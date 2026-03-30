@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: satellite_debug_tool
+Version: 0.1.0
+Summary: Satellite communication debug tool
+Requires-Python: >=3.9
+Requires-Dist: PySide6>=6.5
+Requires-Dist: pyserial>=3.5
+Requires-Dist: pyqtgraph>=0.13
+Requires-Dist: numpy>=1.24
