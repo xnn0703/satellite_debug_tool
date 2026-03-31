@@ -186,6 +186,14 @@ class MainWindow(QMainWindow):
         self._import_btn.clicked.connect(self._on_import_clicked)
         self._toolbar.addWidget(self._import_btn)
 
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.setFixedSize(60, 28)
+        self._clear_btn.setStyleSheet(
+            f"background-color: {S.PRIMARY}; color: white; border: none; border-radius: 2px;"
+        )
+        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        self._toolbar.addWidget(self._clear_btn)
+
         self._theme_combo = QComboBox()
         self._theme_combo.addItems(["Dark", "Light"])
         self._theme_combo.setFixedWidth(70)
@@ -520,6 +528,28 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self._statusbar.showMessage(f"Import failed: {e}", 5000)
 
+    def _on_clear_clicked(self):
+        self._chart.clear()
+        self._data_store.clear()
+        self._frame_count = 0
+        self._frame_times.clear()
+        for name in list(self._channel_checks.keys()):
+            cb = self._channel_checks[name]
+            dot = self._channel_dots[name]
+            value_label = self._channel_value_labels[name]
+            container = self._channel_containers[name]
+            self._channel_layout.removeWidget(container)
+            cb.deleteLater()
+            dot.deleteLater()
+            value_label.deleteLater()
+            container.deleteLater()
+        self._channel_checks.clear()
+        self._channel_dots.clear()
+        self._channel_value_labels.clear()
+        self._channel_containers.clear()
+        self._channel_colors.clear()
+        self._statusbar.showMessage("Display cleared", 2000)
+
     def _on_theme_changed(self, theme: str):
         self._is_dark_theme = theme == "Dark"
         self._apply_stylesheet(theme)
@@ -577,6 +607,10 @@ class MainWindow(QMainWindow):
             "color: white; border: none; border-radius: 2px;"
         )
         self._import_btn.setStyleSheet(
+            f"background-color: {S.PRIMARY if self._is_dark_theme else S.PRIMARY_LIGHT}; "
+            "color: white; border: none; border-radius: 2px;"
+        )
+        self._clear_btn.setStyleSheet(
             f"background-color: {S.PRIMARY if self._is_dark_theme else S.PRIMARY_LIGHT}; "
             "color: white; border: none; border-radius: 2px;"
         )

@@ -121,3 +121,11 @@ class ChartWidget(QWidget):
         self._min_ts = min_ts
         self._max_ts = max_ts
         self._plot_widget.setXRange(min_ts, max_ts)
+
+    def clear(self) -> None:
+        for name in list(self._plot_items.keys()):
+            self._plot_widget.removeItem(self._plot_items[name])
+        self._plot_items.clear()
+        self._min_ts = None
+        self._max_ts = None
+        self._auto_time_range = False
