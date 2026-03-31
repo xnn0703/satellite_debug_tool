@@ -27,6 +27,7 @@ from satellite_debug_tool.io.data_recorder import DataRecorder
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.ui.chart_widget import ChartWidget, COLORS
 from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.core.config import Settings
 
 
 class MainWindow(QMainWindow):
@@ -41,7 +42,23 @@ class MainWindow(QMainWindow):
         self._is_recording = False
         self._frame_times = []
         self._is_dark_theme = True
+        self._settings = Settings()
+        self._load_settings()
         self._setup_ui()
+
+    def _load_settings(self):
+        conn_type = self._settings.get("general.connection_type", "Serial")
+        self._type_combo.setCurrentText(conn_type)
+        self._on_type_changed(conn_type)
+        self._baudrate_combo.setCurrentText(
+            self._settings.get("serial.default_baudrate", "115200")
+        )
+        theme = self._settings.get("ui.theme", "Dark")
+        self._theme_combo.setCurrentText(theme)
+        self._is_dark_theme = theme == "Dark"
+        self._remote_ip.setText(self._settings.get("udp.remote_ip", "192.168.1.12"))
+        self._remote_port.setValue(self._settings.get("udp.remote_port", 4004))
+        self._local_port.setValue(self._settings.get("udp.local_port", 45678))
 
     def _setup_ui(self):
         self.setWindowTitle("Satellite Debug Tool")
@@ -289,6 +306,8 @@ class MainWindow(QMainWindow):
             self._config_stack.setCurrentIndex(0)
         else:
             self._config_stack.setCurrentIndex(1)
+        self._settings.set("general.connection_type", text)
+        self._settings.save()
 
     def _refresh_ports(self):
         ports = SerialWorker.list_ports()
@@ -309,6 +328,11 @@ class MainWindow(QMainWindow):
             config = {"type": "serial", "port": port, "baudrate": baudrate}
             self._worker = SerialWorker()
             self._conn_status_label.setText(f"{port} @ {baudrate}")
+            self._settings.set(
+                "serial.default_baudrate", self._baudrate_combo.currentText()
+            )
+            self._settings.set("serial.last_port", port)
+            self._settings.save()
         else:
             config = {
                 "type": "udp",
@@ -320,6 +344,10 @@ class MainWindow(QMainWindow):
             self._conn_status_label.setText(
                 f"UDP {config['remote_ip']}:{config['remote_port']}"
             )
+            self._settings.set("udp.remote_ip", self._remote_ip.text())
+            self._settings.set("udp.remote_port", self._remote_port.value())
+            self._settings.set("udp.local_port", self._local_port.value())
+            self._settings.save()
 
         self._worker.connected.connect(self._on_connected)
         self._worker.disconnected.connect(self._on_disconnected)
@@ -553,6 +581,8 @@ class MainWindow(QMainWindow):
     def _on_theme_changed(self, theme: str):
         self._is_dark_theme = theme == "Dark"
         self._apply_stylesheet(theme)
+        self._settings.set("ui.theme", theme)
+        self._settings.save()
 
     def _apply_stylesheet(self, theme: str):
         if theme == "Dark":
