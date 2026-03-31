@@ -43,8 +43,8 @@ class MainWindow(QMainWindow):
         self._frame_times = []
         self._is_dark_theme = True
         self._settings = Settings()
-        self._load_settings()
         self._setup_ui()
+        self._load_settings()
 
     def _load_settings(self):
         conn_type = self._settings.get("general.connection_type", "Serial")
