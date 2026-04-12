@@ -26,6 +26,7 @@ from satellite_debug_tool.core.data import DataStore
 from satellite_debug_tool.io.data_recorder import DataRecorder
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.ui.chart_widget import ChartWidget, COLORS
+from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.core.config import Settings
 
@@ -233,10 +234,23 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Vertical)
 
+        # Horizontal splitter for chart + attitude side by side
+        top_splitter = QSplitter(Qt.Horizontal)
+
         self._chart = ChartWidget()
         self._chart.setMinimumHeight(400)
         self._chart.set_dark_theme(True)
-        splitter.addWidget(self._chart)
+        top_splitter.addWidget(self._chart)
+
+        self._attitude = AttitudeWidget()
+        self._attitude.setMinimumWidth(350)
+        self._attitude.set_dark_theme(True)
+        self._attitude.channel_changed.connect(self._on_attitude_channel_changed)
+        top_splitter.addWidget(self._attitude)
+
+        top_splitter.setStretchFactor(0, 3)
+        top_splitter.setStretchFactor(1, 1)
+        splitter.addWidget(top_splitter)
 
         channel_panel = QWidget()
         channel_panel.setObjectName("channel_panel")
@@ -300,6 +314,17 @@ class MainWindow(QMainWindow):
 
         self._frame_count = 0
         self._error_count = 0
+
+        # Load attitude channel selections after attitude widget is created
+        roll_ch = self._settings.get("attitude.roll_channel", "")
+        pitch_ch = self._settings.get("attitude.pitch_channel", "")
+        yaw_ch = self._settings.get("attitude.yaw_channel", "")
+        if roll_ch:
+            self._attitude._roll_combo.setCurrentText(roll_ch)
+        if pitch_ch:
+            self._attitude._pitch_combo.setCurrentText(pitch_ch)
+        if yaw_ch:
+            self._attitude._yaw_combo.setCurrentText(yaw_ch)
 
     def _on_type_changed(self, text):
         if text == "Serial":
@@ -424,6 +449,9 @@ class MainWindow(QMainWindow):
         self._channel_count_label.setText(f"Channels: {len(channels)}")
         self._frame_count_label.setText(f"Frames: {self._frame_count}")
 
+        # Update attitude widget channel options when new channels appear
+        self._attitude.set_channel_options(channels)
+
         existing_names = set(self._channel_checks.keys())
         new_names = set(channels) - existing_names
 
@@ -497,6 +525,23 @@ class MainWindow(QMainWindow):
                 )
                 self._chart.update_data(latest_ts / 1000.0, values)
 
+        # Update attitude widget with roll/pitch/yaw from selected channels
+        roll_ch, pitch_ch, yaw_ch = self._attitude.get_channel_selections()
+        roll_val = pitch_val = yaw_val = 0.0
+        if roll_ch:
+            ch = self._data_store.get_channel(roll_ch)
+            if ch and ch.get_latest():
+                roll_val = ch.get_latest()[1]
+        if pitch_ch:
+            ch = self._data_store.get_channel(pitch_ch)
+            if ch and ch.get_latest():
+                pitch_val = ch.get_latest()[1]
+        if yaw_ch:
+            ch = self._data_store.get_channel(yaw_ch)
+            if ch and ch.get_latest():
+                yaw_val = ch.get_latest()[1]
+        self._attitude.update_attitude(roll_val, pitch_val, yaw_val, roll_ch, pitch_ch, yaw_ch)
+
     def _on_record_clicked(self):
         if self._is_recording:
             if self._recorder:
@@ -558,6 +603,7 @@ class MainWindow(QMainWindow):
 
     def _on_clear_clicked(self):
         self._chart.clear()
+        self._attitude.clear()
         self._data_store.clear()
         self._frame_count = 0
         self._frame_times.clear()
@@ -577,6 +623,16 @@ class MainWindow(QMainWindow):
         self._channel_containers.clear()
         self._channel_colors.clear()
         self._statusbar.showMessage("Display cleared", 2000)
+
+    def _on_attitude_channel_changed(self, channel_name: str, axis: str):
+        """Save attitude channel selection when user changes it."""
+        if axis == "roll":
+            self._settings.set("attitude.roll_channel", channel_name)
+        elif axis == "pitch":
+            self._settings.set("attitude.pitch_channel", channel_name)
+        elif axis == "yaw":
+            self._settings.set("attitude.yaw_channel", channel_name)
+        self._settings.save()
 
     def _on_theme_changed(self, theme: str):
         self._is_dark_theme = theme == "Dark"
@@ -599,6 +655,7 @@ class MainWindow(QMainWindow):
             input_bg = S.INPUT_LIGHT
         self.setStyleSheet(f"background-color: {bg}; color: {text};")
         self._chart.set_dark_theme(self._is_dark_theme)
+        self._attitude.set_dark_theme(self._is_dark_theme)
         self._toolbar.setStyleSheet(
             f"background-color: {panel}; border: none; padding: 4px;"
         )
