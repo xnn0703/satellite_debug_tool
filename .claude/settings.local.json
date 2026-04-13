@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(/usr/bin/python3 --version)",
+      "Bash(/usr/local/bin/python3 --version)",
+      "Read(//Library/Frameworks/Python.framework/Versions/**)",
+      "Bash(/usr/local/bin/python3:*)",
+      "Skill(update-config)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3 -m pytest satellite_debug_tool/tests/ -v --tb=short)",
+      "Bash(python3:*)",
+      "Bash(git checkout:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
