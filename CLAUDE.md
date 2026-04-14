@@ -9,12 +9,12 @@ Satellite Debug Tool — a PySide6 desktop application for debugging phased-arra
 ## Running the Application
 
 ```bash
-# From repository root
-python satellite_debug_tool/main.py
+# 必须使用 -m 方式运行（不能用 python satellite_debug_tool/main.py）
+python3 -m satellite_debug_tool.main
 
-# Or with editable install
-pip install -e satellite_debug_tool
-python -m satellite_debug_tool.main
+# 或先安装 editable 包
+pip3 install -e satellite_debug_tool --user
+python3 -m satellite_debug_tool.main
 ```
 
 ## Running Tests
