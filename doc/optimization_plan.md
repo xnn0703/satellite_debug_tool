@@ -15,6 +15,7 @@
 |------|------|------|
 | v1.0 | 2026-04-16 | 初稿 |
 | v1.1 | 2026-04-16 | 吸收反馈：上位机 UI 完全由设备 profile 驱动，afd01/ufd45 可各自独立一套通道/状态/事件；新增 §3.3 设备自适应架构、§5.2 ProfileStore、§6.4 设备 profile 分离、§8.1 新增 C 类（兼容性）验收点 |
+| v1.2 | 2026-04-16 | **放弃 v1 兼容层**：上下位机同步切换到 v2，简化代码路径。删除兼容相关任务/验收/回退策略，删除"SDB v1 回放双路径"负担（v1 .sdb 不保证可读，如需要另行提供转换脚本） |
 
 ---
 
@@ -320,12 +321,15 @@ Dashboard 数字字体锁定 **JetBrains Mono / Consolas / SF Mono** 等宽，�
 
 ### 5.1 协议层（`core/protocol/`）
 
+决策（v1.2）：**v2 全量替换，不保留 v1 实现**。旧文件 `frame_receiver.py` / `data_frame.py` / `helpers.py` 删除并重写。
+
 | 任务 | 文件 | 说明 |
 |------|------|------|
-| 扩充 FrameReceiver | `frame_receiver.py` | 识别 0x04~0x0A 新帧类型，保留 v1 行为 |
-| 扩充 DataFrame 结构 | `data_frame.py` | 新增 `MetaInfo`/`ChannelDef`/`StateDef`/`EventDef`/`DataReport`/`StateReport`/`EventReport`/`Heartbeat` 数据类 |
-| 帧构建器 | `helpers.py` | 新增 `build_control_frame(sub_cmd, payload)`、`build_user_mark_frame()`、各 REQUEST 帧 |
+| v2 常量与数据类 | `frame_v2.py`（新增） | 10 类命令枚举、SubCmd 子命令、ChannelDef/StateDef/EventDef/... 数据类 |
+| v2 编解码 | `codec_v2.py`（新增） | `build_frame` + 各 DECODE；CRC16 复用 `crc16.py`；所有 CONTROL 子命令构造函数 |
+| v2 状态机 | `frame_receiver_v2.py`（新增） | 字节流 → `FrameV2Record`，按 cmd_type 分发至 codec，含 CRC/framing/decode 计数 |
 | 握手状态机 | `core/protocol/handshake.py`（新增） | 管理"等待 META → 等待 DEFINE → Ready"，超时重发 REQUEST_* |
+| 删除 v1 | `frame_receiver.py` `data_frame.py` `helpers.py` | 直接删除 |
 
 ### 5.2 业务层 / 数据层（`core/data/`）
 
@@ -394,12 +398,13 @@ class ProfileStore:
 
 | 任务 | 文件 |
 |------|------|
-| FrameReceiver 新帧类型 | `tests/test_frame_receiver.py` 扩展 |
-| MetaRegistry | `tests/test_meta_registry.py`（新增） |
+| FrameV2 / codec_v2 / receiver_v2 | `tests/test_frame_v2.py` `tests/test_codec_v2.py` `tests/test_frame_receiver_v2.py`（新增） |
+| ProfileStore | `tests/test_profile_store.py`（新增） |
 | StateStore | `tests/test_state_store.py`（新增） |
 | EventLog | `tests/test_event_log.py`（新增） |
-| AsyncRecorder | `tests/test_data_recorder.py` 扩展 |
-| v1/v2 兼容 | `tests/test_compat_v1_v2.py`（新增） |
+| Handshake | `tests/test_handshake.py`（新增） |
+| AsyncRecorder | `tests/test_data_recorder.py` 重写 |
+| v1 旧测试 | `tests/test_frame_receiver.py` `tests/test_data.py` `tests/test_io.py` 重写或删除 |
 
 ---
 
@@ -418,7 +423,7 @@ class ProfileStore:
 | 注册表实现 | `debug_registry.c`（新增） | 通道/状态字/事件动态表，支持 register/lookup/serialize_define |
 | 周期任务 | `debug_task.c`（新增） | 独立 FreeRTOS 任务：100Hz DATA、5Hz STATE 全量、1Hz HEARTBEAT、0.2Hz DEFINE 重发 |
 | 事件队列 | `debug.c` | 环形队列，事件触发入队；1s 去重窗口 |
-| 兼容开关 | `debug.h` | `USE_DEBUG_PROTO_V2` 编译开关，默认 ON |
+| 开关 | `debug.h` / CMake | 使用既有 `USE_DEBUG` 开关整体启停；**不保留 v1 协议实现**（决策 v1.2） |
 
 ### 6.2 设备 profile 层（按型号独立）
 
@@ -493,7 +498,7 @@ ufd45 profile 的 ID / 名称 / 枚举 完全独立规划，与 afd01 零耦合�
 | **M2 状态/事件** | STATE/EVENT 帧 + StateStore/EventLog + StatePanel（profile 驱动）+ EventTimeline | 1 |
 | **M3 Dashboard + 分组曲线** | Dashboard/StatusStrip/ControlPanel（全部 profile 驱动）+ Chart 分组 Y 轴 | 1.2 |
 | **M4 3D 场景 + 标记** | Scene3D 通道绑定可配 + USER_MARK 闭环 + 曲线标记 | 0.8 |
-| **M5 异步录制 + 兼容 + ufd45 profile 冒烟** | 异步 Recorder + SDB v2（含内嵌 profile）+ v1 回退 + **ufd45_debug_profile 骨架 + 跨设备切换验收** | 1 |
+| **M5 异步录制 + ufd45 profile 冒烟** | 异步 Recorder + SDB v2（含内嵌 profile）+ **ufd45_debug_profile 骨架 + 跨设备切换验收** | 1 |
 | **M6 主题/字号/文档** | dark_hc + 字号档位 + 用户手册更新 | 0.3 |
 
 每个 M 独立可验收；M1 完成即可在桌面看到原有信息量（不丢功能），M2 起开始有新价值，M3 起具备车载可用性，M5 完成多设备自适应闭环。
@@ -508,7 +513,6 @@ ufd45 profile 的 ID / 名称 / 枚举 完全独立规划，与 afd01 零耦合�
 |------|------|----------|------|
 | F-01 | 协议握手 | 上位机连接后 500ms 内收到 META_INFO + 三张 DEFINE 表 | M1 |
 | F-02 | 数据上报 | 100Hz 下连续 10 分钟不丢帧、CRC 错 = 0 | M1 |
-| F-03 | v1 兼容 | 老下位机（仅发 0x01）能被 v2 上位机正确解析 | M5 |
 | F-04 | 状态字 | 下位机 LOCK_FLAG 切换，上位机 200ms 内显示 | M2 |
 | F-05 | 全量重发 | 上位机中途重启，重新握手后状态板所有灯恢复正确 | M2 |
 | F-06 | 事件上报 | LOCK_ACQUIRED 事件触发，时间线立即显示，曲线画竖线 | M2 |
@@ -545,13 +549,13 @@ ufd45 profile 的 ID / 名称 / 枚举 完全独立规划，与 afd01 零耦合�
 | U-04 | 车载屏适配 | 1920×1080 和 1366×768 下布局不溢出、不遮挡 |
 | U-05 | 字号切换 | 超大字号下 Dashboard 数字宽度不截断 |
 
-### 8.4 兼容性验收
+### 8.4 协议版本验收
 
 | 编号 | 条件 | 验收条件 |
 |------|------|----------|
-| C-01 | v1 上位机 + v2 下位机 | 仍可看到数据曲线，不崩溃 |
-| C-02 | v2 上位机 + v1 下位机 | 3 秒后回退到 v1 模式，通道名按 32B 解析 |
-| C-03 | 协议版本字段 | META_INFO.protocol_ver 正确识别 |
+| C-03 | 协议版本字段 | META_INFO.protocol_ver == 0x02；上位机收到非 0x02 时提示并断连 |
+
+> 决策 v1.2：不再维护 v1 兼容层。原 C-01/C-02 验收条目移除。
 
 ### 8.5 多设备自适应验收
 
@@ -574,11 +578,11 @@ ufd45 profile 的 ID / 名称 / 枚举 完全独立规划，与 afd01 零耦合�
 
 | 风险 | 缓解 |
 |------|------|
-| 下位机 v2 改动影响现有 trace 逻辑 | `USE_DEBUG_PROTO_V2` 编译开关，可一键回退 v1 |
+| 下位机 v2 改动影响现有 trace 逻辑 | 既有 `trace.c` 中的 `debug_report_data` 调用点重写为 v2 API；单独 M1 验证 trace 数据路径 |
 | UDP 丢包导致 DEFINE 表错位 | DEFINE 每 5 秒重发 + table_ver 校验 + 上位机 REQUEST 重传 |
 | 上位机重构工作量大，中途不可用 | 按 M1~M6 分阶段，每个阶段都可独立发布 |
 | 离散量上报频率错误估算 | 压力测试阶段（M5）用模拟器回放 6 小时数据验证 |
-| 既有 sdb 文件无法打开 | data_importer 识别文件头版本字段，v1/v2 双路径解析 |
+| v1 格式旧 `.sdb` 文件无法读取 | 不再维护 v1 兼容；若确有需要，提供独立 `sdb_v1_convert.py` 一次性转换脚本（非主线任务） |
 | 字体/主题在不同系统表现不一致 | 内置 JetBrains Mono 字体，不依赖系统字体 |
 | afd01 / ufd45 profile ID 空间冲突 | 无需担心——每个 hw_type 在上位机 ProfileStore 里独立分桶，ID 空间互不可见 |
 | 新型号发布时临时要求上位机改动 | 按设计不应发生；若确实需要，只能是"协议层能力不足"，走协议 v2.x 升级流程而非改 UI |

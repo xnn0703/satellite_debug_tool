@@ -21,7 +21,13 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from datetime import datetime
 from satellite_debug_tool.core.comm import SerialWorker, UdpWorker
-from satellite_debug_tool.core.protocol import FrameReceiver, build_debug_control_frame
+from satellite_debug_tool.core.protocol import (
+    DataReport,
+    FrameReceiverV2,
+    build_debug_enable_v2,
+)
+from satellite_debug_tool.core.protocol.handshake import Handshake
+from satellite_debug_tool.core.profile import ProfileCache, ProfileStore
 from satellite_debug_tool.core.data import DataStore
 from satellite_debug_tool.io.data_recorder import DataRecorder
 from satellite_debug_tool.io.data_importer import DataImporter
@@ -35,8 +41,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._worker = None
-        self._receiver = FrameReceiver()
+        self._receiver = FrameReceiverV2()
         self._data_store = DataStore()
+        self._profile_store = ProfileStore(cache=ProfileCache())
+        self._handshake: Handshake | None = None   # 连接建立后创建
+        self._handshake_timer = QTimer(self)
+        self._handshake_timer.setInterval(100)     # 100ms 驱动握手/心跳检查
+        self._handshake_timer.timeout.connect(self._on_handshake_tick)
         self._is_connected = False
         self._debug_enabled = False
         self._recorder = None
@@ -400,6 +411,29 @@ class MainWindow(QMainWindow):
         self._conn_status_label.setStyleSheet(f"color: {S.SUCCESS};")
         self._type_combo.setEnabled(False)
 
+        # 启动握手：发 4 条 REQUEST，之后定时 tick 检查心跳/重发
+        self._receiver.reset()
+        if self._worker is not None:
+            self._handshake = Handshake(self._profile_store, self._worker.send)
+            self._handshake.ready.connect(self._on_handshake_ready)
+            self._handshake.link_lost.connect(self._on_link_lost)
+            self._handshake.link_restored.connect(self._on_link_restored)
+            self._handshake.start()
+            self._handshake_timer.start()
+
+    def _on_handshake_tick(self):
+        if self._handshake is not None:
+            self._handshake.tick(self._handshake_timer.interval())
+
+    def _on_handshake_ready(self, hw_type: str):
+        self._statusbar.showMessage(f"Profile ready: {hw_type}", 3000)
+
+    def _on_link_lost(self):
+        self._statusbar.showMessage("Heartbeat timeout (link lost)", 5000)
+
+    def _on_link_restored(self):
+        self._statusbar.showMessage("Heartbeat restored", 2000)
+
     def _on_disconnected(self):
         self._is_connected = False
         self._connect_btn.setEnabled(True)
@@ -411,11 +445,17 @@ class MainWindow(QMainWindow):
         self._conn_status_label.setStyleSheet(f"color: {S.TEXT};")
         self._type_combo.setEnabled(True)
 
+        # 握手停止，profile 缓存保留供下次连接复用
+        self._handshake_timer.stop()
+        if self._handshake is not None:
+            self._handshake.stop()
+            self._handshake = None
+
     def _on_debug_toggled(self):
         if not self._worker:
             return
         self._debug_enabled = not self._debug_enabled
-        frame = build_debug_control_frame(self._debug_enabled)
+        frame = build_debug_enable_v2(self._debug_enabled)
         if self._worker.send(frame):
             self._debug_btn.setText(f"Debug: {'ON' if self._debug_enabled else 'OFF'}")
             self._debug_btn.setStyleSheet(
@@ -431,12 +471,20 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage(f"Error: {msg}", 5000)
 
     def _on_data_received(self, data: bytes):
-        frames = self._receiver.feed(data)
-        for frame in frames:
-            self._data_store.update(frame)
-            self._frame_count += 1
-            if self._is_recording and self._recorder:
-                self._recorder.write_frame(data)
+        # 录制：写原始字节流，保证 .sdb 里帧边界与协议一致
+        if self._is_recording and self._recorder:
+            self._recorder.write_frame(data)
+
+        # 协议解码：v2 状态机每次吐一批 record，按类型分发
+        records = self._receiver.feed(data)
+        for rec in records:
+            # 握手层消费 META/DEFINE/HEARTBEAT，其余类型忽略
+            if self._handshake is not None:
+                self._handshake.feed(rec)
+            if isinstance(rec, DataReport):
+                self._data_store.update(rec)
+                self._frame_count += 1
+            # M2 起加入 StateReport/EventReport 的 UI 处理
 
     def _update_display(self):
         current_time = datetime.now().timestamp()

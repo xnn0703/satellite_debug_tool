@@ -1,91 +1,77 @@
+"""
+.sdb / .csv 回放读取器（v2）。
+
+.sdb 文件直接用字节流存 v2 协议帧。回放时复用 `FrameReceiverV2`：
+依次 feed 文件内容，yield 出其中的 `DataReport` 帧（其它帧类型 M5 再细化）。
+
+CSV 在 v2 下尚未重新定义列格式（原 v1 用通道名为列名已不适用），此处
+先返回空迭代器并打印告警，完整实现留到 M5（异步录制 + SDB v2 重写）。
+"""
+
+from __future__ import annotations
+
 import struct
-import csv
-from datetime import datetime
+import warnings
 from typing import Iterator
-from satellite_debug_tool.core.protocol import DataFrame, ChannelData
+
+from satellite_debug_tool.core.protocol import DataReport, FrameReceiverV2
 
 
 SDB_MAGIC = b"SDB\x00"
 SDB_FOOTER = b"\xee\xee\xee\xee"
+SDB_HEADER_SIZE = 4 + 2 + 8 + 8   # magic + version + timestamp + reserved
 
 
 class DataImporter:
+    """读取历史录制数据。"""
+
     @staticmethod
-    def read_sdb(filepath: str) -> Iterator[DataFrame]:
+    def read_sdb(filepath: str) -> Iterator[DataReport]:
+        """
+        读取 .sdb 文件，yield 其中的 `DataReport` 帧。
+
+        文件格式：header(22B) + N 个 v2 协议帧（完整字节） + 4B footer(0xEEEEEEEE)。
+        """
         with open(filepath, "rb") as f:
-            magic = f.read(4)
-            if magic != SDB_MAGIC:
-                raise ValueError("Invalid SDB file format")
+            head = f.read(SDB_HEADER_SIZE)
+            if len(head) < SDB_HEADER_SIZE or head[:4] != SDB_MAGIC:
+                raise ValueError("Invalid SDB file format (magic mismatch)")
+            # header 解析暂仅做格式校验，protocol 字段留到 SDB v2 规范稳定后
+            _version = struct.unpack("<H", head[4:6])[0]
 
-            version = struct.unpack("<H", f.read(2))[0]
-            timestamp = struct.unpack("<Q", f.read(8))[0]
-            f.read(8)
-
-            buffer = bytearray()
+            receiver = FrameReceiverV2()
+            tail = bytearray()
             while True:
                 chunk = f.read(4096)
                 if not chunk:
                     break
-                buffer.extend(chunk)
+                tail.extend(chunk)
+                if len(tail) >= 4 and tail[-4:] == SDB_FOOTER:
+                    # 末尾 4B 为 footer，喂 receiver 时剔除
+                    for rec in receiver.feed(bytes(tail[:-4])):
+                        if isinstance(rec, DataReport):
+                            yield rec
+                    tail.clear()
+                    break
+                # 保留最后 4B 防 footer 跨 chunk 边界
+                if len(tail) > 4:
+                    for rec in receiver.feed(bytes(tail[:-4])):
+                        if isinstance(rec, DataReport):
+                            yield rec
+                    del tail[:-4]
 
-                while buffer:
-                    idx = buffer.find(b"\xaa\x55")
-                    if idx < 0:
-                        break
-                    buffer = buffer[idx:]
-                    if len(buffer) < 9:
-                        break
-                    data_len = struct.unpack("<H", bytes(buffer[4:6]))[0]
-                    frame_len = 9 + data_len
-                    if len(buffer) < frame_len:
-                        break
-                    frame_data = bytes(buffer[:frame_len])
-                    buffer = buffer[frame_len:]
-
-                    if frame_data[-1:] != b"\xee":
-                        continue
-
-                    yield DataImporter._parse_frame(frame_data)
-
-                    if buffer[-4:] == SDB_FOOTER:
-                        return
+            # 若文件没有写完整 footer（异常结束），把剩余喂完
+            if tail:
+                for rec in receiver.feed(bytes(tail)):
+                    if isinstance(rec, DataReport):
+                        yield rec
 
     @staticmethod
-    def _parse_frame(frame_data: bytes) -> DataFrame:
-        cmd_type = frame_data[3]
-        data_len = struct.unpack("<H", frame_data[4:6])[0]
-        data = frame_data[6 : 6 + data_len]
-
-        timestamp = struct.unpack("<I", data[:4])[0]
-        channel_count = data[4]
-
-        channels = []
-        offset = 5
-        for _ in range(channel_count):
-            if offset + 36 > len(data):
-                break
-            name_bytes = data[offset : offset + 32]
-            name = name_bytes.rstrip(b"\x00").decode("utf-8", errors="ignore")
-            offset += 32
-            value = struct.unpack("<f", data[offset : offset + 4])[0]
-            offset += 4
-            channels.append(ChannelData(name=name, value=value))
-
-        return DataFrame(cmd_type=cmd_type, timestamp=timestamp, channels=channels)
-
-    @staticmethod
-    def read_csv(filepath: str) -> Iterator[DataFrame]:
-        with open(filepath, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for i, row in enumerate(reader):
-                timestamp = int(float(row.get("timestamp", i * 100)))
-                channels = []
-                for name, value in row.items():
-                    if name == "timestamp":
-                        continue
-                    try:
-                        channels.append(ChannelData(name=name, value=float(value)))
-                    except ValueError:
-                        pass
-                if channels:
-                    yield DataFrame(cmd_type=1, timestamp=timestamp, channels=channels)
+    def read_csv(filepath: str) -> Iterator[DataReport]:
+        """CSV 导入暂未实现（等 SDB v2 + CSV 规范确定后在 M5 重写）。"""
+        warnings.warn(
+            "CSV import is not supported in protocol v2 yet; will be re-enabled in M5.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return iter(())
