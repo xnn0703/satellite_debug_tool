@@ -113,9 +113,33 @@
 
 ---
 
-## M2 — State/Event（待开始）
+## M2 — State/Event（进行中，代码完成，待硬件联调）
 
-（M1 完成并通过验收后细化）
+### 业务层
+- [x] `core/data/state_store.py`：StateStore(QObject)，按 hw_type 分桶，value 变化才发 state_changed
+- [x] `core/data/event_log.py`：EventLog(QObject)，deque(5000) 环形，profile 查名 / 未知降级 `EVENT_<hex>`，支持 hw_type / level / keyword 过滤
+- [x] `core/data/__init__.py`：导出 StateStore / StateSnapshot / EventLog / EventRecord
+
+### UI 层
+- [x] `ui/state_panel_widget.py`：Profile 驱动的状态灯板，BOOL 绿/灰（inverse 反色），ENUM 按 enum_item.level 上色（INFO 绿 / WARN 黄 / ERROR 红 / NEUTRAL 灰），profile_changed/state_changed 自动刷新
+- [x] `ui/event_timeline_widget.py`：反序列表 + 级别下拉 + 关键字过滤 + 清空 + 计数
+
+### MainWindow 集成
+- [x] 实例化 StateStore / EventLog / StatePanelWidget / EventTimelineWidget
+- [x] 顶部 splitter 新增"right_panel"（StatePanel 上、EventTimeline 下）
+- [x] `_on_data_received` 扩展到 StateReport / EventReport 分发
+- [x] `_on_handshake_ready` 同步 hw_type 给 StatePanel
+
+### 测试
+- [x] tests/test_state_store.py（5 条）
+- [x] tests/test_event_log.py（10 条）
+- 全量 122/122 通过
+
+### 验收对照 §8.1
+- [ ] F-04：状态字 200ms 内显示（单元侧通路 OK，待硬件端到端）
+- [ ] F-05：全量重发恢复（StateStore 不清空；下位机 5Hz 全量发；待联调验证）
+- [x] F-06：事件上报时间线显示（`event_added` → UI insert，走通）
+      **曲线竖线标记**放到 M3（需 ChartWidget 重构）
 
 ---
 

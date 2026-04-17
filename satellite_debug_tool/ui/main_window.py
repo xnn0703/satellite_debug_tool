@@ -23,12 +23,16 @@ from datetime import datetime
 from satellite_debug_tool.core.comm import SerialWorker, UdpWorker
 from satellite_debug_tool.core.protocol import (
     DataReport,
+    EventReport,
     FrameReceiverV2,
+    StateReport,
     build_debug_enable_v2,
 )
 from satellite_debug_tool.core.protocol.handshake import Handshake
 from satellite_debug_tool.core.profile import ProfileCache, ProfileStore
-from satellite_debug_tool.core.data import DataStore
+from satellite_debug_tool.core.data import DataStore, EventLog, StateStore
+from satellite_debug_tool.ui.state_panel_widget import StatePanelWidget
+from satellite_debug_tool.ui.event_timeline_widget import EventTimelineWidget
 from satellite_debug_tool.io.data_recorder import DataRecorder
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.ui.chart_widget import ChartWidget, COLORS
@@ -44,6 +48,8 @@ class MainWindow(QMainWindow):
         self._receiver = FrameReceiverV2()
         self._data_store = DataStore()
         self._profile_store = ProfileStore(cache=ProfileCache())
+        self._state_store = StateStore()
+        self._event_log = EventLog()
         self._handshake: Handshake | None = None   # 连接建立后创建
         self._handshake_timer = QTimer(self)
         self._handshake_timer.setInterval(100)     # 100ms 驱动握手/心跳检查
@@ -259,8 +265,20 @@ class MainWindow(QMainWindow):
         self._attitude.channel_changed.connect(self._on_attitude_channel_changed)
         top_splitter.addWidget(self._attitude)
 
-        top_splitter.setStretchFactor(0, 3)
-        top_splitter.setStretchFactor(1, 1)
+        # 右侧：状态灯板 + 事件时间线（M2 新增）
+        right_panel = QSplitter(Qt.Vertical)
+        right_panel.setMinimumWidth(260)
+        self._state_panel = StatePanelWidget(self._profile_store, self._state_store)
+        right_panel.addWidget(self._state_panel)
+        self._event_timeline = EventTimelineWidget(self._event_log)
+        right_panel.addWidget(self._event_timeline)
+        right_panel.setStretchFactor(0, 1)
+        right_panel.setStretchFactor(1, 1)
+        top_splitter.addWidget(right_panel)
+
+        top_splitter.setStretchFactor(0, 3)   # chart
+        top_splitter.setStretchFactor(1, 1)   # attitude
+        top_splitter.setStretchFactor(2, 1)   # state + event
         splitter.addWidget(top_splitter)
 
         channel_panel = QWidget()
@@ -427,6 +445,8 @@ class MainWindow(QMainWindow):
 
     def _on_handshake_ready(self, hw_type: str):
         self._statusbar.showMessage(f"Profile ready: {hw_type}", 3000)
+        # 通知状态面板切换 hw_type 并按最新 profile 重建行
+        self._state_panel.set_hw_type(hw_type)
 
     def _on_link_lost(self):
         self._statusbar.showMessage("Heartbeat timeout (link lost)", 5000)
@@ -479,12 +499,23 @@ class MainWindow(QMainWindow):
         records = self._receiver.feed(data)
         for rec in records:
             # 握手层消费 META/DEFINE/HEARTBEAT，其余类型忽略
+            # 注意：META 帧处理后 current_hw_type 才有值，故分发时每次重取
             if self._handshake is not None:
                 self._handshake.feed(rec)
+
             if isinstance(rec, DataReport):
                 self._data_store.update(rec)
                 self._frame_count += 1
-            # M2 起加入 StateReport/EventReport 的 UI 处理
+                continue
+
+            hw = self._profile_store.current_hw_type()
+            if hw is None:
+                # META 未到，状态/事件无法归属 → 丢弃（5Hz 全量重发会补上）
+                continue
+            if isinstance(rec, StateReport):
+                self._state_store.update(hw, rec)
+            elif isinstance(rec, EventReport):
+                self._event_log.add(hw, rec, self._profile_store)
 
     def _update_display(self):
         current_time = datetime.now().timestamp()
