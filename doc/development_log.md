@@ -264,6 +264,36 @@
 
 ---
 
+## 工具：下位机模拟器（M1-M5 端到端联调）
+
+- [x] `tools/device_simulator.py`：
+  - Python 实现的 debug v2 下位机模拟器，纯 UDP
+  - `--profile afd01 | ufd45` 切换型号
+  - 启动即广播 META + 三张 DEFINE，之后按协议节奏发 DATA(100Hz)/STATE(5Hz + 全量 1Hz)/HEARTBEAT(1Hz)/DEFINE(0.2Hz)
+  - 自动注入事件：每 ~6s 切换 LOCK_FLAG + LOCK_ACQUIRED/LOCK_LOST；每 ~10s 随机事件
+  - 响应全部 CONTROL 子命令：DEBUG_ENABLE / REQUEST_* / USER_MARK / SET_SAMPLE_RATE / SET_TRACE_MODE / RESET_STATS
+  - afd01 profile: 12 channels / 7 states / 5 events（含 SNR 渐强模拟锁星）
+  - ufd45 profile: 12 channels（含 bcn_rssi/ku_lo/buc_temp 等 Ku 频段特色） / 6 states / 6 events
+  - 数据生成器模拟真实姿态漂移 + 锁星前后 SNR 变化
+
+- [x] `tests/test_simulator.py`（16 条）：
+  - encode → build_frame → FrameReceiverV2 对称性：META/CHANNEL/STATE/EVENT_DEFINE + DATA/STATE_REPORT + HEARTBEAT
+  - afd01 和 ufd45 双 profile 参数化
+  - **端到端 smoke**：模拟器发 4 帧握手 → Handshake.ready 触发 → ProfileStore 三张表就绪 ✓
+
+全量 pytest 142/142。
+
+**使用方式**：
+```bash
+# 终端 1
+python tools/device_simulator.py --profile afd01 -v
+
+# 终端 2：启动上位机，连接 UDP 127.0.0.1:4004（本地 45678）
+python -m satellite_debug_tool
+```
+
+---
+
 ## M6 — 主题字体（待开始）
 
 ---
@@ -306,6 +336,7 @@
 | 2026-04-17 | 上位机 `feat/protocol_v2_refactor` | M3 Dashboard/StatusStrip/ControlPanel/分组曲线 (commit 27144c9) |
 | 2026-04-17 | 下位机 `feat/debug_protocol_v2` | M5 下位机：ufd45_debug_profile + app_debug + trace.c（ufd45 编译通过，FLASH 39%, RAM_D2 4.1%） |
 | 2026-04-17 | 上位机 `feat/protocol_v2_refactor` | M5 上位机：异步 DataRecorder + SDB v2 (内嵌 profile) + DataImporter v2 + 7 条测试 (129/129) |
+| 2026-04-17 | 上位机 `feat/protocol_v2_refactor` | 新增 tools/device_simulator.py + 16 条 smoke 测试 (142/142) |
 
 ---
 
