@@ -48,32 +48,27 @@
 
 在 `code/shared/MiddleWare/components/debug/`：
 
-- [ ] `debug_protocol.h/c`：帧结构升级到 v2，支持命令 0x01–0x0A
-- [ ] `debug_registry.h/c`：提供 API
-  - [ ] `debug_register_channel(name, unit, group_id, flags, *out_id)`
-  - [ ] `debug_register_state(name, kind, enum_list, flags, *out_id)`
-  - [ ] `debug_register_event(name, level, flags, *out_id)`
-  - [ ] `debug_compute_table_ver()`（channel/state/event 注册完后计算）
-- [ ] `debug_report.c`：上报接口
-  - [ ] `debug_report_channel(id, value)` / batch
-  - [ ] `debug_report_state(id, value)`（含变化触发）
-  - [ ] `debug_report_event(id, level, payload)`
-- [ ] `debug_session.c`：握手/心跳
-  - [ ] 启动时发送 META_INFO + CHANNEL_DEFINE + STATE_DEFINE + EVENT_DEFINE
-  - [ ] 周期（5s）重发 DEFINE 表
-  - [ ] HEARTBEAT 1Hz（CPU load / free heap / tick）
-  - [ ] 响应 REQUEST（按需重发指定表）
-- [ ] CRC16：复用现有 `PublicLib/CRC`
-- [ ] 接入 `USE_DEBUG` 编译开关
+- [x] `debug.h`：v2 公开 API + 所有协议常量 / 枚举 / flags
+- [x] `debug_internal.h`：内部数据结构 + `DEBUG_SRAM` 宏（section 到 RAM_D2）
+- [x] `debug_proto.c`：CRC16-CCITT + envelope 打包 / 解析
+- [x] `debug_registry.c`：channel/state/event 注册 + META/CHANNEL/STATE/EVENT_DEFINE 序列化
+- [x] `debug_session.c`：rx 任务 + worker 任务（100Hz DATA / 200ms 变化 STATE /
+      1Hz HB + 全量 STATE / 5s META+DEFINE 广播）+ 事件环形队列 + CONTROL 处理
+- [x] `debug.c`：g_debug 单例 + debug_init/deinit + setter
+- [x] CRC16 自实现（与 `PublicLib/lib_check.c:crc16_ccitt` 常量一致，保留在 debug 内部便于未来切换硬件加速）
 
-在 `code/target/afd01/application/app/debug_profile/`（新增目录）：
+在 `code/target/afd01/application/app/debug/`：
 
-- [ ] `afd01_debug_profile.c`：
-  - [ ] 注册 channel（trace SNR/信标、locate 姿态、modem 频点/功率、antenna 方向等）
-  - [ ] 注册 state（trace_mode、ant_state、link_state、lock_flag、…）
-  - [ ] 注册 event（ACQUIRE_DONE/LOST/CMD_ACK/INS_CALIB…）
-  - [ ] 订阅既有 MCN topic 并在定时线程里打包上报
-- [ ] `AppTaskCreate` 里创建 `debug_task`（优先级低于 trace/modem）
+- [x] `afd01_debug_profile.h`：channel/state/event ID 枚举（16 / 10 / 12 项）+ setter 原型
+- [x] `afd01_debug_profile.c`：注册 + 业务层便捷 setter（push_trace_frame / on_lock_* / set_*）
+- [x] `afd01_app_debug.c`：重写，绑定 WizNet UDP port 4004，注册 send_cb，注册 profile，启动 debug_task（优先级 9，栈 4KB）
+- [x] `trace.c`：旧 `debug_report_data_t` 删除，`trace_debug_info()` 改用 `afd01_profile_push_trace_frame()`
+
+### 构建验证 (./build.sh afd01 app debug)
+- [x] 编译通过（4 warnings from pre-existing ins.c，非本次代码）
+- [x] 内存占用：FLASH 346K/768K (44.06%)，RAM 79K/512K (15.16%)
+- [x] 新组件落位 RAM_D2：12K/288K (4.11%)，DTCM 不受影响
+- [x] 生成 afd01_app_0.0.16_beta.hex / .bin
 
 ### 上位机任务 (feat/protocol_v2_refactor)
 
@@ -170,6 +165,10 @@
 | 2026-04-16 | 上位机 `feat/protocol_v2_refactor` | 新增 `core/profile/`（models + ProfileStore + cache） |
 | 2026-04-16 | 上位机 `feat/protocol_v2_refactor` | 新增 `core/protocol/handshake.py`；MainWindow 自动握手 + 100ms tick |
 | 2026-04-16 | 上位机 `feat/protocol_v2_refactor` | 上位机 M1 任务完工，测试 107/107 通过 |
+| 2026-04-17 | 下位机 `feat/debug_protocol_v2` | 修正分支创建（原先误建到上位机 repo） |
+| 2026-04-17 | 下位机 `feat/debug_protocol_v2` | shared/debug 重写为 v2：debug.h + internal + proto + registry + session + debug.c |
+| 2026-04-17 | 下位机 `feat/debug_protocol_v2` | target/afd01 新增 afd01_debug_profile.h/c，改写 afd01_app_debug.c，trace.c 接入新 API |
+| 2026-04-17 | 下位机 `feat/debug_protocol_v2` | 编译通过（FLASH 44%, RAM 15%, RAM_D2 4%，DTCM 不变） |
 
 ---
 
