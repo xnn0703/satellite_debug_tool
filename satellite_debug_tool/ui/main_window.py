@@ -25,17 +25,26 @@ from satellite_debug_tool.core.protocol import (
     DataReport,
     EventReport,
     FrameReceiverV2,
+    Heartbeat,
     StateReport,
     build_debug_enable_v2,
+    build_reset_stats,
+    build_set_sample_rate,
+    build_set_trace_mode,
+    build_user_mark,
 )
 from satellite_debug_tool.core.protocol.handshake import Handshake
 from satellite_debug_tool.core.profile import ProfileCache, ProfileStore
-from satellite_debug_tool.core.data import DataStore, EventLog, StateStore
+from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, StateStore
 from satellite_debug_tool.ui.state_panel_widget import StatePanelWidget
 from satellite_debug_tool.ui.event_timeline_widget import EventTimelineWidget
+from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
+from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
+from satellite_debug_tool.ui.control_panel_widget import ControlPanelWidget
+from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
 from satellite_debug_tool.io.data_recorder import DataRecorder
 from satellite_debug_tool.io.data_importer import DataImporter
-from satellite_debug_tool.ui.chart_widget import ChartWidget, COLORS
+from satellite_debug_tool.ui.chart_widget import COLORS   # COLORS 保留给通道选择面板使用
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.core.config import Settings
@@ -50,6 +59,8 @@ class MainWindow(QMainWindow):
         self._profile_store = ProfileStore(cache=ProfileCache())
         self._state_store = StateStore()
         self._event_log = EventLog()
+        # M3：事件到达时把标记绘制到分组曲线图上
+        self._event_log.event_added.connect(self._on_event_added_for_chart)
         self._handshake: Handshake | None = None   # 连接建立后创建
         self._handshake_timer = QTimer(self)
         self._handshake_timer.setInterval(100)     # 100ms 驱动握手/心跳检查
@@ -249,14 +260,25 @@ class MainWindow(QMainWindow):
         )
         self._toolbar.addWidget(self._conn_status_label)
 
+        # ==== M3: 顶部 StatusStrip（始终可见的链路/状态灯带） ====
+        self._status_strip = StatusStripWidget(self._profile_store, self._state_store)
+        layout.addWidget(self._status_strip)
+
+        # ==== M3: Dashboard（KPI 卡片 + 模式按钮，profile 驱动） ====
+        self._dashboard = DashboardWidget(self._profile_store, self._state_store)
+        self._dashboard.mode_requested.connect(self._on_dashboard_mode_requested)
+        layout.addWidget(self._dashboard)
+
         splitter = QSplitter(Qt.Vertical)
 
         # Horizontal splitter for chart + attitude side by side
         top_splitter = QSplitter(Qt.Horizontal)
 
-        self._chart = ChartWidget()
+        # M3: 分组曲线（按 profile.group_id 分子图）
+        self._chart = GroupedChartWidget()
         self._chart.setMinimumHeight(400)
         self._chart.set_dark_theme(True)
+        self._chart.set_profile_store(self._profile_store)
         top_splitter.addWidget(self._chart)
 
         self._attitude = AttitudeWidget()
@@ -312,9 +334,17 @@ class MainWindow(QMainWindow):
         channel_layout.addWidget(self._scroll)
         channel_panel.setMinimumHeight(80)
 
+        # M3: 控制面板（采样率 / USER_MARK / 复位统计）
+        self._control_panel = ControlPanelWidget()
+        self._control_panel.sample_rate_changed.connect(self._on_sample_rate_changed)
+        self._control_panel.user_mark_requested.connect(self._on_user_mark_requested)
+        self._control_panel.reset_stats_requested.connect(self._on_reset_stats_requested)
+
+        splitter.addWidget(self._control_panel)
         splitter.addWidget(channel_panel)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 4)   # top_splitter（曲线+姿态+状态）
+        splitter.setStretchFactor(1, 0)   # control_panel（不拉伸）
+        splitter.setStretchFactor(2, 1)   # channel_panel
 
         layout.addWidget(splitter)
 
@@ -429,6 +459,10 @@ class MainWindow(QMainWindow):
         self._conn_status_label.setStyleSheet(f"color: {S.SUCCESS};")
         self._type_combo.setEnabled(False)
 
+        # M3: 控制面板可用，链路指示置绿
+        self._control_panel.set_enabled(True)
+        self._status_strip.set_link_state(connected=True)
+
         # 启动握手：发 4 条 REQUEST，之后定时 tick 检查心跳/重发
         self._receiver.reset()
         if self._worker is not None:
@@ -445,14 +479,60 @@ class MainWindow(QMainWindow):
 
     def _on_handshake_ready(self, hw_type: str):
         self._statusbar.showMessage(f"Profile ready: {hw_type}", 3000)
-        # 通知状态面板切换 hw_type 并按最新 profile 重建行
+        # 通知各 profile 驱动组件切换 hw_type 并按最新 profile 重建
         self._state_panel.set_hw_type(hw_type)
+        self._dashboard.set_hw_type(hw_type)
+        self._status_strip.set_hw_type(hw_type)
+        self._chart.set_hw_type(hw_type)
+
+    # ----- ControlPanel / Dashboard 发出的控制意图 -----
+
+    def _send_control_frame(self, frame: bytes) -> bool:
+        if self._worker is None or not self._is_connected:
+            self._statusbar.showMessage("未连接，命令未发送", 3000)
+            return False
+        return bool(self._worker.send(frame))
+
+    def _on_sample_rate_changed(self, hz: int) -> None:
+        if self._send_control_frame(build_set_sample_rate(hz)):
+            self._statusbar.showMessage(f"已请求采样率 {hz} Hz", 2000)
+
+    def _on_user_mark_requested(self, mark_id: int, text: str) -> None:
+        if self._send_control_frame(build_user_mark(mark_id, text)):
+            self._statusbar.showMessage(f"Mark #{mark_id} 已发送", 2000)
+
+    def _on_reset_stats_requested(self) -> None:
+        if self._send_control_frame(build_reset_stats()):
+            self._statusbar.showMessage("已请求下位机复位统计", 2000)
+
+    def _on_dashboard_mode_requested(self, state_id: int, target_value: int) -> None:
+        """Dashboard 枚举按钮：当前仅对 TRACE_MODE (afd01 state_id=0) 下发实际帧；
+        其它状态字只显示意图，等协议扩展 SET_STATE 泛化子命令后再自动发。"""
+        if state_id == 0:
+            if self._send_control_frame(build_set_trace_mode(target_value)):
+                self._statusbar.showMessage(
+                    f"已请求切换模式（state_id={state_id} → {target_value}）", 2000,
+                )
+        else:
+            self._statusbar.showMessage(
+                f"state_id={state_id} 的模式切换暂未下发（协议待扩展）", 3000,
+            )
+
+    # ----- EventLog → Chart 垂直事件标记 -----
+
+    def _on_event_added_for_chart(self, record: EventRecord) -> None:
+        hw = self._profile_store.current_hw_type()
+        if hw is None or record.hw_type != hw:
+            return
+        self._chart.add_event_marker(record.timestamp_ms, record.level)
 
     def _on_link_lost(self):
         self._statusbar.showMessage("Heartbeat timeout (link lost)", 5000)
+        self._status_strip.set_link_state(connected=False)
 
     def _on_link_restored(self):
         self._statusbar.showMessage("Heartbeat restored", 2000)
+        self._status_strip.set_link_state(connected=True)
 
     def _on_disconnected(self):
         self._is_connected = False
@@ -464,6 +544,10 @@ class MainWindow(QMainWindow):
         self._conn_status_label.setText("Disconnected")
         self._conn_status_label.setStyleSheet(f"color: {S.TEXT};")
         self._type_combo.setEnabled(True)
+
+        # M3: 控制面板置灰、链路指示置红
+        self._control_panel.set_enabled(False)
+        self._status_strip.set_link_state(connected=False)
 
         # 握手停止，profile 缓存保留供下次连接复用
         self._handshake_timer.stop()
@@ -506,6 +590,9 @@ class MainWindow(QMainWindow):
             if isinstance(rec, DataReport):
                 self._data_store.update(rec)
                 self._frame_count += 1
+                continue
+            if isinstance(rec, Heartbeat):
+                self._status_strip.pulse_heartbeat()
                 continue
 
             hw = self._profile_store.current_hw_type()
@@ -579,30 +666,18 @@ class MainWindow(QMainWindow):
                 del self._channel_value_labels[name]
                 del self._channel_containers[name]
 
-        visible_names = [
-            name
-            for name, cb in self._channel_checks.items()
-            if cb.isChecked() and name in channels
-        ]
-        if visible_names:
-            self._chart.set_channels(visible_names)
-            values = {}
-            for name in visible_names:
-                ch = self._data_store.get_channel(name)
-                latest = ch.get_latest() if ch else None
-                if latest:
-                    values[name] = latest[1]
-                    self._channel_value_labels[name].setText(f"{latest[1]:.2f}")
-            if values:
-                latest_ts = next(
-                    (
-                        self._data_store.get_channel(name).get_latest()[0]
-                        for name in visible_names
-                        if self._data_store.get_channel(name).get_latest()
-                    ),
-                    0,
-                )
-                self._chart.update_data(latest_ts / 1000.0, values)
+        # 通道数值标签：保留旧 UI 里"列出每通道最新数值"的功能
+        for name, cb in self._channel_checks.items():
+            if not cb.isChecked() or name not in channels:
+                continue
+            ch = self._data_store.get_channel(name)
+            latest = ch.get_latest() if ch else None
+            if latest:
+                self._channel_value_labels[name].setText(f"{latest[1]:.2f}")
+
+        # M3: 分组曲线 + Dashboard 统一按 profile 从 DataStore 拉取整批数据
+        self._chart.refresh(self._data_store)
+        self._dashboard.refresh(self._data_store)
 
         # Update attitude widget with roll/pitch/yaw from selected channels
         roll_ch, pitch_ch, yaw_ch = self._attitude.get_channel_selections()
@@ -627,6 +702,7 @@ class MainWindow(QMainWindow):
                 self._recorder.stop()
                 self._recorder = None
             self._is_recording = False
+            self._status_strip.set_recording(False)
             self._record_btn.setText("Record")
             self._record_btn.setStyleSheet(
                 f"background-color: {S.PRIMARY}; color: white; border: none; border-radius: 2px;"
@@ -644,6 +720,7 @@ class MainWindow(QMainWindow):
                 self._recorder = DataRecorder(filepath)
                 if self._recorder.start():
                     self._is_recording = True
+                    self._status_strip.set_recording(True)
                     self._record_btn.setText("Stop")
                     self._record_btn.setStyleSheet(
                         f"background-color: {S.ERROR}; color: white; border: none; border-radius: 2px;"

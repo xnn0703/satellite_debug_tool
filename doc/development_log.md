@@ -143,7 +143,66 @@
 
 ---
 
-## M3 — Dashboard + 分组曲线（待开始）
+## M3 — Dashboard + 分组曲线（代码完成，待硬件联调）
+
+### 新增 UI 组件
+
+- [x] `ui/dashboard_widget.py`：
+  - `KpiCard`：大号等宽数字 + 单位，超出 `[display_min,display_max]` 变红
+  - `ModeButtonGroup`：基于 ENUM state 生成按钮组，当前值高亮
+  - `DashboardWidget`：按 `flags.critical` 自动筛卡片和模式按钮；
+    `mode_requested(state_id, target)` 信号给 MainWindow
+  - 刷新节奏：外部 `refresh(data_store)` 驱动，无内部定时器
+
+- [x] `ui/status_strip_widget.py`：
+  - 固定 chip：LINK / REC / BEAT（心跳闪烁 200ms）
+  - 动态 chip：前 ≤ 6 个 critical state（BOOL 灯 + ENUM 文本）
+  - `set_link_state / set_recording / pulse_heartbeat` API
+
+- [x] `ui/control_panel_widget.py`：
+  - 采样率下拉 (5/10/25/50/100/200 Hz)
+  - 用户标记输入 + 发送按钮（自增 mark_id）
+  - 复位统计按钮
+  - 连接状态联动 `set_enabled(bool)`
+
+- [x] `ui/grouped_chart_widget.py`（取代旧 ChartWidget）：
+  - `GraphicsLayoutWidget` 纵向堆叠 PlotItem，按 `group_id` 分子图
+  - 共享 X 轴（`setXLink`），每组独立 Y 轴 + 自带 legend
+  - `refresh(data_store)` 从 ChannelBuffer 整批 `setData`（ndarray 最快路径）
+  - 时间窗口：`set_time_window(sec)` / `set_auto_range(bool)`
+  - `add_event_marker(ts_ms, level)` 全子图竖线标记（最多 200 条环形）
+  - `setDownsampling(mode='peak', auto=True)` + `setClipToView(True)` 性能
+
+### MainWindow 集成
+
+- [x] import 接入四个新 widget + `Heartbeat` / `build_set_*` 等
+- [x] Toolbar 下新增 StatusStrip
+- [x] Toolbar 下 StatusStrip 后新增 Dashboard
+- [x] 垂直 splitter: top_splitter / ControlPanel / channel_panel
+- [x] top_splitter 右侧 right_panel（StatePanel + EventTimeline）保留
+- [x] `_on_handshake_ready` 同步 hw_type 给 State/Dashboard/StatusStrip/Chart
+- [x] `_on_connected/disconnected` 联动 ControlPanel 和 StatusStrip LINK
+- [x] `_on_link_lost/restored` 切换 StatusStrip LINK 颜色
+- [x] `_on_record_clicked` 同步 StatusStrip REC
+- [x] `_on_data_received`：HEARTBEAT → `status_strip.pulse_heartbeat()`
+- [x] `_update_display` 改用 `chart.refresh(data_store)` + `dashboard.refresh(data_store)`
+- [x] ControlPanel 三个信号 → `build_set_sample_rate / build_user_mark / build_reset_stats`
+- [x] Dashboard `mode_requested`：state_id=0 → `build_set_trace_mode`（协议泛化待 v2.x）
+- [x] EventLog `event_added` → `chart.add_event_marker`
+
+### 简化 / 清理
+
+- [x] 旧 `ChartWidget` 类从 `chart_widget.py` 移除，保留 `COLORS` 常量给通道 panel
+- [x] `ui/__init__.py` 导出更新
+
+### 验收对照 §8.1
+
+- [x] F-08 Dashboard：SNR/AZ/EL/姿态/误差 5 类 KPI 卡片完全由 `flags.critical` 生成 ✓（单元路径通）
+- [x] F-09 曲线分组：SNR 与姿态角分属 group_id=2 与 group_id=0，各自独立 Y 轴 ✓
+- [x] F-10 曲线交互：pyqtgraph 默认鼠标滚轮缩放 / 拖动 / 右键菜单已启用 ✓
+- [x] F-14 模式切换：Dashboard 按钮点击下发 SET_TRACE_MODE（state_id=0）；其它 ENUM 状态等协议扩展
+
+全量 pytest 122/122 通过；`import satellite_debug_tool.ui.main_window` 通过。
 
 ---
 
