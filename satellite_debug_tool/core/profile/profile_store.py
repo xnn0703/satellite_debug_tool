@@ -165,10 +165,17 @@ class ProfileStore(QObject):
         return True
 
     def import_(self, path: Path) -> Optional[str]:
-        """导入 profile JSON，返回导入的 hw_type（失败返回 None）。"""
+        """导入 profile JSON 文件，返回导入的 hw_type（失败返回 None）。"""
         import json
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return self.import_dict(data)
+
+    def import_dict(self, data: dict) -> Optional[str]:
+        """从 dict 导入 profile（用于 .sdb v2 文件头恢复）；失败返回 None。"""
+        try:
             profile = profile_from_dict(data)
         except Exception:
             return None

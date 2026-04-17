@@ -210,7 +210,57 @@
 
 ---
 
-## M5 — 异步录制 + ufd45 smoke（待开始）
+## M5 — 异步录制 + ufd45 smoke（代码完成，待端到端联调）
+
+### 下位机：ufd45 profile
+
+- [x] `target/ufd45/application/app/debug/ufd45_debug_profile.h/c`
+  - 16 channels（含 ufd45 专属 `bcn_rssi` / `bcn_freq_offset` / `ku_lo`
+    / `buc_temp` / `lnb_current` / `tx_power` / `rx_agc`）
+  - 10 states（含专属 `BUC_READY` / `LNB_OK` / `BEACON_LOCKED` / `POLARIZATION` ENUM）
+  - 11 events（含专属 `BEACON_ACQUIRED/LOST` / `BUC_OVERTEMP` / `LNB_FAULT`
+    / `POLARIZATION_SWITCH`）
+  - ID 分布 / 枚举项均与 afd01 故意差异化，验证 §8.5 D-02
+- [x] `ufd45_app_debug.c` 重写：对齐 afd01 结构，绑定 WizNet UDP + 启动 debug_task
+- [x] `trace.c` 清理旧 `debug_report_data_t` + `ufd45_app_debug_report_data` → `ufd45_profile_push_trace_frame`
+- [x] `./build.sh ufd45 app debug` 通过（FLASH 39.17%，RAM_D2 4.10%，DTCM 不变）
+- shared/ 协议核心**零改动**：证明 M1 设计的设备解耦架构有效
+
+### 上位机：异步 Recorder + SDB v2
+
+- [x] `io/data_recorder.py` 重写：threading.Thread + queue.Queue(10k)
+  - `write_frame()` 非阻塞 `put_nowait`
+  - `dropped_count` / `written_count` 属性
+  - `stop()` 用哨兵（None）通知线程退出，timeout 3s join
+- [x] SDB v2 文件格式：header 内嵌 `profile_len` + `profile_json`
+  - 录制时把当前 `ProfileStore.get_profile(hw)` → `profile_to_dict` 嵌入
+  - 回放时 `import_dict` 恢复到 ProfileStore，UI 按文件内 profile 重建
+- [x] `io/data_importer.py` 重写：
+  - `DataImporter.open_sdb(path)` → `SdbFile(version, timestamp, profile, ...)`
+  - `iter_records()` / `iter_data_reports()` 双视图
+  - v1 拒绝读取（明确抛 `SdbFormatError`）
+- [x] `ProfileStore.import_dict(dict)`：新增 API 支持直接从 dict 恢复
+- [x] `_on_record_clicked` 把当前 profile 传给 Recorder
+- [x] `_on_import_clicked` 重写：先恢复 profile → 清空 DataStore → 分发 Data/State/Event
+- [x] `tests/test_recorder_importer.py`（7 条）：
+  - 无 profile / 带 profile 写入 + 头结构
+  - 端到端 round-trip（5 帧 + profile）
+  - 错误处理：bad magic / v1 拒绝 / 截断
+
+### 验收对照 §8.5
+
+- [x] D-01：afd01 profile 完整显示（M1-M4 已通；待硬件端到端）
+- [x] D-02：ufd45 profile 与 afd01 完全不同的 channel/state/event，**上位机零改动** ✓
+- [x] D-03：profile 缓存命中逻辑（M1 已有；待硬件端到端）
+- [x] D-04：table_ver 递增触发重建（M1 ProfileStore.apply_*_define 实现）
+- [x] D-05：profile 导出 JSON 可直接解析（testcovered 2x profile roundtrip）
+- [x] D-06：.sdb v2 内嵌 profile，跨机器回放 ✓（test_round_trip_with_profile）
+- [x] D-07：未知 channel_id → `ch_{id:02d}` 占位（DataStore 行为已实现）
+- [x] D-08：未知 event_id → `EVENT_<hex>`（EventLog 行为已实现）
+- [x] D-09：下位机无事件 → EventTimeline 空面板不崩溃（设计如此）
+- [x] D-10：下位机零通道 → Chart 区域"等待握手"，StatePanel/Dashboard 仍可工作（设计如此）
+
+全量 pytest 129/129 通过。
 
 ---
 
@@ -252,6 +302,10 @@
 | 2026-04-17 | 下位机 `feat/debug_protocol_v2` | shared/debug 重写为 v2：debug.h + internal + proto + registry + session + debug.c |
 | 2026-04-17 | 下位机 `feat/debug_protocol_v2` | target/afd01 新增 afd01_debug_profile.h/c，改写 afd01_app_debug.c，trace.c 接入新 API |
 | 2026-04-17 | 下位机 `feat/debug_protocol_v2` | 编译通过（FLASH 44%, RAM 15%, RAM_D2 4%，DTCM 不变） |
+| 2026-04-17 | 上位机 `feat/protocol_v2_refactor` | M2 State/Event UI (commit f5c7678) |
+| 2026-04-17 | 上位机 `feat/protocol_v2_refactor` | M3 Dashboard/StatusStrip/ControlPanel/分组曲线 (commit 27144c9) |
+| 2026-04-17 | 下位机 `feat/debug_protocol_v2` | M5 下位机：ufd45_debug_profile + app_debug + trace.c（ufd45 编译通过，FLASH 39%, RAM_D2 4.1%） |
+| 2026-04-17 | 上位机 `feat/protocol_v2_refactor` | M5 上位机：异步 DataRecorder + SDB v2 (内嵌 profile) + DataImporter v2 + 7 条测试 (129/129) |
 
 ---
 

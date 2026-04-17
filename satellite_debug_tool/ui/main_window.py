@@ -717,7 +717,15 @@ class MainWindow(QMainWindow):
                 "SDB Files (*.sdb);;All Files (*)",
             )
             if filepath:
-                self._recorder = DataRecorder(filepath)
+                # M5: 录制时把当前 profile dict 嵌入 .sdb 文件头，回放时可脱机恢复 UI
+                profile_dict = None
+                hw = self._profile_store.current_hw_type()
+                if hw is not None:
+                    p = self._profile_store.get_profile(hw)
+                    if p is not None:
+                        from satellite_debug_tool.core.profile.cache import profile_to_dict
+                        profile_dict = profile_to_dict(p)
+                self._recorder = DataRecorder(filepath, profile_dict=profile_dict)
                 if self._recorder.start():
                     self._is_recording = True
                     self._status_strip.set_recording(True)
@@ -725,7 +733,8 @@ class MainWindow(QMainWindow):
                     self._record_btn.setStyleSheet(
                         f"background-color: {S.ERROR}; color: white; border: none; border-radius: 2px;"
                     )
-                    self._statusbar.showMessage(f"Recording to {filepath}", 3000)
+                    suffix = " + profile" if profile_dict else ""
+                    self._statusbar.showMessage(f"Recording to {filepath}{suffix}", 3000)
                 else:
                     self._recorder = None
                     self._statusbar.showMessage("Failed to start recording", 3000)
@@ -735,27 +744,42 @@ class MainWindow(QMainWindow):
             self,
             "Import Data",
             "",
-            "Data Files (*.sdb *.csv);;SDB Files (*.sdb);;CSV Files (*.csv);;All Files (*)",
+            "SDB Files (*.sdb);;All Files (*)",
         )
-        if filepath:
-            try:
-                if filepath.endswith(".csv"):
-                    frames = DataImporter.read_csv(filepath)
-                else:
-                    frames = DataImporter.read_sdb(filepath)
-                for frame in frames:
-                    self._data_store.update(frame)
-                    self._frame_count += 1
-                self._chart.set_auto_time_range(True)
-                all_timestamps = []
-                for ch in self._data_store.get_all_channels().values():
-                    for ts, _ in ch.get_values():
-                        all_timestamps.append(ts / 1000.0)
-                if all_timestamps:
-                    self._chart.set_time_range(min(all_timestamps), max(all_timestamps))
-                self._statusbar.showMessage(f"Imported data from {filepath}", 3000)
-            except Exception as e:
-                self._statusbar.showMessage(f"Import failed: {e}", 5000)
+        if not filepath:
+            return
+        try:
+            sdb = DataImporter.open_sdb(filepath)
+
+            # 1) 回放前先恢复 profile，让 UI 按文件内 profile 渲染
+            if sdb.profile is not None:
+                hw_type = self._profile_store.import_dict(sdb.profile)
+                if hw_type is not None:
+                    self._state_panel.set_hw_type(hw_type)
+                    self._dashboard.set_hw_type(hw_type)
+                    self._status_strip.set_hw_type(hw_type)
+                    self._chart.set_hw_type(hw_type)
+
+            # 2) 清空现有数据后灌入录制内容
+            self._data_store.clear()
+            hw = self._profile_store.current_hw_type()
+            data_count = 0
+            for rec in sdb.iter_records():
+                if isinstance(rec, DataReport):
+                    self._data_store.update(rec)
+                    data_count += 1
+                elif hw is not None and isinstance(rec, StateReport):
+                    self._state_store.update(hw, rec)
+                elif hw is not None and isinstance(rec, EventReport):
+                    self._event_log.add(hw, rec, self._profile_store)
+            self._frame_count += data_count
+            self._chart.set_auto_range(True)
+            self._statusbar.showMessage(
+                f"Imported {data_count} DataReport(s) from {filepath}", 3000,
+            )
+        except Exception as exc:
+            self._statusbar.showMessage(f"Import failed: {exc}", 5000)
+            return
 
     def _on_clear_clicked(self):
         self._chart.clear()

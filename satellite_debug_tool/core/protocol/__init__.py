@@ -34,7 +34,7 @@ from .frame_v2 import (
     ChannelSample, DataReport,
     StateSample, StateReport,
     EventReport, Heartbeat, CommandResponse,
-    RawFrame,
+    RawFrame, FrameV2Record,
 )
 
 
@@ -70,5 +70,5 @@ __all__ = [
     "ChannelSample", "DataReport",
     "StateSample", "StateReport",
     "EventReport", "Heartbeat", "CommandResponse",
-    "RawFrame",
+    "RawFrame", "FrameV2Record",
 ]
