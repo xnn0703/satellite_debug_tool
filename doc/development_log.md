@@ -332,6 +332,26 @@ python -m satellite_debug_tool
 
 全量 pytest 142/142 通过；`import main_window` 通过。
 
+### 2026-04-18 — 性能/布局补丁
+
+用户反馈 "点击/拖拽一顿一顿" + "曲线太分散看不全"，两项针对性修复：
+
+**1. 拆双定时器**
+- 原 `_update_timer` 100ms 做所有事情（含 chart.refresh 整份 ndarray setData）
+- 现拆成：
+  - `_update_timer` 100ms：FPS/计数/3D 姿态/通道数值 label —— 只是轻量标签更新
+  - `_heavy_timer` 200ms：chart.refresh + dashboard.refresh —— 重绘制 5Hz 即可
+- 12 条曲线 × 30000 点 setData 频率从 10Hz 降到 5Hz，UI 事件循环不再被挤压
+
+**2. Chart 单图 / 分组 模式**
+- GroupedChartWidget 加 `_mode` 字段（默认 `"combined"`）
+- `_rebuild_combined(channels)`：所有通道叠一张大图，共用 Y 轴 + enableAutoRange；legend 每条 `name (unit)`
+- `_rebuild_stacked(channels)`：保留原来的按 group_id 分子图
+- 顶部 toolbar 加 "单图 / 分组" toggle 按钮，`set_mode()` 切换即重建
+- 按钮色板跟随主题
+
+全量 pytest 142/142 通过。
+
 ---
 
 ## M6 — 主题字体（待开始）

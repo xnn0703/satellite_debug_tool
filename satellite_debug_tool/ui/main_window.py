@@ -369,9 +369,17 @@ class MainWindow(QMainWindow):
         self._statusbar.addPermanentWidget(QLabel("  |  "))
         self._statusbar.addPermanentWidget(self._error_count_label)
 
+        # 轻量 UI 刷新（FPS/计数/姿态 3D/通道数值）—— 10Hz
         self._update_timer = QTimer()
         self._update_timer.timeout.connect(self._update_display)
         self._update_timer.start(100)
+
+        # 重绘制（分组曲线 / Dashboard 数值） —— 5Hz，拉开与 UI 事件循环的挤压，
+        # 曲线 setData 只要看得清楚就够，避免每 100ms 刷 30000 点 ndarray
+        # 导致拖拽/点击卡顿
+        self._heavy_timer = QTimer()
+        self._heavy_timer.timeout.connect(self._update_heavy)
+        self._heavy_timer.start(200)
 
         self._frame_count = 0
         self._error_count = 0
@@ -637,6 +645,12 @@ class MainWindow(QMainWindow):
             elif isinstance(rec, EventReport):
                 self._event_log.add(hw, rec, self._profile_store)
 
+    def _update_heavy(self):
+        """重绘制：分组曲线 + Dashboard KPI。5Hz 足够，避免每 100ms 刷整份
+        ndarray 导致 UI 响应卡顿。"""
+        self._chart.refresh(self._data_store)
+        self._dashboard.refresh(self._data_store)
+
     def _update_display(self):
         current_time = datetime.now().timestamp()
         self._frame_times.append(current_time)
@@ -711,10 +725,6 @@ class MainWindow(QMainWindow):
             latest = ch.get_latest() if ch else None
             if latest:
                 self._channel_value_labels[name].setText(f"{latest[1]:.2f}")
-
-        # M3: 分组曲线 + Dashboard 统一按 profile 从 DataStore 拉取整批数据
-        self._chart.refresh(self._data_store)
-        self._dashboard.refresh(self._data_store)
 
         # Update attitude widget with roll/pitch/yaw from selected channels
         roll_ch, pitch_ch, yaw_ch = self._attitude.get_channel_selections()

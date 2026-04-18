@@ -17,12 +17,13 @@ from typing import Dict, List, Optional
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from satellite_debug_tool.core.data import DataStore
 from satellite_debug_tool.core.data.data_store import channel_key
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.protocol import ChannelDefEntry
+from satellite_debug_tool.ui import styles as S
 
 
 # 每个 group_id 选一套视觉友好的曲线配色
@@ -46,6 +47,14 @@ _EVENT_LEVEL_COLORS = {
 # 每个子图最小高度（像素）
 _MIN_SUBPLOT_HEIGHT = 120
 
+# 合并模式下 12 条曲线的颜色序列（高区分度）
+_COMBINED_PALETTE = [
+    "#E74C3C", "#3498DB", "#2ECC71", "#F39C12",
+    "#9B59B6", "#1ABC9C", "#E91E63", "#00BCD4",
+    "#8BC34A", "#FF5722", "#607D8B", "#673AB7",
+    "#CDDC39", "#FFC107", "#795548", "#03A9F4",
+]
+
 
 def _group_title(group_id: int) -> str:
     return {
@@ -66,8 +75,11 @@ class GroupedChartWidget(QWidget):
         self._is_dark = True
         self._current_hw: Optional[str] = None
         self._profile: Optional[ProfileStore] = None
+        # 默认 "combined"：所有通道叠到一张大图看全貌；
+        # "stacked"：按 group_id 纵向分子图（适合多量纲对比）
+        self._mode = "combined"
 
-        # group_id -> PlotItem
+        # group_id (combined 模式用 0) -> PlotItem
         self._plots: Dict[int, pg.PlotItem] = {}
         # channel_id -> (group_id, PlotDataItem, ChannelDefEntry)
         self._curves: Dict[int, tuple] = {}
@@ -80,8 +92,28 @@ class GroupedChartWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        # 顶部 toolbar：单图 / 分组 切换 + 自动/跟随 开关
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(4, 2, 4, 2)
+        toolbar.setSpacing(4)
+        self._btn_combined = QPushButton("单图")
+        self._btn_combined.setCheckable(True)
+        self._btn_combined.setChecked(True)
+        self._btn_combined.clicked.connect(lambda: self.set_mode("combined"))
+        self._btn_stacked = QPushButton("分组")
+        self._btn_stacked.setCheckable(True)
+        self._btn_stacked.clicked.connect(lambda: self.set_mode("stacked"))
+        for b in (self._btn_combined, self._btn_stacked):
+            b.setFixedHeight(24)
+        toolbar.addWidget(self._btn_combined)
+        toolbar.addWidget(self._btn_stacked)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+
         self._gl = pg.GraphicsLayoutWidget()
-        layout.addWidget(self._gl)
+        layout.addWidget(self._gl, 1)
         self._apply_theme()
 
         self._empty = pg.LabelItem("等待设备握手…", color="#666666", size="10pt")
@@ -92,6 +124,10 @@ class GroupedChartWidget(QWidget):
     def set_dark_theme(self, is_dark: bool) -> None:
         self._is_dark = is_dark
         self._apply_theme()
+        self._apply_button_theme()
+        # 已有子图的轴色也要同步；简化做法：重建
+        if self._current_hw is not None and self._curves:
+            self._rebuild()
 
     def set_profile_store(self, profile: ProfileStore) -> None:
         """绑定 profile store；profile_changed 时自动重建子图。"""
@@ -117,6 +153,15 @@ class GroupedChartWidget(QWidget):
 
     def set_auto_range(self, enabled: bool) -> None:
         self._auto_range = bool(enabled)
+
+    def set_mode(self, mode: str) -> None:
+        """mode = "combined" (所有通道叠一张大图) 或 "stacked" (按 group_id 分子图)。"""
+        if mode not in ("combined", "stacked"):
+            return
+        self._mode = mode
+        self._btn_combined.setChecked(mode == "combined")
+        self._btn_stacked.setChecked(mode == "stacked")
+        self._rebuild()
 
     def refresh(self, data_store: DataStore) -> None:
         """按 profile 拉取 ChannelBuffer 的最新全量数据整批刷新。"""
@@ -223,13 +268,58 @@ class GroupedChartWidget(QWidget):
             self._gl.addItem(self._empty)
             return
 
-        # 按 group_id 聚合
+        self._apply_button_theme()
+        if self._mode == "combined":
+            self._rebuild_combined(channels)
+        else:
+            self._rebuild_stacked(channels)
+
+    def _plot_axis_color(self) -> str:
+        return "#CCCCCC" if self._is_dark else "#333333"
+
+    def _apply_button_theme(self) -> None:
+        p = S.palette(self._is_dark)
+        btn_style = (
+            f"QPushButton {{ background-color: {p['input_bg']}; color: {p['text']}; "
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 2px 10px; }}"
+            f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
+            f"QPushButton:checked {{ background-color: #0E639C; color: white; "
+            f"border-color: #0E639C; font-weight: 600; }}"
+        )
+        self._btn_combined.setStyleSheet(btn_style)
+        self._btn_stacked.setStyleSheet(btn_style)
+
+    def _rebuild_combined(self, channels: List[ChannelDefEntry]) -> None:
+        """所有通道叠一张大图，共用 Y 轴（量纲有差异用户可接受）。"""
+        plot: pg.PlotItem = self._gl.addPlot(row=0, col=0, title="全部通道")
+        plot.setLabel("left", "Value")
+        plot.setLabel("bottom", "Time", units="s")
+        plot.showGrid(x=True, y=True, alpha=0.25)
+        plot.getAxis("left").setTextPen(self._plot_axis_color())
+        plot.getAxis("bottom").setTextPen(self._plot_axis_color())
+        plot.setDownsampling(mode="peak", auto=True)
+        plot.setClipToView(True)
+        plot.addLegend(offset=(10, 10))
+
+        for i, ch in enumerate(channels):
+            color = _COMBINED_PALETTE[i % len(_COMBINED_PALETTE)]
+            label = f"{ch.name} ({ch.unit})" if ch.unit else ch.name
+            curve = plot.plot(
+                [], [], pen=pg.mkPen(color=color, width=1.5), name=label
+            )
+            self._curves[ch.channel_id] = (0, curve, ch)
+
+        # 合并模式让 Y 轴自动贴数据，避免显式固定范围挤压极小数
+        plot.enableAutoRange(axis="y", enable=True)
+        self._plots[0] = plot
+
+    def _rebuild_stacked(self, channels: List[ChannelDefEntry]) -> None:
+        """按 group_id 分子图，各自独立 Y 轴，共享 X 轴。"""
         groups: Dict[int, List[ChannelDefEntry]] = {}
         for ch in channels:
             groups.setdefault(ch.group_id, []).append(ch)
 
-        axis_text_color = "#CCCCCC" if self._is_dark else "#333333"
-        grid_alpha = 0.25
+        axis_text_color = self._plot_axis_color()
         first_plot: Optional[pg.PlotItem] = None
 
         for row_idx, group_id in enumerate(sorted(groups.keys())):
@@ -237,7 +327,7 @@ class GroupedChartWidget(QWidget):
             plot: pg.PlotItem = self._gl.addPlot(row=row_idx, col=0, title=_group_title(group_id))
             plot.setMinimumHeight(_MIN_SUBPLOT_HEIGHT)
             plot.setLabel("left", "Value")
-            plot.showGrid(x=True, y=True, alpha=grid_alpha)
+            plot.showGrid(x=True, y=True, alpha=0.25)
             plot.getAxis("left").setTextPen(axis_text_color)
             plot.getAxis("bottom").setTextPen(axis_text_color)
             plot.setDownsampling(mode="peak", auto=True)
@@ -257,7 +347,7 @@ class GroupedChartWidget(QWidget):
                 )
                 self._curves[ch.channel_id] = (group_id, curve, ch)
 
-            # 建议 Y 轴范围：取组内 display_min/max 聚合
+            # 分组模式下按组内 display_min/max 建议 Y 轴
             y_mins = [c.display_min for c in group_channels]
             y_maxs = [c.display_max for c in group_channels]
             if y_mins and y_maxs:
