@@ -51,8 +51,10 @@ class KpiCard(QFrame):
         self._out_of_range = False
         self._is_dark = True
 
-        self.setMinimumSize(120, 80)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # 固定高度 72px 与 ModeButtonGroup 对齐；宽度自适应
+        self.setFixedHeight(72)
+        self.setMinimumWidth(110)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -136,9 +138,11 @@ class ModeButtonGroup(QFrame):
         self._current_value: Optional[int] = None
         self._is_dark = True
 
+        # 与 KpiCard 高度 72 对齐
+        self.setFixedHeight(72)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 6, 8, 6)
-        outer.setSpacing(4)
+        outer.setContentsMargins(8, 4, 8, 4)
+        outer.setSpacing(2)
 
         self._title = QLabel(state.name)
         outer.addWidget(self._title)
@@ -149,7 +153,7 @@ class ModeButtonGroup(QFrame):
         for item in state.enums:
             btn = QPushButton(item.name)
             btn.setCheckable(True)
-            btn.setMinimumHeight(28)
+            btn.setFixedHeight(26)
             btn.clicked.connect(lambda _c=False, v=item.value: self._on_clicked(v))
             row.addWidget(btn)
             self._buttons[item.value] = btn
@@ -215,16 +219,22 @@ class DashboardWidget(QWidget):
 
         self.setStyleSheet("background-color: transparent;")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
-        outer.setSpacing(6)
+        outer.setContentsMargins(4, 2, 4, 2)
+        outer.setSpacing(4)
 
+        # 单行布局：KPI 卡片 + 模式按钮组并排，高度一致避免两行参差
+        self._main_row = QHBoxLayout()
+        self._main_row.setContentsMargins(0, 0, 0, 0)
+        self._main_row.setSpacing(6)
+        outer.addLayout(self._main_row)
+
+        # 兼容旧调用点：保留两个子 layout 引用（实际都放进 _main_row）
         self._cards_row = QHBoxLayout()
         self._cards_row.setSpacing(6)
-        outer.addLayout(self._cards_row)
-
         self._modes_row = QHBoxLayout()
         self._modes_row.setSpacing(6)
-        outer.addLayout(self._modes_row)
+        self._main_row.addLayout(self._cards_row, 1)
+        self._main_row.addLayout(self._modes_row, 0)
 
         self._empty_label = QLabel("等待设备握手…")
         self._empty_label.setAlignment(Qt.AlignCenter)

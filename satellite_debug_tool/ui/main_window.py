@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(3)
 
         self._toolbar = QToolBar()
         self._toolbar.setStyleSheet(

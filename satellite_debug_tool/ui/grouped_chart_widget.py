@@ -17,7 +17,13 @@ from typing import Dict, List, Optional
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from satellite_debug_tool.core.data import DataStore
 from satellite_debug_tool.core.data.data_store import channel_key
@@ -44,8 +50,14 @@ _EVENT_LEVEL_COLORS = {
     3: "#F14C4C",   # ERROR
 }
 
-# 每个子图最小高度（像素）
-_MIN_SUBPLOT_HEIGHT = 120
+# stacked 模式下每个子图固定目标高度（像素）。
+# - 小于可视区：容器自适应不触发滚动
+# - 大于可视区：容器总高度累加触发 QScrollArea 滚动
+_STACKED_SUBPLOT_HEIGHT = 220
+
+# X 窗口"滚屏阈值"：新数据超出当前 xmax 超过这个秒数才扩展 viewbox，
+# 避免每帧 setXRange 触发 sigRangeChanged → 刻度/网格重绘导致肉眼闪烁。
+_X_SCROLL_STEP_SEC = 1.0
 
 # 合并模式下 12 条曲线的颜色序列（高区分度）
 _COMBINED_PALETTE = [
@@ -87,6 +99,12 @@ class GroupedChartWidget(QWidget):
         self._event_lines: List[tuple] = []   # (ts_ms, [InfiniteLine...])
         self._max_event_lines = 200
 
+        # 相对时间原点（第一帧数据的 ms 时间戳）。X 轴显示 = (ts_ms - origin)/1000，
+        # 避免设备启动已运行几千秒时 pyqtgraph 把单位自动切到 "ks" 导致刻度跳变
+        self._x_origin_ms: Optional[float] = None
+        # 当前 X 窗口右边界（秒，相对时间）；仅在真正扩窗时更新
+        self._x_view_max: float = 0.0
+
         # pyqtgraph 全局默认：抗锯齿 + 黑背景
         pg.setConfigOptions(antialias=True)
 
@@ -112,8 +130,15 @@ class GroupedChartWidget(QWidget):
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
+        # Chart 容器放进 QScrollArea：stacked 模式下子图多时可上下滚动
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._gl = pg.GraphicsLayoutWidget()
-        layout.addWidget(self._gl, 1)
+        self._scroll.setWidget(self._gl)
+        layout.addWidget(self._scroll, 1)
         self._apply_theme()
 
         self._empty = pg.LabelItem("等待设备握手…", color="#666666", size="10pt")
@@ -164,7 +189,15 @@ class GroupedChartWidget(QWidget):
         self._rebuild()
 
     def refresh(self, data_store: DataStore) -> None:
-        """按 profile 拉取 ChannelBuffer 的最新全量数据整批刷新。"""
+        """按 profile 拉取 ChannelBuffer 的最新全量数据整批刷新。
+
+        防闪烁要点：
+        - 只 setData，不动 autoRange（构建时已一次性固定 Y 范围）
+        - X 窗口仅在新数据超出右边界 `_X_SCROLL_STEP_SEC` 秒时才扩窗，
+          而不是每帧都 setXRange，避免 sigRangeChanged 级联重绘
+        - 时间戳用"相对启动时刻"的秒数，避免 pyqtgraph 把时间单位自动
+          切到 ks/Ms 造成整体刻度跳变
+        """
         if not self._curves:
             return
 
@@ -177,29 +210,43 @@ class GroupedChartWidget(QWidget):
             ys = buf.get_values()
             if xs.size == 0:
                 continue
-            # ChannelBuffer 存的是设备时间戳（ms）；X 轴按秒显示
-            xs_sec = xs / 1000.0
+            if self._x_origin_ms is None:
+                self._x_origin_ms = float(xs[0])
+            xs_sec = (xs - self._x_origin_ms) / 1000.0
+            # connect='all' + skipFiniteCheck 略快；数据是有序的 ms 不存在 NaN
             curve.setData(xs_sec, ys)
             if latest_x is None or xs_sec[-1] > latest_x:
                 latest_x = float(xs_sec[-1])
 
-        if latest_x is None:
+        if latest_x is None or self._auto_range:
             return
-        if not self._auto_range:
-            # 任一子图 setXRange 即同步（已 setXLink）
-            first_plot = next(iter(self._plots.values()), None)
-            if first_plot is not None:
-                first_plot.setXRange(latest_x - self._time_window, latest_x, padding=0)
+
+        # 只在真的需要扩窗时才 setXRange。阈值 1s：
+        # - 数据 100Hz 刷新，每 200ms refresh 产生 0.2s 新数据
+        # - 连续 5 次 refresh 才触发一次 setXRange → 肉眼不易察觉跳动
+        if latest_x <= self._x_view_max:
+            return
+        new_xmax = latest_x + _X_SCROLL_STEP_SEC   # 多扩一小段，下次不用立刻再扩
+        new_xmin = new_xmax - self._time_window
+        self._x_view_max = new_xmax
+        first_plot = next(iter(self._plots.values()), None)
+        if first_plot is not None:
+            first_plot.setXRange(new_xmin, new_xmax, padding=0)
 
     def add_event_marker(self, timestamp_ms: int, level: int) -> None:
         """在所有子图上叠一条半透明竖线（接 EventLog.event_added）。"""
         if not self._plots:
             return
+        # 未收到首帧数据时还没有时间原点，拿当前时间戳做原点占位
+        if self._x_origin_ms is None:
+            self._x_origin_ms = float(timestamp_ms)
+        x_sec = (float(timestamp_ms) - self._x_origin_ms) / 1000.0
+
         color = _EVENT_LEVEL_COLORS.get(level, "#CCCCCC")
         pen = pg.mkPen(color=color, width=1, style=Qt.DashLine)
         lines: List[pg.InfiniteLine] = []
         for plot in self._plots.values():
-            line = pg.InfiniteLine(pos=timestamp_ms / 1000.0, angle=90, pen=pen)
+            line = pg.InfiniteLine(pos=x_sec, angle=90, pen=pen)
             line.setZValue(-1)   # 放曲线底下
             plot.addItem(line)
             lines.append(line)
@@ -220,6 +267,9 @@ class GroupedChartWidget(QWidget):
         for channel_id, (_gid, curve, _entry) in self._curves.items():
             curve.clear()
         self.clear_event_markers()
+        # 时间原点/窗口回到未初始化状态，下次新数据重新对齐
+        self._x_origin_ms = None
+        self._x_view_max = 0.0
 
     # ---- 旧 API 兼容（MainWindow 暂未重构时保留） ----
 
@@ -251,6 +301,9 @@ class GroupedChartWidget(QWidget):
         self._plots.clear()
         self._curves.clear()
         self._event_lines.clear()
+        # 切换 mode / profile 时丢弃旧的 X 原点，避免新图沿用旧时间轴
+        self._x_origin_ms = None
+        self._x_view_max = 0.0
 
     def _rebuild(self) -> None:
         self._clear_plots()
@@ -290,7 +343,11 @@ class GroupedChartWidget(QWidget):
         self._btn_stacked.setStyleSheet(btn_style)
 
     def _rebuild_combined(self, channels: List[ChannelDefEntry]) -> None:
-        """所有通道叠一张大图，共用 Y 轴（量纲有差异用户可接受）。"""
+        """所有通道叠一张大图，共用 Y 轴。Y 范围取所有通道 display_min/max 包络，
+        不开 autoRange 避免每帧 Y 轴回弹造成整图闪烁。"""
+        # 让容器高度跟滚动区一致（combined 模式只有一张图，撑满可视区即可）
+        self._gl.setMinimumHeight(0)
+
         plot: pg.PlotItem = self._gl.addPlot(row=0, col=0, title="全部通道")
         plot.setLabel("left", "Value")
         plot.setLabel("bottom", "Time", units="s")
@@ -300,6 +357,8 @@ class GroupedChartWidget(QWidget):
         plot.setDownsampling(mode="peak", auto=True)
         plot.setClipToView(True)
         plot.addLegend(offset=(10, 10))
+        # 默认关交互自动范围：只有用户手动拖动时才允许
+        plot.enableAutoRange(x=False, y=False)
 
         for i, ch in enumerate(channels):
             color = _COMBINED_PALETTE[i % len(_COMBINED_PALETTE)]
@@ -309,15 +368,26 @@ class GroupedChartWidget(QWidget):
             )
             self._curves[ch.channel_id] = (0, curve, ch)
 
-        # 合并模式让 Y 轴自动贴数据，避免显式固定范围挤压极小数
-        plot.enableAutoRange(axis="y", enable=True)
+        # Y 范围 = 所有通道 display_min/max 的包络，留 5% padding
+        y_mins = [c.display_min for c in channels]
+        y_maxs = [c.display_max for c in channels]
+        if y_mins and y_maxs:
+            plot.setYRange(min(y_mins), max(y_maxs), padding=0.05)
+        # 初始 X 范围：0 ~ time_window，新数据到来后 refresh() 滚窗
+        plot.setXRange(0.0, self._time_window, padding=0)
+        self._x_view_max = self._time_window
         self._plots[0] = plot
 
     def _rebuild_stacked(self, channels: List[ChannelDefEntry]) -> None:
-        """按 group_id 分子图，各自独立 Y 轴，共享 X 轴。"""
+        """按 group_id 分子图，各自独立 Y 轴，共享 X 轴。
+        总高度 = 子图数 × _STACKED_SUBPLOT_HEIGHT，超过可视区由 QScrollArea 滚动。"""
         groups: Dict[int, List[ChannelDefEntry]] = {}
         for ch in channels:
             groups.setdefault(ch.group_id, []).append(ch)
+
+        n_groups = len(groups)
+        # 给 GraphicsLayoutWidget 一个明确的最小总高度，触发 QScrollArea 滚动条
+        self._gl.setMinimumHeight(n_groups * _STACKED_SUBPLOT_HEIGHT)
 
         axis_text_color = self._plot_axis_color()
         first_plot: Optional[pg.PlotItem] = None
@@ -325,7 +395,7 @@ class GroupedChartWidget(QWidget):
         for row_idx, group_id in enumerate(sorted(groups.keys())):
             group_channels = groups[group_id]
             plot: pg.PlotItem = self._gl.addPlot(row=row_idx, col=0, title=_group_title(group_id))
-            plot.setMinimumHeight(_MIN_SUBPLOT_HEIGHT)
+            plot.setMinimumHeight(_STACKED_SUBPLOT_HEIGHT - 20)  # 留一些 layout 余量
             plot.setLabel("left", "Value")
             plot.showGrid(x=True, y=True, alpha=0.25)
             plot.getAxis("left").setTextPen(axis_text_color)
@@ -333,6 +403,7 @@ class GroupedChartWidget(QWidget):
             plot.setDownsampling(mode="peak", auto=True)
             plot.setClipToView(True)
             plot.addLegend(offset=(4, 4))
+            plot.enableAutoRange(x=False, y=False)
 
             if first_plot is None:
                 first_plot = plot
@@ -347,7 +418,7 @@ class GroupedChartWidget(QWidget):
                 )
                 self._curves[ch.channel_id] = (group_id, curve, ch)
 
-            # 分组模式下按组内 display_min/max 建议 Y 轴
+            # 固定 Y 范围（组内 display_min/max 包络）
             y_mins = [c.display_min for c in group_channels]
             y_maxs = [c.display_max for c in group_channels]
             if y_mins and y_maxs:
@@ -357,3 +428,6 @@ class GroupedChartWidget(QWidget):
 
         if first_plot is not None:
             first_plot.setLabel("bottom", "Time", units="s")
+            # 初始 X 范围同 combined
+            first_plot.setXRange(0.0, self._time_window, padding=0)
+            self._x_view_max = self._time_window

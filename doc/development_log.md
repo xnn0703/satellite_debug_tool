@@ -332,6 +332,40 @@ python -m satellite_debug_tool
 
 全量 pytest 142/142 通过；`import main_window` 通过。
 
+### 2026-04-18 — 布局 + 防闪烁
+
+用户进一步反馈：
+- 分组模式曲线显示不全（没有滚动条）
+- 曲线过一会儿"整体闪烁一下"像全图刷新
+- 请评估整体布局
+
+**1. 分组曲线滚动**
+- `GroupedChartWidget` 的 `GraphicsLayoutWidget` 外包了 `QScrollArea`
+- stacked 模式下 GL 的 `setMinimumHeight(n_groups × 220)`，超出可视区自动出纵向滚动条
+- combined 模式 GL minHeight=0，撑满滚动区
+
+**2. 消闪烁（业界做法参考）**
+pyqtgraph 闪烁根因：每帧 `setXRange` → `sigRangeChanged` → 刻度/网格 relayout 整图重绘。
+做法：
+- **相对时间轴**：引入 `_x_origin_ms`（首帧时间戳），X 显示 = `(ts_ms - origin)/1000` 秒。
+  原来设备已运行几千秒时 pyqtgraph 会把单位从 `Time(s)` 切到 `Time(ks)` 刻度跳变；
+  现在稳定显示秒数
+- **固定 Y 范围**：combined 取所有通道 `display_min/max` 包络，stacked 取组内包络，
+  `enableAutoRange(x=False, y=False)`，不让 Y 自适应触发回弹
+- **X 滚窗节流**：新数据超出当前右边界 **≥ 1s** 才 `setXRange` 扩窗（多扩 1s 缓冲）
+  意味着连续 5 次 refresh 才触发 1 次坐标重排，肉眼不可察觉
+- `clear()` / `_clear_plots()` 重置 X 原点与窗口
+
+**3. 布局 polish**
+- Dashboard 改为单行布局：KPI 卡片区（stretch=1）+ 模式按钮区（fixed）并排；
+  原来两行容易对不齐，现在同一行高度一致
+- `KpiCard` 固定高度 72，`ModeButtonGroup` 固定高度 72，按钮 fixed 26
+- 主窗口 VBoxLayout spacing=3，Dashboard outer margin 2px 避免"松垮"感
+
+全量 pytest 142/142 通过。
+
+---
+
 ### 2026-04-18 — 性能/布局补丁
 
 用户反馈 "点击/拖拽一顿一顿" + "曲线太分散看不全"，两项针对性修复：
