@@ -189,8 +189,17 @@ class StatePanelWidget(QScrollArea):
         """当前 hw_type 的 profile 变化了 → 重建行。"""
         if self._current_hw is None:
             self._current_hw = hw_type   # 首次同步
-        if hw_type == self._current_hw:
-            self._rebuild()
+        if hw_type != self._current_hw:
+            return
+        # 幂等：states 表签名未变时跳过（避免上游重复 emit 导致整板闪烁）
+        new_sig = tuple(
+            (s.state_id, s.name, s.state_type, s.flags, tuple((e.value, e.level, e.name) for e in s.enums))
+            for s in self._profile.get_states(hw_type)
+        )
+        if getattr(self, "_states_signature", None) == new_sig and self._rows:
+            return
+        self._states_signature = new_sig
+        self._rebuild()
 
     def _on_state_changed(self, hw_type: str, state_id: int, value: int, _old: int) -> None:
         if hw_type != self._current_hw:

@@ -554,19 +554,31 @@ class MainWindow(QMainWindow):
         return f"{entry.name} ({entry.unit})" if entry.unit else entry.name
 
     def _on_profile_changed_sync(self, _hw_type: str) -> None:
-        """profile 任一表更新后，刷新 channel panel 标签 + 尝试 3D 自动绑定。"""
+        """profile 任一表更新后，刷新 channel panel 标签 + 尝试 3D 自动绑定。
+
+        幂等：profile 签名未变时只做 setText 无重绑定；
+        （setText 相同字符串 Qt 不会触发 repaint，安全）
+        """
         # 1) 刷新所有已存在 checkbox 的显示名
         for key, cb in self._channel_checks.items():
-            cb.setText(self._channel_display_label(key))
+            new_label = self._channel_display_label(key)
+            if cb.text() != new_label:
+                cb.setText(new_label)
 
-        # 2) 根据 profile 里 name 包含 roll/pitch/yaw 的通道自动绑定 3D
+        # 2) 3D 自动绑定 —— 签名未变就跳过
         hw = self._profile_store.current_hw_type()
-        if hw is not None:
-            name_to_key: dict[str, str] = {}
-            for ch in self._profile_store.get_channels(hw):
-                name_to_key[ch.name.lower()] = f"ch_{ch.channel_id:02d}"
-            if name_to_key:
-                self._attitude.auto_bind_from_profile(name_to_key)
+        if hw is None:
+            return
+        name_to_key: dict[str, str] = {}
+        for ch in self._profile_store.get_channels(hw):
+            name_to_key[ch.name.lower()] = f"ch_{ch.channel_id:02d}"
+        if not name_to_key:
+            return
+        sig = tuple(sorted(name_to_key.items()))
+        if getattr(self, "_attitude_bind_sig", None) == sig:
+            return
+        self._attitude_bind_sig = sig
+        self._attitude.auto_bind_from_profile(name_to_key)
 
     def _on_link_lost(self):
         self._statusbar.showMessage("Heartbeat timeout (link lost)", 5000)

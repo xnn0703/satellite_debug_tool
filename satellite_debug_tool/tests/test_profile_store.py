@@ -112,6 +112,26 @@ class TestProfileStoreBasic:
         store.apply_channel_define("afd01", 1, sample_channels)
         assert signal_fires == []
 
+    def test_apply_meta_idempotent(self):
+        """下位机每 5s 重发 META，内容不变时不能触发 profile_changed。
+        否则 UI 会周期性整体重建（曲线闪烁）。"""
+        store = ProfileStore()
+        meta = MetaInfo(protocol_ver=2, fw_ver="afd01-1.0", hw_type="afd01", device_sn="SN")
+
+        signal_fires = []
+        store.profile_changed.connect(signal_fires.append)
+
+        store.apply_meta(meta)                    # 首次：emit
+        store.apply_meta(meta)                    # 完全相同：跳过
+        store.apply_meta(meta)                    # 完全相同：跳过
+
+        assert signal_fires == ["afd01"]
+
+        # fw_ver 变化（固件升级场景）→ emit
+        meta2 = MetaInfo(protocol_ver=2, fw_ver="afd01-1.1", hw_type="afd01", device_sn="SN")
+        store.apply_meta(meta2)
+        assert signal_fires == ["afd01", "afd01"]
+
     def test_version_bump_reapply(self, sample_channels):
         store = ProfileStore()
         store.apply_channel_define("afd01", 1, sample_channels)

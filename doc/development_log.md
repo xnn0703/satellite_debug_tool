@@ -332,6 +332,37 @@ python -m satellite_debug_tool
 
 全量 pytest 142/142 通过；`import main_window` 通过。
 
+### 2026-04-18 — 5 秒周期闪烁根因修复
+
+上一轮"固定 Y + 相对时间轴 + setXRange 节流"修复了滚动帧闪烁，但**5 秒周期**的整体闪烁依旧。根因定位：
+
+**周期对齐下位机 META + DEFINE 广播频率（每 5s 一次）。**
+
+每次 simulator / 下位机重发 META_INFO，`ProfileStore.apply_meta`
+**无条件** emit `profile_changed` 信号，触发 5 个订阅者整体重建：
+- Chart._rebuild（清空所有 plot）
+- Dashboard._rebuild
+- StatePanel._rebuild
+- StatusStrip._rebuild_dynamic
+- MainWindow._on_profile_changed_sync（channel panel）
+
+而 `apply_channel/state/event_define` 本来就有 table_ver 幂等，唯独 `apply_meta` 漏了。
+
+**修复**：
+- `apply_meta` 比较 protocol_ver / fw_ver / hw_type / device_sn 四字段，
+  **全部相同时不 emit**；仅首次 / hw 切换 / 字段变化时触发
+- 加回归测试 `test_apply_meta_idempotent`：同一 meta 连发 3 次只 emit 1 次
+- 额外给三个 UI 组件加签名级幂等（双保险，未来其他上游错误重发也兜得住）：
+  - `GroupedChartWidget._on_profile_changed`: channels 签名（id/name/unit/group/range）
+  - `StatePanelWidget._on_profile_changed`: states 签名（含 enum 列表）
+  - `DashboardWidget._on_profile_changed`: critical channels + critical ENUM states 签名
+- `MainWindow._on_profile_changed_sync`: checkbox text 仅变化时 setText，
+  attitude auto_bind 仅 name→key 映射变化时调用
+
+测试 143/143 全部通过（新增 1 条）。
+
+---
+
 ### 2026-04-18 — 布局 + 防闪烁
 
 用户进一步反馈：

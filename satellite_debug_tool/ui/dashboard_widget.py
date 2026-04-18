@@ -279,8 +279,25 @@ class DashboardWidget(QWidget):
     def _on_profile_changed(self, hw_type: str) -> None:
         if self._current_hw is None:
             self._current_hw = hw_type
-        if hw_type == self._current_hw:
-            self._rebuild()
+        if hw_type != self._current_hw:
+            return
+        # 幂等：关键 profile 子集（critical channels + critical ENUM states）未变时跳过
+        channels = [c for c in self._profile.get_channels(hw_type) if c.critical]
+        enums = [
+            s for s in self._profile.get_states(hw_type)
+            if s.critical and s.state_type == int(StateType.ENUM)
+        ]
+        new_sig = (
+            tuple((c.channel_id, c.name, c.unit, c.display_min, c.display_max) for c in channels),
+            tuple(
+                (s.state_id, s.name, tuple((e.value, e.name, e.level) for e in s.enums))
+                for s in enums
+            ),
+        )
+        if getattr(self, "_dash_signature", None) == new_sig and (self._cards or self._mode_groups):
+            return
+        self._dash_signature = new_sig
+        self._rebuild()
 
     def _on_state_changed(self, hw_type: str, state_id: int, value: int, _old: int) -> None:
         if hw_type != self._current_hw:

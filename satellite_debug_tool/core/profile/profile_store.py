@@ -95,13 +95,33 @@ class ProfileStore(QObject):
     # ----- 写入：来自 FrameReceiverV2 下发 -----
 
     def apply_meta(self, meta: MetaInfo) -> None:
-        """收到 META_INFO。设置 current_hw_type 并 upsert profile。"""
+        """收到 META_INFO。设置 current_hw_type 并 upsert profile。
+
+        **幂等性**：META 每 5 秒由下位机广播一次，内容通常不变。如果
+        ``protocol_ver / fw_ver / hw_type / device_sn`` 都与已记录值相同，
+        就不发 ``profile_changed`` 信号——否则 UI 会每 5 秒整体重建一次，
+        表现为"曲线周期性闪烁"。仅在 hw_type 切换、固件升级或首次到达时
+        才触发重建。
+        """
         hw = meta.hw_type or "unknown"
+        first_time = hw not in self._profiles
+        hw_switched = self._current_hw_type != hw
         p = self._profiles.setdefault(hw, DeviceProfile(hw_type=hw))
+
+        prev = p.meta
+        content_changed = (
+            prev is None
+            or prev.protocol_ver != meta.protocol_ver
+            or prev.fw_ver != meta.fw_ver
+            or prev.hw_type != meta.hw_type
+            or prev.device_sn != meta.device_sn
+        )
         p.meta = meta
         self._current_hw_type = hw
-        self._persist(hw)
-        self.profile_changed.emit(hw)
+
+        if first_time or hw_switched or content_changed:
+            self._persist(hw)
+            self.profile_changed.emit(hw)
 
     def apply_channel_define(
         self, hw_type: str, table_ver: int, entries: Iterable[ChannelDefEntry]

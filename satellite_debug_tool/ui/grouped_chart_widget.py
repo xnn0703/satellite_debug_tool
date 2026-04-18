@@ -287,8 +287,18 @@ class GroupedChartWidget(QWidget):
     def _on_profile_changed(self, hw_type: str) -> None:
         if self._current_hw is None:
             self._current_hw = hw_type
-        if hw_type == self._current_hw:
-            self._rebuild()
+        if hw_type != self._current_hw or self._profile is None:
+            return
+        # 二次保险：即便 ProfileStore 错误地多发了一次 profile_changed，
+        # 也只有在 channels 组成/属性真变化时才 rebuild，避免清空曲线历史
+        new_sig = tuple(
+            (c.channel_id, c.name, c.unit, c.group_id, c.display_min, c.display_max)
+            for c in self._profile.get_channels(hw_type)
+        )
+        if getattr(self, "_channels_signature", None) == new_sig and self._curves:
+            return
+        self._channels_signature = new_sig
+        self._rebuild()
 
     # ---- 重建 ----
 
