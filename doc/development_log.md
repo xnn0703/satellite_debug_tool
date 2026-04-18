@@ -294,6 +294,46 @@ python -m satellite_debug_tool
 
 ---
 
+## UI 体验修复（基于联调反馈）
+
+用户用 simulator 跑通端到端后反馈的 5 个问题，本轮一次性修复：
+
+### 1. 3D 自动绑定 roll/pitch/yaw
+- `AttitudeWidget.auto_bind_from_profile(name_to_key)`：按通道名（小写）匹配 exact 或 contains "roll"/"pitch"/"yaw"，自动填到三个 combo 并触发 channel_changed 信号
+- MainWindow 在 `profile_changed` 时用 profile 通道名构造 `name_to_key` 字典，调 auto_bind；用户仍可手动覆盖
+
+### 2. Channel Selection 显示真名 + 单位
+- MainWindow 新增 `_channel_display_label(key)`：`ch_00` → `roll (°)` （profile 驱动）
+- `_update_display` 创建 checkbox 时使用真名；`_on_profile_changed_sync` 在 profile 到达时刷新已有 checkbox 的 text
+
+### 3. Clear 按钮扩展
+原来只清 chart/attitude/data_store/channel_panel。现在额外：
+- `event_log.clear()` + EventTimeline list 清空 + count 刷新
+- `chart.clear_event_markers()` 清除曲线竖线
+- `dashboard.refresh()` → KPI 卡片归位 "—"
+- `frame_count / error_count` 归零，StatusBar 计数同步更新
+- StatePanel / StatusStrip 不清（状态字保留以便立即识别设备）
+
+### 4. 曲线历史保留
+- `ChannelBuffer` 默认容量 2000 → **30000**（100Hz 下可保留 5 分钟）
+- `DataStore` 默认 buffer_capacity 同步更新
+- `GroupedChartWidget` 默认 `time_window` 30s → **120s**
+
+### 5. Light 主题全局生效
+- 新增 `styles.palette(is_dark) -> dict` 统一色板（card / border / text / input_bg 等 11 项色值）
+- 所有 M2/M3 新 widget 去掉硬编码颜色，加 `set_dark_theme(bool)`：
+  StatusStripWidget / `_Chip`
+  DashboardWidget / KpiCard / ModeButtonGroup
+  StatePanelWidget / StateItemRow
+  EventTimelineWidget
+  ControlPanelWidget
+- MainWindow `_apply_stylesheet` 统一调用所有 widget 的 set_dark_theme，
+  并追加处理 StatusBar / channel panel 容器 / 通道条目
+
+全量 pytest 142/142 通过；`import main_window` 通过。
+
+---
+
 ## M6 — 主题字体（待开始）
 
 ---

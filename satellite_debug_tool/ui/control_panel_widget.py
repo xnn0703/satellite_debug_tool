@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from satellite_debug_tool.ui import styles as S
+
 
 _SAMPLE_RATES = [5, 10, 25, 50, 100, 200]
 
@@ -33,18 +35,8 @@ class ControlPanelWidget(QFrame):
         super().__init__(parent)
         self._mark_counter = 0
         self._enabled = False
+        self._is_dark = True
 
-        self.setStyleSheet(
-            "ControlPanelWidget { background-color: #252526; border: 1px solid #3C3C3C; "
-            "border-radius: 4px; }"
-            "QLabel { color: #CCCCCC; border: none; }"
-            "QComboBox, QLineEdit { background-color: #333333; color: #CCCCCC; "
-            "border: 1px solid #555555; border-radius: 3px; padding: 3px 6px; }"
-            "QPushButton { background-color: #333333; color: #CCCCCC; "
-            "border: 1px solid #555555; border-radius: 3px; padding: 4px 10px; }"
-            "QPushButton:hover:enabled { background-color: #3E3E3E; }"
-            "QPushButton:disabled { color: #666666; border-color: #333333; }"
-        )
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 6, 8, 6)
         row.setSpacing(8)
@@ -76,7 +68,23 @@ class ControlPanelWidget(QFrame):
         self._reset_btn.clicked.connect(self.reset_stats_requested.emit)
         row.addWidget(self._reset_btn)
 
+        self.set_dark_theme(True)
         self.set_enabled(False)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        p = S.palette(is_dark)
+        self.setStyleSheet(
+            f"ControlPanelWidget {{ background-color: {p['card']}; "
+            f"border: 1px solid {p['border']}; border-radius: 4px; }}"
+            f"QLabel {{ color: {p['text']}; border: none; background: transparent; }}"
+            f"QComboBox, QLineEdit {{ background-color: {p['input_bg']}; color: {p['text']}; "
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 3px 6px; }}"
+            f"QPushButton {{ background-color: {p['input_bg']}; color: {p['text']}; "
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 4px 10px; }}"
+            f"QPushButton:hover:enabled {{ background-color: {p['card_alt']}; }}"
+            f"QPushButton:disabled {{ color: {p['text_faint']}; border-color: {p['border']}; }}"
+        )
 
     # ---- Public ----
 

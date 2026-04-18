@@ -209,6 +209,44 @@ class AttitudeWidget(QWidget):
         if current_yaw in names:
             self._yaw_combo.setCurrentText(current_yaw)
 
+    def auto_bind_from_profile(self, channel_name_to_key: dict[str, str]) -> None:
+        """
+        根据 profile 通道名自动绑定 roll / pitch / yaw。
+
+        Args:
+            channel_name_to_key: profile 通道名（小写匹配）→ DataStore 内部 key，
+                例如 {"roll": "ch_00", "pitch": "ch_01", "yaw": "ch_02"}
+        """
+        # 模糊匹配：通道名（小写）contains "roll"/"pitch"/"yaw"
+        picks: dict[str, str] = {}
+        # 先找完全匹配，再找 contains
+        for axis in ("roll", "pitch", "yaw"):
+            exact = channel_name_to_key.get(axis)
+            if exact is not None:
+                picks[axis] = exact
+                continue
+            for name_lower, key in channel_name_to_key.items():
+                if axis in name_lower:
+                    picks[axis] = key
+                    break
+
+        # 填到下拉框（当前用 key 作为 combo text；外层会做一次 refresh 时显示真值）
+        for axis, combo in [
+            ("roll", self._roll_combo),
+            ("pitch", self._pitch_combo),
+            ("yaw", self._yaw_combo),
+        ]:
+            key = picks.get(axis)
+            if key:
+                combo.blockSignals(True)
+                if combo.findText(key) < 0:
+                    combo.addItem(key)
+                combo.setCurrentText(key)
+                combo.blockSignals(False)
+                # 同步内部状态
+                setattr(self, f"_{axis}_ch", key)
+                self.channel_changed.emit(key, axis)
+
     def update_attitude(
         self,
         roll: float,

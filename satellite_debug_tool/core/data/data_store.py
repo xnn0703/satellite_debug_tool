@@ -22,7 +22,7 @@ def channel_key(channel_id: int) -> str:
 class DataStore:
     """按 channel_id 组织的环形缓冲集合。"""
 
-    def __init__(self, max_channels: int = 16, buffer_capacity: int = 2000) -> None:
+    def __init__(self, max_channels: int = 16, buffer_capacity: int = 30000) -> None:
         self._max_channels = max_channels
         self._buffer_capacity = buffer_capacity
         self._buffers: Dict[str, ChannelBuffer] = {}

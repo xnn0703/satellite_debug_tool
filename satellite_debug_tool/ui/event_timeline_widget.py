@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.data import EventLog, EventRecord
+from satellite_debug_tool.ui import styles as S
 
 
 _LEVEL_COLORS = {
@@ -43,12 +44,7 @@ class EventTimelineWidget(QWidget):
         self._log = log
         self._min_level = 0
         self._keyword = ""
-
-        self.setStyleSheet(
-            "QWidget { background-color: #1E1E1E; color: #CCCCCC; }"
-            "QListWidget { background-color: #252526; border: 1px solid #3C3C3C; }"
-            "QListWidget::item { padding: 4px; border-bottom: 1px solid #333333; }"
-        )
+        self._is_dark = True
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -87,11 +83,28 @@ class EventTimelineWidget(QWidget):
 
         # ---- 底部计数 ----
         self._count_label = QLabel("0 events")
-        self._count_label.setStyleSheet("color: #888888; padding: 2px 4px;")
         outer.addWidget(self._count_label)
+
+        self.set_dark_theme(True)
 
         # 订阅
         log.event_added.connect(self._on_event_added)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        p = S.palette(is_dark)
+        item_border = "#333333" if is_dark else "#E8E8E8"
+        self.setStyleSheet(
+            f"QWidget {{ background-color: {p['bg']}; color: {p['text']}; }}"
+            f"QListWidget {{ background-color: {p['card']}; border: 1px solid {p['border']}; }}"
+            f"QListWidget::item {{ padding: 4px; border-bottom: 1px solid {item_border}; }}"
+            f"QComboBox, QLineEdit {{ background-color: {p['input_bg']}; color: {p['text']}; "
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 2px 4px; }}"
+            f"QPushButton {{ background-color: {p['input_bg']}; color: {p['text']}; "
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 2px 8px; }}"
+            f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
+        )
+        self._count_label.setStyleSheet(f"color: {p['text_muted']}; padding: 2px 4px;")
 
     # ----- 事件 -----
 

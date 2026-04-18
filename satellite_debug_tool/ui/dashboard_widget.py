@@ -35,6 +35,7 @@ from satellite_debug_tool.core.protocol import (
     StateDefEntry,
     StateType,
 )
+from satellite_debug_tool.ui import styles as S
 
 
 # ============================================================
@@ -48,27 +49,22 @@ class KpiCard(QFrame):
         super().__init__(parent)
         self._entry = entry
         self._out_of_range = False
+        self._is_dark = True
 
         self.setMinimumSize(120, 80)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._apply_style(normal=True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(2)
 
         self._name_label = QLabel(entry.name.upper())
-        self._name_label.setStyleSheet("color: #888888; font-size: 10px; font-weight: 600;")
-
         mono = QFont("JetBrains Mono", 22, QFont.Bold)
         mono.setStyleHint(QFont.Monospace)
         self._value_label = QLabel("—")
         self._value_label.setFont(mono)
-        self._value_label.setStyleSheet("color: #EEEEEE;")
         self._value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-
         self._unit_label = QLabel(entry.unit or "")
-        self._unit_label.setStyleSheet("color: #AAAAAA; font-size: 11px;")
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -81,23 +77,41 @@ class KpiCard(QFrame):
 
         layout.addLayout(top)
         layout.addLayout(bottom)
+        self._apply_style(normal=True)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        self._apply_style(normal=not self._out_of_range)
 
     def _apply_style(self, normal: bool) -> None:
+        p = S.palette(self._is_dark)
         if normal:
-            self.setStyleSheet(
-                "KpiCard { background-color: #252526; border: 1px solid #3C3C3C; "
-                "border-radius: 4px; }"
-            )
+            card_bg = p["card"]
+            border = p["border"]
         else:
-            self.setStyleSheet(
-                "KpiCard { background-color: #3B1F1F; border: 1px solid #F14C4C; "
-                "border-radius: 4px; }"
-            )
+            # 告警色：保留高对比红
+            card_bg = "#3B1F1F" if self._is_dark else "#FFE8E8"
+            border = "#F14C4C"
+        self.setStyleSheet(
+            f"KpiCard {{ background-color: {card_bg}; border: 1px solid {border}; "
+            f"border-radius: 4px; }}"
+        )
+        self._name_label.setStyleSheet(
+            f"color: {p['text_muted']}; font-size: 10px; font-weight: 600; background: transparent;"
+        )
+        self._value_label.setStyleSheet(
+            f"color: {p['value_number']}; background: transparent;"
+        )
+        self._unit_label.setStyleSheet(
+            f"color: {p['text_muted']}; font-size: 11px; background: transparent;"
+        )
 
     def update_value(self, value: Optional[float]) -> None:
         if value is None:
             self._value_label.setText("—")
-            self._apply_style(normal=True)
+            if self._out_of_range:
+                self._out_of_range = False
+                self._apply_style(normal=True)
             return
         self._value_label.setText(f"{value:.2f}")
         out = value < self._entry.display_min or value > self._entry.display_max
@@ -120,18 +134,14 @@ class ModeButtonGroup(QFrame):
         self._state = state
         self._buttons: Dict[int, QPushButton] = {}
         self._current_value: Optional[int] = None
+        self._is_dark = True
 
-        self.setStyleSheet(
-            "ModeButtonGroup { background-color: #252526; border: 1px solid #3C3C3C; "
-            "border-radius: 4px; }"
-        )
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
         outer.setSpacing(4)
 
-        title = QLabel(state.name)
-        title.setStyleSheet("color: #AAAAAA; font-size: 11px; font-weight: 600;")
-        outer.addWidget(title)
+        self._title = QLabel(state.name)
+        outer.addWidget(self._title)
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -140,18 +150,33 @@ class ModeButtonGroup(QFrame):
             btn = QPushButton(item.name)
             btn.setCheckable(True)
             btn.setMinimumHeight(28)
-            btn.setStyleSheet(
-                "QPushButton { background-color: #333333; color: #CCCCCC; "
-                "border: 1px solid #555555; border-radius: 3px; padding: 4px 10px; }"
-                "QPushButton:hover { background-color: #3E3E3E; }"
-                "QPushButton:checked { background-color: #0E639C; color: white; "
-                "border-color: #0E639C; font-weight: 600; }"
-            )
             btn.clicked.connect(lambda _c=False, v=item.value: self._on_clicked(v))
             row.addWidget(btn)
             self._buttons[item.value] = btn
         row.addStretch(1)
         outer.addLayout(row)
+
+        self.set_dark_theme(True)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        p = S.palette(is_dark)
+        self.setStyleSheet(
+            f"ModeButtonGroup {{ background-color: {p['card']}; "
+            f"border: 1px solid {p['border']}; border-radius: 4px; }}"
+        )
+        self._title.setStyleSheet(
+            f"color: {p['text_muted']}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        btn_style = (
+            f"QPushButton {{ background-color: {p['input_bg']}; color: {p['text']}; "
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 4px 10px; }}"
+            f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
+            f"QPushButton:checked {{ background-color: #0E639C; color: white; "
+            f"border-color: #0E639C; font-weight: 600; }}"
+        )
+        for btn in self._buttons.values():
+            btn.setStyleSheet(btn_style)
 
     def _on_clicked(self, target_value: int) -> None:
         self.mode_requested.emit(self._state.state_id, target_value)
@@ -186,6 +211,7 @@ class DashboardWidget(QWidget):
         self._current_hw: Optional[str] = None
         self._cards: Dict[int, KpiCard] = {}
         self._mode_groups: Dict[int, ModeButtonGroup] = {}
+        self._is_dark = True
 
         self.setStyleSheet("background-color: transparent;")
         outer = QVBoxLayout(self)
@@ -202,11 +228,21 @@ class DashboardWidget(QWidget):
 
         self._empty_label = QLabel("等待设备握手…")
         self._empty_label.setAlignment(Qt.AlignCenter)
-        self._empty_label.setStyleSheet("color: #666666; padding: 12px;")
         outer.addWidget(self._empty_label)
+
+        self.set_dark_theme(True)
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        p = S.palette(is_dark)
+        self._empty_label.setStyleSheet(f"color: {p['text_faint']}; padding: 12px;")
+        for card in self._cards.values():
+            card.set_dark_theme(is_dark)
+        for group in self._mode_groups.values():
+            group.set_dark_theme(is_dark)
 
     # ---- Public ----
 
@@ -279,6 +315,7 @@ class DashboardWidget(QWidget):
         # ---- 卡片 ----
         for ch in channels:
             card = KpiCard(ch)
+            card.set_dark_theme(self._is_dark)
             self._cards_row.addWidget(card)
             self._cards[ch.channel_id] = card
         if channels:
@@ -287,6 +324,7 @@ class DashboardWidget(QWidget):
         # ---- 模式按钮组 ----
         for st in critical_enums:
             group = ModeButtonGroup(st)
+            group.set_dark_theme(self._is_dark)
             group.mode_requested.connect(self.mode_requested.emit)
             self._modes_row.addWidget(group)
             self._mode_groups[st.state_id] = group

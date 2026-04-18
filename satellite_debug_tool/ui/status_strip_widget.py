@@ -30,6 +30,7 @@ from satellite_debug_tool.core.protocol import (
     StateDefEntry,
     StateType,
 )
+from satellite_debug_tool.ui import styles as S
 
 # 与 StatePanel 同源的色标
 _ENUM_LEVEL_COLORS = {
@@ -58,11 +59,6 @@ class _Chip(QFrame):
 
     def __init__(self, label: str, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setStyleSheet(
-            "QFrame { background-color: #252526; border: 1px solid #3C3C3C; "
-            "border-radius: 10px; padding: 2px 6px; }"
-            "QLabel { border: none; color: #CCCCCC; font-size: 11px; }"
-        )
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 2, 8, 2)
         row.setSpacing(6)
@@ -71,6 +67,15 @@ class _Chip(QFrame):
         self._text = QLabel(label)
         row.addWidget(self._dot_label)
         row.addWidget(self._text)
+        self.apply_theme(True)
+
+    def apply_theme(self, is_dark: bool) -> None:
+        p = S.palette(is_dark)
+        self.setStyleSheet(
+            f"QFrame {{ background-color: {p['card']}; border: 1px solid {p['border']}; "
+            f"border-radius: 10px; padding: 2px 6px; }}"
+            f"QLabel {{ border: none; color: {p['text']}; font-size: 11px; }}"
+        )
 
     def set_dot(self, color: str) -> None:
         self._dot_label.setStyleSheet(_dot(color))
@@ -98,10 +103,7 @@ class StatusStripWidget(QFrame):
         self._state_entries: Dict[int, StateDefEntry] = {}
 
         self.setFixedHeight(36)
-        self.setStyleSheet(
-            "StatusStripWidget { background-color: #1E1E1E; "
-            "border-top: 1px solid #3C3C3C; border-bottom: 1px solid #3C3C3C; }"
-        )
+        self._is_dark = True
 
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 3, 8, 3)
@@ -117,9 +119,8 @@ class StatusStripWidget(QFrame):
         row.addWidget(self._beat_chip)
 
         # 分隔符
-        sep = QLabel("|")
-        sep.setStyleSheet("color: #555555; padding: 0 4px;")
-        row.addWidget(sep)
+        self._sep = QLabel("|")
+        row.addWidget(self._sep)
 
         # 动态 chips 区域
         self._dynamic_host = QWidget()
@@ -139,8 +140,20 @@ class StatusStripWidget(QFrame):
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
 
+        self.set_dark_theme(True)
         self.set_recording(False)
         self.set_link_state(connected=False)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        p = S.palette(is_dark)
+        self.setStyleSheet(
+            f"StatusStripWidget {{ background-color: {p['bg']}; "
+            f"border-top: 1px solid {p['border']}; border-bottom: 1px solid {p['border']}; }}"
+        )
+        self._sep.setStyleSheet(f"color: {p['text_faint']}; padding: 0 4px;")
+        for chip in (self._link_chip, self._recording_chip, self._beat_chip, *self._state_chips.values()):
+            chip.apply_theme(is_dark)
 
     # ---- Public ----
 
@@ -201,6 +214,7 @@ class StatusStripWidget(QFrame):
         critical = [s for s in states if s.critical][: self.MAX_CRITICAL_STATES]
         for entry in critical:
             chip = _Chip(entry.name)
+            chip.apply_theme(self._is_dark)
             self._dynamic_layout.addWidget(chip)
             self._state_chips[entry.state_id] = chip
             self._state_entries[entry.state_id] = entry

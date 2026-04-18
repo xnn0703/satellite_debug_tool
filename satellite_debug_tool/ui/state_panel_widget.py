@@ -31,6 +31,7 @@ from satellite_debug_tool.core.protocol import (
     StateDefEntry,
     StateType,
 )
+from satellite_debug_tool.ui import styles as S
 
 
 # ---- 色标（与 DEBUG_ENUM_LEVEL_* 对齐） ----
@@ -59,10 +60,7 @@ class StateItemRow(QFrame):
     def __init__(self, entry: StateDefEntry, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._entry = entry
-        self.setStyleSheet(
-            "QFrame { background-color: #2A2A2A; border-radius: 4px; padding: 4px 8px; }"
-            "QLabel { border: none; color: #CCCCCC; }"
-        )
+        self._is_dark = True
         layout = QGridLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setHorizontalSpacing(8)
@@ -70,12 +68,8 @@ class StateItemRow(QFrame):
 
         self._dot = QLabel()
         self._dot.setStyleSheet(_dot_stylesheet(_BOOL_OFF_COLOR))
-
         self._name_label = QLabel(entry.name)
-        self._name_label.setStyleSheet("font-weight: 500;")
-
         self._value_label = QLabel("—")
-        self._value_label.setStyleSheet("color: #888888;")
         self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         layout.addWidget(self._dot, 0, 0)
@@ -83,7 +77,18 @@ class StateItemRow(QFrame):
         layout.addWidget(self._value_label, 0, 2)
         layout.setColumnStretch(1, 1)
 
+        self.set_dark_theme(True)
         self.set_unknown()
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        p = S.palette(is_dark)
+        self.setStyleSheet(
+            f"QFrame {{ background-color: {p['card_alt']}; border-radius: 4px; padding: 4px 8px; }}"
+            f"QLabel {{ border: none; color: {p['text']}; }}"
+        )
+        self._name_label.setStyleSheet(f"font-weight: 500; color: {p['text']};")
+        # value_label 颜色由 set_value/set_unknown 设置，不在此覆盖
 
     # ----- 更新 -----
 
@@ -91,7 +96,8 @@ class StateItemRow(QFrame):
         """状态未知（未曾上报）。"""
         self._dot.setStyleSheet(_dot_stylesheet(_BOOL_OFF_COLOR))
         self._value_label.setText("—")
-        self._value_label.setStyleSheet("color: #666666;")
+        p = S.palette(self._is_dark)
+        self._value_label.setStyleSheet(f"color: {p['text_faint']};")
 
     def set_value(self, value: int) -> None:
         if self._entry.state_type == int(StateType.BOOL):
@@ -136,12 +142,10 @@ class StatePanelWidget(QScrollArea):
         self._states = state_store
         self._rows: Dict[int, StateItemRow] = {}
         self._current_hw: Optional[str] = None
+        self._is_dark = True
 
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setStyleSheet(
-            "QScrollArea { background-color: #1E1E1E; border: 1px solid #3C3C3C; }"
-        )
 
         self._container = QWidget()
         self._vlayout = QVBoxLayout(self._container)
@@ -152,11 +156,23 @@ class StatePanelWidget(QScrollArea):
 
         self._empty_label = QLabel("等待设备握手…")
         self._empty_label.setAlignment(Qt.AlignCenter)
-        self._empty_label.setStyleSheet("color: #666666; padding: 16px;")
         self._vlayout.insertWidget(0, self._empty_label)
+
+        self.set_dark_theme(True)
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        p = S.palette(is_dark)
+        self.setStyleSheet(
+            f"QScrollArea {{ background-color: {p['bg']}; border: 1px solid {p['border']}; }}"
+        )
+        self._container.setStyleSheet(f"background-color: {p['bg']};")
+        self._empty_label.setStyleSheet(f"color: {p['text_faint']}; padding: 16px;")
+        for row in self._rows.values():
+            row.set_dark_theme(is_dark)
 
     # ----- Public -----
 
@@ -208,6 +224,7 @@ class StatePanelWidget(QScrollArea):
         insert_pos = 0
         for entry in states:
             row = StateItemRow(entry)
+            row.set_dark_theme(self._is_dark)
             self._vlayout.insertWidget(insert_pos, row)
             self._rows[entry.state_id] = row
             insert_pos += 1

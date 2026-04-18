@@ -60,7 +60,8 @@ def _group_title(group_id: int) -> str:
 class GroupedChartWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._time_window = 30.0
+        # 默认 120s 窗口；配合 ChannelBuffer=30000 容量，足够保留最近几分钟历史
+        self._time_window = 120.0
         self._auto_range = False
         self._is_dark = True
         self._current_hw: Optional[str] = None

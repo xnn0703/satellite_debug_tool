@@ -61,6 +61,8 @@ class MainWindow(QMainWindow):
         self._event_log = EventLog()
         # M3：事件到达时把标记绘制到分组曲线图上
         self._event_log.event_added.connect(self._on_event_added_for_chart)
+        # profile 变化时同步刷新 channel panel 显示名、AttitudeWidget 自动绑定
+        self._profile_store.profile_changed.connect(self._on_profile_changed_sync)
         self._handshake: Handshake | None = None   # 连接建立后创建
         self._handshake_timer = QTimer(self)
         self._handshake_timer.setInterval(100)     # 100ms 驱动握手/心跳检查
@@ -526,6 +528,37 @@ class MainWindow(QMainWindow):
             return
         self._chart.add_event_marker(record.timestamp_ms, record.level)
 
+    # ----- Channel panel / AttitudeWidget 的 profile 同步 -----
+
+    def _channel_display_label(self, key: str) -> str:
+        """把 DataStore 内部 key（`ch_00`）转成 profile 里的真名（含单位）。"""
+        hw = self._profile_store.current_hw_type()
+        if hw is None or not key.startswith("ch_"):
+            return key
+        try:
+            cid = int(key.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return key
+        entry = self._profile_store.get_channel(hw, cid)
+        if entry is None:
+            return key
+        return f"{entry.name} ({entry.unit})" if entry.unit else entry.name
+
+    def _on_profile_changed_sync(self, _hw_type: str) -> None:
+        """profile 任一表更新后，刷新 channel panel 标签 + 尝试 3D 自动绑定。"""
+        # 1) 刷新所有已存在 checkbox 的显示名
+        for key, cb in self._channel_checks.items():
+            cb.setText(self._channel_display_label(key))
+
+        # 2) 根据 profile 里 name 包含 roll/pitch/yaw 的通道自动绑定 3D
+        hw = self._profile_store.current_hw_type()
+        if hw is not None:
+            name_to_key: dict[str, str] = {}
+            for ch in self._profile_store.get_channels(hw):
+                name_to_key[ch.name.lower()] = f"ch_{ch.channel_id:02d}"
+            if name_to_key:
+                self._attitude.auto_bind_from_profile(name_to_key)
+
     def _on_link_lost(self):
         self._statusbar.showMessage("Heartbeat timeout (link lost)", 5000)
         self._status_strip.set_link_state(connected=False)
@@ -621,6 +654,7 @@ class MainWindow(QMainWindow):
         existing_names = set(self._channel_checks.keys())
         new_names = set(channels) - existing_names
 
+        pal = S.palette(self._is_dark_theme)
         for name in new_names:
             idx = len(self._channel_checks)
             cols = 8
@@ -630,7 +664,8 @@ class MainWindow(QMainWindow):
             container = QWidget()
             container.setFixedHeight(32)
             container.setStyleSheet(
-                f"background-color: {S.PANEL_DARK}; border-left: 4px solid {color}; border-radius: 3px; padding: 4px 8px;"
+                f"background-color: {pal['panel']}; border-left: 4px solid {color}; "
+                f"border-radius: 3px; padding: 4px 8px;"
             )
             container_layout = QHBoxLayout(container)
             container_layout.setContentsMargins(0, 0, 0, 0)
@@ -638,12 +673,14 @@ class MainWindow(QMainWindow):
             dot = QLabel()
             dot.setFixedSize(10, 10)
             dot.setStyleSheet(f"background-color: {color}; border-radius: 50%;")
-            cb = QCheckBox(name)
+            cb = QCheckBox(self._channel_display_label(name))
             cb.setChecked(True)
-            cb.setStyleSheet(f"color: {S.TEXT}; border: none; padding: 0px 4px;")
+            cb.setStyleSheet(
+                f"color: {pal['text']}; border: none; padding: 0px 4px; background: transparent;"
+            )
             value_label = QLabel("--")
             value_label.setStyleSheet(
-                f"color: {S.TEXT}; min-width: 60px; text-align: right;"
+                f"color: {pal['text']}; min-width: 60px; text-align: right; background: transparent;"
             )
             container_layout.addWidget(dot)
             container_layout.addWidget(cb)
@@ -782,11 +819,26 @@ class MainWindow(QMainWindow):
             return
 
     def _on_clear_clicked(self):
-        self._chart.clear()
-        self._attitude.clear()
+        # 1) 数据/历史缓存
         self._data_store.clear()
+        self._event_log.clear()
         self._frame_count = 0
+        self._error_count = 0
         self._frame_times.clear()
+
+        # 2) UI 组件
+        self._chart.clear()                     # 清曲线数据 + 所有事件竖线
+        self._attitude.clear()
+        self._dashboard.refresh(self._data_store)   # 卡片刷新为 "—"
+        # StatePanel / StatusStrip 不清（状态字保留当前值以便立即识别设备状态）
+
+        # EventTimeline：列表视图手动清空（EventLog 已清，但 QListWidget 缓存需 rebuild）
+        if hasattr(self._event_timeline, "_list"):
+            self._event_timeline._list.clear()
+            if hasattr(self._event_timeline, "_update_count"):
+                self._event_timeline._update_count()
+
+        # 3) 底部 Channel panel：完全重建，下一帧有数据再自动生成
         for name in list(self._channel_checks.keys()):
             cb = self._channel_checks[name]
             dot = self._channel_dots[name]
@@ -802,6 +854,11 @@ class MainWindow(QMainWindow):
         self._channel_value_labels.clear()
         self._channel_containers.clear()
         self._channel_colors.clear()
+
+        # 4) 状态栏计数
+        self._channel_count_label.setText("Channels: 0")
+        self._frame_count_label.setText("Frames: 0")
+        self._error_count_label.setText("Errors: 0")
         self._statusbar.showMessage("Display cleared", 2000)
 
     def _on_attitude_channel_changed(self, channel_name: str, axis: str):
@@ -836,6 +893,30 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(f"background-color: {bg}; color: {text};")
         self._chart.set_dark_theme(self._is_dark_theme)
         self._attitude.set_dark_theme(self._is_dark_theme)
+        # M2/M3 新增 widget 的主题统一切换
+        self._status_strip.set_dark_theme(self._is_dark_theme)
+        self._dashboard.set_dark_theme(self._is_dark_theme)
+        self._state_panel.set_dark_theme(self._is_dark_theme)
+        self._event_timeline.set_dark_theme(self._is_dark_theme)
+        self._control_panel.set_dark_theme(self._is_dark_theme)
+        # StatusBar
+        self._statusbar.setStyleSheet(f"background-color: {panel}; color: {text};")
+        # 底部 channel panel
+        if hasattr(self, "_scroll"):
+            self._scroll.setStyleSheet(f"background-color: {bg}; border: none;")
+        # 通道条目内的 checkbox / value_label 随主题刷新
+        for name, cb in self._channel_checks.items():
+            cb.setStyleSheet(f"color: {text}; border: none; padding: 0px 4px; background: transparent;")
+        for lbl in self._channel_value_labels.values():
+            lbl.setStyleSheet(
+                f"color: {text}; min-width: 60px; text-align: right; background: transparent;"
+            )
+        for name, container in self._channel_containers.items():
+            color = self._channel_colors.get(name, "#888888")
+            container.setStyleSheet(
+                f"background-color: {panel}; border-left: 4px solid {color}; "
+                f"border-radius: 3px; padding: 4px 8px;"
+            )
         self._toolbar.setStyleSheet(
             f"background-color: {panel}; border: none; padding: 4px;"
         )
