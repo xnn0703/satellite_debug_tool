@@ -19,20 +19,27 @@ FRAME_HEADER_1 = 0x55
 FRAME_FOOTER = 0xEE
 DEVICE_TYPE = 0x0D
 
-# 每帧 DATA 段最大长度（规范 §3：512B）
-MAX_DATA_LENGTH = 512
+# 每帧 DATA 段最大长度
+# 2026-04-24：esa01 注册 27 路 channel，CHANNEL_DEFINE 序列化约 785B 超原 512 上限，
+# 整张表会被下位机直接丢弃。上调到 1024 同时容纳 27 路；afd01/ufd45 端仍按 512 发，
+# 旧设备的 ≤512 帧仍能被本上位机正确接收（向后兼容）。
+MAX_DATA_LENGTH = 1024
 # 完整帧最大长度（协议总量 + 9B 帧头/固定 + 2B CRC + 1B footer）
 MAX_FRAME_LENGTH = MAX_DATA_LENGTH + 12
 
-# 通道/状态/事件 ID 上界（参见规范 §8）
-CHANNEL_ID_MAX = 15          # 0..15
+# 通道/状态/事件 ID 上界（与下位机 DEBUG_MAX_CHANNELS 等保持同步）
+# 2026-04-24：esa01 端 DEBUG_MAX_CHANNELS=32，channel id 0..31 合法
+CHANNEL_ID_MAX = 31          # 0..31
 STATE_ID_MAX = 63            # 0..63
 EVENT_ID_MIN = 0x0001        # 0x0000 保留/禁用
 EVENT_ID_MAX = 0xFFFE
 EVENT_ID_USER_MARK = 0xFFFF  # 规范 §8.1：上位机 USER_MARK 保留事件
 
 # DATA_REPORT 单帧最大通道数
-DATA_REPORT_MAX_CHANNELS = 16
+# 2026-04-24：esa01 一帧上报 27 个 channel，超原 16 上限会被 codec_v2 直接丢帧，
+# 表象是"通道列表显示但数据全 0、Frames=0"。上调到 32 与下位机
+# DEBUG_MAX_CHANNELS=32 对齐；afd01/ufd45 仍 ≤ 11 channel/帧，向后兼容。
+DATA_REPORT_MAX_CHANNELS = 32
 # EVENT_REPORT payload 上限（§5.9）
 EVENT_PAYLOAD_MAX = 200
 
