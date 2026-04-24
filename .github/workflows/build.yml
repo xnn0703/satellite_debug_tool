@@ -1,0 +1,96 @@
+name: Build Desktop Packages
+
+on:
+  push:
+    tags:
+      - "v*.*.*"          # 打 tag 时触发
+    branches:
+      - main
+      - master
+  workflow_dispatch:       # 在 Actions 页面手动触发
+    inputs:
+      mark_release:
+        description: "Create a draft GitHub release with artifacts"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14            # Apple Silicon
+            arch: arm64
+            script: bash scripts/build_macos.sh
+          - os: macos-13            # Intel
+            arch: x86_64
+            script: bash scripts/build_macos.sh
+          - os: windows-latest
+            arch: x86_64
+            script: .\scripts\build_windows.bat
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r satellite_debug_tool/requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Build
+        shell: bash
+        run: ${{ matrix.script }}
+
+      - name: List artifacts
+        shell: bash
+        run: ls -lh release/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SatelliteDebugTool-${{ runner.os }}-${{ matrix.arch }}
+          path: release/*.zip
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: Draft Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.mark_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten
+        run: |
+          mkdir -p dist
+          find artifacts -type f -name "*.zip" -exec cp {} dist/ \;
+          ls -lh dist/
+
+      - name: Create GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*.zip
