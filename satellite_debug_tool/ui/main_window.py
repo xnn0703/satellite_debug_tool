@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from datetime import datetime
+from typing import Optional
 from satellite_debug_tool.core.comm import SerialWorker, UdpWorker
 from satellite_debug_tool.core.protocol import (
     DataReport,
@@ -72,8 +73,15 @@ class MainWindow(QMainWindow):
         self._recorder = None
         self._is_recording = False
         self._frame_times = []
-        self._is_dark_theme = True
+        self._theme = "dark"                # M6: "dark" | "dark_hc" | "light"
+        self._font_scale = "medium"         # M6: "small" | "medium" | "large" | "xlarge"
+        self._is_dark_theme = True          # 保留：其它 widget 还吃 bool
         self._settings = Settings()
+        # 2026-04-21：3D 通道绑定改为全自动（按 profile 通道名），移除手动
+        # combo 与 attitude.* 持久化。启动时一次性清掉整块 attitude 旧配置，
+        # settings.json 不再留这一节。
+        if self._settings.remove("attitude"):
+            self._settings.save()
         self._setup_ui()
         self._load_settings()
 
@@ -84,9 +92,27 @@ class MainWindow(QMainWindow):
         self._baudrate_combo.setCurrentText(
             self._settings.get("serial.default_baudrate", "115200")
         )
-        theme = self._settings.get("ui.theme", "Dark")
-        self._theme_combo.setCurrentText(theme)
-        self._is_dark_theme = theme == "Dark"
+        # M6: ui.theme 从旧 "Dark"/"Light" 迁移到 "dark"/"dark_hc"/"light"
+        theme_raw = self._settings.get("ui.theme", "dark")
+        if str(theme_raw).lower() in ("dark", "light"):
+            theme = str(theme_raw).lower()
+        elif theme_raw == "Dark":
+            theme = "dark"
+        elif theme_raw == "Light":
+            theme = "light"
+        else:
+            theme = S._normalize_theme(theme_raw)
+        self._theme = theme
+        self._is_dark_theme = theme != "light"
+        self._theme_combo.setCurrentText(S.THEME_LABELS.get(theme, "深色"))
+        # M6: ui.font_scale
+        fs = self._settings.get("ui.font_scale", "medium")
+        if fs not in S.FONT_SCALES:
+            fs = "medium"
+        self._font_scale = fs
+        self._font_scale_combo.setCurrentText(S.FONT_SCALE_LABELS.get(fs, "中"))
+        # 初次应用一次（setup_ui 内已经 setStyleSheet 了默认 dark，这里切换到持久化值）
+        self._apply_theme(self._theme, self._font_scale)
         self._remote_ip.setText(self._settings.get("udp.remote_ip", "192.168.1.12"))
         self._remote_port.setValue(self._settings.get("udp.remote_port", 4004))
         self._local_port.setValue(self._settings.get("udp.local_port", 45678))
@@ -109,7 +135,15 @@ class MainWindow(QMainWindow):
             f"background-color: {S.PANEL_DARK}; border: none; padding: 4px;"
         )
         self._toolbar.setMovable(False)
-        self.addToolBar(self._toolbar)
+        # M6: 用 QScrollArea 包工具栏 → 超大字号下溢出通过横滚条滚到末尾，
+        # 避免 QToolBar 的 ">>" 扩展菜单把 QComboBox 吞进去不好用
+        self._toolbar_scroll = QScrollArea()
+        self._toolbar_scroll.setWidgetResizable(True)
+        self._toolbar_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._toolbar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._toolbar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._toolbar_scroll.setWidget(self._toolbar)
+        layout.addWidget(self._toolbar_scroll)
 
         self._type_combo = QComboBox()
         self._type_combo.addItems(["Serial", "UDP"])
@@ -194,6 +228,7 @@ class MainWindow(QMainWindow):
         self._connect_btn.setStyleSheet(
             f"background-color: {S.PRIMARY}; color: white; border: none; border-radius: 2px;"
         )
+        self._connect_btn.setToolTip("打开串口 / 绑定 UDP 端口并启动握手")
         self._connect_btn.clicked.connect(self._on_connect_clicked)
         self._toolbar.addWidget(self._connect_btn)
 
@@ -203,6 +238,7 @@ class MainWindow(QMainWindow):
         self._disconnect_btn.setStyleSheet(
             f"background-color: {S.ERROR}; color: white; border: none; border-radius: 2px;"
         )
+        self._disconnect_btn.setToolTip("断开连接（不清空已接收的数据/Profile）")
         self._disconnect_btn.clicked.connect(self._on_disconnect_clicked)
         self._toolbar.addWidget(self._disconnect_btn)
 
@@ -214,6 +250,7 @@ class MainWindow(QMainWindow):
         self._debug_btn.setStyleSheet(
             f"background-color: #444; color: {S.TEXT}; border: none; border-radius: 2px;"
         )
+        self._debug_btn.setToolTip("下发 CONTROL.DEBUG_ENABLE，开启/关闭下位机数据上报")
         self._debug_btn.clicked.connect(self._on_debug_toggled)
         self._toolbar.addWidget(self._debug_btn)
 
@@ -224,6 +261,7 @@ class MainWindow(QMainWindow):
         self._record_btn.setStyleSheet(
             f"background-color: {S.PRIMARY}; color: white; border: none; border-radius: 2px;"
         )
+        self._record_btn.setToolTip("开始/停止录制 .sdb v2（含 profile 快照）")
         self._record_btn.clicked.connect(self._on_record_clicked)
         self._toolbar.addWidget(self._record_btn)
 
@@ -232,6 +270,7 @@ class MainWindow(QMainWindow):
         self._import_btn.setStyleSheet(
             f"background-color: {S.PRIMARY}; color: white; border: none; border-radius: 2px;"
         )
+        self._import_btn.setToolTip("离线导入 .sdb v2 回放（UI 按文件内嵌 profile 渲染）")
         self._import_btn.clicked.connect(self._on_import_clicked)
         self._toolbar.addWidget(self._import_btn)
 
@@ -240,22 +279,51 @@ class MainWindow(QMainWindow):
         self._clear_btn.setStyleSheet(
             f"background-color: {S.PRIMARY}; color: white; border: none; border-radius: 2px;"
         )
+        self._clear_btn.setToolTip(
+            "清空曲线/Dashboard/事件/计数（保留 Profile 与 StatePanel 当前状态）"
+        )
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         self._toolbar.addWidget(self._clear_btn)
 
+        # M6: 三档主题（深色 / 深色·高对比 / 浅色）
         self._theme_combo = QComboBox()
-        self._theme_combo.addItems(["Dark", "Light"])
-        self._theme_combo.setFixedWidth(70)
+        self._theme_combo.addItems([S.THEME_LABELS[t] for t in S.THEMES])
+        self._theme_combo.setFixedWidth(110)
         self._theme_combo.setStyleSheet(
             f"background-color: #333; color: {S.TEXT}; border: none; padding: 4px; border-radius: 2px;"
         )
+        self._theme_combo.setToolTip(
+            "深色:桌面开发 / 深色·高对比:车载强光屏 500cd/m² / 浅色:日间外场"
+        )
         self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
-        self._toolbar.addWidget(QLabel("Theme:"))
+        self._toolbar.addWidget(QLabel("主题:"))
         self._toolbar.addWidget(self._theme_combo)
+
+        # M6: 四档字号（小 / 中 / 大 / 超大）
+        self._font_scale_combo = QComboBox()
+        for key in ("small", "medium", "large", "xlarge"):
+            self._font_scale_combo.addItem(S.FONT_SCALE_LABELS[key])
+        self._font_scale_combo.setFixedWidth(70)
+        self._font_scale_combo.setStyleSheet(
+            f"background-color: #333; color: {S.TEXT}; border: none; padding: 4px; border-radius: 2px;"
+        )
+        self._font_scale_combo.setToolTip("UI 全局字号缩放（基准 12px → 12/14/18/22）")
+        self._font_scale_combo.currentTextChanged.connect(self._on_font_scale_changed)
+        self._toolbar.addWidget(QLabel("字号:"))
+        self._toolbar.addWidget(self._font_scale_combo)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._toolbar.addWidget(spacer)
+
+        # 设备型号标签（握手成功后显示 afd01 / ufd45 / ...）
+        self._hw_label = QLabel("设备: —")
+        self._hw_label.setToolTip("当前连接设备的 hw_type（来自下位机 META_INFO）")
+        self._hw_label.setStyleSheet(
+            f"color: {S.TEXT}; font-weight: bold; padding: 4px 8px; "
+            f"border-left: 1px solid {S.BORDER};"
+        )
+        self._toolbar.addWidget(self._hw_label)
 
         self._conn_status_label = QLabel("Disconnected")
         self._conn_status_label.setStyleSheet(
@@ -287,7 +355,7 @@ class MainWindow(QMainWindow):
         self._attitude = AttitudeWidget()
         self._attitude.setMinimumWidth(350)
         self._attitude.set_dark_theme(True)
-        self._attitude.channel_changed.connect(self._on_attitude_channel_changed)
+        # 2026-04-21：移除手动绑定 combo，channel_changed 信号不再使用
         top_splitter.addWidget(self._attitude)
 
         # 右侧：状态灯板 + 事件时间线（M2 新增）
@@ -296,6 +364,8 @@ class MainWindow(QMainWindow):
         self._state_panel = StatePanelWidget(self._profile_store, self._state_store)
         right_panel.addWidget(self._state_panel)
         self._event_timeline = EventTimelineWidget(self._event_log)
+        # A1/A2: 双击 / 右键菜单事件 → 曲线 X 视窗跳过去
+        self._event_timeline.jump_requested.connect(self._chart.jump_to_timestamp)
         right_panel.addWidget(self._event_timeline)
         right_panel.setStretchFactor(0, 1)
         right_panel.setStretchFactor(1, 1)
@@ -339,9 +409,11 @@ class MainWindow(QMainWindow):
 
         # M3: 控制面板（采样率 / USER_MARK / 复位统计）
         self._control_panel = ControlPanelWidget()
+        self._control_panel.set_profile_store(self._profile_store)   # A5
         self._control_panel.sample_rate_changed.connect(self._on_sample_rate_changed)
         self._control_panel.user_mark_requested.connect(self._on_user_mark_requested)
         self._control_panel.reset_stats_requested.connect(self._on_reset_stats_requested)
+        self._control_panel.channel_enable_changed.connect(self._on_channel_enable_changed)
 
         splitter.addWidget(self._control_panel)
         splitter.addWidget(channel_panel)
@@ -385,16 +457,10 @@ class MainWindow(QMainWindow):
         self._frame_count = 0
         self._error_count = 0
 
-        # Load attitude channel selections after attitude widget is created
-        roll_ch = self._settings.get("attitude.roll_channel", "")
-        pitch_ch = self._settings.get("attitude.pitch_channel", "")
-        yaw_ch = self._settings.get("attitude.yaw_channel", "")
-        if roll_ch:
-            self._attitude._roll_combo.setCurrentText(roll_ch)
-        if pitch_ch:
-            self._attitude._pitch_combo.setCurrentText(pitch_ch)
-        if yaw_ch:
-            self._attitude._yaw_combo.setCurrentText(yaw_ch)
+        # A6: Attitude/指向 通道绑定按 hw_type 分桶恢复。
+        # 此时 handshake 尚未完成（hw_type 未知），仅做字段存在性校验；
+        # 实际恢复放在 _on_handshake_ready 里调用 _restore_attitude_bindings。
+        # 旧版共享键也保留读取（一次性迁移）。
 
     def _on_type_changed(self, text):
         if text == "Serial":
@@ -488,13 +554,25 @@ class MainWindow(QMainWindow):
         if self._handshake is not None:
             self._handshake.tick(self._handshake_timer.interval())
 
+    def _on_channel_enable_changed(self, mask: int):
+        """A5: 下发 CHANNEL_ENABLE_MASK。"""
+        from satellite_debug_tool.core.protocol import build_channel_enable_mask
+
+        if self._send_control_frame(build_channel_enable_mask(mask)):
+            self._statusbar.showMessage(
+                f"通道使能 mask → 0x{mask:016X}", 3000
+            )
+
     def _on_handshake_ready(self, hw_type: str):
         self._statusbar.showMessage(f"Profile ready: {hw_type}", 3000)
+        # 工具栏设备型号显示
+        self._hw_label.setText(f"设备: {hw_type}")
         # 通知各 profile 驱动组件切换 hw_type 并按最新 profile 重建
         self._state_panel.set_hw_type(hw_type)
         self._dashboard.set_hw_type(hw_type)
         self._status_strip.set_hw_type(hw_type)
         self._chart.set_hw_type(hw_type)
+        self._control_panel.set_hw_type(hw_type)    # A5: 让通道使能对话框按该 hw 列通道
 
     # ----- ControlPanel / Dashboard 发出的控制意图 -----
 
@@ -535,7 +613,12 @@ class MainWindow(QMainWindow):
         hw = self._profile_store.current_hw_type()
         if hw is None or record.hw_type != hw:
             return
-        self._chart.add_event_marker(record.timestamp_ms, record.level)
+        # M4: 传 name + event_id 让 Chart 画用户标记（0xFFFF）时加粗/换色，
+        # 并给所有竖线加 hover tooltip
+        self._chart.add_event_marker(
+            record.timestamp_ms, record.level,
+            name=record.name, event_id=record.event_id,
+        )
 
     # ----- Channel panel / AttitudeWidget 的 profile 同步 -----
 
@@ -553,12 +636,19 @@ class MainWindow(QMainWindow):
             return key
         return f"{entry.name} ({entry.unit})" if entry.unit else entry.name
 
-    def _on_profile_changed_sync(self, _hw_type: str) -> None:
+    def _on_profile_changed_sync(self, hw_type: str) -> None:
         """profile 任一表更新后，刷新 channel panel 标签 + 尝试 3D 自动绑定。
 
         幂等：profile 签名未变时只做 setText 无重绑定；
         （setText 相同字符串 Qt 不会触发 repaint，安全）
+
+        设备型号标签：META_INFO 一到就更新（不等 DEFINE 全齐的 handshake_ready），
+        否则 DEFINE 表任一缺失时 _hw_label 会一直停在 "设备: —"。
         """
+        # 0) 设备型号标签 —— META 一到就更新
+        if hw_type:
+            self._hw_label.setText(f"设备: {hw_type}")
+
         # 1) 刷新所有已存在 checkbox 的显示名
         for key, cb in self._channel_checks.items():
             new_label = self._channel_display_label(key)
@@ -578,6 +668,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_attitude_bind_sig", None) == sig:
             return
         self._attitude_bind_sig = sig
+        # 2026-04-21：3D 通道绑定无条件 auto_bind，没有手动覆盖分支。
         self._attitude.auto_bind_from_profile(name_to_key)
 
     def _on_link_lost(self):
@@ -597,6 +688,7 @@ class MainWindow(QMainWindow):
         self._debug_btn.setText("Debug: OFF")
         self._conn_status_label.setText("Disconnected")
         self._conn_status_label.setStyleSheet(f"color: {S.TEXT};")
+        self._hw_label.setText("设备: —")
         self._type_combo.setEnabled(True)
 
         # M3: 控制面板置灰、链路指示置红
@@ -675,13 +767,27 @@ class MainWindow(QMainWindow):
         self._channel_count_label.setText(f"Channels: {len(channels)}")
         self._frame_count_label.setText(f"Frames: {self._frame_count}")
 
-        # Update attitude widget channel options when new channels appear
-        self._attitude.set_channel_options(channels)
+        # 给 Attitude 下拉填候选：用 **profile 里注册的全部通道**（只要握手过就有，
+        # 即使某通道当前还没上报数据也在列表里）；没 profile 时退回 DataStore 的
+        # 已见通道。避免"绑定了 ch_06 但 ch_06 还没数据 → combo 候选没它 →
+        # setCurrentText 留空"的时序 bug。
+        hw = self._profile_store.current_hw_type()
+        if hw is not None:
+            attitude_options = [
+                f"ch_{c.channel_id:02d}"
+                for c in self._profile_store.get_channels(hw)
+            ]
+        else:
+            attitude_options = channels
+        self._attitude.set_channel_options(attitude_options)
 
         existing_names = set(self._channel_checks.keys())
         new_names = set(channels) - existing_names
 
-        pal = S.palette(self._is_dark_theme)
+        pal = S.palette(self._theme)
+        # M6: 行高随字号动态：字号 + padding + 点/复选框间距
+        row_h = S.font_px(12, self._font_scale) + 20
+        dot_sz = max(10, S.font_px(10, self._font_scale) - 2)
         for name in new_names:
             idx = len(self._channel_checks)
             cols = 8
@@ -689,7 +795,7 @@ class MainWindow(QMainWindow):
             col = idx % cols
             color = COLORS[idx % len(COLORS)]
             container = QWidget()
-            container.setFixedHeight(32)
+            container.setFixedHeight(row_h)
             container.setStyleSheet(
                 f"background-color: {pal['panel']}; border-left: 4px solid {color}; "
                 f"border-radius: 3px; padding: 4px 8px;"
@@ -698,8 +804,10 @@ class MainWindow(QMainWindow):
             container_layout.setContentsMargins(0, 0, 0, 0)
             container_layout.setSpacing(4)
             dot = QLabel()
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background-color: {color}; border-radius: 50%;")
+            dot.setFixedSize(dot_sz, dot_sz)
+            dot.setStyleSheet(
+                f"background-color: {color}; border-radius: {dot_sz // 2}px;"
+            )
             cb = QCheckBox(self._channel_display_label(name))
             cb.setChecked(True)
             cb.setStyleSheet(
@@ -740,21 +848,32 @@ class MainWindow(QMainWindow):
                 self._channel_value_labels[name].setText(f"{latest[1]:.2f}")
 
         # Update attitude widget with roll/pitch/yaw from selected channels
+        def _latest(ch_name: str):
+            """返回绑定通道的最新值，None 表示未绑定或暂无数据。"""
+            if not ch_name:
+                return None
+            ch = self._data_store.get_channel(ch_name)
+            if ch is None:
+                return None
+            latest = ch.get_latest()
+            return latest[1] if latest else None
+
         roll_ch, pitch_ch, yaw_ch = self._attitude.get_channel_selections()
-        roll_val = pitch_val = yaw_val = 0.0
-        if roll_ch:
-            ch = self._data_store.get_channel(roll_ch)
-            if ch and ch.get_latest():
-                roll_val = ch.get_latest()[1]
-        if pitch_ch:
-            ch = self._data_store.get_channel(pitch_ch)
-            if ch and ch.get_latest():
-                pitch_val = ch.get_latest()[1]
-        if yaw_ch:
-            ch = self._data_store.get_channel(yaw_ch)
-            if ch and ch.get_latest():
-                yaw_val = ch.get_latest()[1]
-        self._attitude.update_attitude(roll_val, pitch_val, yaw_val, roll_ch, pitch_ch, yaw_ch)
+        roll_val = _latest(roll_ch) or 0.0
+        pitch_val = _latest(pitch_ch) or 0.0
+        yaw_val = _latest(yaw_ch) or 0.0
+        self._attitude.update_attitude(
+            roll_val, pitch_val, yaw_val, roll_ch, pitch_ch, yaw_ch
+        )
+
+        # M4: 推指向矢量（tgt/ant az/el），未绑定或无数据的返回 None 让 3D 场景隐藏对应元素
+        tgt_az_ch, tgt_el_ch, ant_az_ch, ant_el_ch = (
+            self._attitude.get_pointing_selections()
+        )
+        self._attitude.update_pointing(
+            _latest(tgt_az_ch), _latest(tgt_el_ch),
+            _latest(ant_az_ch), _latest(ant_el_ch),
+        )
 
     def _on_record_clicked(self):
         if self._is_recording:
@@ -819,6 +938,7 @@ class MainWindow(QMainWindow):
                     self._dashboard.set_hw_type(hw_type)
                     self._status_strip.set_hw_type(hw_type)
                     self._chart.set_hw_type(hw_type)
+                    self._control_panel.set_hw_type(hw_type)
 
             # 2) 清空现有数据后灌入录制内容
             self._data_store.clear()
@@ -884,44 +1004,71 @@ class MainWindow(QMainWindow):
         self._error_count_label.setText("Errors: 0")
         self._statusbar.showMessage("Display cleared", 2000)
 
-    def _on_attitude_channel_changed(self, channel_name: str, axis: str):
-        """Save attitude channel selection when user changes it."""
-        if axis == "roll":
-            self._settings.set("attitude.roll_channel", channel_name)
-        elif axis == "pitch":
-            self._settings.set("attitude.pitch_channel", channel_name)
-        elif axis == "yaw":
-            self._settings.set("attitude.yaw_channel", channel_name)
-        self._settings.save()
+    # 2026-04-21：Attitude 通道绑定改为全自动（按 profile 通道名匹配）。
+    # 去除手动 combo + hw_type 分桶持久化/迁移/restore 逻辑 —— 整块 attitude.*
+    # settings 键在 __init__ 里一次性清掉。
 
-    def _on_theme_changed(self, theme: str):
-        self._is_dark_theme = theme == "Dark"
-        self._apply_stylesheet(theme)
+    # --------- M6: theme / font scale 切换 ---------
+
+    def _label_to_theme(self, label: str) -> str:
+        reverse = {v: k for k, v in S.THEME_LABELS.items()}
+        return reverse.get(label, S._normalize_theme(label))
+
+    def _label_to_scale(self, label: str) -> str:
+        reverse = {v: k for k, v in S.FONT_SCALE_LABELS.items()}
+        return reverse.get(label, "medium")
+
+    def _on_theme_changed(self, label: str):
+        theme = self._label_to_theme(label)
+        self._theme = theme
+        self._is_dark_theme = theme != "light"
+        self._apply_theme(theme, self._font_scale)
         self._settings.set("ui.theme", theme)
         self._settings.save()
 
-    def _apply_stylesheet(self, theme: str):
-        if theme == "Dark":
-            bg = S.BG_DARK
-            panel = S.PANEL_DARK
-            border = S.BORDER
-            text = S.TEXT
-            input_bg = S.INPUT_DARK
-        else:
-            bg = S.BG_LIGHT
-            panel = S.PANEL_LIGHT
-            border = S.BORDER_LIGHT
-            text = S.TEXT_LIGHT
-            input_bg = S.INPUT_LIGHT
+    def _on_font_scale_changed(self, label: str):
+        scale = self._label_to_scale(label)
+        self._font_scale = scale
+        self._apply_theme(self._theme, scale)
+        self._settings.set("ui.font_scale", scale)
+        self._settings.save()
+
+    def _apply_theme(self, theme: str, scale: str):
+        """统一主题 + 字号分发。取代老 `_apply_stylesheet`。"""
+        pal = S.palette(theme)
+        bg, panel, border, text, input_bg = (
+            pal["bg"], pal["panel"], pal["border"], pal["text"], pal["input_bg"]
+        )
+        primary = pal["primary"]
+        error = pal["error"]
+
+        # 全局字体缩放（影响 QLabel/QComboBox 等未显式设字号的控件）
+        try:
+            from PySide6.QtWidgets import QApplication
+
+            app = QApplication.instance()
+            if app is not None:
+                S.apply_global_font(app, scale)
+        except Exception:
+            pass
+
         self.setStyleSheet(f"background-color: {bg}; color: {text};")
-        self._chart.set_dark_theme(self._is_dark_theme)
-        self._attitude.set_dark_theme(self._is_dark_theme)
-        # M2/M3 新增 widget 的主题统一切换
-        self._status_strip.set_dark_theme(self._is_dark_theme)
-        self._dashboard.set_dark_theme(self._is_dark_theme)
-        self._state_panel.set_dark_theme(self._is_dark_theme)
-        self._event_timeline.set_dark_theme(self._is_dark_theme)
-        self._control_panel.set_dark_theme(self._is_dark_theme)
+
+        # 分发给子 widget：优先用 M6 新接口 set_theme(theme, scale)，老 widget 仍吃 set_dark_theme(bool)
+        def dispatch(w):
+            if hasattr(w, "set_theme"):
+                w.set_theme(theme, scale)
+            elif hasattr(w, "set_dark_theme"):
+                w.set_dark_theme(self._is_dark_theme)
+
+        for w in (
+            self._chart, self._attitude,
+            self._status_strip, self._dashboard,
+            self._state_panel, self._event_timeline,
+            self._control_panel,
+        ):
+            dispatch(w)
+
         # StatusBar
         self._statusbar.setStyleSheet(f"background-color: {panel}; color: {text};")
         # 底部 channel panel
@@ -934,14 +1081,45 @@ class MainWindow(QMainWindow):
             lbl.setStyleSheet(
                 f"color: {text}; min-width: 60px; text-align: right; background: transparent;"
             )
+        # M6: 通道条目行高/圆点尺寸 同步字号
+        row_h = S.font_px(12, scale) + 20
+        dot_sz = max(10, S.font_px(10, scale) - 2)
         for name, container in self._channel_containers.items():
             color = self._channel_colors.get(name, "#888888")
+            container.setFixedHeight(row_h)
             container.setStyleSheet(
                 f"background-color: {panel}; border-left: 4px solid {color}; "
                 f"border-radius: 3px; padding: 4px 8px;"
             )
+        for name, dot in self._channel_dots.items():
+            color = self._channel_colors.get(name, "#888888")
+            dot.setFixedSize(dot_sz, dot_sz)
+            dot.setStyleSheet(
+                f"background-color: {color}; border-radius: {dot_sz // 2}px;"
+            )
         self._toolbar.setStyleSheet(
             f"background-color: {panel}; border: none; padding: 4px;"
+        )
+        # M6: 工具栏字号**不跟随**全局字号档位 —— 始终锁定 12px，避免超大档下
+        # 挤出窗口宽度、字号下拉被 chevron 吞掉。
+        # apply_global_font 已改了 QApplication 默认字体，这里把 toolbar 的字体
+        # 显式覆盖回基准像素；Qt 字体继承会让 toolbar 里所有控件跟着用这个。
+        try:
+            from PySide6.QtGui import QFont
+
+            fixed = QFont(self._toolbar.font())
+            fixed.setPixelSize(12)
+            self._toolbar.setFont(fixed)
+            # 覆盖所有子控件（setStyleSheet 中的 font-size 会胜过父字体，
+            # 但这里没设，所以继承生效）
+            for child in self._toolbar.findChildren(QWidget):
+                child.setFont(fixed)
+        except Exception:
+            pass
+        # toolbar 高度也固定，不随字号放大
+        self._toolbar_scroll.setFixedHeight(42)
+        self._toolbar_scroll.setStyleSheet(
+            f"QScrollArea {{ background-color: {panel}; border: none; }}"
         )
         self._serial_widget.setStyleSheet(f"background-color: transparent;")
         self._udp_widget.setStyleSheet(f"background-color: transparent;")
@@ -963,32 +1141,29 @@ class MainWindow(QMainWindow):
                 f"color: {text}; border: none; padding: 4px; border-radius: 2px;"
             )
         self._connect_btn.setStyleSheet(
-            f"background-color: {S.PRIMARY if self._is_dark_theme else S.PRIMARY_LIGHT}; "
-            "color: white; border: none; border-radius: 2px;"
+            f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
         )
         self._disconnect_btn.setStyleSheet(
-            f"background-color: {S.ERROR}; color: white; border: none; border-radius: 2px;"
+            f"background-color: {error}; color: white; border: none; border-radius: 2px;"
         )
         self._debug_btn.setStyleSheet(
-            f"background-color: {S.BUTTON_DARK if self._is_dark_theme else S.BUTTON_LIGHT}; "
+            f"background-color: {pal['button_bg']}; "
             f"color: {text}; border: none; border-radius: 2px;"
         )
         self._record_btn.setStyleSheet(
-            f"background-color: {S.PRIMARY if self._is_dark_theme else S.PRIMARY_LIGHT}; "
-            "color: white; border: none; border-radius: 2px;"
+            f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
         )
         self._import_btn.setStyleSheet(
-            f"background-color: {S.PRIMARY if self._is_dark_theme else S.PRIMARY_LIGHT}; "
-            "color: white; border: none; border-radius: 2px;"
+            f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
         )
         self._clear_btn.setStyleSheet(
-            f"background-color: {S.PRIMARY if self._is_dark_theme else S.PRIMARY_LIGHT}; "
-            "color: white; border: none; border-radius: 2px;"
+            f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
         )
-        self._theme_combo.setStyleSheet(
-            f"background-color: {input_bg}; "
-            f"color: {text}; border: none; padding: 4px; border-radius: 2px;"
-        )
+        for combo in (self._theme_combo, self._font_scale_combo):
+            combo.setStyleSheet(
+                f"background-color: {input_bg}; "
+                f"color: {text}; border: none; padding: 4px; border-radius: 2px;"
+            )
         channel_panel = self.findChild(QWidget, "channel_panel")
         if channel_panel:
             channel_panel.setStyleSheet(
