@@ -30,9 +30,9 @@
 | M1 | 协议核心 + afd01 profile + 握手 + ProfileStore | 进行中 | §8.1.1 §8.4 §8.5 D-01~D-03 |
 | M2 | State/Event 报文 + StatePanel/EventTimeline | 待开始 | §8.1.2 §8.3 |
 | M3 | Dashboard + 分组曲线（完全 profile 驱动） | 待开始 | §8.1.3 §8.3 |
-| M4 | 3D 场景 + 用户 mark 事件 | 待开始 | §8.1.5 |
+| M4 | 3D 场景 + 用户 mark 事件 | 代码完成 | §8.1.5 F-07 F-11 |
 | M5 | 异步录制 (.sdb v2) + ufd45 smoke test | 待开始 | §8.1.4 §8.5 D-04 |
-| M6 | 主题/字体/布局微调 | 待开始 | §8.3 |
+| M6 | 主题/字体/tooltip | 代码完成 | §8.3 U-02/U-05 |
 
 ---
 
@@ -206,7 +206,197 @@
 
 ---
 
-## M4 — 3D + 用户 mark（待开始）
+## M4 — 3D 场景升级 + 用户 mark 闭环（代码完成）
+
+### 2026-04-18 — AttitudeWidget 全面升级
+
+#### 坐标系约定（写进 `attitude_widget.py` 顶部文档）
+
+- 机体系：+X 机头 / +Y 左翼 / +Z 天顶
+- 相控阵波束坐标：**az** 机头右为 0°、从 +Z 俯视**逆时针**增大；
+  **el** 天顶为 0°、水平面为 90°
+- 单位矢量公式：
+  ```python
+  phi   = radians(AZ_PHI_OFFSET_DEG + AZ_SIGN * az)  # 默认 270 + az
+  theta = radians(el)
+  x = sin(theta) * cos(phi)
+  y = sin(theta) * sin(phi)
+  z = cos(theta)
+  ```
+- 若实际硬件方向相反，只改文件头两个常数 `AZ_PHI_OFFSET_DEG` / `AZ_SIGN`
+- 典型验证（已写测试）：
+  - az=0,  el=0  → (0, 0, 1)   天顶
+  - az=0,  el=90 → (0, -1, 0)  机头右
+  - az=90, el=90 → (1, 0, 0)   机头
+
+#### 默认机体：飞机 → 扁平长方体（相控阵卫通终端外形）
+
+- 尺寸 3.0 × 1.8 × 0.3（长宽高），长边沿 +X
+- 顶面机头端 8% 削角，直观区分朝向
+- 10 顶点 / 16 三角面
+- 预留 `set_body_model(mesh_data)` 接口，后续接具体设备的 STL/OBJ 模型
+
+#### 新增 4 类 GL 场景元素
+
+| 元素 | 类型 | 来源 | 颜色 |
+|------|------|------|------|
+| 卫星矢量 | GLLinePlotItem | `tgt_az / tgt_el` 通道 → unit_vec × R | 红 |
+| 天线实际法向 | GLLinePlotItem | `ant_az / ant_el` 通道 → unit_vec × R | 绿 |
+| 误差扇面 | GLMeshItem (translucent) | 两矢量 slerp 插值 12 段三角扇 | 半透明琥珀 |
+| 扫描轨迹 | GLLinePlotItem | 最近 300 个 ant 矢量点（deque） | 淡蓝 |
+
+任一通道未绑定/无数据时对应元素隐藏（`setData(pos=empty)`），绝不崩。
+
+#### 通道绑定扩展：3 → 7 路
+
+- 新增 4 个下拉：tgt_az / tgt_el / ant_az / ant_el（Attitude 第 2 行）
+- `auto_bind_from_profile` 重写为规则驱动，每个 axis 有 exact + contains 两层规则
+- settings 持久化：`attitude.{roll|pitch|yaw|tgt_az|tgt_el|ant_az|ant_el}_channel`
+- `get_pointing_selections()` 返回 4 元组供外层按每帧取值
+
+#### MainWindow 接入
+
+- `_on_attitude_channel_changed` 支持全部 7 axis
+- `_update_heavy` 调用 `_attitude.update_pointing(...)`，每帧用
+  本地 `_latest(ch)` 帮手取值；未绑定返回 None 让 3D 场景隐藏对应元素
+- 启动时从 settings 恢复 7 路下拉选择
+
+#### 视角复位
+
+- Attitude 第 1 行右侧加 "复位视角" 按钮 → `setCameraPosition(10, 30, 45)`
+- 按钮样式跟随主题
+
+#### 用户 mark 闭环（F-07）
+
+- `GroupedChartWidget.add_event_marker(ts, level, name="", event_id=-1)` 扩展：
+  - `event_id == 0xFFFF`（用户标记）：实线 + 2px + 琥珀色 + label "⚑ 名称"
+  - 其它事件：保留原 dashed + 级别色
+  - 所有竖线加 hover `setToolTip` 显示事件名
+- `EventTimeline._format_row`：0xFFFF 事件加 ⚑ 前缀
+- MainWindow `_on_event_added_for_chart` 传 `name + event_id` 给 Chart
+
+#### 测试
+
+新增 `tests/test_attitude_pointing.py`（16 条）：
+
+- `TestPointingUnitVec`
+  - 9 组典型 az/el 值的坐标公式（天顶 / 机头右 / 机头 / 机头左 / 机尾 + 中间角）
+  - 单位长度断言（扫 az × el 全空间 ≈ 80 样本）
+  - 约定常数存在性（防有人偷改）
+- `TestErrorFan`
+  - shape / dtype / 面索引合法性
+  - 零矢量退化 / 同向退化 / 不同 segments
+  - 弧首尾接近两矢量方向（cos > 0.9999）
+
+全量 pytest **176/176 通过**（160 → 176，+16）。  
+MainWindow 12 组合（3 主题 × 4 字号）切换 + heavy 刷新冒烟通过。
+
+#### 验收对照
+
+- [x] F-11 3D 场景：飞机（→长方体）+ 卫星矢量 + 天线矢量 + 误差扇面同时渲染
+- [x] F-07 用户 mark：ControlPanel 发 → 下位机回 EVENT(0xFFFF) → Chart 画加粗琥珀竖线 + ⚑ tooltip，EventTimeline ⚑ 前缀
+- [ ] 通道绑定可配 + 按 hw_type 记忆到 settings.json：已实现持久化；**未做**"按 hw_type 分桶"（目前所有 hw 共享同一份 attitude.*_channel）；若切设备会串绑定，后续需要可补
+- [ ] 外场实测：需真硬件 / 下位机给 tgt/ant az/el 通道
+
+---
+
+## 批次 A — 体验增强小项（代码完成）
+
+### 2026-04-18 — A1/A2/A3/A4/A5/A6 一次性落地
+
+一次性交付 plan §4.4–§4.8 里剩余的 6 项体验增强。
+
+#### A1 + A2: EventTimeline 跳转曲线
+
+- `GroupedChartWidget.jump_to_timestamp(ts_ms, window_sec=None)`：把 X 视窗中心定位到指定时间戳，返回 bool
+- `EventTimelineWidget.jump_requested` 信号（携带 `ts_ms: int`）
+- 触发源：
+  - **A1** 双击任一事件行 → emit
+  - **A2** 右键"在曲线上定位"菜单 → emit
+- MainWindow 把信号直接连到 `chart.jump_to_timestamp`
+- 每个 item 把 `rec.timestamp_ms` 存到 `Qt.UserRole`
+
+#### A3: StatePanel 最近变化 2 秒高亮
+
+- `StateItemRow._make_style(border)` 抽出一个模板方法，主题变化时调 normal 边、flash 时调琥珀 `#FFC107` 边
+- `flash_highlight()` setStyleSheet + `QTimer.singleShot(2000, ...)` 恢复
+- `_on_state_changed` 触发 `set_value()` 后调 `flash_highlight()`
+
+#### A4: StatePanel 子系统折叠分组
+
+- 新增 `_SubsystemSection`（可折叠 QFrame）+ `_classify_subsystem(name)` 分桶
+- 规则：按 `_` 切分 token + 长度敏感匹配：
+  - 2 字符及以下的关键字（如 `lo`）走精确匹配，避免 `lock` 被误归 `lo`
+  - 3 字符及以上走前缀匹配（`pll_locked` 的 `pll` → rf）
+  - 顺序：`modem`（snr/beacon）> `rf`（pll/lo/buc/lnb/polar）> `trace`（trace/lock）> `ins`（ins/imu/gps）> `general`
+- `_rebuild` 先按规则分桶，再按 `_SUBSYSTEM_ORDER` 顺序插入各 section
+- 空桶不创建，header 含实时计数 `"▼ 跟踪 (Trace)  (3)"`
+
+#### A5: ControlPanel 通道使能 bitmask
+
+- 协议层 `build_channel_enable_mask(mask)` 已存在（u32 lo + u32 hi）
+- ControlPanel 加 "通道使能…" 按钮；点开 `_ChannelEnableDialog`（QDialog）
+- 对话框：profile 驱动列出通道复选框（2 列网格），带 `全选 / 全不选 / 反选`
+- 对话框 OK 返回 64bit mask，emit `channel_enable_changed(mask)`
+- MainWindow `_on_channel_enable_changed` 调 `build_channel_enable_mask` 下发
+
+#### A6: Attitude 绑定按 hw_type 分桶
+
+- 老 key `attitude.{axis}_channel` → 新 key `attitude.{hw}.{axis}_channel`
+- `_attitude_setting_key(axis, hw)` 统一 key 生成，无 hw 时回落老格式（迁移用）
+- `_restore_attitude_bindings(hw)` 按桶恢复 7 路 combo
+- 触发时机（`_on_profile_changed_sync`）：
+  1. 该 hw 下已有分桶保存 → 恢复这套
+  2. 该 hw 下无，但存在老共享键 → **一次性迁移**老键到新 hw 桶
+  3. 都没有 → 走 `auto_bind_from_profile`
+- `_on_attitude_channel_changed` 按当前 hw_type 保存到对应桶
+
+#### 测试
+
+新增 `tests/test_ux_batch_a.py` 10 条：
+
+- `TestSubsystemClassify`（3 条）：规则 dict 15 样本、大小写、顺序常量覆盖
+- `TestChartJumpToTimestamp`（2 条）：无数据返 False / 正确设视窗中心和宽度
+- `TestChannelEnableMask`（3 条）：手动勾选位掩码拼装、空勾选 / 全选 / 反选
+- `TestAttitudeSettingKey`（2 条）：带 hw_type 分桶 key / 无 hw 回落老格式
+
+全量 pytest **186/186 通过**（176 → 186，+10）。
+MainWindow 冒烟：5 子系统 profile 分桶正确（trace=2 / modem=1 / rf=1 / ins=1 / general=1），
+3 主题 × 4 字号切换、A5 对话框打开/关闭、A6 分桶保存读取都 OK。
+
+#### 验收对照
+
+- [x] plan §4.4 StatePanel 按子系统折叠分组（A4）
+- [x] plan §4.4 StatePanel 最近变化项高亮（A3）
+- [x] plan §4.5 U-03 EventTimeline 双击跳曲线（A1）
+- [x] plan §4.5 EventTimeline 右键"在曲线上定位"（A2）
+- [x] plan §4.8 ControlPanel 通道使能复选框矩阵（A5）
+- [x] M4 遗留 Attitude 绑定按 hw_type 分桶（A6）
+
+---
+
+## 批次 B — 文档收尾（完成）
+
+### 2026-04-19
+
+按 plan §11 开发纪律，补齐 3 类非代码交付物：
+
+| 文件 | 作用 |
+|------|------|
+| `doc/acceptance_log.md` | 按 plan §8 逐项跟踪验收状态（功能 F-01~F-15、性能 P-01~P-08、UI U-01~U-05、协议 C-03、多设备 D-01~D-10）；附"待真机/外场实测 Checklist" |
+| `doc/user_manual.md` | 11 节用户手册：快速开始 / 界面总览 / 连接 / 数据查看 / 事件状态 / 3D 场景 / 控制 / 录制回放 / 主题字号 / 常见问题 / 文件位置 |
+| `doc/screenshots/README.md` + `.gitkeep` | 截图命名约定与抓图清单；外场实测时按 README 给的场景抓图后在 `acceptance_log.md` 引用 |
+
+**里程碑状态 @ 2026-04-19**（对照最新开发日志顶部总览表）：
+
+| M | 状态 |
+|---|------|
+| M1–M6 主线 | 代码全部完成，自动化测试 186/186 |
+| 批次 A 体验增强（A1–A6） | 代码完成 |
+| 批次 B 文档收尾 | 完成 |
+
+剩余：**全部等真下位机 / 车载外场实测关闭的 13 项**，清单见
+`acceptance_log.md` 文末 Checklist。
 
 ---
 
@@ -419,7 +609,160 @@ pyqtgraph 闪烁根因：每帧 `setXRange` → `sigRangeChanged` → 刻度/网
 
 ---
 
-## M6 — 主题字体（待开始）
+## M6 — 主题/字体/tooltip（代码完成）
+
+### 2026-04-18 — 三档主题 + 四档字号 + 全局 tooltip
+
+#### styles.py 扩展
+
+- `palette(theme)` 三档：
+  - `dark`（沿用）/ `dark_hc`（#000000 黑底 + #F5F5F5 纯白 + 高饱和语义色，500cd/m² 车载强光屏可读）/ `light`
+  - 新增键：`primary / success / warning / error`（各主题各自调），统一替代散落硬编码
+  - 老签名 `palette(bool)` 向下兼容（True→dark, False→light）
+- `FONT_SCALES` 四档：small(1.0) / medium(1.17) / large(1.5) / xlarge(1.83)
+  - 基准 12px → 12 / 14 / 18 / 22
+- `font_px(base, scale)`：按档位像素缩放，最低 6px 钳位
+- `monospace_family()`：运行时探测 JetBrains Mono → Consolas → SF Mono → Menlo → Courier New；
+  无 QGuiApplication 时回退 "monospace"（测试环境不崩）
+- `apply_global_font(app, scale)`：QApplication 级字号缩放入口
+
+#### MainWindow toolbar
+
+- 主题下拉：`Dark/Light` → `深色 / 深色·高对比 / 浅色`（标签驱动，持久化英文 key `dark/dark_hc/light`）
+- 新增字号下拉：`小 / 中 / 大 / 超大`
+- 老配置 `ui.theme = "Dark"/"Light"` 自动迁移到新值；新增 `ui.font_scale`
+- `_on_theme_changed` / `_on_font_scale_changed` 各持久化
+- `_apply_stylesheet` 重命名 `_apply_theme(theme, scale)`；
+  内部改用 `palette()` 取色，不再 `S.PRIMARY if is_dark else S.PRIMARY_LIGHT` 这类散落分支
+- 子 widget 分发：优先调 `set_theme(theme, scale)` 新接口，向下兼容 `set_dark_theme(bool)`
+
+#### 子 widget 统一改造
+
+每个 widget 都新增 `set_theme(theme, scale)`，保留 `set_dark_theme(bool)` 作兼容薄皮：
+
+| Widget | 关键改动 |
+|--------|---------|
+| StatusStripWidget / `_Chip` | `apply_theme(theme, scale)`，chip 文字 `font_px(11, scale)`；critical-state chip tooltip 展示 state_id/类型/枚举项 |
+| DashboardWidget / KpiCard / ModeButtonGroup | KPI 数字字体 = `QFont(monospace_family(), font_px(22, scale), Bold)`（字名锁定，字号随档缩放）；卡片在 xlarge 档自适应加高；卡片 tooltip=通道全信息；按钮 tooltip=目标枚举 |
+| StatePanelWidget / StateItemRow | 行 tooltip 展示 state_id/flags/枚举；三档主题适配；字号缩放 |
+| EventTimelineWidget | 级别下拉/关键字输入/清空 三个控件 tooltip；每行事件 tooltip 显示 event_id、完整 payload（utf-8/hex）、时间戳 |
+| ControlPanelWidget | 采样率/标记/复位 tooltip；三档主题 + 字号 |
+| AttitudeWidget | 去掉所有硬编码 `#CCCCCC / #888888 / #0E639C`，改由 `palette()` 取；`_combo_style(active)` 统一按钮状态；3D 背景按主题（#000 / #FFF / #1E1E1E）；label/combo tooltip |
+| GroupedChartWidget | `_apply_theme` 改用 palette；axis 颜色 = `text`；按钮 tooltip（单图/分组模式说明）；字号缩放 |
+
+#### Toolbar 按钮 tooltip（U-02）
+
+- Connect / Disconnect / Debug / Record / Import / Clear / Theme / FontScale：每个都带中文说明
+- Dashboard KPI / StatusStrip chip / StatePanel row / EventTimeline item：均 setToolTip
+
+#### 测试
+
+- 新增 `tests/test_styles.py`（17 条）：
+  - palette 三档键完整性 + bool/None/未知回落
+  - dark_hc 对比度断言（bg=#000000，text 比 dark 更亮）
+  - font_px 四档准确性（12/14/18/22）+ 未知档回落 medium + 数值输入 + 6px 最小钳位
+  - monospace_family 非空 + 无 QApplication 不崩
+- MainWindow 12 组合（3 主题 × 4 字号）切换冒烟通过
+
+**全量 pytest 160/160 通过（143 → 160，+17）。**
+
+#### 补丁：超大字号下的水平溢出
+
+用户反馈在 **超大字号 + dark_hc** 实测时 StatusStrip 末端 chip（POLARIZATION / BEACON）被
+截断、Dashboard KPI 数字（`2.09°` 显示成 `2.0|`）也被挤压。
+
+讨论后选择 **分条独立横向滚动**（非整窗全局滚动，避免与图表自身的水平拖动冲突）：
+
+- `StatusStripWidget`：chip 行移进 `QScrollArea`（横滚 AsNeeded / 纵向关闭），
+  条带固定高度随字号放大（chip 字号 + 18 padding + 12 滚动条）
+- `DashboardWidget`：`main_row` 移进 `QScrollArea`；`setMinimumHeight(card_h + 20)`
+  给横滚条留位
+- `KpiCard`：`SizePolicy` 由 `Expanding` 改为 `Preferred`（装得下按自然宽度，
+  装不下交给外层横滚）；`minWidth` 按 value 字号放大
+  `max(110, int(value_px * 4.0) + 40)`
+    - small 22 → 120, medium 26 → 144, large 33 → 172, xlarge 40 → 200
+  保证 "−000.00°" 这种 6 字符读数在各档都不截断
+
+全量 pytest 仍 160/160 通过，12 组合切换冒烟仍通过。
+
+#### 补丁 2：顶部工具栏也需要横向滚动
+
+用户进一步反馈：超大字号下 **工具栏末端的"字号"下拉** 被 QToolBar 的 `>>` 扩展菜单
+吞掉（QComboBox 放进扩展菜单交互很差），**实际失去了再修改字号的能力**。
+
+修法：不再用 `QMainWindow.addToolBar()` 把工具栏放进 QMainWindow 的工具栏区，而是
+**把 QToolBar 包进一个横向 QScrollArea 后作为普通 widget 放在中央布局顶部**：
+
+```python
+self._toolbar_scroll = QScrollArea()
+self._toolbar_scroll.setWidgetResizable(True)
+self._toolbar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+self._toolbar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+self._toolbar_scroll.setWidget(self._toolbar)
+layout.addWidget(self._toolbar_scroll)   # 取代 self.addToolBar(...)
+```
+
+`_apply_theme` 里按内容 sizeHint 自适应高度 `max(42, tb_h + 12)` 给横滚条留位。
+实测 xlarge 下 toolbar 自然宽度 ~1798px > 窗口 1240px，横滚条自动出现，
+能滚到末尾取到字号下拉。
+
+pytest 仍 160/160 通过。
+
+#### 补丁 3：工具栏彻底**不跟随**全局字号
+
+横滚能让字号下拉可达，但用户反馈实测仍找不到（Mac trackpad 横滚发现不了）。
+最终方案：**工具栏字号固定 12px，不跟随全局字号档位变化**。
+
+```python
+# _apply_theme 里，apply_global_font 之后：
+fixed = QFont(self._toolbar.font())
+fixed.setPixelSize(12)
+self._toolbar.setFont(fixed)
+for child in self._toolbar.findChildren(QWidget):
+    child.setFont(fixed)
+self._toolbar_scroll.setFixedHeight(42)   # 不再按 scale 变
+```
+
+效果：切到任意字号档，工具栏宽度/高度/控件字号都不变（sizeHint 稳定 1525×41），
+主题 / 字号下拉始终在屏幕同一位置可见；其它区域（StatusStrip / Dashboard /
+Chart / Channel Panel）继续跟随档位缩放。
+
+设计理由：工具栏是"操作 UI 的 UI"，它本身跟随字号放大反而让切换字号变困难。
+类似 VSCode 的命令面板、IntelliJ 的 Settings 对话框，都不跟随编辑器字号。
+
+pytest 仍 160/160 通过，12 组合切换验证：toolbar 尺寸稳定不变。
+
+#### 补丁 4：补齐几处漏掉的"硬编码行高"
+
+用户进一步反馈实测发现"行高看上去不是动态的"。排查后确认以下几处仍是硬编码像素：
+
+| 位置 | 之前 | 现在 |
+|------|------|------|
+| `main_window._update_display` 通道条目 `container.setFixedHeight(32)` | 固定 32 | `font_px(12, scale) + 20` (32/34/38/42) |
+| `main_window._update_display` 通道圆点 `dot.setFixedSize(10,10)` + `border-radius: 50%` | 固定 10px，border-radius 部分 Qt 版本不生效 | `max(10, font_px(10, scale) - 2)` + `border-radius: {dot//2}px` |
+| `dashboard_widget.ModeButtonGroup._buttons[*].setFixedHeight(26)` | 固定 26 | `btn_px + 14` (25/27/32/36) |
+| `_apply_theme` 的通道 container 遍历循环 | 只改 stylesheet | 再 `setFixedHeight(row_h)` + 重刷圆点 |
+
+验证脚本（模拟握手 + 数据）测量结果：
+
+| scale | toolbar | statusstrip | channel row |
+|-------|---------|-------------|-------------|
+| small | 42 (锁定) | 41 | 32 |
+| medium | 42 | 43 | 34 |
+| large | 42 | 46 | 38 |
+| xlarge | 42 | 50 | 42 |
+
+所有行均随字号放大，仅 toolbar 按上一轮决定保持锁定 42。
+
+pytest 仍 160/160。
+
+#### 验收对照 §8.3
+
+- [x] U-02 指示灯悬停显示含义：StatusStrip/Dashboard/StatePanel/EventTimeline 全部加 tooltip ✓
+- [x] U-05 超大字号 KPI 数字不截断：KpiCard 按数字像素自适应卡片高度 ✓（需外场实测确认）
+- [ ] U-01 外场 3 米可读：需 dark_hc 在 500cd/m² 屏实测
+- [ ] U-04 1366×768 布局不溢出：需实测
+- [ ] F-15 高对比主题阳光屏可读：需外场实测
 
 ---
 
