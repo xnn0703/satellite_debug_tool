@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -46,6 +48,59 @@ _ENUM_LEVEL_COLORS = {
 _BOOL_ON_COLOR = "#4EC9B0"     # 绿
 _BOOL_OFF_COLOR = "#555555"    # 深灰
 
+# A3: 最近变化 2 秒内边框高亮
+_HIGHLIGHT_BORDER = "#FFC107"    # 琥珀
+_HIGHLIGHT_MS = 2000
+
+
+# A4: 子系统分组 — 从 state.name 前缀（下划线前）抽取
+# 规则：
+# - TRACE_MODE / TRACE_X → "trace"
+# - MODEM_X / SNR_LOCK  → "modem"（SNR 视为 modem 子）
+# - INS_READY / IMU_X   → "ins"
+# - PLL_LOCKED / LO_X   → "rf"
+# - LOCK_FLAG           → "trace"（业务上锁星属 trace）
+# - 其它                → "general"
+_SUBSYSTEM_RULES = [
+    # (关键字, 子系统 key) —— 顺序敏感：更特定的关键字排前面，
+    # 否则 "SNR_LOCKED" / "PLL_LOCKED" 会先命中 "lock" 被误归 trace。
+    (("modem", "snr", "beacon"), "modem"),
+    (("pll", "lo", "buc", "lnb", "polar", "pol"), "rf"),
+    (("trace", "lock"),          "trace"),
+    (("ins", "imu", "gps"),      "ins"),
+]
+_SUBSYSTEM_LABELS = {
+    "trace":   "跟踪 (Trace)",
+    "modem":   "调制解调 (Modem)",
+    "ins":     "导航 (INS / GPS)",
+    "rf":      "射频 (RF)",
+    "general": "其它 (General)",
+}
+_SUBSYSTEM_ORDER = ["trace", "modem", "rf", "ins", "general"]
+
+
+def _classify_subsystem(name: str) -> str:
+    """把 state.name 分到子系统桶。
+
+    匹配 _ 切分的 token；比对规则：
+    - 2 字符及以下的短关键字（如 "lo"）走**精确**匹配，避免 "LOCK" 被误归 "LO"
+    - 3 字符及以上走**前缀**匹配（覆盖 "PLL_LOCKED" → "pll"）
+    规则顺序：modem > rf > trace > ins，避免 "SNR_LOCKED" 被 lock 抢走。
+    """
+    tokens = [t.lower() for t in name.split("_") if t]
+    if not tokens:
+        return "general"
+    for keys, sub in _SUBSYSTEM_RULES:
+        for k in keys:
+            for tok in tokens:
+                if len(k) <= 2:
+                    if tok == k:
+                        return sub
+                else:
+                    if tok.startswith(k):
+                        return sub
+    return "general"
+
 
 def _dot_stylesheet(color: str) -> str:
     return (
@@ -61,6 +116,8 @@ class StateItemRow(QFrame):
         super().__init__(parent)
         self._entry = entry
         self._is_dark = True
+        self._theme = "dark"
+        self._scale = "medium"
         layout = QGridLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setHorizontalSpacing(8)
@@ -72,23 +129,68 @@ class StateItemRow(QFrame):
         self._value_label = QLabel("—")
         self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
+        # M6: tooltip 显示 state_id / 类型 / flags / 枚举说明
+        if entry.state_type == int(StateType.BOOL):
+            tip = (
+                f"[BOOL] state_id={entry.state_id}  {entry.name}\n"
+                f"flags=0x{entry.flags:02X}"
+                + ("\n(INVERSE 反色：0=正常，1=告警)" if entry.flags & STATE_FLAG_INVERSE else "")
+            )
+        else:
+            enum_lines = "\n".join(
+                f"  {e.value} = {e.name}  [lv={e.level}]" for e in entry.enums
+            )
+            tip = (
+                f"[ENUM] state_id={entry.state_id}  {entry.name}\n"
+                f"flags=0x{entry.flags:02X}\n{enum_lines or '  (无枚举项)'}"
+            )
+        self.setToolTip(tip)
+
         layout.addWidget(self._dot, 0, 0)
         layout.addWidget(self._name_label, 0, 1)
         layout.addWidget(self._value_label, 0, 2)
         layout.setColumnStretch(1, 1)
 
-        self.set_dark_theme(True)
+        self.set_theme(self._theme, self._scale)
         self.set_unknown()
 
     def set_dark_theme(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
-        p = S.palette(is_dark)
-        self.setStyleSheet(
-            f"QFrame {{ background-color: {p['card_alt']}; border-radius: 4px; padding: 4px 8px; }}"
-            f"QLabel {{ border: none; color: {p['text']}; }}"
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def _make_style(self, border: str) -> str:
+        p = S.palette(self._theme)
+        px = S.font_px(12, self._scale)
+        return (
+            f"QFrame {{ background-color: {p['card_alt']}; "
+            f"border: 1px solid {border}; border-radius: 4px; padding: 4px 8px; }}"
+            f"QLabel {{ border: none; color: {p['text']}; font-size: {px}px; }}"
         )
-        self._name_label.setStyleSheet(f"font-weight: 500; color: {p['text']};")
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._is_dark = self._theme != "light"
+        self._scale = scale
+        p = S.palette(self._theme)
+        name_px = S.font_px(12, scale)
+        # A3: 默认"无边框"视觉（边与背景同色），flash 时换琥珀色
+        self._normal_border = p["card_alt"]
+        self.setStyleSheet(self._make_style(self._normal_border))
+        self._name_label.setStyleSheet(
+            f"font-weight: 500; color: {p['text']}; font-size: {name_px}px;"
+        )
         # value_label 颜色由 set_value/set_unknown 设置，不在此覆盖
+
+    # ----- A3: 最近变化 2 秒高亮 -----
+
+    def flash_highlight(self) -> None:
+        """值变化时，外框高亮 2 秒后恢复。"""
+        self.setStyleSheet(self._make_style(_HIGHLIGHT_BORDER))
+        QTimer.singleShot(
+            _HIGHLIGHT_MS,
+            lambda: self.setStyleSheet(
+                self._make_style(getattr(self, "_normal_border", "transparent"))
+            ),
+        )
 
     # ----- 更新 -----
 
@@ -96,7 +198,7 @@ class StateItemRow(QFrame):
         """状态未知（未曾上报）。"""
         self._dot.setStyleSheet(_dot_stylesheet(_BOOL_OFF_COLOR))
         self._value_label.setText("—")
-        p = S.palette(self._is_dark)
+        p = S.palette(self._theme)
         self._value_label.setStyleSheet(f"color: {p['text_faint']};")
 
     def set_value(self, value: int) -> None:
@@ -128,6 +230,68 @@ class StateItemRow(QFrame):
         self._value_label.setStyleSheet(f"color: {color}; font-weight: 500;")
 
 
+class _SubsystemSection(QFrame):
+    """A4: 一个可折叠的子系统分组。header 带 ▶/▼ 三角 + 名称 + (n 项) 计数。"""
+
+    def __init__(self, key: str, label: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._key = key
+        self._label_text = label
+        self._collapsed = False
+        self._theme = "dark"
+        self._scale = "medium"
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        self._header_btn = QPushButton(f"▼ {label}")
+        self._header_btn.setCheckable(False)
+        self._header_btn.setCursor(Qt.PointingHandCursor)
+        self._header_btn.clicked.connect(self._toggle)
+        outer.addWidget(self._header_btn)
+
+        self._body = QWidget()
+        self._body_layout = QVBoxLayout(self._body)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.setSpacing(3)
+        outer.addWidget(self._body)
+
+    # ----- Public -----
+
+    def add_row(self, row: QWidget) -> None:
+        self._body_layout.addWidget(row)
+
+    def clear_rows(self) -> None:
+        while self._body_layout.count():
+            item = self._body_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+
+    def set_count(self, n: int) -> None:
+        arrow = "▼" if not self._collapsed else "▶"
+        self._header_btn.setText(f"{arrow} {self._label_text}  ({n})")
+
+    def _toggle(self) -> None:
+        self._collapsed = not self._collapsed
+        self._body.setVisible(not self._collapsed)
+        # header 文本更新
+        self.set_count(self._body_layout.count())
+
+    def set_theme(self, theme: str, scale: str) -> None:
+        self._theme = S._normalize_theme(theme)
+        self._scale = scale
+        p = S.palette(self._theme)
+        px = S.font_px(12, scale)
+        self._header_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {p['panel']}; color: {p['text_muted']}; "
+            f"border: none; text-align: left; padding: 4px 6px; "
+            f"font-size: {px}px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background-color: {p['card_alt']}; color: {p['text']}; }}"
+        )
+
+
 class StatePanelWidget(QScrollArea):
     """整体状态灯板：跟随 ProfileStore / StateStore 自动刷新。"""
 
@@ -141,8 +305,11 @@ class StatePanelWidget(QScrollArea):
         self._profile = profile_store
         self._states = state_store
         self._rows: Dict[int, StateItemRow] = {}
+        self._sections: Dict[str, _SubsystemSection] = {}   # A4
         self._current_hw: Optional[str] = None
         self._is_dark = True
+        self._theme = "dark"
+        self._scale = "medium"
 
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -158,21 +325,31 @@ class StatePanelWidget(QScrollArea):
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._vlayout.insertWidget(0, self._empty_label)
 
-        self.set_dark_theme(True)
+        self.set_theme("dark", "medium")
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
 
     def set_dark_theme(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
-        p = S.palette(is_dark)
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._is_dark = self._theme != "light"
+        self._scale = scale
+        p = S.palette(self._theme)
         self.setStyleSheet(
             f"QScrollArea {{ background-color: {p['bg']}; border: 1px solid {p['border']}; }}"
         )
         self._container.setStyleSheet(f"background-color: {p['bg']};")
-        self._empty_label.setStyleSheet(f"color: {p['text_faint']}; padding: 16px;")
+        empty_px = S.font_px(12, scale)
+        self._empty_label.setStyleSheet(
+            f"color: {p['text_faint']}; padding: 16px; font-size: {empty_px}px;"
+        )
         for row in self._rows.values():
-            row.set_dark_theme(is_dark)
+            row.set_theme(self._theme, scale)
+        for sec in self._sections.values():
+            sec.set_theme(self._theme, scale)
 
     # ----- Public -----
 
@@ -207,14 +384,20 @@ class StatePanelWidget(QScrollArea):
         row = self._rows.get(state_id)
         if row is not None:
             row.set_value(value)
+            # A3: 最近变化项短暂高亮
+            row.flash_highlight()
 
     # ----- 构建 -----
 
     def _clear_rows(self) -> None:
         for row in self._rows.values():
-            self._vlayout.removeWidget(row)
+            row.setParent(None)
             row.deleteLater()
         self._rows.clear()
+        for sec in self._sections.values():
+            self._vlayout.removeWidget(sec)
+            sec.deleteLater()
+        self._sections.clear()
 
     def _rebuild(self) -> None:
         self._clear_rows()
@@ -230,14 +413,28 @@ class StatePanelWidget(QScrollArea):
             return
 
         self._empty_label.hide()
-        insert_pos = 0
+
+        # A4: 按子系统分桶
+        buckets: Dict[str, list[StateDefEntry]] = {k: [] for k in _SUBSYSTEM_ORDER}
         for entry in states:
-            row = StateItemRow(entry)
-            row.set_dark_theme(self._is_dark)
-            self._vlayout.insertWidget(insert_pos, row)
-            self._rows[entry.state_id] = row
+            buckets[_classify_subsystem(entry.name)].append(entry)
+
+        insert_pos = 0
+        for sub_key in _SUBSYSTEM_ORDER:
+            entries = buckets[sub_key]
+            if not entries:
+                continue
+            section = _SubsystemSection(sub_key, _SUBSYSTEM_LABELS[sub_key])
+            section.set_theme(self._theme, self._scale)
+            for entry in entries:
+                row = StateItemRow(entry)
+                row.set_theme(self._theme, self._scale)
+                section.add_row(row)
+                self._rows[entry.state_id] = row
+                current = self._states.get_value(self._current_hw, entry.state_id)
+                if current is not None:
+                    row.set_value(current)
+            section.set_count(len(entries))
+            self._vlayout.insertWidget(insert_pos, section)
+            self._sections[sub_key] = section
             insert_pos += 1
-            # 回灌当前值
-            current = self._states.get_value(self._current_hw, entry.state_id)
-            if current is not None:
-                row.set_value(current)
