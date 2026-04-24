@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QWidget,
 )
 
@@ -67,14 +68,19 @@ class _Chip(QFrame):
         self._text = QLabel(label)
         row.addWidget(self._dot_label)
         row.addWidget(self._text)
-        self.apply_theme(True)
+        self._theme = "dark"
+        self._scale = "medium"
+        self.apply_theme(self._theme, self._scale)
 
-    def apply_theme(self, is_dark: bool) -> None:
-        p = S.palette(is_dark)
+    def apply_theme(self, theme="dark", scale="medium") -> None:
+        """theme: "dark"/"dark_hc"/"light"（也接受 bool）；scale: 字号档位。"""
+        self._theme = S._normalize_theme(theme)
+        self._scale = scale
+        p = S.palette(self._theme)
         self.setStyleSheet(
             f"QFrame {{ background-color: {p['card']}; border: 1px solid {p['border']}; "
             f"border-radius: 10px; padding: 2px 6px; }}"
-            f"QLabel {{ border: none; color: {p['text']}; font-size: 11px; }}"
+            f"QLabel {{ border: none; color: {p['text']}; font-size: {S.font_px(11, scale)}px; }}"
         )
 
     def set_dot(self, color: str) -> None:
@@ -102,18 +108,35 @@ class StatusStripWidget(QFrame):
         self._state_chips: Dict[int, _Chip] = {}
         self._state_entries: Dict[int, StateDefEntry] = {}
 
-        self.setFixedHeight(36)
         self._is_dark = True
+        self._theme = "dark"
+        self._scale = "medium"
 
-        row = QHBoxLayout(self)
+        # 外层只放一个横向滚动区；chip 真正的 row 放进 _inner
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._inner = QWidget()
+        self._scroll.setWidget(self._inner)
+        outer.addWidget(self._scroll, 1)
+
+        row = QHBoxLayout(self._inner)
         row.setContentsMargins(8, 3, 8, 3)
         row.setSpacing(6)
 
         # 固定 chips
         self._link_chip = _Chip("LINK")
+        self._link_chip.setToolTip("协议级心跳（HEARTBEAT）健康状态：OK=链路通，-- =3s 未收到心跳")
         self._recording_chip = _Chip("REC")
+        self._recording_chip.setToolTip("本机 .sdb 录制状态：红灯闪=正在录，灰=空闲")
         self._beat_chip = _Chip("BEAT")
         self._beat_chip.set_dot(_LINK_IDLE)
+        self._beat_chip.setToolTip("每收到一帧 HEARTBEAT 闪一下绿灯（可验证下位机存活）")
         row.addWidget(self._link_chip)
         row.addWidget(self._recording_chip)
         row.addWidget(self._beat_chip)
@@ -140,20 +163,34 @@ class StatusStripWidget(QFrame):
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
 
-        self.set_dark_theme(True)
+        self.set_theme("dark", "medium")
         self.set_recording(False)
         self.set_link_state(connected=False)
 
     def set_dark_theme(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
-        p = S.palette(is_dark)
+        """兼容老接口：bool → 三档主题中的 dark/light。"""
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._is_dark = self._theme != "light"
+        self._scale = scale
+        p = S.palette(self._theme)
+        # 条带高度：chip 字号 + padding + 给可能出现的横向滚动条留位
+        chip_px = S.font_px(11, scale)
+        bar_h = max(36, chip_px + 18 + 12)   # 12px scrollbar 空间
+        self.setFixedHeight(bar_h)
         self.setStyleSheet(
             f"StatusStripWidget {{ background-color: {p['bg']}; "
             f"border-top: 1px solid {p['border']}; border-bottom: 1px solid {p['border']}; }}"
         )
+        self._scroll.setStyleSheet(
+            f"QScrollArea {{ background-color: {p['bg']}; border: none; }}"
+        )
+        self._inner.setStyleSheet(f"background-color: {p['bg']};")
         self._sep.setStyleSheet(f"color: {p['text_faint']}; padding: 0 4px;")
         for chip in (self._link_chip, self._recording_chip, self._beat_chip, *self._state_chips.values()):
-            chip.apply_theme(is_dark)
+            chip.apply_theme(self._theme, self._scale)
 
     # ---- Public ----
 
@@ -214,7 +251,21 @@ class StatusStripWidget(QFrame):
         critical = [s for s in states if s.critical][: self.MAX_CRITICAL_STATES]
         for entry in critical:
             chip = _Chip(entry.name)
-            chip.apply_theme(self._is_dark)
+            chip.apply_theme(self._theme, self._scale)
+            # M6: 给每个状态 chip 加 tooltip，悬停显示类型 + 枚举说明
+            if entry.state_type == int(StateType.BOOL):
+                tip = f"[BOOL] state_id={entry.state_id}  {entry.name}"
+                if entry.flags & STATE_FLAG_INVERSE:
+                    tip += "\n(INVERSE: 0=正常/绿，1=告警/灰)"
+            else:
+                enum_lines = "\n".join(
+                    f"  {e.value} = {e.name} [lv={e.level}]" for e in entry.enums
+                )
+                tip = (
+                    f"[ENUM] state_id={entry.state_id}  {entry.name}\n"
+                    f"{enum_lines or '  (无枚举项)'}"
+                )
+            chip.setToolTip(tip)
             self._dynamic_layout.addWidget(chip)
             self._state_chips[entry.state_id] = chip
             self._state_entries[entry.state_id] = entry

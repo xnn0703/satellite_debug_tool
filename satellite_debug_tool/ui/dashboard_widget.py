@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -45,28 +46,44 @@ from satellite_debug_tool.ui import styles as S
 class KpiCard(QFrame):
     """一张 KPI 卡片：大号数字 + 单位 + 通道名。"""
 
+    # 基准字号（scale=1.0 时的像素值）
+    _VALUE_BASE_PX = 22
+    _NAME_BASE_PX = 10
+    _UNIT_BASE_PX = 11
+
     def __init__(self, entry: ChannelDefEntry, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._entry = entry
         self._out_of_range = False
         self._is_dark = True
+        self._theme = "dark"
+        self._scale = "medium"
 
-        # 固定高度 72px 与 ModeButtonGroup 对齐；宽度自适应
+        # 固定高度 72px 与 ModeButtonGroup 对齐；宽度按字号放大（由 _apply_font 调整）
         self.setFixedHeight(72)
         self.setMinimumWidth(110)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # 用 Preferred 而不是 Expanding：装得下按自然宽度排，装不下由外层 QScrollArea 横滚
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        # M6: tooltip 悬停显示通道全信息
+        self.setToolTip(
+            f"通道 #{entry.channel_id}  {entry.name}\n"
+            f"单位: {entry.unit or '(无)'}\n"
+            f"量程: [{entry.display_min:.2f}, {entry.display_max:.2f}]\n"
+            f"group_id: {entry.group_id}  flags: 0x{entry.flags:02X}\n"
+            f"来源: DEFINE 表"
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(2)
 
         self._name_label = QLabel(entry.name.upper())
-        mono = QFont("JetBrains Mono", 22, QFont.Bold)
-        mono.setStyleHint(QFont.Monospace)
         self._value_label = QLabel("—")
-        self._value_label.setFont(mono)
         self._value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._unit_label = QLabel(entry.unit or "")
+
+        self._apply_font(self._scale)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -81,31 +98,61 @@ class KpiCard(QFrame):
         layout.addLayout(bottom)
         self._apply_style(normal=True)
 
+    # ---------- 主题/字号 ----------
+
     def set_dark_theme(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._is_dark = self._theme != "light"
+        self._scale = scale
+        self._apply_font(scale)
         self._apply_style(normal=not self._out_of_range)
 
+    def _apply_font(self, scale) -> None:
+        # Dashboard KPI 数字字体：锁定等宽族，字号随档位缩放
+        value_px = S.font_px(self._VALUE_BASE_PX, scale)
+        mono = QFont(S.monospace_family(), 0, QFont.Bold)
+        mono.setStyleHint(QFont.Monospace)
+        mono.setPixelSize(value_px)
+        self._value_label.setFont(mono)
+        # 超大档下给卡片留足高度（默认 72 在 xlarge 会截断）
+        min_h = max(72, value_px + 34)
+        self.setFixedHeight(min_h)
+        # 最小宽度：按 value 字号估算 "−000.00°" 需要的像素（6 字符 × 0.6 字宽 + 单位 + padding）
+        min_w = max(110, int(value_px * 4.0) + 40)
+        self.setMinimumWidth(min_w)
+
     def _apply_style(self, normal: bool) -> None:
-        p = S.palette(self._is_dark)
+        p = S.palette(self._theme)
         if normal:
             card_bg = p["card"]
             border = p["border"]
         else:
-            # 告警色：保留高对比红
-            card_bg = "#3B1F1F" if self._is_dark else "#FFE8E8"
-            border = "#F14C4C"
+            # 告警色：三档主题下分别挑一档
+            if self._theme == "dark_hc":
+                card_bg = "#2A0000"
+            elif self._theme == "light":
+                card_bg = "#FFE8E8"
+            else:
+                card_bg = "#3B1F1F"
+            border = p["error"]
+        name_px = S.font_px(self._NAME_BASE_PX, self._scale)
+        unit_px = S.font_px(self._UNIT_BASE_PX, self._scale)
         self.setStyleSheet(
             f"KpiCard {{ background-color: {card_bg}; border: 1px solid {border}; "
             f"border-radius: 4px; }}"
         )
         self._name_label.setStyleSheet(
-            f"color: {p['text_muted']}; font-size: 10px; font-weight: 600; background: transparent;"
+            f"color: {p['text_muted']}; font-size: {name_px}px; font-weight: 600; "
+            f"background: transparent;"
         )
         self._value_label.setStyleSheet(
             f"color: {p['value_number']}; background: transparent;"
         )
         self._unit_label.setStyleSheet(
-            f"color: {p['text_muted']}; font-size: 11px; background: transparent;"
+            f"color: {p['text_muted']}; font-size: {unit_px}px; background: transparent;"
         )
 
     def update_value(self, value: Optional[float]) -> None:
@@ -137,6 +184,8 @@ class ModeButtonGroup(QFrame):
         self._buttons: Dict[int, QPushButton] = {}
         self._current_value: Optional[int] = None
         self._is_dark = True
+        self._theme = "dark"
+        self._scale = "medium"
 
         # 与 KpiCard 高度 72 对齐
         self.setFixedHeight(72)
@@ -145,6 +194,10 @@ class ModeButtonGroup(QFrame):
         outer.setSpacing(2)
 
         self._title = QLabel(state.name)
+        self._title.setToolTip(
+            f"[ENUM] state_id={state.state_id}  {state.name}\n"
+            f"点击按钮发送 CONTROL.SET_TRACE_MODE（或等价子命令）"
+        )
         outer.addWidget(self._title)
 
         row = QHBoxLayout()
@@ -154,32 +207,47 @@ class ModeButtonGroup(QFrame):
             btn = QPushButton(item.name)
             btn.setCheckable(True)
             btn.setFixedHeight(26)
+            btn.setToolTip(f"→ {state.name} = {item.name} (value={item.value}, level={item.level})")
             btn.clicked.connect(lambda _c=False, v=item.value: self._on_clicked(v))
             row.addWidget(btn)
             self._buttons[item.value] = btn
         row.addStretch(1)
         outer.addLayout(row)
 
-        self.set_dark_theme(True)
+        self.set_theme(self._theme, self._scale)
 
     def set_dark_theme(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
-        p = S.palette(is_dark)
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._is_dark = self._theme != "light"
+        self._scale = scale
+        p = S.palette(self._theme)
+        title_px = S.font_px(11, scale)
+        btn_px = S.font_px(11, scale)
+        # 超大档按钮容易被裁：撑一下整体高度
+        min_h = max(72, title_px + btn_px + 36)
+        self.setFixedHeight(min_h)
         self.setStyleSheet(
             f"ModeButtonGroup {{ background-color: {p['card']}; "
             f"border: 1px solid {p['border']}; border-radius: 4px; }}"
         )
         self._title.setStyleSheet(
-            f"color: {p['text_muted']}; font-size: 11px; font-weight: 600; background: transparent;"
+            f"color: {p['text_muted']}; font-size: {title_px}px; font-weight: 600; "
+            f"background: transparent;"
         )
         btn_style = (
             f"QPushButton {{ background-color: {p['input_bg']}; color: {p['text']}; "
-            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 4px 10px; }}"
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; "
+            f"padding: 4px 10px; font-size: {btn_px}px; }}"
             f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
-            f"QPushButton:checked {{ background-color: #0E639C; color: white; "
-            f"border-color: #0E639C; font-weight: 600; }}"
+            f"QPushButton:checked {{ background-color: {p['primary']}; color: white; "
+            f"border-color: {p['primary']}; font-weight: 600; }}"
         )
+        btn_h = btn_px + 14   # 字号 + padding
         for btn in self._buttons.values():
+            btn.setFixedHeight(btn_h)
             btn.setStyleSheet(btn_style)
 
     def _on_clicked(self, target_value: int) -> None:
@@ -216,17 +284,28 @@ class DashboardWidget(QWidget):
         self._cards: Dict[int, KpiCard] = {}
         self._mode_groups: Dict[int, ModeButtonGroup] = {}
         self._is_dark = True
+        self._theme = "dark"
+        self._scale = "medium"
 
         self.setStyleSheet("background-color: transparent;")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 2, 4, 2)
         outer.setSpacing(4)
 
+        # M6: main_row 放进横向滚动区；超大字号/超多卡片时底部出现横滚条
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._inner = QWidget()
+        self._scroll.setWidget(self._inner)
+        outer.addWidget(self._scroll, 1)
+
         # 单行布局：KPI 卡片 + 模式按钮组并排，高度一致避免两行参差
-        self._main_row = QHBoxLayout()
+        self._main_row = QHBoxLayout(self._inner)
         self._main_row.setContentsMargins(0, 0, 0, 0)
         self._main_row.setSpacing(6)
-        outer.addLayout(self._main_row)
 
         # 兼容旧调用点：保留两个子 layout 引用（实际都放进 _main_row）
         self._cards_row = QHBoxLayout()
@@ -240,19 +319,35 @@ class DashboardWidget(QWidget):
         self._empty_label.setAlignment(Qt.AlignCenter)
         outer.addWidget(self._empty_label)
 
-        self.set_dark_theme(True)
+        self.set_theme("dark", "medium")
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
 
     def set_dark_theme(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
-        p = S.palette(is_dark)
-        self._empty_label.setStyleSheet(f"color: {p['text_faint']}; padding: 12px;")
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._is_dark = self._theme != "light"
+        self._scale = scale
+        p = S.palette(self._theme)
+        empty_px = S.font_px(12, scale)
+        self._empty_label.setStyleSheet(
+            f"color: {p['text_faint']}; padding: 12px; font-size: {empty_px}px;"
+        )
+        # 滚动区背景、Dashboard 高度随档位放大（给卡片 + 横滚条留位）
+        self._scroll.setStyleSheet(
+            f"QScrollArea {{ background-color: transparent; border: none; }}"
+        )
+        self._inner.setStyleSheet("background-color: transparent;")
+        # KpiCard 在 xlarge 档会把自己撑到 ~100px 高，外框留 ~20px scrollbar + margin
+        card_h = S.font_px(KpiCard._VALUE_BASE_PX, scale) + 34  # 与 KpiCard._apply_font 同步
+        self.setMinimumHeight(card_h + 20)
         for card in self._cards.values():
-            card.set_dark_theme(is_dark)
+            card.set_theme(self._theme, scale)
         for group in self._mode_groups.values():
-            group.set_dark_theme(is_dark)
+            group.set_theme(self._theme, scale)
 
     # ---- Public ----
 
@@ -342,7 +437,7 @@ class DashboardWidget(QWidget):
         # ---- 卡片 ----
         for ch in channels:
             card = KpiCard(ch)
-            card.set_dark_theme(self._is_dark)
+            card.set_theme(self._theme, self._scale)
             self._cards_row.addWidget(card)
             self._cards[ch.channel_id] = card
         if channels:
@@ -351,7 +446,7 @@ class DashboardWidget(QWidget):
         # ---- 模式按钮组 ----
         for st in critical_enums:
             group = ModeButtonGroup(st)
-            group.set_dark_theme(self._is_dark)
+            group.set_theme(self._theme, self._scale)
             group.mode_requested.connect(self.mode_requested.emit)
             self._modes_row.addWidget(group)
             self._mode_groups[st.state_id] = group

@@ -85,6 +85,8 @@ class GroupedChartWidget(QWidget):
         self._time_window = 120.0
         self._auto_range = False
         self._is_dark = True
+        self._theme = "dark"
+        self._scale = "medium"
         self._current_hw: Optional[str] = None
         self._profile: Optional[ProfileStore] = None
         # 默认 "combined"：所有通道叠到一张大图看全貌；
@@ -119,9 +121,11 @@ class GroupedChartWidget(QWidget):
         self._btn_combined = QPushButton("单图")
         self._btn_combined.setCheckable(True)
         self._btn_combined.setChecked(True)
+        self._btn_combined.setToolTip("所有通道叠加在一张大图（适合快速扫视整体趋势）")
         self._btn_combined.clicked.connect(lambda: self.set_mode("combined"))
         self._btn_stacked = QPushButton("分组")
         self._btn_stacked.setCheckable(True)
+        self._btn_stacked.setToolTip("按 profile.group_id 纵向分子图（适合多量纲对比，可滚动）")
         self._btn_stacked.clicked.connect(lambda: self.set_mode("stacked"))
         for b in (self._btn_combined, self._btn_stacked):
             b.setFixedHeight(24)
@@ -141,13 +145,18 @@ class GroupedChartWidget(QWidget):
         layout.addWidget(self._scroll, 1)
         self._apply_theme()
 
-        self._empty = pg.LabelItem("等待设备握手…", color="#666666", size="10pt")
+        self._empty = pg.LabelItem("等待设备握手…", color=S.palette(self._theme)["text_faint"], size="10pt")
         self._gl.addItem(self._empty)
 
     # ---- 公共 API ----
 
     def set_dark_theme(self, is_dark: bool) -> None:
-        self._is_dark = is_dark
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._is_dark = self._theme != "light"
+        self._scale = scale
         self._apply_theme()
         self._apply_button_theme()
         # 已有子图的轴色也要同步；简化做法：重建
@@ -187,6 +196,27 @@ class GroupedChartWidget(QWidget):
         self._btn_combined.setChecked(mode == "combined")
         self._btn_stacked.setChecked(mode == "stacked")
         self._rebuild()
+
+    def jump_to_timestamp(self, timestamp_ms: int, window_sec: Optional[float] = None) -> bool:
+        """把 X 视窗中心定位到某个 ms 时间戳。
+
+        供 EventTimeline 双击 / 右键"在曲线上定位"调用。
+        `window_sec` 指定跳转后的可见窗宽度，默认沿用当前 `_time_window`。
+        返回 True 表示跳转成功。未加载 profile 或还没收到数据则返回 False。
+        """
+        if not self._plots or self._x_origin_ms is None:
+            return False
+        win = max(1.0, float(window_sec)) if window_sec is not None else self._time_window
+        x_sec = (float(timestamp_ms) - self._x_origin_ms) / 1000.0
+        new_xmin = x_sec - win * 0.5
+        new_xmax = x_sec + win * 0.5
+        self._x_view_max = new_xmax
+        # 跳转时关闭"follow latest"语义：下一次 refresh 新数据进来如果超出当前右边界，
+        # 会再次触发滚屏；想要暂停不跟随，调用方应先 setAutoRange(False)+外部冻结
+        first_plot = next(iter(self._plots.values()), None)
+        if first_plot is not None:
+            first_plot.setXRange(new_xmin, new_xmax, padding=0)
+        return True
 
     def refresh(self, data_store: DataStore) -> None:
         """按 profile 拉取 ChannelBuffer 的最新全量数据整批刷新。
@@ -233,8 +263,19 @@ class GroupedChartWidget(QWidget):
         if first_plot is not None:
             first_plot.setXRange(new_xmin, new_xmax, padding=0)
 
-    def add_event_marker(self, timestamp_ms: int, level: int) -> None:
-        """在所有子图上叠一条半透明竖线（接 EventLog.event_added）。"""
+    def add_event_marker(
+        self,
+        timestamp_ms: int,
+        level: int,
+        name: str = "",
+        event_id: int = -1,
+    ) -> None:
+        """在所有子图上叠一条半透明竖线（接 EventLog.event_added）。
+
+        M4:
+        - `name` 用于鼠标悬停 tooltip；
+        - `event_id == 0xFFFF` 为用户标记，改用实线 + 加粗 + 特殊色。
+        """
         if not self._plots:
             return
         # 未收到首帧数据时还没有时间原点，拿当前时间戳做原点占位
@@ -242,12 +283,22 @@ class GroupedChartWidget(QWidget):
             self._x_origin_ms = float(timestamp_ms)
         x_sec = (float(timestamp_ms) - self._x_origin_ms) / 1000.0
 
-        color = _EVENT_LEVEL_COLORS.get(level, "#CCCCCC")
-        pen = pg.mkPen(color=color, width=1, style=Qt.DashLine)
+        is_user_mark = (event_id == 0xFFFF)
+        if is_user_mark:
+            color = "#FFB347"   # 醒目琥珀
+            pen = pg.mkPen(color=color, width=2, style=Qt.SolidLine)
+            label = f"⚑ {name}" if name else "⚑ USER MARK"
+        else:
+            color = _EVENT_LEVEL_COLORS.get(level, "#CCCCCC")
+            pen = pg.mkPen(color=color, width=1, style=Qt.DashLine)
+            label = name
+
         lines: List[pg.InfiniteLine] = []
         for plot in self._plots.values():
             line = pg.InfiniteLine(pos=x_sec, angle=90, pen=pen)
             line.setZValue(-1)   # 放曲线底下
+            if label:
+                line.setToolTip(label)
             plot.addItem(line)
             lines.append(line)
         self._event_lines.append((timestamp_ms, lines))
@@ -303,8 +354,12 @@ class GroupedChartWidget(QWidget):
     # ---- 重建 ----
 
     def _apply_theme(self) -> None:
-        bg = "#1E1E1E" if self._is_dark else "#FFFFFF"
-        self._gl.setBackground(bg)
+        p = S.palette(self._theme)
+        self._gl.setBackground(p["bg"])
+        # QScrollArea / container 背景也跟随，避免切到 dark_hc 时边缘留灰
+        self._scroll.setStyleSheet(
+            f"QScrollArea {{ background-color: {p['bg']}; border: none; }}"
+        )
 
     def _clear_plots(self) -> None:
         self._gl.clear()
@@ -319,14 +374,14 @@ class GroupedChartWidget(QWidget):
         self._clear_plots()
 
         if self._current_hw is None or self._profile is None:
-            self._empty = pg.LabelItem("等待设备握手…", color="#666666", size="10pt")
+            self._empty = pg.LabelItem("等待设备握手…", color=S.palette(self._theme)["text_faint"], size="10pt")
             self._gl.addItem(self._empty)
             return
 
         channels = self._profile.get_channels(self._current_hw)
         if not channels:
             self._empty = pg.LabelItem(
-                f"[{self._current_hw}] 暂无通道", color="#666666", size="10pt",
+                f"[{self._current_hw}] 暂无通道", color=S.palette(self._theme)["text_faint"], size="10pt",
             )
             self._gl.addItem(self._empty)
             return
@@ -338,16 +393,18 @@ class GroupedChartWidget(QWidget):
             self._rebuild_stacked(channels)
 
     def _plot_axis_color(self) -> str:
-        return "#CCCCCC" if self._is_dark else "#333333"
+        return S.palette(self._theme)["text"]
 
     def _apply_button_theme(self) -> None:
-        p = S.palette(self._is_dark)
+        p = S.palette(self._theme)
+        px = S.font_px(11, self._scale)
         btn_style = (
             f"QPushButton {{ background-color: {p['input_bg']}; color: {p['text']}; "
-            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 2px 10px; }}"
+            f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 2px 10px; "
+            f"font-size: {px}px; }}"
             f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
-            f"QPushButton:checked {{ background-color: #0E639C; color: white; "
-            f"border-color: #0E639C; font-weight: 600; }}"
+            f"QPushButton:checked {{ background-color: {p['primary']}; color: white; "
+            f"border-color: {p['primary']}; font-weight: 600; }}"
         )
         self._btn_combined.setStyleSheet(btn_style)
         self._btn_stacked.setStyleSheet(btn_style)
