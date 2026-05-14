@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Satellite Debug Tool — a PySide6 desktop application for debugging phased-array satellite communication equipment. Displays real-time data curves (PyQtGraph), supports serial/UDP communication, 3D attitude display (Roll/Pitch/Yaw via OpenGL), and can record/playback data in `.sdb` (binary) and `.csv` formats. Dark/Light theme switching supported.
+Satellite Debug Tool — PySide6 desktop app for debugging phased-array satellite communication equipment. Real-time data curves (PyQtGraph), serial/UDP transport, 3D attitude display (OpenGL), `.sdb` v2 record/replay with embedded profile, and WindTerm log parser.
 
 ## Running the Application
 
 ```bash
-# 必须使用 -m 方式运行（不能用 python satellite_debug_tool/main.py）
+# 必须用 -m 方式启动（因为 satellite_debug_tool 包 import 自身子模块的绝对路径）
 python3 -m satellite_debug_tool.main
 
-# 或先安装 editable 包
+# editable install（推荐，便于 IDE 跳转）
 pip3 install -e satellite_debug_tool --user
 python3 -m satellite_debug_tool.main
 ```
@@ -20,58 +20,109 @@ python3 -m satellite_debug_tool.main
 ## Running Tests
 
 ```bash
-pytest satellite_debug_tool/tests
-pytest satellite_debug_tool/tests/test_frame_receiver.py -v   # single test file
-pytest satellite_debug_tool/tests/ -k "crc"                    # run tests matching pattern
+PYTHONPATH=. pytest satellite_debug_tool/tests              # 全套（无 editable install 时需要 PYTHONPATH）
+pytest satellite_debug_tool/tests/test_frame_v2.py -v       # 单文件
+pytest satellite_debug_tool/tests -k "crc"                  # 按 pattern
 ```
 
-## Architecture
+> **已知 baseline 失败**：`test_codec_v2.py::test_oversize_data_rejected` 在 master HEAD 上 fail。
+> 原因：commit `ae878cf` 把 `MAX_DATA_LENGTH` 从 512 升到 1024，但该测试还在用 513 字节的 payload。修复见 spawn_task 跟进。
+
+## Architecture (M1–M7)
 
 ### Package Structure
 
 ```
 satellite_debug_tool/
-├── core/           # Business logic (protocol, comm, data)
-│   ├── protocol/   # Frame parsing, CRC16校验, data structures
-│   ├── comm/       # QThread-based workers for serial/UDP
-│   ├── data/       # ChannelBuffer (ring buffer), DataStore
-│   └── config.py   # Settings (JSON config at ~/.satellite_debug_tool/settings.json)
-├── ui/             # PySide6 widgets — MainWindow, ChartWidget, AttitudeWidget
-└── io/             # DataRecorder (.sdb), DataImporter (.sdb/.csv)
+├── core/
+│   ├── protocol/           # 协议 v2：frame_v2 / codec_v2 / frame_receiver_v2 / handshake
+│   ├── comm/               # SerialWorker / UdpWorker / BaseWorker（QThread）
+│   ├── data/               # ChannelBuffer / DataStore / StateStore / EventLog
+│   ├── profile/            # ProfileStore（每 hw_type 一份 channel/state/event 定义）+ ProfileCache（本地 JSON）
+│   ├── log_parser/         # M7：WindTermLogParser（控制台 log 自动分列）
+│   └── config.py           # Settings（~/.satellite_debug_tool/settings.json）
+├── ui/                     # PySide6 widgets
+│   ├── main_window.py      # M7：QTabWidget 容器（实时 / 回放 / Log）
+│   ├── live_view.py        # M7：实时 Tab（含 worker / handshake / 全部显示组件）
+│   ├── playback_view.py    # M7：回放 Tab（独立 DataStore + ProfileStore）
+│   ├── log_view.py         # M7：Log Tab（虚拟 ProfileStore，复用 GroupedChart）
+│   ├── grouped_chart_widget.py  # M3：profile 驱动、按 group_id 分子图，单图/分组切换
+│   ├── dashboard_widget.py # M3：KPI 卡片
+│   ├── state_panel_widget.py    # M2：状态字灯板（含 INS/GPS channel 数值侧栏）
+│   ├── event_timeline_widget.py # M2：事件时间线
+│   ├── status_strip_widget.py   # M3：顶部链路/心跳灯条
+│   ├── control_panel_widget.py  # M3：采样率/USER_MARK/复位统计
+│   ├── attitude_widget.py       # M4：3D 姿态 + 指向矢量
+│   ├── time_range_control.py    # M7：Playback / Log 共用时间范围选择
+│   └── styles.py           # 主题色板 + 字号档位（M7 后 UI 固化 small）
+├── io/                     # DataRecorder（异步 SDB v2）+ DataImporter
+└── tests/                  # pytest（218+ tests）；UI 测试用 QApplication fixture
 ```
 
-### Data Flow
+### 三 Tab 数据流（M7）
 
 ```
-Device → SerialWorker/UdpWorker → FrameReceiver (state machine) → DataFrame
-                                                                        ↓
-                                                              ChannelBuffer (ring buffer)
-                                                                        ↓
-                                                              DataStore (manager)
-                                                                        ↓
-                                                              ChartWidget (PyQtGraph)
+Live Tab
+  Device → SerialWorker/UdpWorker → FrameReceiverV2 → records
+    ↓
+  Handshake 消费 META/DEFINE/HEARTBEAT → ProfileStore (Live 独立)
+  DataReport → DataStore (Live, ring 30000) → GroupedChart.refresh @5Hz
+  StateReport/EventReport → StateStore/EventLog → 各 widget
+
+Playback Tab
+  .sdb v2 文件 → DataImporter.open_sdb → SdbFile.iter_records
+    ↓ (profile dict 内嵌)
+  ProfileStore (Playback 独立, cache=None) + DataStore (无界)
+  TimeRangeControl → chart.set_x_range_sec
+
+Log Tab
+  .log 文件 → WindTermLogParser → (列名, 数据矩阵, 占位时间戳)
+    ↓
+  虚拟 ProfileStore (hw_type="windterm_log") + DataStore (无界, max_channels=128)
+  每行 → DataReport(行号*100ms, samples) → DataStore.update
 ```
 
-### Key Classes
+### 关键类
 
-- **FrameReceiver**: State machine parsing binary protocol (0xAA 0x55 header, CRC16-CCITT)
-- **BaseWorker**: QThread with signals — `connected`, `disconnected`, `error`, `data_received`
-- **ChannelBuffer**: Ring buffer per channel, capacity 2000 samples, supports `append()` and `get_latest()`
-- **DataStore**: Manages all channels, provides `update(frame)`, `get_channel(name)`, `get_all_channels()`
-- **AttitudeWidget**: 3D OpenGL aircraft model (PyQtGraph) displaying Roll/Pitch/Yaw from selected channels
-- **Settings**: JSON-based config persisted to `~/.satellite_debug_tool/settings.json`
+- **FrameReceiverV2** ([core/protocol/frame_receiver_v2.py](satellite_debug_tool/core/protocol/frame_receiver_v2.py)): 状态机解析 v2 协议；`feed(bytes)` 返回 record 列表（DataReport / StateReport / EventReport / MetaInfo / DEFINE / Heartbeat 等）
+- **Handshake** ([core/protocol/handshake.py](satellite_debug_tool/core/protocol/handshake.py)): 连接后发 4 条 REQUEST 拉 META + 三张 DEFINE，定时 tick 心跳检查
+- **ProfileStore** ([core/profile/profile_store.py](satellite_debug_tool/core/profile/profile_store.py)): 按 hw_type 聚合 profile，幂等 apply_meta；M7 每个 Tab 一份独立实例
+- **DataStore** ([core/data/data_store.py](satellite_debug_tool/core/data/data_store.py)): `buffer_capacity: int | None`，`None` = 无界（list 累加，Playback / Log 用）
+- **ChannelBuffer** ([core/data/channel_buffer.py](satellite_debug_tool/core/data/channel_buffer.py)): 环形 ndarray 或无界 list 两种模式；默认 30000 ≈ 5min @ 100Hz
+- **GroupedChartWidget** ([ui/grouped_chart_widget.py](satellite_debug_tool/ui/grouped_chart_widget.py)): profile 驱动；`set_mode("combined" / "stacked")` 切换单图/分组；`refresh(data_store)` 整批 setData
+- **DataRecorder** ([io/data_recorder.py](satellite_debug_tool/io/data_recorder.py)): 异步（threading.Thread + queue）；SDB v2 文件头内嵌 profile JSON
+- **WindTermLogParser** ([core/log_parser/windterm_log.py](satellite_debug_tool/core/log_parser/windterm_log.py)): 正则识别 `track_debug_print_table_header:` / `track_table_row_bynav:`，非数字列整列剔除，行号 × 100ms 占位时间戳
 
-### Protocol Helpers
+### 协议 v2 摘要
 
-- **build_debug_control_frame(enabled: bool)**: Build CMD_DEBUG_CONTROL frame (0x03) to enable/disable device debug output
+帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`
 
-### Protocol
+- 完整规范：[doc/DEBUG设备协议接口规范_v2.md](doc/DEBUG设备协议接口规范_v2.md)
+- 11 个 cmd_type（DATA_REPORT 0x01 / STATE_REPORT 0x08 / EVENT_REPORT 0x09 / META 0x04 / DEFINE 0x05~0x07 / CONTROL 0x03 / HEARTBEAT 0x0A 等）
+- 三张 DEFINE 表（CHANNEL/STATE/EVENT）按需 ID 标识；上位机 UI 完全由 profile 驱动，afd01/ufd45/esa01 共用同一套渲染逻辑
 
-Binary frame format: `AA 55` (header) → device_type → cmd_type → len (little-endian) → data → crc16 → `EE` (footer)
+### 性能优化（M6/M7）
 
-## Important Conventions
+- **双定时器解耦**：100ms 轻量更新（FPS、姿态、通道值）+ 200ms 重绘（GroupedChart / Dashboard）
+- **GroupedChart 防闪烁**：固定 Y 范围 + X 滚屏阈值 1s（不每帧 setXRange）+ pyqtgraph setDownsampling("peak", auto=True) + setClipToView
+- **profile 幂等**：META 5s 周期广播但只在 hw_type / 版本变化时 emit profile_changed
+- **录制异步**：write_frame 非阻塞 queue.put_nowait，后台线程刷盘
 
-- UI logic stays in `satellite_debug_tool/ui`; business logic in `core`, persistence in `io`
-- Communication workers inherit `BaseWorker` (QThread) and emit Qt signals for thread-safe UI updates
-- Tests are in `satellite_debug_tool/tests`; many test names and comments are in Chinese
-- Configuration is stored in `~/.satellite_debug_tool/settings.json`
+## 重要约定
+
+- UI 在 `ui/`；业务在 `core/`；持久化在 `io/`。所有 import 用 `satellite_debug_tool.` 前缀。
+- 通信 worker 继承 `BaseWorker`（QThread）emit Qt 信号；**严禁** worker 线程直接动 widget
+- **每个 Tab 独立 DataStore / ProfileStore**（M7），切 Tab 不会污染数据
+- 字号已固化 `small`（12px 基准）；styles.py 的 `FONT_SCALES` API 保留只为兼容 `test_styles.py`，UI 不再暴露
+- 配置：`~/.satellite_debug_tool/settings.json`；profile 缓存：`~/.satellite_debug_tool/profiles/{hw_type}.json`
+- 测试名/注释多为中文；UI 测试用 `qapp` fixture 复用 QApplication 实例
+
+## 关键文档
+
+- [doc/optimization_plan.md](doc/optimization_plan.md) — M1–M6 整体优化计划（v1.2）
+- [doc/M7_plan.md](doc/M7_plan.md) — M7 Tab 化 + 字号固化 + log 解析（本轮）
+- [doc/M7_acceptance.md](doc/M7_acceptance.md) — M7 验收锚点
+- [doc/M7_dev_log.md](doc/M7_dev_log.md) — M7 实施日志
+- [doc/DEBUG设备协议接口规范_v2.md](doc/DEBUG设备协议接口规范_v2.md) — 协议权威规范
+- [doc/development_log.md](doc/development_log.md) — M1–M6 实施日志
+- [doc/acceptance_log.md](doc/acceptance_log.md) — F-/A- 系列验收跟踪
