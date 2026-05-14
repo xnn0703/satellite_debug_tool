@@ -199,6 +199,8 @@ class LogView(QWidget):
         self._chart.setMinimumHeight(400)
         self._chart.set_dark_theme(True)
         self._chart.set_profile_store(self._profile_store)
+        # M8：mode 切换后重新灌数据 + Y autorange（否则切完曲线消失）
+        self._chart.mode_changed.connect(self._on_chart_mode_changed)
         root.addWidget(self._chart, 1)
 
     # ============================ 主题 ============================
@@ -336,6 +338,13 @@ class LogView(QWidget):
             start_ms = self._first_ts_ms + start_sec * 1000.0
             end_ms = self._first_ts_ms + end_sec * 1000.0
             self._map_widget.set_track_highlight(start_ms, end_ms)
+
+    def _on_chart_mode_changed(self, mode: str) -> None:
+        """单图 / 分组 切换后曲线为空，重新灌一次 + Y 自适应。"""
+        if self._loaded_rows == 0:
+            return
+        self._chart.refresh(self._data_store)
+        self._chart.enable_y_autorange(True)
 
     # ====================== M8: 地图集成 ======================
 

@@ -12,11 +12,12 @@ GroupedChartWidget — profile 驱动的分组曲线图。
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
@@ -79,6 +80,10 @@ def _group_title(group_id: int) -> str:
 
 
 class GroupedChartWidget(QWidget):
+    # M8：mode 切换后 view 重建完成发此信号，外部（Playback/Log）收到后
+    # 重新 refresh + enable_y_autorange，否则切完模式曲线为空
+    mode_changed = Signal(str)
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         # 默认 120s 窗口；配合 ChannelBuffer=30000 容量，足够保留最近几分钟历史
@@ -196,6 +201,8 @@ class GroupedChartWidget(QWidget):
         self._btn_combined.setChecked(mode == "combined")
         self._btn_stacked.setChecked(mode == "stacked")
         self._rebuild()
+        # M8: 通知外部（Playback/Log）重新灌数据 + Y autorange，避免空曲线
+        self.mode_changed.emit(mode)
 
     def jump_to_timestamp(self, timestamp_ms: int, window_sec: Optional[float] = None) -> bool:
         """把 X 视窗中心定位到某个 ms 时间戳。
@@ -505,7 +512,9 @@ class GroupedChartWidget(QWidget):
         plot.getAxis("bottom").setTextPen(self._plot_axis_color())
         plot.setDownsampling(mode="peak", auto=True)
         plot.setClipToView(True)
-        plot.addLegend(offset=(10, 10))
+        # M8：通道多时 legend 多列布局（每列 ~12 条），避免下面通道被截掉
+        legend_cols = max(1, math.ceil(len(channels) / 12))
+        plot.addLegend(offset=(10, 10), colCount=legend_cols)
         # 默认关交互自动范围：只有用户手动拖动时才允许
         plot.enableAutoRange(x=False, y=False)
 
@@ -551,7 +560,9 @@ class GroupedChartWidget(QWidget):
             plot.getAxis("bottom").setTextPen(axis_text_color)
             plot.setDownsampling(mode="peak", auto=True)
             plot.setClipToView(True)
-            plot.addLegend(offset=(4, 4))
+            # M8：每组 legend 多列（每列 ~8 条），子图比 combined 小
+            legend_cols = max(1, math.ceil(len(group_channels) / 8))
+            plot.addLegend(offset=(4, 4), colCount=legend_cols)
             plot.enableAutoRange(x=False, y=False)
 
             if first_plot is None:

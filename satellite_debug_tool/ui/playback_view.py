@@ -123,6 +123,8 @@ class PlaybackView(QWidget):
         self._chart.setMinimumHeight(400)
         self._chart.set_dark_theme(True)
         self._chart.set_profile_store(self._profile_store)
+        # M8：单图/分组切换后重新 refresh，避免曲线消失
+        self._chart.mode_changed.connect(self._on_chart_mode_changed)
         splitter.addWidget(self._chart)
 
         right_panel = QSplitter(Qt.Vertical)
@@ -280,6 +282,21 @@ class PlaybackView(QWidget):
             record.timestamp_ms, record.level,
             name=record.name, event_id=record.event_id,
         )
+
+    def _on_chart_mode_changed(self, mode: str) -> None:
+        """单图 / 分组 切换后重灌数据 + 事件竖线 + 范围保持。"""
+        if self._loaded_count == 0:
+            return
+        self._chart.refresh(self._data_store)
+        # 回放路径 profile display_min/max 一般是合理的，不主动 autorange
+        # 但如果用户切换后 Y 表现异常可手动开下面这行：
+        # self._chart.enable_y_autorange(True)
+        # 重新画事件竖线（_clear_plots 已清掉旧的）
+        for rec in self._event_log.all():
+            self._chart.add_event_marker(
+                rec.timestamp_ms, rec.level,
+                name=rec.name, event_id=rec.event_id,
+            )
 
     # ====================== M8: 地图集成 ======================
 
