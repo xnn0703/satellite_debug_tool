@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>satellite_debug_tool map</title>
+<link rel="stylesheet" href="leaflet/leaflet.css" />
+<script src="leaflet/leaflet.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+  #map { width: 100%; height: 100%; background: #1E1E1E; }
+  #placeholder {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.75); color: #E0E0E0;
+    padding: 18px 28px; border-radius: 6px;
+    font-family: -apple-system, "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    font-size: 13px; line-height: 1.5;
+    display: none; z-index: 1000;
+    text-align: center; max-width: 80%;
+  }
+  #placeholder code {
+    display: inline-block; margin-top: 8px; padding: 2px 6px;
+    background: #2a2a2a; color: #FFCC66; border-radius: 3px;
+    font-family: Menlo, Consolas, monospace; font-size: 11px;
+  }
+  .leaflet-popup-content { font-size: 12px; line-height: 1.4; }
+  /* 浅色主题图层属性 */
+  .leaflet-container { background: #ddd; }
+  body.theme-dark .leaflet-container { background: #1E1E1E; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="placeholder">
+  <div>未检测到离线地图 tile。</div>
+  <div>请在有网络环境下运行：</div>
+  <code>python -m tools.tile_downloader --bbox &lt;...&gt; --zoom 12-16 --label &lt;region&gt;</code>
+</div>
+<script>
+(function () {
+  var map = L.map('map', {
+    zoomControl: true,
+    attributionControl: true,
+    preferCanvas: true   // 大量 polyline / marker 时 canvas 比 SVG 快
+  }).setView([32.04, 118.78], 13);   // 默认南京中心
+
+  var tileLayer = null;
+  var trackPoints = [];      // [[lat, lon, ts_ms], ...]
+  var trackLayer = null;
+  var trackHighlight = null;
+  var startMarker = null;
+  var endMarker = null;
+  var eventMarkers = [];
+
+  // 跟 chart 一致的事件 level 配色
+  var EVENT_LEVEL_COLORS = {
+    0: '#808080',  // DEBUG
+    1: '#4EC9B0',  // INFO
+    2: '#DCDCAA',  // WARN
+    3: '#F14C4C'   // ERROR
+  };
+
+  function showPlaceholder(show) {
+    document.getElementById('placeholder').style.display = show ? 'block' : 'none';
+  }
+
+  // ============ Python 调用入口 ============
+
+  // url 模板形如 'file:///path/to/tiles/nanjing/{z}/{x}/{y}.png'
+  // 传 null/'' 表示无 tile（显示 placeholder）
+  window.setTileURL = function (url, attribution, maxZoom) {
+    if (tileLayer) { map.removeLayer(tileLayer); tileLayer = null; }
+    if (!url) { showPlaceholder(true); return; }
+    showPlaceholder(false);
+    tileLayer = L.tileLayer(url, {
+      attribution: attribution || '',
+      maxZoom: maxZoom || 19,
+      minZoom: 1,
+      noWrap: true,
+      // 缺失的 tile 显示透明，不报错
+      errorTileUrl: ''
+    }).addTo(map);
+  };
+
+  window.setTrack = function (points) {
+    // points = [[lat, lon, ts_ms], ...]
+    trackPoints = points || [];
+    if (trackLayer) { map.removeLayer(trackLayer); trackLayer = null; }
+    if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+    if (endMarker)   { map.removeLayer(endMarker);   endMarker = null; }
+    if (trackHighlight) { map.removeLayer(trackHighlight); trackHighlight = null; }
+    if (!trackPoints.length) return;
+
+    var coords = trackPoints.map(function (p) { return [p[0], p[1]]; });
+    trackLayer = L.polyline(coords, {
+      color: '#3498DB', weight: 3, opacity: 0.75, smoothFactor: 1.5
+    }).addTo(map);
+
+    var first = coords[0];
+    startMarker = L.circleMarker(first, {
+      radius: 8, color: '#FFFFFF', weight: 2,
+      fillColor: '#2ECC71', fillOpacity: 1
+    }).bindPopup('▶ 起点').addTo(map);
+
+    if (coords.length > 1) {
+      var last = coords[coords.length - 1];
+      endMarker = L.circleMarker(last, {
+        radius: 8, color: '#FFFFFF', weight: 2,
+        fillColor: '#E74C3C', fillOpacity: 1
+      }).bindPopup('■ 终点').addTo(map);
+    }
+    map.fitBounds(trackLayer.getBounds(), { padding: [20, 20] });
+  };
+
+  window.setTrackHighlight = function (startMs, endMs) {
+    if (trackHighlight) { map.removeLayer(trackHighlight); trackHighlight = null; }
+    if (!trackPoints.length) return;
+    var seg = [];
+    for (var i = 0; i < trackPoints.length; i++) {
+      var p = trackPoints[i];
+      if (p[2] >= startMs && p[2] <= endMs) seg.push([p[0], p[1]]);
+    }
+    if (seg.length < 2) return;
+    trackHighlight = L.polyline(seg, {
+      color: '#F39C12', weight: 5, opacity: 0.95
+    }).addTo(map);
+  };
+
+  window.addEvent = function (lat, lon, name, level) {
+    var color = EVENT_LEVEL_COLORS[level] || '#CCCCCC';
+    var m = L.circleMarker([lat, lon], {
+      radius: 6, color: '#FFFFFF', weight: 1,
+      fillColor: color, fillOpacity: 0.9
+    });
+    if (name) m.bindPopup(name);
+    m.addTo(map);
+    eventMarkers.push(m);
+  };
+
+  window.clearAll = function () {
+    if (trackLayer)     { map.removeLayer(trackLayer);     trackLayer = null; }
+    if (trackHighlight) { map.removeLayer(trackHighlight); trackHighlight = null; }
+    if (startMarker)    { map.removeLayer(startMarker);    startMarker = null; }
+    if (endMarker)      { map.removeLayer(endMarker);      endMarker = null; }
+    eventMarkers.forEach(function (m) { map.removeLayer(m); });
+    eventMarkers = [];
+    trackPoints = [];
+  };
+
+  window.fitTrackBounds = function () {
+    if (trackLayer) map.fitBounds(trackLayer.getBounds(), { padding: [20, 20] });
+  };
+
+  window.setTheme = function (theme) {
+    document.body.className = 'theme-' + theme;
+  };
+
+  // 启动时先显示 placeholder，等 Python 注入 tile URL
+  showPlaceholder(true);
+
+  // 通知 Python：HTML 已就绪
+  window._mapReady = true;
+})();
+</script>
+</body>
+</html>
