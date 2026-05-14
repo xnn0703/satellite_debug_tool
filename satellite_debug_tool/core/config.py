@@ -72,3 +72,16 @@ class Settings:
                 config[key] = {}
             config = config[key]
         config[keys[-1]] = value
+
+    def remove(self, key_path: str) -> bool:
+        """删除某个键，返回是否真的删掉了。"""
+        keys = key_path.split(".")
+        config = self._config
+        for key in keys[:-1]:
+            if not isinstance(config, dict) or key not in config:
+                return False
+            config = config[key]
+        if isinstance(config, dict) and keys[-1] in config:
+            del config[keys[-1]]
+            return True
+        return False

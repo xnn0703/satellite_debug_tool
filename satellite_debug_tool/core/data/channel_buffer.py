@@ -2,7 +2,8 @@ import numpy as np
 
 
 class ChannelBuffer:
-    def __init__(self, name: str, capacity: int = 2000):
+    # 默认 30000 样本 ≈ 5 分钟 @ 100Hz；旧值 2000 会在 100Hz 下 20 秒回绕导致曲线丢历史
+    def __init__(self, name: str, capacity: int = 30000):
         self._name = name
         self._capacity = capacity
         self._times = np.zeros(capacity, dtype=np.float64)

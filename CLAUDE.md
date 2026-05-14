@@ -4,17 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Satellite Debug Tool — a PySide6 desktop application for debugging phased-array satellite communication equipment. Displays real-time data curves, supports serial/UDP communication, and can record/playback data in `.sdb` (binary) and `.csv` formats.
+Satellite Debug Tool — a PySide6 desktop application for debugging phased-array satellite communication equipment. Displays real-time data curves (PyQtGraph), supports serial/UDP communication, 3D attitude display (Roll/Pitch/Yaw via OpenGL), and can record/playback data in `.sdb` (binary) and `.csv` formats. Dark/Light theme switching supported.
 
 ## Running the Application
 
 ```bash
-# From repository root
-python satellite_debug_tool/main.py
+# 必须使用 -m 方式运行（不能用 python satellite_debug_tool/main.py）
+python3 -m satellite_debug_tool.main
 
-# Or with editable install
-pip install -e satellite_debug_tool
-python -m satellite_debug_tool.main
+# 或先安装 editable 包
+pip3 install -e satellite_debug_tool --user
+python3 -m satellite_debug_tool.main
 ```
 
 ## Running Tests
@@ -34,8 +34,9 @@ satellite_debug_tool/
 ├── core/           # Business logic (protocol, comm, data)
 │   ├── protocol/   # Frame parsing, CRC16校验, data structures
 │   ├── comm/       # QThread-based workers for serial/UDP
-│   └── data/       # ChannelBuffer (ring buffer), DataStore
-├── ui/             # PySide6 widgets — MainWindow, ChartWidget, ConnectionDialog
+│   ├── data/       # ChannelBuffer (ring buffer), DataStore
+│   └── config.py   # Settings (JSON config at ~/.satellite_debug_tool/settings.json)
+├── ui/             # PySide6 widgets — MainWindow, ChartWidget, AttitudeWidget
 └── io/             # DataRecorder (.sdb), DataImporter (.sdb/.csv)
 ```
 
@@ -54,9 +55,15 @@ Device → SerialWorker/UdpWorker → FrameReceiver (state machine) → DataFram
 ### Key Classes
 
 - **FrameReceiver**: State machine parsing binary protocol (0xAA 0x55 header, CRC16-CCITT)
-- **BaseWorker**: QThread with signals — `signal_connected`, `signal_disconnected`, `signal_data(bytes)`
-- **ChannelBuffer**: Ring buffer per channel, capacity 2000 samples
-- **DataStore**: Manages all channels, provides `update(frame)`, `get_channel(name)`
+- **BaseWorker**: QThread with signals — `connected`, `disconnected`, `error`, `data_received`
+- **ChannelBuffer**: Ring buffer per channel, capacity 2000 samples, supports `append()` and `get_latest()`
+- **DataStore**: Manages all channels, provides `update(frame)`, `get_channel(name)`, `get_all_channels()`
+- **AttitudeWidget**: 3D OpenGL aircraft model (PyQtGraph) displaying Roll/Pitch/Yaw from selected channels
+- **Settings**: JSON-based config persisted to `~/.satellite_debug_tool/settings.json`
+
+### Protocol Helpers
+
+- **build_debug_control_frame(enabled: bool)**: Build CMD_DEBUG_CONTROL frame (0x03) to enable/disable device debug output
 
 ### Protocol
 

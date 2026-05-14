@@ -28,6 +28,7 @@ tests/test_frame_receiver.py
 tests/test_integration.py
 tests/test_io.py
 ui/__init__.py
+ui/attitude_widget.py
 ui/chart_widget.py
 ui/connection_dialog.py
 ui/main_window.py
