@@ -11,6 +11,7 @@ from satellite_debug_tool.core.protocol import (
     FRAME_FOOTER,
     FRAME_HEADER_0,
     FRAME_HEADER_1,
+    MAX_DATA_LENGTH,
     PROTOCOL_VERSION,
     SubCmd,
     build_control,
@@ -66,9 +67,10 @@ class TestBuildFrame:
         assert len(frame) == 4 + 2 + 0 + 2 + 1   # header4 + len2 + data0 + crc2 + footer1
 
     def test_oversize_data_rejected(self):
-        # MAX_DATA_LENGTH = 512
+        # MAX_DATA_LENGTH 历史从 512 升到 1024（commit ae878cf 兼容 esa01 27ch），
+        # 用常量 + 1 而非写死数字，未来再升也不破。
         with pytest.raises(CodecError):
-            build_frame(CmdType.DATA_REPORT, b"\x00" * 513)
+            build_frame(CmdType.DATA_REPORT, b"\x00" * (MAX_DATA_LENGTH + 1))
 
 
 # -----------------------------------------------------------------------------
