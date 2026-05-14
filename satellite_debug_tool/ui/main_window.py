@@ -74,13 +74,18 @@ class MainWindow(QMainWindow):
         self._is_recording = False
         self._frame_times = []
         self._theme = "dark"                # M6: "dark" | "dark_hc" | "light"
-        self._font_scale = "medium"         # M6: "small" | "medium" | "large" | "xlarge"
         self._is_dark_theme = True          # 保留：其它 widget 还吃 bool
         self._settings = Settings()
         # 2026-04-21：3D 通道绑定改为全自动（按 profile 通道名），移除手动
         # combo 与 attitude.* 持久化。启动时一次性清掉整块 attitude 旧配置，
         # settings.json 不再留这一节。
+        # M7：字号档位 UI 移除，统一固定 small（12px）。同步清掉旧 settings key。
+        cleaned = False
         if self._settings.remove("attitude"):
+            cleaned = True
+        if self._settings.remove("ui.font_scale"):
+            cleaned = True
+        if cleaned:
             self._settings.save()
         self._setup_ui()
         self._load_settings()
@@ -105,14 +110,9 @@ class MainWindow(QMainWindow):
         self._theme = theme
         self._is_dark_theme = theme != "light"
         self._theme_combo.setCurrentText(S.THEME_LABELS.get(theme, "深色"))
-        # M6: ui.font_scale
-        fs = self._settings.get("ui.font_scale", "medium")
-        if fs not in S.FONT_SCALES:
-            fs = "medium"
-        self._font_scale = fs
-        self._font_scale_combo.setCurrentText(S.FONT_SCALE_LABELS.get(fs, "中"))
+        # M7：字号档位 UI 已移除，统一固定 small；不再读 ui.font_scale
         # 初次应用一次（setup_ui 内已经 setStyleSheet 了默认 dark，这里切换到持久化值）
-        self._apply_theme(self._theme, self._font_scale)
+        self._apply_theme(self._theme)
         self._remote_ip.setText(self._settings.get("udp.remote_ip", "192.168.1.12"))
         self._remote_port.setValue(self._settings.get("udp.remote_port", 4004))
         self._local_port.setValue(self._settings.get("udp.local_port", 45678))
@@ -299,18 +299,7 @@ class MainWindow(QMainWindow):
         self._toolbar.addWidget(QLabel("主题:"))
         self._toolbar.addWidget(self._theme_combo)
 
-        # M6: 四档字号（小 / 中 / 大 / 超大）
-        self._font_scale_combo = QComboBox()
-        for key in ("small", "medium", "large", "xlarge"):
-            self._font_scale_combo.addItem(S.FONT_SCALE_LABELS[key])
-        self._font_scale_combo.setFixedWidth(70)
-        self._font_scale_combo.setStyleSheet(
-            f"background-color: #333; color: {S.TEXT}; border: none; padding: 4px; border-radius: 2px;"
-        )
-        self._font_scale_combo.setToolTip("UI 全局字号缩放（基准 12px → 12/14/18/22）")
-        self._font_scale_combo.currentTextChanged.connect(self._on_font_scale_changed)
-        self._toolbar.addWidget(QLabel("字号:"))
-        self._toolbar.addWidget(self._font_scale_combo)
+        # M7：字号档位 UI 移除（统一 small / 12px），原"字号:"下拉框已删
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -400,7 +389,7 @@ class MainWindow(QMainWindow):
         self._channel_widget.setStyleSheet("background-color: transparent;")
         self._channel_layout = QGridLayout(self._channel_widget)
         self._channel_layout.setContentsMargins(0, 0, 0, 0)
-        self._channel_layout.setSpacing(6)
+        self._channel_layout.setSpacing(4)   # M7：字号固化后更紧凑
         self._channel_checks = {}
         self._channel_dots = {}
         self._channel_value_labels = {}
@@ -413,6 +402,7 @@ class MainWindow(QMainWindow):
 
         # M3: 控制面板（采样率 / USER_MARK / 复位统计）
         self._control_panel = ControlPanelWidget()
+        self._control_panel.setMaximumHeight(80)   # M7：防止 splitter 拖动时吃掉曲线区
         self._control_panel.set_profile_store(self._profile_store)   # A5
         self._control_panel.sample_rate_changed.connect(self._on_sample_rate_changed)
         self._control_panel.user_mark_requested.connect(self._on_user_mark_requested)
@@ -791,9 +781,9 @@ class MainWindow(QMainWindow):
         new_names = set(channels) - existing_names
 
         pal = S.palette(self._theme)
-        # M6: 行高随字号动态：字号 + padding + 点/复选框间距
-        row_h = S.font_px(12, self._font_scale) + 20
-        dot_sz = max(10, S.font_px(10, self._font_scale) - 2)
+        # M7：字号固定 small（12px），行高/圆点尺寸直接固定
+        row_h = 28
+        dot_sz = 10
         for name in new_names:
             idx = len(self._channel_checks)
             cols = 8
@@ -1020,27 +1010,17 @@ class MainWindow(QMainWindow):
         reverse = {v: k for k, v in S.THEME_LABELS.items()}
         return reverse.get(label, S._normalize_theme(label))
 
-    def _label_to_scale(self, label: str) -> str:
-        reverse = {v: k for k, v in S.FONT_SCALE_LABELS.items()}
-        return reverse.get(label, "medium")
-
     def _on_theme_changed(self, label: str):
         theme = self._label_to_theme(label)
         self._theme = theme
         self._is_dark_theme = theme != "light"
-        self._apply_theme(theme, self._font_scale)
+        self._apply_theme(theme)
         self._settings.set("ui.theme", theme)
         self._settings.save()
 
-    def _on_font_scale_changed(self, label: str):
-        scale = self._label_to_scale(label)
-        self._font_scale = scale
-        self._apply_theme(self._theme, scale)
-        self._settings.set("ui.font_scale", scale)
-        self._settings.save()
-
-    def _apply_theme(self, theme: str, scale: str):
-        """统一主题 + 字号分发。取代老 `_apply_stylesheet`。"""
+    def _apply_theme(self, theme: str):
+        """统一主题分发。M7：字号档位已固化 small，scale 不再外露。"""
+        scale = "small"   # M7：字号统一 small（12px 基准）
         pal = S.palette(theme)
         bg, panel, border, text, input_bg = (
             pal["bg"], pal["panel"], pal["border"], pal["text"], pal["input_bg"]
@@ -1087,9 +1067,9 @@ class MainWindow(QMainWindow):
             lbl.setStyleSheet(
                 f"color: {text}; min-width: 60px; text-align: right; background: transparent;"
             )
-        # M6: 通道条目行高/圆点尺寸 同步字号
-        row_h = S.font_px(12, scale) + 20
-        dot_sz = max(10, S.font_px(10, scale) - 2)
+        # M7：通道条目行高/圆点尺寸 固定值（字号已固化）
+        row_h = 28
+        dot_sz = 10
         for name, container in self._channel_containers.items():
             color = self._channel_colors.get(name, "#888888")
             container.setFixedHeight(row_h)
@@ -1123,7 +1103,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         # toolbar 高度也固定，不随字号放大
-        self._toolbar_scroll.setFixedHeight(42)
+        self._toolbar_scroll.setFixedHeight(36)   # M7：字号固化后压缩到 36px
         self._toolbar_scroll.setStyleSheet(
             f"QScrollArea {{ background-color: {panel}; border: none; }}"
         )
@@ -1165,11 +1145,10 @@ class MainWindow(QMainWindow):
         self._clear_btn.setStyleSheet(
             f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
         )
-        for combo in (self._theme_combo, self._font_scale_combo):
-            combo.setStyleSheet(
-                f"background-color: {input_bg}; "
-                f"color: {text}; border: none; padding: 4px; border-radius: 2px;"
-            )
+        self._theme_combo.setStyleSheet(
+            f"background-color: {input_bg}; "
+            f"color: {text}; border: none; padding: 4px; border-radius: 2px;"
+        )
         channel_panel = self.findChild(QWidget, "channel_panel")
         if channel_panel:
             channel_panel.setStyleSheet(
