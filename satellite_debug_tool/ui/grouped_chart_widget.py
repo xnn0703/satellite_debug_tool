@@ -218,6 +218,20 @@ class GroupedChartWidget(QWidget):
             first_plot.setXRange(new_xmin, new_xmax, padding=0)
         return True
 
+    def enable_y_autorange(self, enabled: bool = True) -> None:
+        """让所有 plot 的 Y 轴跟随数据自动缩放（M8 修：log / 回放路径用，
+        避免单调递增计数器列（如 inspvax_n）把组内 Y 范围拉到几十万，把
+        姿态等小幅度曲线压扁到看不见）。
+
+        Live Tab 路径仍用 profile display_min/max 固定 Y 范围（防闪烁），
+        不调此方法。
+        """
+        for plot in self._plots.values():
+            try:
+                plot.enableAutoRange(y=enabled)
+            except Exception:
+                pass
+
     def set_x_range_sec(self, start_sec: float, end_sec: float) -> bool:
         """M7：直接设置 X 视窗到 [start, end] 秒（相对启动时刻）。
 

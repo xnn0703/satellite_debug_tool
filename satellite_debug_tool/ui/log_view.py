@@ -297,9 +297,11 @@ class LogView(QWidget):
             self._total_sec = 0.0
         self._range_ctl.set_total(self._total_sec)
 
-        # 4) 视图
+        # 4) 视图：先 refresh 灌数据，再开 Y 自动范围（避免单调递增计数器列
+        #    如 inspvax_n / rmp_seen 把组内 Y 范围拉到几十万）
         self._chart.set_auto_range(True)
         self._chart.refresh(self._data_store)
+        self._chart.enable_y_autorange(True)
 
         self._file_label.setText(f"📄 {path.name}")
         self._stats_label.setText(
