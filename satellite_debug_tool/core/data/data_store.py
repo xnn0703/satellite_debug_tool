@@ -8,7 +8,7 @@ M3 阶段 UI 切换到 Profile 驱动后，Dashboard/Chart 会通过 ProfileStor
 用 ``channel_id`` 查询真实名称/单位/分组，本层只保留"ID → 数据"映射。
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .channel_buffer import ChannelBuffer
 from satellite_debug_tool.core.protocol import DataReport
@@ -20,9 +20,17 @@ def channel_key(channel_id: int) -> str:
 
 
 class DataStore:
-    """按 channel_id 组织的环形缓冲集合。"""
+    """按 channel_id 组织的缓冲集合。
 
-    def __init__(self, max_channels: int = 16, buffer_capacity: int = 30000) -> None:
+    M7：`buffer_capacity = None` 进入无界模式，给 PlaybackView / LogView
+    一次性灌入历史数据用；Live Tab 仍用默认 30000 环形缓冲。
+    """
+
+    def __init__(
+        self,
+        max_channels: int = 16,
+        buffer_capacity: Optional[int] = 30000,
+    ) -> None:
         self._max_channels = max_channels
         self._buffer_capacity = buffer_capacity
         self._buffers: Dict[str, ChannelBuffer] = {}
