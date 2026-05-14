@@ -218,6 +218,22 @@ class GroupedChartWidget(QWidget):
             first_plot.setXRange(new_xmin, new_xmax, padding=0)
         return True
 
+    def set_x_range_sec(self, start_sec: float, end_sec: float) -> bool:
+        """M7：直接设置 X 视窗到 [start, end] 秒（相对启动时刻）。
+
+        供 TimeRangeControl 调用。end ≤ start 时返回 False 不动。
+        返回 True 表示已应用。
+        """
+        if not self._plots:
+            return False
+        if end_sec <= start_sec:
+            return False
+        self._x_view_max = float(end_sec)
+        first_plot = next(iter(self._plots.values()), None)
+        if first_plot is not None:
+            first_plot.setXRange(float(start_sec), float(end_sec), padding=0)
+        return True
+
     def refresh(self, data_store: DataStore) -> None:
         """按 profile 拉取 ChannelBuffer 的最新全量数据整批刷新。
 
