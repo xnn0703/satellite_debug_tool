@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Satellite Debug Tool — PySide6 desktop app for debugging phased-array satellite communication equipment. Real-time data curves (PyQtGraph), serial/UDP transport, 3D attitude display (OpenGL), `.sdb` v2 record/replay with embedded profile, and WindTerm log parser.
+Satellite Debug Tool — PySide6 desktop app for debugging phased-array satellite communication equipment. Real-time data curves (PyQtGraph), serial/UDP transport, 3D attitude display (OpenGL), `.sdb` v2 record/replay with embedded profile, WindTerm log parser, **offline GPS map (Leaflet + 离线 tile)**.
 
 ## Running the Application
 
@@ -44,8 +44,12 @@ satellite_debug_tool/
 ├── ui/                     # PySide6 widgets
 │   ├── main_window.py      # M7：QTabWidget 容器（实时 / 回放 / Log）
 │   ├── live_view.py        # M7：实时 Tab（含 worker / handshake / 全部显示组件）
-│   ├── playback_view.py    # M7：回放 Tab（独立 DataStore + ProfileStore）
-│   ├── log_view.py         # M7：Log Tab（虚拟 ProfileStore，复用 GroupedChart）
+│   ├── playback_view.py    # M7：回放 Tab（独立 DataStore + ProfileStore） + M8：地图浮窗 (GPS)
+│   ├── log_view.py         # M7：Log Tab（虚拟 ProfileStore，复用 GroupedChart） + M8：地图浮窗
+│   ├── map_widget.py       # M8：Leaflet + QWebEngine 离线地图组件
+│   ├── assets/             # M8：Leaflet bundle + map.html
+│   │   ├── leaflet/        # leaflet.js 1.9.4 + css + marker icons
+│   │   └── map.html        # 单文件 HTML + JS bridge
 │   ├── grouped_chart_widget.py  # M3：profile 驱动、按 group_id 分子图，单图/分组切换
 │   ├── dashboard_widget.py # M3：KPI 卡片
 │   ├── state_panel_widget.py    # M2：状态字灯板（含 INS/GPS channel 数值侧栏）
@@ -56,7 +60,10 @@ satellite_debug_tool/
 │   ├── time_range_control.py    # M7：Playback / Log 共用时间范围选择
 │   └── styles.py           # 主题色板 + 字号档位（M7 后 UI 固化 small）
 ├── io/                     # DataRecorder（异步 SDB v2）+ DataImporter
-└── tests/                  # pytest（218+ tests）；UI 测试用 QApplication fixture
+└── tests/                  # pytest（247 tests）；UI 测试用 QApplication fixture
+
+tools/
+└── tile_downloader.py      # M8：OSM tile 离线下载 CLI（python -m tools.tile_downloader）
 ```
 
 ### 三 Tab 数据流（M7）
@@ -92,6 +99,8 @@ Log Tab
 - **GroupedChartWidget** ([ui/grouped_chart_widget.py](satellite_debug_tool/ui/grouped_chart_widget.py)): profile 驱动；`set_mode("combined" / "stacked")` 切换单图/分组；`refresh(data_store)` 整批 setData
 - **DataRecorder** ([io/data_recorder.py](satellite_debug_tool/io/data_recorder.py)): 异步（threading.Thread + queue）；SDB v2 文件头内嵌 profile JSON
 - **WindTermLogParser** ([core/log_parser/windterm_log.py](satellite_debug_tool/core/log_parser/windterm_log.py)): 正则识别 `track_debug_print_table_header:` / `track_table_row_bynav:`，非数字列整列剔除，行号 × 100ms 占位时间戳
+- **MapWidget** ([ui/map_widget.py](satellite_debug_tool/ui/map_widget.py)): Leaflet + QWebEngine 离线地图。自动检测 `~/.satellite_debug_tool/tiles/<region>/` 目录，单向 `runJavaScript` 调 JS API（setTrack / setTrackHighlight / addEvent / clear），HTML 异步加载期间 JS 调用进缓冲队列
+- **tile_downloader** ([tools/tile_downloader.py](tools/tile_downloader.py)): OSM 离线 tile 下载 CLI；WGS84 → Web Mercator tile 坐标 + 限速 + 断点续传
 
 ### 协议 v2 摘要
 
@@ -114,15 +123,19 @@ Log Tab
 - 通信 worker 继承 `BaseWorker`（QThread）emit Qt 信号；**严禁** worker 线程直接动 widget
 - **每个 Tab 独立 DataStore / ProfileStore**（M7），切 Tab 不会污染数据
 - 字号已固化 `small`（12px 基准）；styles.py 的 `FONT_SCALES` API 保留只为兼容 `test_styles.py`，UI 不再暴露
-- 配置：`~/.satellite_debug_tool/settings.json`；profile 缓存：`~/.satellite_debug_tool/profiles/{hw_type}.json`
+- 配置：`~/.satellite_debug_tool/settings.json`；profile 缓存：`~/.satellite_debug_tool/profiles/{hw_type}.json`；M8 地图 tile：`~/.satellite_debug_tool/tiles/{region}/{z}/{x}/{y}.png`
+- **离线地图**：约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮，浮窗显示轨迹 + 起点(绿)/终点(红) + 所有事件 marker
 - 测试名/注释多为中文；UI 测试用 `qapp` fixture 复用 QApplication 实例
 
 ## 关键文档
 
 - [doc/optimization_plan.md](doc/optimization_plan.md) — M1–M6 整体优化计划（v1.2）
-- [doc/M7_plan.md](doc/M7_plan.md) — M7 Tab 化 + 字号固化 + log 解析（本轮）
-- [doc/M7_acceptance.md](doc/M7_acceptance.md) — M7 验收锚点
+- [doc/M7_plan.md](doc/M7_plan.md) — M7 Tab 化 + 字号固化 + log 解析
+- [doc/M7_acceptance.md](doc/M7_acceptance.md) — M7 验收锚点 + 自评
 - [doc/M7_dev_log.md](doc/M7_dev_log.md) — M7 实施日志
+- [doc/M8_plan.md](doc/M8_plan.md) — M8 离线地图（GPS 轨迹 + 事件）
+- [doc/M8_acceptance.md](doc/M8_acceptance.md) — M8 验收锚点 + 自评
+- [doc/M8_dev_log.md](doc/M8_dev_log.md) — M8 实施日志
 - [doc/DEBUG设备协议接口规范_v2.md](doc/DEBUG设备协议接口规范_v2.md) — 协议权威规范
 - [doc/development_log.md](doc/development_log.md) — M1–M6 实施日志
 - [doc/acceptance_log.md](doc/acceptance_log.md) — F-/A- 系列验收跟踪
