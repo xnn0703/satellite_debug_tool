@@ -13,8 +13,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -36,6 +38,10 @@ from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
 from satellite_debug_tool.ui.time_range_control import TimeRangeControl
 
 
+GPS_LAT_CHANNEL_NAME = "gps_lat"
+GPS_LON_CHANNEL_NAME = "gps_lon"
+
+
 class PlaybackView(QWidget):
     """离线 .sdb v2 回放视图。"""
 
@@ -51,6 +57,7 @@ class PlaybackView(QWidget):
         self._state_store = StateStore()
         self._event_log = EventLog()
         self._event_log.event_added.connect(self._on_event_added_for_chart)
+        self._event_log.event_added.connect(self._on_event_added_for_map)
 
         # ---------- 元信息：当前文件 / 时间范围 ----------
         self._current_file: Optional[Path] = None
@@ -58,6 +65,12 @@ class PlaybackView(QWidget):
         self._last_ts_ms: Optional[float] = None
         self._total_sec: float = 0.0
         self._loaded_count: int = 0
+
+        # ---------- M8: 地图浮窗（懒加载） ----------
+        self._map_widget = None
+        self._map_dock: Optional[QDockWidget] = None
+        self._gps_lat_id: Optional[int] = None
+        self._gps_lon_id: Optional[int] = None
 
         self._setup_ui()
         self._apply_theme()
@@ -93,6 +106,14 @@ class PlaybackView(QWidget):
         self._range_ctl.range_changed.connect(self._on_range_changed)
         top_layout.addWidget(self._range_ctl)
 
+        # M8: "地图"按钮 — 检测到 GPS channel 时启用
+        self._map_btn = QPushButton("地图")
+        self._map_btn.setFixedSize(60, 28)
+        self._map_btn.setEnabled(False)
+        self._map_btn.setToolTip("打开/关闭离线地图浮窗（需要 gps_lat / gps_lon channel）")
+        self._map_btn.clicked.connect(self._toggle_map)
+        top_layout.addWidget(self._map_btn)
+
         root.addWidget(topbar)
 
         # ---------- 主区：chart | (dashboard + event_timeline) ----------
@@ -125,7 +146,10 @@ class PlaybackView(QWidget):
         self._theme = theme
         self._apply_theme()
         # 广播到子 widget
-        for w in (self._chart, self._dashboard, self._event_timeline, self._range_ctl):
+        widgets = [self._chart, self._dashboard, self._event_timeline, self._range_ctl]
+        if self._map_widget is not None:
+            widgets.append(self._map_widget)
+        for w in widgets:
             if hasattr(w, "set_theme"):
                 w.set_theme(theme, scale)
             elif hasattr(w, "set_dark_theme"):
@@ -228,11 +252,25 @@ class PlaybackView(QWidget):
             5000,
         )
 
+        # M8: GPS 检测 → 启用/禁用地图按钮；已开的地图也同步刷新
+        # 注意：profile_store.import_dict 不会自动 set current_hw_type，
+        # 所以必须传 hw 进来；hw 是本方法上面解析到的 hw_type
+        gps_ok = self._detect_gps_channels(hw)
+        self._map_btn.setEnabled(gps_ok)
+        if self._map_widget is not None:
+            self._refresh_map_track()
+            self._refresh_map_events()
+
     def _on_range_changed(self, start_sec: float, end_sec: float) -> None:
         """TimeRangeControl 选择新范围。"""
         # 关闭自动范围，使用显式 X 视窗
         self._chart.set_auto_range(False)
         self._chart.set_x_range_sec(start_sec, end_sec)
+        # M8: 地图轨迹高亮（sec 相对 chart 时间原点 → 绝对 ms）
+        if self._map_widget is not None and self._first_ts_ms is not None:
+            start_ms = self._first_ts_ms + start_sec * 1000.0
+            end_ms = self._first_ts_ms + end_sec * 1000.0
+            self._map_widget.set_track_highlight(start_ms, end_ms)
 
     def _on_event_added_for_chart(self, record) -> None:
         hw = self._profile_store.current_hw_type()
@@ -241,4 +279,113 @@ class PlaybackView(QWidget):
         self._chart.add_event_marker(
             record.timestamp_ms, record.level,
             name=record.name, event_id=record.event_id,
+        )
+
+    # ====================== M8: 地图集成 ======================
+
+    def _detect_gps_channels(self, hw_type: Optional[str] = None) -> bool:
+        """在 profile 中查 gps_lat / gps_lon channel；返回 True 表示找到。
+
+        Args:
+            hw_type: 显式指定 hw_type；None 时回退到 current_hw_type 或
+                首个已知 profile（import_dict 不会自动 set current_hw_type，
+                所以加载完 .sdb 后调用方应传 hw 进来）。
+        """
+        self._gps_lat_id = None
+        self._gps_lon_id = None
+        hw = hw_type or self._profile_store.current_hw_type()
+        if hw is None:
+            # 兜底：取 ProfileStore 里第一个已知 hw_type
+            for candidate in ("windterm_log",):  # 占位（不会用到）
+                if self._profile_store.has_profile(candidate):
+                    hw = candidate
+                    break
+            if hw is None:
+                # 最后一次尝试：扫所有已注册 profile
+                profiles = getattr(self._profile_store, "_profiles", {})
+                if profiles:
+                    hw = next(iter(profiles))
+        if hw is None:
+            return False
+        for ch in self._profile_store.get_channels(hw):
+            if ch.name == GPS_LAT_CHANNEL_NAME:
+                self._gps_lat_id = ch.channel_id
+            elif ch.name == GPS_LON_CHANNEL_NAME:
+                self._gps_lon_id = ch.channel_id
+        return self._gps_lat_id is not None and self._gps_lon_id is not None
+
+    def _toggle_map(self) -> None:
+        if self._map_dock is None:
+            self._build_map_dock()
+            self._refresh_map_track()
+            self._refresh_map_events()
+        self._map_dock.setVisible(not self._map_dock.isVisible())
+
+    def _build_map_dock(self) -> None:
+        from satellite_debug_tool.ui.map_widget import MapWidget
+        self._map_widget = MapWidget()
+        self._map_widget.set_theme(self._theme, "small")
+        self._map_dock = QDockWidget("地图 — 回放", self)
+        self._map_dock.setAllowedAreas(Qt.NoDockWidgetArea)
+        self._map_dock.setFloating(True)
+        self._map_dock.setWidget(self._map_widget)
+        self._map_dock.resize(800, 600)
+
+    def _refresh_map_track(self) -> None:
+        """从 DataStore 拉 gps_lat / gps_lon 灌到 MapWidget。"""
+        if self._map_widget is None:
+            return
+        if self._gps_lat_id is None or self._gps_lon_id is None:
+            self._map_widget.clear()
+            return
+        lat_buf = self._data_store.get_channel_by_id(self._gps_lat_id)
+        lon_buf = self._data_store.get_channel_by_id(self._gps_lon_id)
+        if lat_buf is None or lon_buf is None:
+            self._map_widget.clear()
+            return
+        ts = lat_buf.get_times()
+        lats = lat_buf.get_values()
+        lon_times = lon_buf.get_times()
+        lon_vals = lon_buf.get_values()
+        if ts.size == 0 or lon_times.size == 0:
+            self._map_widget.clear()
+            return
+        # lat / lon 一般同步上报（都来自同一 DataReport），但稳妥起见用 lat 时间戳
+        # 在 lon 时间序列上做线性内插
+        lons = np.interp(ts, lon_times, lon_vals)
+        self._map_widget.clear()
+        self._map_widget.set_track(ts, lats, lons)
+
+    def _refresh_map_events(self) -> None:
+        """灌当前已积累的所有事件到地图。"""
+        if self._map_widget is None or self._gps_lat_id is None:
+            return
+        for rec in self._event_log.all():
+            self._add_event_to_map(rec)
+
+    def _on_event_added_for_map(self, record) -> None:
+        """事件实时到达时往地图加 marker（仅在地图已构建且检测到 GPS 时）。"""
+        if self._map_widget is None or self._gps_lat_id is None:
+            return
+        hw = self._profile_store.current_hw_type()
+        if hw is None or record.hw_type != hw:
+            return
+        self._add_event_to_map(record)
+
+    def _add_event_to_map(self, record) -> None:
+        lat_buf = self._data_store.get_channel_by_id(self._gps_lat_id)
+        lon_buf = self._data_store.get_channel_by_id(self._gps_lon_id)
+        if lat_buf is None or lon_buf is None:
+            return
+        lat_times = lat_buf.get_times()
+        lat_vals = lat_buf.get_values()
+        lon_times = lon_buf.get_times()
+        lon_vals = lon_buf.get_values()
+        if lat_times.size == 0 or lon_times.size == 0:
+            return
+        # 线性内插得到事件时刻的 lat/lon（端点外推按端点值）
+        lat = float(np.interp(record.timestamp_ms, lat_times, lat_vals))
+        lon = float(np.interp(record.timestamp_ms, lon_times, lon_vals))
+        self._map_widget.add_event(
+            record.timestamp_ms, record.name, record.level, lat, lon
         )

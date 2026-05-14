@@ -59,6 +59,69 @@ class TestRangeControlWiring:
         # set_x_range_sec 在 chart 没有 _plots 时返回 False，但 set_auto_range 已被调
 
 
+class TestGpsDetectionAndMap:
+    """M8: GPS channel 检测启用地图按钮。"""
+
+    def test_no_profile_disables_map_button(self, qapp):
+        from satellite_debug_tool.ui.playback_view import PlaybackView
+        pv = PlaybackView()
+        # 没有 profile / 未加载文件 → 按钮 disabled
+        assert pv._map_btn.isEnabled() is False
+        # _detect_gps_channels 也应返回 False
+        assert pv._detect_gps_channels() is False
+
+    def test_profile_with_gps_enables_button(self, qapp):
+        """构造一个含 gps_lat / gps_lon 的虚拟 profile，检测应通过。"""
+        from satellite_debug_tool.ui.playback_view import PlaybackView
+        pv = PlaybackView()
+        profile_dict = {
+            "schema_version": 1,
+            "hw_type": "test_hw",
+            "channel_table_ver": 1,
+            "state_table_ver": 0,
+            "event_table_ver": 0,
+            "channels": [
+                {"channel_id": 0, "data_type": 0, "group_id": 4, "flags": 0,
+                 "name": "gps_lat", "unit": "°",
+                 "display_min": -90.0, "display_max": 90.0},
+                {"channel_id": 1, "data_type": 0, "group_id": 4, "flags": 0,
+                 "name": "gps_lon", "unit": "°",
+                 "display_min": -180.0, "display_max": 180.0},
+                {"channel_id": 2, "data_type": 0, "group_id": 0, "flags": 0,
+                 "name": "yaw", "unit": "°",
+                 "display_min": 0.0, "display_max": 360.0},
+            ],
+            "states": [],
+            "events": [],
+            "meta": None,
+        }
+        pv._profile_store.import_dict(profile_dict)
+        assert pv._detect_gps_channels() is True
+        assert pv._gps_lat_id == 0
+        assert pv._gps_lon_id == 1
+
+    def test_profile_without_gps_returns_false(self, qapp):
+        from satellite_debug_tool.ui.playback_view import PlaybackView
+        pv = PlaybackView()
+        profile_dict = {
+            "schema_version": 1,
+            "hw_type": "test_hw",
+            "channel_table_ver": 1,
+            "state_table_ver": 0,
+            "event_table_ver": 0,
+            "channels": [
+                {"channel_id": 0, "data_type": 0, "group_id": 0, "flags": 0,
+                 "name": "yaw", "unit": "°",
+                 "display_min": 0.0, "display_max": 360.0},
+            ],
+            "states": [],
+            "events": [],
+            "meta": None,
+        }
+        pv._profile_store.import_dict(profile_dict)
+        assert pv._detect_gps_channels() is False
+
+
 class TestStatusMessage:
     def test_open_no_file_no_op(self, qapp, monkeypatch):
         """文件对话框取消时不该崩 / 不该发 status_message。"""

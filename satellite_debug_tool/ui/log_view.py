@@ -16,8 +16,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -37,6 +39,9 @@ from satellite_debug_tool.ui.time_range_control import TimeRangeControl
 
 
 _VIRTUAL_HW_TYPE = "windterm_log"
+
+GPS_LAT_CHANNEL_NAME = "gps_lat"
+GPS_LON_CHANNEL_NAME = "gps_lon"
 
 
 def _infer_group_id(name: str) -> int:
@@ -127,6 +132,14 @@ class LogView(QWidget):
         self._skipped_rows: int = 0
         self._dropped_cols: list[str] = []
 
+        # M8: 地图浮窗（懒加载）
+        self._map_widget = None
+        self._map_dock: Optional[QDockWidget] = None
+        self._gps_lat_id: Optional[int] = None
+        self._gps_lon_id: Optional[int] = None
+        # 缓存第一帧时间戳（log 路径用占位时间戳，应为 0）
+        self._first_ts_ms: float = 0.0
+
         self._setup_ui()
         self._apply_theme()
 
@@ -163,6 +176,16 @@ class LogView(QWidget):
         self._range_ctl.range_changed.connect(self._on_range_changed)
         top_layout.addWidget(self._range_ctl)
 
+        # M8: 地图按钮
+        self._map_btn = QPushButton("地图")
+        self._map_btn.setFixedSize(60, 28)
+        self._map_btn.setEnabled(False)
+        self._map_btn.setToolTip(
+            "打开/关闭离线地图浮窗（需要 log 中含 gps_lat / gps_lon 列）"
+        )
+        self._map_btn.clicked.connect(self._toggle_map)
+        top_layout.addWidget(self._map_btn)
+
         root.addWidget(top)
 
         # 第二行：X 轴占位说明（小字）
@@ -183,7 +206,10 @@ class LogView(QWidget):
     def set_theme(self, theme: str, scale: str = "small") -> None:
         self._theme = theme
         self._apply_theme()
-        for w in (self._chart, self._range_ctl):
+        widgets = [self._chart, self._range_ctl]
+        if self._map_widget is not None:
+            widgets.append(self._map_widget)
+        for w in widgets:
             if hasattr(w, "set_theme"):
                 w.set_theme(theme, scale)
             elif hasattr(w, "set_dark_theme"):
@@ -291,9 +317,70 @@ class LogView(QWidget):
             5000,
         )
 
+        # M8: GPS 列检测 → 启用地图按钮 + 同步已开浮窗
+        gps_ok = self._detect_gps_columns(result)
+        self._map_btn.setEnabled(gps_ok)
+        if self._map_widget is not None:
+            self._refresh_map_track()
+
     def _on_parse_progress(self, line_count: int) -> None:
         self.status_message.emit(f"Parsing... {line_count} lines", 0)
 
     def _on_range_changed(self, start_sec: float, end_sec: float) -> None:
         self._chart.set_auto_range(False)
         self._chart.set_x_range_sec(start_sec, end_sec)
+        # M8: 地图轨迹高亮（log 占位时间戳从 0 开始，sec → ms 直接 *1000）
+        if self._map_widget is not None:
+            start_ms = self._first_ts_ms + start_sec * 1000.0
+            end_ms = self._first_ts_ms + end_sec * 1000.0
+            self._map_widget.set_track_highlight(start_ms, end_ms)
+
+    # ====================== M8: 地图集成 ======================
+
+    def _detect_gps_columns(self, result: WindTermLogResult) -> bool:
+        """在解析结果列名中查 gps_lat / gps_lon；返回 True 表示找到。"""
+        self._gps_lat_id = None
+        self._gps_lon_id = None
+        for i, name in enumerate(result.columns):
+            if name == GPS_LAT_CHANNEL_NAME:
+                self._gps_lat_id = i
+            elif name == GPS_LON_CHANNEL_NAME:
+                self._gps_lon_id = i
+        return self._gps_lat_id is not None and self._gps_lon_id is not None
+
+    def _toggle_map(self) -> None:
+        if self._map_dock is None:
+            self._build_map_dock()
+            self._refresh_map_track()
+        self._map_dock.setVisible(not self._map_dock.isVisible())
+
+    def _build_map_dock(self) -> None:
+        from satellite_debug_tool.ui.map_widget import MapWidget
+        self._map_widget = MapWidget()
+        self._map_widget.set_theme(self._theme, "small")
+        self._map_dock = QDockWidget("地图 — Log", self)
+        self._map_dock.setAllowedAreas(Qt.NoDockWidgetArea)
+        self._map_dock.setFloating(True)
+        self._map_dock.setWidget(self._map_widget)
+        self._map_dock.resize(800, 600)
+
+    def _refresh_map_track(self) -> None:
+        if self._map_widget is None:
+            return
+        if self._gps_lat_id is None or self._gps_lon_id is None:
+            self._map_widget.clear()
+            return
+        lat_buf = self._data_store.get_channel_by_id(self._gps_lat_id)
+        lon_buf = self._data_store.get_channel_by_id(self._gps_lon_id)
+        if lat_buf is None or lon_buf is None:
+            self._map_widget.clear()
+            return
+        ts = lat_buf.get_times()
+        lats = lat_buf.get_values()
+        lon_vals = lon_buf.get_values()
+        if ts.size == 0:
+            self._map_widget.clear()
+            return
+        # log 路径 lat/lon 同一帧灌入，时间戳一致；无需 interp
+        self._map_widget.clear()
+        self._map_widget.set_track(ts, lats, lon_vals)
