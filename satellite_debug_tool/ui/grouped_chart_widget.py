@@ -219,16 +219,68 @@ class GroupedChartWidget(QWidget):
         return True
 
     def enable_y_autorange(self, enabled: bool = True) -> None:
-        """让所有 plot 的 Y 轴跟随数据自动缩放（M8 修：log / 回放路径用，
-        避免单调递增计数器列（如 inspvax_n）把组内 Y 范围拉到几十万，把
-        姿态等小幅度曲线压扁到看不见）。
+        """让所有 plot 的 Y 轴根据当前数据自适应（M8 修：log / 回放路径用）。
+
+        实现策略：手工算 Y 范围（不靠 pyqtgraph 的 enableAutoRange，因为它
+        会无条件包含所有曲线，单调递增的计数器列（inspvax_n / nicnt /
+        rmp_seen 等）会把 Y 范围拉到几十万、把姿态等小幅度曲线压扁到
+        看不见）。
+
+        算法：
+        1. 把每条曲线判定是否 "单调"（diff ≥0 或 ≤0 占比 > 95%）
+        2. Y 范围只取 **非单调** 曲线的 min/max ± 10% padding
+        3. 全部单调（极少见，比如只有计数器）则回退到全部曲线
+        4. 单调曲线仍然画在图上，只是不参与 Y 范围决定
 
         Live Tab 路径仍用 profile display_min/max 固定 Y 范围（防闪烁），
         不调此方法。
         """
-        for plot in self._plots.values():
+        if not enabled:
+            for plot in self._plots.values():
+                try:
+                    plot.enableAutoRange(y=False)
+                except Exception:
+                    pass
+            return
+
+        # 按 plot 分桶 curves（combined 模式下都是 group_id=0）
+        plot_curves: Dict[int, List] = {}
+        for channel_id, (group_id, curve, _entry) in self._curves.items():
+            plot_curves.setdefault(group_id, []).append(curve)
+
+        for group_id, curves in plot_curves.items():
+            plot = self._plots.get(group_id)
+            if plot is None:
+                continue
+            interesting_y: List[np.ndarray] = []
+            fallback_y: List[np.ndarray] = []
+            for c in curves:
+                ys = c.yData
+                if ys is None or len(ys) < 2:
+                    continue
+                fallback_y.append(ys)
+                diffs = np.diff(ys)
+                if diffs.size == 0:
+                    continue
+                mono_inc = float(np.sum(diffs >= 0)) / diffs.size > 0.95
+                mono_dec = float(np.sum(diffs <= 0)) / diffs.size > 0.95
+                if not (mono_inc or mono_dec):
+                    interesting_y.append(ys)
+            target = interesting_y if interesting_y else fallback_y
+            if not target:
+                continue
+            all_y = np.concatenate(target)
+            if all_y.size == 0:
+                continue
+            lo = float(all_y.min())
+            hi = float(all_y.max())
+            if hi - lo < 1e-6:
+                lo -= 1.0
+                hi += 1.0
+            pad = (hi - lo) * 0.1
             try:
-                plot.enableAutoRange(y=enabled)
+                plot.enableAutoRange(y=False)
+                plot.setYRange(lo - pad, hi + pad, padding=0)
             except Exception:
                 pass
 
