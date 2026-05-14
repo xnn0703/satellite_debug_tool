@@ -361,7 +361,11 @@ class MainWindow(QMainWindow):
         # 右侧：状态灯板 + 事件时间线（M2 新增）
         right_panel = QSplitter(Qt.Vertical)
         right_panel.setMinimumWidth(260)
-        self._state_panel = StatePanelWidget(self._profile_store, self._state_store)
+        # §debug: 传 data_store 进去 — 让 state_panel 同时显示 INS/GPS channel
+        # 实时数值（ins_roll/ins_pitch/ins_yaw/ins_yaw_std）跟状态字一起看
+        self._state_panel = StatePanelWidget(
+            self._profile_store, self._state_store, data_store=self._data_store
+        )
         right_panel.addWidget(self._state_panel)
         self._event_timeline = EventTimelineWidget(self._event_log)
         # A1/A2: 双击 / 右键菜单事件 → 曲线 X 视窗跳过去
@@ -755,6 +759,8 @@ class MainWindow(QMainWindow):
         ndarray 导致 UI 响应卡顿。"""
         self._chart.refresh(self._data_store)
         self._dashboard.refresh(self._data_store)
+        # §debug: state_panel 侧边的 INS/GPS channel 数值实时刷新（跟 state 一起看）
+        self._state_panel.refresh_channel_values()
 
     def _update_display(self):
         current_time = datetime.now().timestamp()
