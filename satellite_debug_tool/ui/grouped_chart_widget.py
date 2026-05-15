@@ -136,10 +136,19 @@ class GroupedChartWidget(QWidget):
         self._btn_stacked.setCheckable(True)
         self._btn_stacked.setToolTip("按 profile.group_id 纵向分子图（适合多量纲对比，可滚动）")
         self._btn_stacked.clicked.connect(lambda: self.set_mode("stacked"))
-        for b in (self._btn_combined, self._btn_stacked):
+        # M9：全部隐藏 / 全部显示 切换 — 通道太多时一键清空再勾选关心的
+        self._btn_hide_all = QPushButton("全部隐藏")
+        self._btn_hide_all.setCheckable(True)
+        self._btn_hide_all.setToolTip(
+            "一键隐藏所有曲线，再用 legend 单独勾选要看的（再点恢复全部显示）"
+        )
+        self._btn_hide_all.toggled.connect(self._on_hide_all_toggled)
+        for b in (self._btn_combined, self._btn_stacked, self._btn_hide_all):
             b.setFixedHeight(24)
         toolbar.addWidget(self._btn_combined)
         toolbar.addWidget(self._btn_stacked)
+        toolbar.addSpacing(8)
+        toolbar.addWidget(self._btn_hide_all)
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
@@ -196,6 +205,23 @@ class GroupedChartWidget(QWidget):
 
     def set_auto_range(self, enabled: bool) -> None:
         self._auto_range = bool(enabled)
+
+    def _on_hide_all_toggled(self, checked: bool) -> None:
+        """M9：一键隐藏 / 显示所有曲线（不影响 legend 单独切换的状态历史）。"""
+        for _channel_id, (_group_id, curve, _entry) in self._curves.items():
+            curve.setVisible(not checked)
+        self._btn_hide_all.setText("全部显示" if checked else "全部隐藏")
+
+    def set_all_visible(self, visible: bool) -> None:
+        """程序化一键切换所有曲线显隐（rebuild 后用，恢复用户上次状态）。"""
+        for _channel_id, (_group_id, curve, _entry) in self._curves.items():
+            curve.setVisible(visible)
+        self._btn_hide_all.blockSignals(True)
+        try:
+            self._btn_hide_all.setChecked(not visible)
+            self._btn_hide_all.setText("全部显示" if not visible else "全部隐藏")
+        finally:
+            self._btn_hide_all.blockSignals(False)
 
     def set_mode(self, mode: str) -> None:
         """mode = "combined" (所有通道叠一张大图) 或 "stacked" (按 group_id 分子图)。"""
@@ -492,6 +518,10 @@ class GroupedChartWidget(QWidget):
             self._rebuild_combined(channels)
         else:
             self._rebuild_stacked(channels)
+        # M9：rebuild 后所有 curve visible=True，恢复"全部隐藏"按钮状态
+        if self._btn_hide_all.isChecked():
+            for _id, (_g, curve, _e) in self._curves.items():
+                curve.setVisible(False)
 
     def _plot_axis_color(self) -> str:
         return S.palette(self._theme)["text"]
@@ -509,6 +539,7 @@ class GroupedChartWidget(QWidget):
         )
         self._btn_combined.setStyleSheet(btn_style)
         self._btn_stacked.setStyleSheet(btn_style)
+        self._btn_hide_all.setStyleSheet(btn_style)
 
     def _rebuild_combined(self, channels: List[ChannelDefEntry]) -> None:
         """所有通道叠一张大图，共用 Y 轴。Y 范围取所有通道 display_min/max 包络，

@@ -164,6 +164,14 @@ class LogView(QWidget):
         self._open_btn.clicked.connect(self._on_open_clicked)
         top_layout.addWidget(self._open_btn)
 
+        # M9：清除按钮 — 释放大文件占用的内存（log 47万行 × 65列 ≈ 370MB）
+        self._clear_btn = QPushButton("清除")
+        self._clear_btn.setFixedSize(60, 28)
+        self._clear_btn.setEnabled(False)
+        self._clear_btn.setToolTip("清空当前数据 + 曲线 + 地图轨迹（释放内存）")
+        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        top_layout.addWidget(self._clear_btn)
+
         self._file_label = QLabel("（未加载文件）")
         self._file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         top_layout.addWidget(self._file_label)
@@ -327,6 +335,9 @@ class LogView(QWidget):
         if self._map_widget is not None:
             self._refresh_map_track()
 
+        # M9: 启用"清除"按钮
+        self._clear_btn.setEnabled(True)
+
     def _on_parse_progress(self, line_count: int) -> None:
         self.status_message.emit(f"Parsing... {line_count} lines", 0)
 
@@ -345,6 +356,33 @@ class LogView(QWidget):
             return
         self._chart.refresh(self._data_store)
         self._chart.enable_y_autorange(True)
+
+    def _on_clear_clicked(self) -> None:
+        """M9：清空所有数据 + UI 状态，释放大文件占用的内存。"""
+        # 1) 数据
+        self._data_store.clear()
+        # 2) 元信息
+        self._current_file = None
+        self._total_sec = 0.0
+        self._loaded_rows = 0
+        self._loaded_cols = 0
+        self._skipped_rows = 0
+        self._dropped_cols = []
+        self._gps_lat_id = None
+        self._gps_lon_id = None
+        # 3) 曲线
+        self._chart.clear()
+        # 4) 地图
+        if self._map_widget is not None:
+            self._map_widget.clear()
+        self._map_btn.setEnabled(False)
+        # 5) UI 标签
+        self._file_label.setText("（未加载文件）")
+        self._stats_label.setText("行数: — · 列数: —")
+        self._range_ctl.set_total(0.0)
+        # 6) 自身按钮
+        self._clear_btn.setEnabled(False)
+        self.status_message.emit("Log 数据已清除", 2000)
 
     # ====================== M8: 地图集成 ======================
 

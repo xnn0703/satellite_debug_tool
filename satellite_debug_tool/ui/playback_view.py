@@ -94,6 +94,14 @@ class PlaybackView(QWidget):
         self._open_btn.clicked.connect(self._on_open_clicked)
         top_layout.addWidget(self._open_btn)
 
+        # M9：清除按钮
+        self._clear_btn = QPushButton("清除")
+        self._clear_btn.setFixedSize(60, 28)
+        self._clear_btn.setEnabled(False)
+        self._clear_btn.setToolTip("清空当前回放数据 + 曲线 + 事件 + 地图轨迹（释放内存）")
+        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        top_layout.addWidget(self._clear_btn)
+
         self._file_label = QLabel("（未加载文件）")
         self._file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         top_layout.addWidget(self._file_label)
@@ -263,6 +271,9 @@ class PlaybackView(QWidget):
             self._refresh_map_track()
             self._refresh_map_events()
 
+        # M9: 启用"清除"按钮
+        self._clear_btn.setEnabled(True)
+
     def _on_range_changed(self, start_sec: float, end_sec: float) -> None:
         """TimeRangeControl 选择新范围。"""
         # 关闭自动范围，使用显式 X 视窗
@@ -297,6 +308,40 @@ class PlaybackView(QWidget):
                 rec.timestamp_ms, rec.level,
                 name=rec.name, event_id=rec.event_id,
             )
+
+    def _on_clear_clicked(self) -> None:
+        """M9：清空所有回放数据 + UI 状态，释放内存。"""
+        # 1) 数据三件套
+        self._data_store.clear()
+        self._event_log.clear()
+        # state_store 没有 clear_all 接口，留 profile 不动；新加载会重置
+        # 2) 元信息
+        self._current_file = None
+        self._first_ts_ms = None
+        self._last_ts_ms = None
+        self._total_sec = 0.0
+        self._loaded_count = 0
+        self._gps_lat_id = None
+        self._gps_lon_id = None
+        # 3) 曲线 + 事件竖线
+        self._chart.clear()
+        # 4) Dashboard / EventTimeline 刷新（_event_log 已清）
+        self._dashboard.refresh(self._data_store)
+        if hasattr(self._event_timeline, "_list"):
+            self._event_timeline._list.clear()
+            if hasattr(self._event_timeline, "_update_count"):
+                self._event_timeline._update_count()
+        # 5) 地图
+        if self._map_widget is not None:
+            self._map_widget.clear()
+        self._map_btn.setEnabled(False)
+        # 6) UI 标签
+        self._file_label.setText("（未加载文件）")
+        self._total_label.setText("时长: —")
+        self._range_ctl.set_total(0.0)
+        # 7) 自身按钮
+        self._clear_btn.setEnabled(False)
+        self.status_message.emit("回放数据已清除", 2000)
 
     # ====================== M8: 地图集成 ======================
 
