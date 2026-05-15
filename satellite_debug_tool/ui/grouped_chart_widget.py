@@ -111,6 +111,10 @@ class GroupedChartWidget(QWidget):
         self._x_origin_ms: Optional[float] = None
         # 当前 X 窗口右边界（秒，相对时间）；仅在真正扩窗时更新
         self._x_view_max: float = 0.0
+        # M9：refresh 时单通道最多 setData 多少点。Live 模式按视窗大小估算
+        # （_time_window × 估算上报频率 × padding），auto_range 模式（回放/log）
+        # 一次性看全部数据，取无限大让 get_tail 自动 cap 到 buffer 总点数
+        self._max_visible_points_live: int = 18000   # 120s × 150Hz
 
         # pyqtgraph 全局默认：抗锯齿 + 黑背景
         pg.setConfigOptions(antialias=True)
@@ -308,7 +312,7 @@ class GroupedChartWidget(QWidget):
         return True
 
     def refresh(self, data_store: DataStore) -> None:
-        """按 profile 拉取 ChannelBuffer 的最新全量数据整批刷新。
+        """按 profile 拉取 ChannelBuffer 的最新数据整批刷新。
 
         防闪烁要点：
         - 只 setData，不动 autoRange（构建时已一次性固定 Y 范围）
@@ -316,30 +320,38 @@ class GroupedChartWidget(QWidget):
           而不是每帧都 setXRange，避免 sigRangeChanged 级联重绘
         - 时间戳用"相对启动时刻"的秒数，避免 pyqtgraph 把时间单位自动
           切到 ks/Ms 造成整体刻度跳变
+
+        M9 性能优化（实时模式）：只 setData 视窗内点（约 _time_window 秒），
+        不传完整 buffer (5min @ 100Hz = 30000 点)。视窗外的点 pyqtgraph 也
+        画不出来（setClipToView 会裁），但 setData O(N) 仍要做 — 减小
+        N 直接缩短主线程阻塞，避免数据满 buffer 后 UI 卡顿。
         """
         if not self._curves:
             return
+
+        # auto_range（log/playback 整段查看）→ 取全部；否则只取视窗 + padding
+        if self._auto_range:
+            tail_n = 10_000_000   # 实际由 buffer 总点数兜底
+        else:
+            tail_n = self._max_visible_points_live
 
         latest_x = None
         for channel_id, (group_id, curve, _entry) in self._curves.items():
             buf = data_store.get_channel(channel_key(channel_id))
             if buf is None:
                 continue
-            xs = buf.get_times()
-            ys = buf.get_values()
+            xs, ys = buf.get_tail(tail_n)
             if xs.size == 0:
                 continue
             if self._x_origin_ms is None:
                 self._x_origin_ms = float(xs[0])
             xs_sec = (xs - self._x_origin_ms) / 1000.0
-            # connect='all' + skipFiniteCheck 略快；数据是有序的 ms 不存在 NaN
             curve.setData(xs_sec, ys)
             if latest_x is None or xs_sec[-1] > latest_x:
                 latest_x = float(xs_sec[-1])
 
         if latest_x is None or self._auto_range:
             return
-
         # 只在真的需要扩窗时才 setXRange。阈值 1s：
         # - 数据 100Hz 刷新，每 200ms refresh 产生 0.2s 新数据
         # - 连续 5 次 refresh 才触发一次 setXRange → 肉眼不易察觉跳动

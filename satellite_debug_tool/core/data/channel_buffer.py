@@ -74,6 +74,58 @@ class ChannelBuffer:
         idx = self._head
         return np.concatenate([self._values[idx:], self._values[:idx]])
 
+    def get_tail(self, n: int) -> tuple[np.ndarray, np.ndarray]:
+        """取最近 n 个 (times, values) 样本（M9 性能优化）。
+
+        比 get_times() + get_values() 各拷贝整个 buffer 快得多 —— 实时
+        chart 只需要当前视窗内的点（120s @ 100Hz ≈ 12000），不必每次
+        把 30000 全拷贝出来传给 pyqtgraph.setData。
+
+        n 大于实际数据点数时返回全部；返回的 ndarray dtype 与 get_times /
+        get_values 一致 (float64 / float32)。
+        """
+        if n <= 0:
+            return (np.array([], dtype=np.float64),
+                    np.array([], dtype=np.float32))
+        if self._capacity is None:
+            total = len(self._times_list)
+            n = min(n, total)
+            if n == 0:
+                return (np.array([], dtype=np.float64),
+                        np.array([], dtype=np.float32))
+            return (
+                np.asarray(self._times_list[-n:], dtype=np.float64),
+                np.asarray(self._values_list[-n:], dtype=np.float32),
+            )
+
+        # 环形 buffer
+        n = min(n, self._count)
+        if n == 0:
+            return (np.array([], dtype=np.float64),
+                    np.array([], dtype=np.float32))
+        if self._count < self._capacity:
+            # 未满：数据线性占据 [0, _count)，最新 n 个 = [_count - n, _count)
+            start = self._count - n
+            return (
+                self._times[start:self._count].copy(),
+                self._values[start:self._count].copy(),
+            )
+        # 已满：最新 n 个起点 = (_head - n) mod _capacity（_head 指向下次写入位置）
+        start = (self._head - n) % self._capacity
+        end = start + n
+        if end <= self._capacity:
+            return (
+                self._times[start:end].copy(),
+                self._values[start:end].copy(),
+            )
+        # 跨边界：拼两段
+        first_n = self._capacity - start
+        wrap_n = n - first_n
+        return (
+            np.concatenate([self._times[start:], self._times[:wrap_n]]),
+            np.concatenate([self._values[start:], self._values[:wrap_n]]),
+        )
+
     def get_latest(self) -> tuple[float, float] | None:
         if self._capacity is None:
             if not self._values_list:

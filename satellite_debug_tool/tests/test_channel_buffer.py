@@ -53,6 +53,70 @@ class TestBoundedMode:
 
 
 # ---------------------------------------------------------------------------
+# get_tail (M9 性能优化用)
+# ---------------------------------------------------------------------------
+
+
+class TestGetTail:
+    def test_tail_below_count(self):
+        buf = ChannelBuffer("ch_00", capacity=100)
+        for i in range(50):
+            buf.append(i * 10.0, float(i))
+        xs, ys = buf.get_tail(20)
+        assert xs.shape == (20,)
+        assert xs[0] == 300.0   # i=30
+        assert xs[-1] == 490.0  # i=49
+
+    def test_tail_exceeds_count_returns_all(self):
+        buf = ChannelBuffer("ch_00", capacity=100)
+        for i in range(10):
+            buf.append(i * 10.0, float(i))
+        xs, ys = buf.get_tail(50)
+        assert xs.shape == (10,)
+
+    def test_tail_after_wraparound_no_crossing(self):
+        """已满后 tail 段不跨物理边界。"""
+        buf = ChannelBuffer("ch_00", capacity=10)
+        for i in range(15):
+            buf.append(i * 10.0, float(i))
+        # tail 5 个 = i=10..14
+        xs, ys = buf.get_tail(5)
+        assert xs.tolist() == [100.0, 110.0, 120.0, 130.0, 140.0]
+        assert ys.tolist() == [10.0, 11.0, 12.0, 13.0, 14.0]
+
+    def test_tail_after_wraparound_crossing(self):
+        """已满后 tail 段跨物理边界，需要拼两段。"""
+        buf = ChannelBuffer("ch_00", capacity=10)
+        for i in range(15):
+            buf.append(i * 10.0, float(i))
+        # tail 8 个 = i=7..14
+        xs, ys = buf.get_tail(8)
+        assert xs.tolist() == [70.0, 80.0, 90.0, 100.0, 110.0, 120.0, 130.0, 140.0]
+        assert ys.tolist() == [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0]
+
+    def test_tail_zero(self):
+        buf = ChannelBuffer("ch_00", capacity=10)
+        for i in range(5):
+            buf.append(i * 10.0, float(i))
+        xs, ys = buf.get_tail(0)
+        assert xs.size == 0 and ys.size == 0
+
+    def test_tail_empty_buffer(self):
+        buf = ChannelBuffer("ch_00", capacity=10)
+        xs, ys = buf.get_tail(5)
+        assert xs.size == 0 and ys.size == 0
+
+    def test_tail_unbounded_mode(self):
+        buf = ChannelBuffer("ch_log", capacity=None)
+        for i in range(1000):
+            buf.append(float(i), float(i))
+        xs, ys = buf.get_tail(50)
+        assert xs.shape == (50,)
+        assert xs[0] == 950.0
+        assert xs[-1] == 999.0
+
+
+# ---------------------------------------------------------------------------
 # 无界模式（M7 新增，PlaybackView / LogView 用）
 # ---------------------------------------------------------------------------
 
