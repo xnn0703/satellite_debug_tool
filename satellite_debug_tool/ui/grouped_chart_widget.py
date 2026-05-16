@@ -33,15 +33,33 @@ from satellite_debug_tool.core.protocol import ChannelDefEntry
 from satellite_debug_tool.ui import styles as S
 
 
-# 每个 group_id 选一套视觉友好的曲线配色
-_GROUP_PALETTES = {
-    0: ["#E74C3C", "#E67E22", "#F1C40F"],                     # 姿态（暖色）
-    1: ["#3498DB", "#2980B9", "#1ABC9C", "#16A085"],          # 指向/角度（蓝绿）
-    2: ["#2ECC71", "#27AE60"],                                # 信号（绿）
-    3: ["#9B59B6", "#8E44AD", "#E91E63"],                     # PID/误差（紫红）
-    4: ["#F39C12", "#D35400"],                                # GPS（橙）
-}
-_DEFAULT_PALETTE = ["#CCCCCC", "#888888"]
+# 高区分度定性调色板（Sasha Trubetskoy "20 simple distinct colors"，
+# 挑选适合深色背景的亮色，去掉纯黑/海军蓝等过暗项）。
+# 旧 _GROUP_PALETTES 每组只 2-4 个同色系颜色 —— 信号组 7+ 通道时两种绿
+# 循环导致完全分不开。改成统一大调色板，stacked 每组内按索引取色（每组
+# 是独立子图，组间撞色不影响同图区分）；combined 也用同一套。
+_DISTINCT_PALETTE = [
+    "#E6194B",  # 红
+    "#3CB44B",  # 绿
+    "#FFE119",  # 黄
+    "#4363D8",  # 蓝
+    "#F58231",  # 橙
+    "#42D4F4",  # 青
+    "#F032E6",  # 品红
+    "#BFEF45",  # 黄绿
+    "#FABED4",  # 粉
+    "#469990",  # 蓝绿
+    "#DCBEFF",  # 薰衣草
+    "#9A6324",  # 棕
+    "#FFD8B1",  # 杏
+    "#AAFFC3",  # 薄荷
+    "#911EB4",  # 紫
+    "#808000",  # 橄榄
+    "#FF7F50",  # 珊瑚
+    "#A9A9A9",  # 灰
+    "#00CED1",  # 暗青
+    "#FFFFFF",  # 白
+]
 
 # 与 EventLog level 对应的事件竖线颜色
 _EVENT_LEVEL_COLORS = {
@@ -60,13 +78,8 @@ _STACKED_SUBPLOT_HEIGHT = 220
 # 避免每帧 setXRange 触发 sigRangeChanged → 刻度/网格重绘导致肉眼闪烁。
 _X_SCROLL_STEP_SEC = 1.0
 
-# 合并模式下 12 条曲线的颜色序列（高区分度）
-_COMBINED_PALETTE = [
-    "#E74C3C", "#3498DB", "#2ECC71", "#F39C12",
-    "#9B59B6", "#1ABC9C", "#E91E63", "#00BCD4",
-    "#8BC34A", "#FF5722", "#607D8B", "#673AB7",
-    "#CDDC39", "#FFC107", "#795548", "#03A9F4",
-]
+# combined 模式复用同一套高区分度调色板（统一视觉，避免两套色规则）
+_COMBINED_PALETTE = _DISTINCT_PALETTE
 
 
 def _group_title(group_id: int) -> str:
@@ -657,9 +670,9 @@ class GroupedChartWidget(QWidget):
             else:
                 plot.setXLink(first_plot)
 
-            palette = _GROUP_PALETTES.get(group_id, _DEFAULT_PALETTE)
             for i, ch in enumerate(group_channels):
-                color = palette[i % len(palette)]
+                # 组内按索引从高区分度调色板取色（每组独立子图，组间撞色无妨）
+                color = _DISTINCT_PALETTE[i % len(_DISTINCT_PALETTE)]
                 curve = plot.plot(
                     [], [], pen=pg.mkPen(color=color, width=1.5), name=ch.name
                 )
