@@ -79,6 +79,38 @@ def _group_title(group_id: int) -> str:
     }.get(group_id, f"Group {group_id}")
 
 
+def _downsample_peak(
+    xs: np.ndarray, ys: np.ndarray, target: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """峰值保留降采样：把 N 点压到约 target 点，每个 bin 取 min+max 两点，
+    不丢尖峰（普通 stride 抽样会丢失瞬时尖峰）。
+
+    用于 Live 模式 setData 前减小数据量 —— 屏幕宽 ~1500px，setData 18000
+    点纯属浪费且阻塞主线程。N ≤ target 时原样返回。
+    """
+    n = xs.size
+    if n <= target or target < 4:
+        return xs, ys
+    bins = max(1, target // 2)
+    step = n // bins
+    if step < 2:
+        return xs, ys
+    trimmed = bins * step
+    yr = ys[:trimmed].reshape(bins, step)
+    xb = xs[:trimmed].reshape(bins, step)[:, 0]
+    mins = yr.min(axis=1)
+    maxs = yr.max(axis=1)
+    out_x = np.repeat(xb, 2)
+    out_y = np.empty(out_x.size, dtype=ys.dtype)
+    out_y[0::2] = mins
+    out_y[1::2] = maxs
+    # 尾部不足一个 bin 的残点补回（保证曲线右端是最新值，不被截断）
+    if trimmed < n:
+        out_x = np.concatenate([out_x, xs[trimmed:]])
+        out_y = np.concatenate([out_y, ys[trimmed:]])
+    return out_x, out_y
+
+
 class GroupedChartWidget(QWidget):
     # M8：mode 切换后 view 重建完成发此信号，外部（Playback/Log）收到后
     # 重新 refresh + enable_y_autorange，否则切完模式曲线为空
@@ -111,10 +143,15 @@ class GroupedChartWidget(QWidget):
         self._x_origin_ms: Optional[float] = None
         # 当前 X 窗口右边界（秒，相对时间）；仅在真正扩窗时更新
         self._x_view_max: float = 0.0
-        # M9：refresh 时单通道最多 setData 多少点。Live 模式按视窗大小估算
-        # （_time_window × 估算上报频率 × padding），auto_range 模式（回放/log）
-        # 一次性看全部数据，取无限大让 get_tail 自动 cap 到 buffer 总点数
+        # M9：refresh 时单通道最多取多少点喂给降采样。Live 模式按视窗大小
+        # 估算（_time_window × 估算上报频率 × padding），auto_range 模式
+        # （回放/log）一次性看全部数据，取无限大让 get_tail 自动 cap
         self._max_visible_points_live: int = 18000   # 120s × 150Hz
+        # M9.1：Live 模式 setData 前峰值降采样目标点数。屏幕宽 ~1500px，
+        # 取 3000（2x）视觉无损。18000→3000 让 setData / path 重算快 6 倍，
+        # 主线程不再被 buffer 满后的全量 setData 阻塞（FPS 从 3 回到 10+）。
+        # 回放/Log 模式不降（用户 zoom in 看细节靠 pyqtgraph auto-downsample）
+        self._live_setdata_max_points: int = 3000
 
         # pyqtgraph 全局默认：抗锯齿 + 黑背景
         pg.setConfigOptions(antialias=True)
@@ -372,8 +409,15 @@ class GroupedChartWidget(QWidget):
             if self._x_origin_ms is None:
                 self._x_origin_ms = float(xs[0])
             xs_sec = (xs - self._x_origin_ms) / 1000.0
+            # M9.1：Live 模式 setData 前峰值降采样到 ~3000 点，避免 buffer
+            # 满后 18000 点全量 setData 阻塞主线程（回放/log 不降，靠
+            # pyqtgraph auto-downsample 支持 zoom 看细节）
+            if not self._auto_range:
+                xs_sec, ys = _downsample_peak(
+                    xs_sec, ys, self._live_setdata_max_points
+                )
             curve.setData(xs_sec, ys)
-            if latest_x is None or xs_sec[-1] > latest_x:
+            if xs_sec.size and (latest_x is None or xs_sec[-1] > latest_x):
                 latest_x = float(xs_sec[-1])
 
         if latest_x is None or self._auto_range:
