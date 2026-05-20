@@ -170,7 +170,117 @@ class KpiCard(QFrame):
 
 
 # ============================================================
-# 枚举模式按钮组（单个 ENUM 状态字对应一组按钮）
+# 只读枚举状态紧凑标签（不可控的 ENUM 状态字）
+# ============================================================
+
+# 与 state_panel_widget 同源色标
+_ENUM_LEVEL_COLORS = {
+    0: "#4EC9B0",   # INFO (绿)
+    1: "#DCDCAA",   # WARN (黄)
+    2: "#F14C4C",   # ERROR (红)
+    3: "#808080",   # NEUTRAL (灰)
+}
+
+
+class EnumStatusChip(QFrame):
+    """只读 ENUM 状态字的紧凑显示：状态名 + 圆点 + 当前值。与 KpiCard 等高对齐。"""
+
+    def __init__(self, state: StateDefEntry, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._state = state
+        self._current_value: Optional[int] = None
+        self._theme = "dark"
+        self._scale = "medium"
+
+        self.setFixedHeight(72)
+        self.setMinimumWidth(90)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        enum_lines = "\n".join(
+            f"  {e.value} = {e.name} [lv={e.level}]" for e in state.enums
+        )
+        self.setToolTip(
+            f"[ENUM] state_id={state.state_id}  {state.name}\n"
+            f"{enum_lines or '  (无枚举项)'}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+
+        self._name_label = QLabel(state.name)
+        layout.addWidget(self._name_label)
+
+        val_row = QHBoxLayout()
+        val_row.setContentsMargins(0, 0, 0, 0)
+        val_row.setSpacing(6)
+        self._dot = QLabel()
+        self._dot.setFixedSize(12, 12)
+        self._value_label = QLabel("—")
+        val_font = QFont(S.monospace_family(), 0, QFont.Bold)
+        val_font.setStyleHint(QFont.Monospace)
+        self._value_label.setFont(val_font)
+        val_row.addWidget(self._dot, 0, Qt.AlignVCenter)
+        val_row.addWidget(self._value_label, 1, Qt.AlignVCenter)
+        layout.addLayout(val_row)
+
+        self.set_theme(self._theme, self._scale)
+
+    def set_dark_theme(self, is_dark: bool) -> None:
+        self.set_theme("dark" if is_dark else "light", self._scale)
+
+    def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
+        self._theme = S._normalize_theme(theme)
+        self._scale = scale
+        p = S.palette(self._theme)
+        name_px = S.font_px(11, scale)
+        value_px = S.font_px(16, scale)
+        min_h = max(72, value_px + name_px + 28)
+        self.setFixedHeight(min_h)
+        self.setStyleSheet(
+            f"EnumStatusChip {{ background-color: {p['card']}; "
+            f"border: 1px solid {p['border']}; border-radius: 4px; }}"
+        )
+        self._name_label.setStyleSheet(
+            f"color: {p['text_muted']}; font-size: {name_px}px; font-weight: 600; "
+            f"background: transparent;"
+        )
+        val_font = self._value_label.font()
+        val_font.setPixelSize(value_px)
+        self._value_label.setFont(val_font)
+        # 重新应用当前值的颜色
+        self.update_value(self._current_value)
+
+    def update_value(self, value: Optional[int]) -> None:
+        self._current_value = value
+        p = S.palette(self._theme)
+        if value is None:
+            self._dot.setStyleSheet(
+                "background-color: #555555; border-radius: 6px;"
+            )
+            self._value_label.setText("—")
+            self._value_label.setStyleSheet(
+                f"color: {p['text_faint']}; background: transparent;"
+            )
+            return
+        match = next((e for e in self._state.enums if e.value == value), None)
+        if match is None:
+            color = "#888888"
+            text = str(value)
+        else:
+            color = _ENUM_LEVEL_COLORS.get(match.level, "#888888")
+            text = match.name
+        self._dot.setStyleSheet(
+            f"background-color: {color}; border-radius: 6px;"
+        )
+        self._value_label.setText(text)
+        self._value_label.setStyleSheet(
+            f"color: {color}; font-weight: bold; background: transparent;"
+        )
+
+
+# ============================================================
+# 可控枚举模式按钮组（如 TRACE_MODE，点击可发送控制帧）
 # ============================================================
 
 class ModeButtonGroup(QFrame):
@@ -268,7 +378,7 @@ class ModeButtonGroup(QFrame):
 class DashboardWidget(QWidget):
     """完全元数据驱动的顶部仪表盘。"""
 
-    # 用户点击模式按钮：(state_id, target_value)
+    # 用户点击模式按钮：(state_id, target_value)  — 保留信号兼容外部连接
     mode_requested = Signal(int, int)
 
     def __init__(
@@ -283,6 +393,7 @@ class DashboardWidget(QWidget):
         self._current_hw: Optional[str] = None
         self._cards: Dict[int, KpiCard] = {}
         self._mode_groups: Dict[int, ModeButtonGroup] = {}
+        self._status_chips: Dict[int, EnumStatusChip] = {}
         self._is_dark = True
         self._theme = "dark"
         self._scale = "medium"
@@ -348,6 +459,8 @@ class DashboardWidget(QWidget):
             card.set_theme(self._theme, scale)
         for group in self._mode_groups.values():
             group.set_theme(self._theme, scale)
+        for chip in self._status_chips.values():
+            chip.set_theme(self._theme, scale)
 
     # ---- Public ----
 
@@ -376,20 +489,12 @@ class DashboardWidget(QWidget):
             self._current_hw = hw_type
         if hw_type != self._current_hw:
             return
-        # 幂等：关键 profile 子集（critical channels + critical ENUM states）未变时跳过
+        # 幂等：关键 profile 子集（critical channels）未变时跳过
         channels = [c for c in self._profile.get_channels(hw_type) if c.critical]
-        enums = [
-            s for s in self._profile.get_states(hw_type)
-            if s.critical and s.state_type == int(StateType.ENUM)
-        ]
-        new_sig = (
-            tuple((c.channel_id, c.name, c.unit, c.display_min, c.display_max) for c in channels),
-            tuple(
-                (s.state_id, s.name, tuple((e.value, e.name, e.level) for e in s.enums))
-                for s in enums
-            ),
+        new_sig = tuple(
+            (c.channel_id, c.name, c.unit, c.display_min, c.display_max) for c in channels
         )
-        if getattr(self, "_dash_signature", None) == new_sig and (self._cards or self._mode_groups):
+        if getattr(self, "_dash_signature", None) == new_sig and self._cards:
             return
         self._dash_signature = new_sig
         self._rebuild()
@@ -400,6 +505,9 @@ class DashboardWidget(QWidget):
         group = self._mode_groups.get(state_id)
         if group is not None:
             group.update_value(value)
+        chip = self._status_chips.get(state_id)
+        if chip is not None:
+            chip.update_value(value)
 
     # ---- 重建 ----
 
@@ -412,6 +520,10 @@ class DashboardWidget(QWidget):
             self._modes_row.removeWidget(g)
             g.deleteLater()
         self._mode_groups.clear()
+        for chip in self._status_chips.values():
+            self._modes_row.removeWidget(chip)
+            chip.deleteLater()
+        self._status_chips.clear()
 
     def _rebuild(self) -> None:
         self._clear()
@@ -421,38 +533,19 @@ class DashboardWidget(QWidget):
             return
 
         channels = [c for c in self._profile.get_channels(self._current_hw) if c.critical]
-        states = self._profile.get_states(self._current_hw)
-        critical_enums = [
-            s for s in states if s.critical and s.state_type == int(StateType.ENUM)
-        ]
 
-        if not channels and not critical_enums:
+        if not channels:
             self._empty_label.setText(
-                f"[{self._current_hw}] profile 无 critical channel/state"
+                f"[{self._current_hw}] profile 无 critical channel"
             )
             self._empty_label.show()
             return
         self._empty_label.hide()
 
-        # ---- 卡片 ----
+        # ---- KPI 卡片 ----
         for ch in channels:
             card = KpiCard(ch)
             card.set_theme(self._theme, self._scale)
             self._cards_row.addWidget(card)
             self._cards[ch.channel_id] = card
-        if channels:
-            self._cards_row.addStretch(1)
-
-        # ---- 模式按钮组 ----
-        for st in critical_enums:
-            group = ModeButtonGroup(st)
-            group.set_theme(self._theme, self._scale)
-            group.mode_requested.connect(self.mode_requested.emit)
-            self._modes_row.addWidget(group)
-            self._mode_groups[st.state_id] = group
-            # 回灌当前值
-            current = self._states.get_value(self._current_hw, st.state_id)
-            if current is not None:
-                group.update_value(current)
-        if critical_enums:
-            self._modes_row.addStretch(1)
+        self._cards_row.addStretch(1)

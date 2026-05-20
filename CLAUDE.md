@@ -6,14 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Satellite Debug Tool — PySide6 desktop app for debugging phased-array satellite communication equipment. Real-time data curves (PyQtGraph), serial/UDP transport, 3D attitude display (OpenGL), `.sdb` v2 record/replay with embedded profile, WindTerm log parser, **offline GPS map (Leaflet + 离线 tile)**.
 
+## Setup
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip3 install -r satellite_debug_tool/requirements.txt
+
+# editable install（推荐，便于 IDE 跳转和 import 解析）
+pip3 install -e satellite_debug_tool
+```
+
 ## Running the Application
 
 ```bash
-# 必须用 -m 方式启动（因为 satellite_debug_tool 包 import 自身子模块的绝对路径）
-python3 -m satellite_debug_tool.main
-
-# editable install（推荐，便于 IDE 跳转）
-pip3 install -e satellite_debug_tool --user
+# 必须用 -m 方式启动（因为包内用绝对 import）
 python3 -m satellite_debug_tool.main
 ```
 
@@ -25,8 +31,7 @@ pytest satellite_debug_tool/tests/test_frame_v2.py -v       # 单文件
 pytest satellite_debug_tool/tests -k "crc"                  # 按 pattern
 ```
 
-> **已知 baseline 失败**：`test_codec_v2.py::test_oversize_data_rejected` 在 master HEAD 上 fail。
-> 原因：commit `ae878cf` 把 `MAX_DATA_LENGTH` 从 512 升到 1024，但该测试还在用 513 字节的 payload。修复见 spawn_task 跟进。
+> **已知 baseline 失败**：`test_codec_v2.py::test_oversize_data_rejected`（payload 513B < 新 MAX_DATA_LENGTH 1024，需更新为 1025B）
 
 ## Architecture (M1–M7)
 
@@ -35,35 +40,20 @@ pytest satellite_debug_tool/tests -k "crc"                  # 按 pattern
 ```
 satellite_debug_tool/
 ├── core/
-│   ├── protocol/           # 协议 v2：frame_v2 / codec_v2 / frame_receiver_v2 / handshake
-│   ├── comm/               # SerialWorker / UdpWorker / BaseWorker（QThread）
-│   ├── data/               # ChannelBuffer / DataStore / StateStore / EventLog
-│   ├── profile/            # ProfileStore（每 hw_type 一份 channel/state/event 定义）+ ProfileCache（本地 JSON）
-│   ├── log_parser/         # M7：WindTermLogParser（控制台 log 自动分列）
-│   └── config.py           # Settings（~/.satellite_debug_tool/settings.json）
-├── ui/                     # PySide6 widgets
-│   ├── main_window.py      # M7：QTabWidget 容器（实时 / 回放 / Log）
-│   ├── live_view.py        # M7：实时 Tab（含 worker / handshake / 全部显示组件）
-│   ├── playback_view.py    # M7：回放 Tab（独立 DataStore + ProfileStore） + M8：地图浮窗 (GPS)
-│   ├── log_view.py         # M7：Log Tab（虚拟 ProfileStore，复用 GroupedChart） + M8：地图浮窗
-│   ├── map_widget.py       # M8：Leaflet + QWebEngine 离线地图组件
-│   ├── assets/             # M8：Leaflet bundle + map.html
-│   │   ├── leaflet/        # leaflet.js 1.9.4 + css + marker icons
-│   │   └── map.html        # 单文件 HTML + JS bridge
-│   ├── grouped_chart_widget.py  # M3：profile 驱动、按 group_id 分子图，单图/分组切换
-│   ├── dashboard_widget.py # M3：KPI 卡片
-│   ├── state_panel_widget.py    # M2：状态字灯板（含 INS/GPS channel 数值侧栏）
-│   ├── event_timeline_widget.py # M2：事件时间线
-│   ├── status_strip_widget.py   # M3：顶部链路/心跳灯条
-│   ├── control_panel_widget.py  # M3：采样率/USER_MARK/复位统计
-│   ├── attitude_widget.py       # M4：3D 姿态 + 指向矢量
-│   ├── time_range_control.py    # M7：Playback / Log 共用时间范围选择
-│   └── styles.py           # 主题色板 + 字号档位（M7 后 UI 固化 small）
-├── io/                     # DataRecorder（异步 SDB v2）+ DataImporter
-└── tests/                  # pytest（247 tests）；UI 测试用 QApplication fixture
+│   ├── protocol/       # v2 协议：帧编解码、状态机解析、握手
+│   ├── comm/           # 通信 worker（Serial/UDP，QThread）
+│   ├── data/           # 数据存储：ChannelBuffer / DataStore / StateStore / EventLog
+│   ├── profile/        # ProfileStore + ProfileCache（设备 profile 驱动 UI）
+│   ├── log_parser/     # WindTerm log 解析
+│   └── config.py       # 用户配置 (~/.satellite_debug_tool/settings.json)
+├── ui/                 # PySide6 界面（三 Tab：Live / Playback / Log）
+│   ├── assets/         # Leaflet 离线地图 bundle
+│   └── ...             # 各 widget（chart / dashboard / state / event / attitude / map）
+├── io/                 # SDB v2 录制（DataRecorder）/ 导入（DataImporter）
+└── tests/              # pytest；UI 测试用 qapp fixture
 
 tools/
-└── tile_downloader.py      # M8：OSM tile 离线下载 CLI（python -m tools.tile_downloader）
+└── tile_downloader.py  # OSM tile 离线下载 CLI（python -m tools.tile_downloader）
 ```
 
 ### 三 Tab 数据流（M7）
@@ -126,6 +116,7 @@ Log Tab
 - 配置：`~/.satellite_debug_tool/settings.json`；profile 缓存：`~/.satellite_debug_tool/profiles/{hw_type}.json`；M8 地图 tile：`~/.satellite_debug_tool/tiles/{region}/{z}/{x}/{y}.png`
 - **离线地图**：约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮，浮窗显示轨迹 + 起点(绿)/终点(红) + 所有事件 marker
 - 测试名/注释多为中文；UI 测试用 `qapp` fixture 复用 QApplication 实例
+- **Git commit 格式**：`type(scope): 中文描述`，type 用英文（feat/fix/perf/refactor/test/docs/chore）
 
 ## 关键文档
 
