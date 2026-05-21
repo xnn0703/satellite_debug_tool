@@ -57,6 +57,7 @@ class CmdType(IntEnum):
     STATE_REPORT = 0x08
     EVENT_REPORT = 0x09
     HEARTBEAT = 0x0A
+    PARA_TABLE_REPORT = 0x0B
 
 
 class SubCmd(IntEnum):
@@ -72,6 +73,15 @@ class SubCmd(IntEnum):
     SET_TRACE_MODE = 0x08
     CHANNEL_ENABLE_MASK = 0x09
     RESET_STATS = 0x0A
+    # M9: 参数管理 + OTA
+    REQUEST_PARA_TABLE = 0x0B
+    PARA_SET = 0x0C
+    PARA_RESET = 0x0D
+    OTA_BEGIN = 0x0E
+    OTA_DATA = 0x0F
+    OTA_END = 0x10
+    OTA_ABORT = 0x11
+    DEVICE_REBOOT = 0x12
 
 
 class RespCode(IntEnum):
@@ -110,6 +120,23 @@ class Level(IntEnum):
     # 仅 STATE enum_item 使用，事件层不使用
     NEUTRAL = 0xFF  # 规范里 enum level=3 是 NEUTRAL，此处用 0xFF 避免与 EVENT level 混淆
 
+
+class ParaType(IntEnum):
+    """参数类型，与设备端 para_manage.h ParaType 对齐。"""
+
+    INT = 0
+    FLOAT = 1
+    STRING = 2
+    IP = 3
+    UINT8 = 4
+    INT8 = 5
+    UINT16 = 6
+    INT16 = 7
+
+
+# 参数 flags
+PARA_FLAG_REQUIRES_REBOOT = 0x01
+PARA_FLAG_READ_ONLY = 0x02
 
 # channel flags (CHANNEL_DEFINE.flags)
 CHANNEL_FLAG_DEFAULT_VISIBLE = 0x01
@@ -277,6 +304,24 @@ class CommandResponse:
     msg: str = ""
 
 
+@dataclass
+class ParaEntry:
+    """参数表中的单个参数。"""
+
+    name: str
+    para_type: int       # ParaType 枚举值
+    flags: int           # bit0=requires_reboot, bit1=read_only
+    value: str           # 字符串表示的当前值
+
+
+@dataclass
+class ParaTableReport:
+    """0x0B PARA_TABLE_REPORT 载荷。"""
+
+    table_ver: int
+    params: List[ParaEntry] = field(default_factory=list)
+
+
 # 解析后返回的 union 类型
 FrameV2Record = Union[
     DataReport,
@@ -288,6 +333,7 @@ FrameV2Record = Union[
     StateReport,
     EventReport,
     Heartbeat,
+    ParaTableReport,
     # 未识别/未解码的控制帧等，保留原始 cmd+data
     "RawFrame",
 ]
@@ -311,8 +357,9 @@ __all__ = [
     "DATA_REPORT_MAX_CHANNELS", "EVENT_PAYLOAD_MAX",
     "CHANNEL_FLAG_DEFAULT_VISIBLE", "CHANNEL_FLAG_CRITICAL",
     "STATE_FLAG_CRITICAL", "STATE_FLAG_INVERSE",
+    "PARA_FLAG_REQUIRES_REBOOT", "PARA_FLAG_READ_ONLY",
     # enums
-    "CmdType", "SubCmd", "RespCode", "DataType", "StateType", "Level",
+    "CmdType", "SubCmd", "RespCode", "DataType", "StateType", "Level", "ParaType",
     # dataclasses
     "MetaInfo",
     "ChannelDefEntry", "ChannelDefineTable",
@@ -321,5 +368,6 @@ __all__ = [
     "ChannelSample", "DataReport",
     "StateSample", "StateReport",
     "EventReport", "Heartbeat", "CommandResponse",
+    "ParaEntry", "ParaTableReport",
     "RawFrame", "FrameV2Record",
 ]

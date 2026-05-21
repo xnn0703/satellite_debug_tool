@@ -41,6 +41,8 @@ from .frame_v2 import (
     StateReport,
     StateSample,
     SubCmd,
+    ParaEntry,
+    ParaTableReport,
 )
 
 
@@ -130,6 +132,56 @@ def build_channel_enable_mask(mask: int) -> bytes:
 
 def build_reset_stats() -> bytes:
     return build_control(SubCmd.RESET_STATS)
+
+
+# M9: 参数管理 + OTA 构建函数 ------------------------------------------------
+
+def build_request_para_table() -> bytes:
+    return build_control(SubCmd.REQUEST_PARA_TABLE)
+
+
+def build_para_set(name: str, value: str) -> bytes:
+    """PARA_SET: name_len(u8) + name(utf8) + value_len(u8) + value(utf8)。"""
+    nb = name.encode("utf-8")
+    vb = value.encode("utf-8")
+    if len(nb) > 255 or len(vb) > 255:
+        raise CodecError("para name/value too long")
+    return build_control(SubCmd.PARA_SET, bytes([len(nb)]) + nb + bytes([len(vb)]) + vb)
+
+
+def build_para_reset() -> bytes:
+    return build_control(SubCmd.PARA_RESET)
+
+
+def build_ota_begin(file_size: int, filename: str) -> bytes:
+    """OTA_BEGIN: file_size(u32) + name_len(u8) + filename(utf8)。"""
+    fb = filename.encode("utf-8")
+    if len(fb) > 255:
+        raise CodecError("OTA filename too long")
+    return build_control(
+        SubCmd.OTA_BEGIN,
+        struct.pack("<I", file_size) + bytes([len(fb)]) + fb,
+    )
+
+
+def build_ota_data(seq: int, chunk: bytes) -> bytes:
+    """OTA_DATA: seq(u16) + data(≤1021B)。MAX_DATA=1024 减去 sub_cmd(1)+seq(2)=3。"""
+    if len(chunk) > 1021:
+        raise CodecError("OTA chunk exceeds 1021 bytes")
+    return build_control(SubCmd.OTA_DATA, struct.pack("<H", seq) + chunk)
+
+
+def build_ota_end(crc32: int) -> bytes:
+    """OTA_END: crc32(u32)。"""
+    return build_control(SubCmd.OTA_END, struct.pack("<I", crc32 & 0xFFFFFFFF))
+
+
+def build_ota_abort() -> bytes:
+    return build_control(SubCmd.OTA_ABORT)
+
+
+def build_device_reboot() -> bytes:
+    return build_control(SubCmd.DEVICE_REBOOT)
 
 
 # -----------------------------------------------------------------------------
@@ -358,6 +410,26 @@ def decode_command_response(data: bytes) -> CommandResponse:
     return CommandResponse(code=code, msg=msg)
 
 
+def decode_para_table_report(data: bytes) -> ParaTableReport:
+    """PARA_TABLE_REPORT(0x0B): table_ver(u8) + count(u8) + N * 参数条目。"""
+    if len(data) < 2:
+        raise CodecError("PARA_TABLE_REPORT too short")
+    table_ver = data[0]
+    count = data[1]
+    off = 2
+    params: List[ParaEntry] = []
+    for _ in range(count):
+        name, off = _read_u8_prefixed_utf8(data, off)
+        if off + 2 > len(data):
+            raise CodecError("PARA_TABLE_REPORT entry truncated")
+        para_type = data[off]
+        flags = data[off + 1]
+        off += 2
+        value, off = _read_u8_prefixed_utf8(data, off)
+        params.append(ParaEntry(name=name, para_type=para_type, flags=flags, value=value))
+    return ParaTableReport(table_ver=table_ver, params=params)
+
+
 __all__ = [
     "CodecError",
     "build_frame", "build_control",
@@ -366,7 +438,11 @@ __all__ = [
     "build_request_state_define", "build_request_event_define",
     "build_user_mark", "build_set_sample_rate", "build_set_trace_mode",
     "build_channel_enable_mask", "build_reset_stats",
+    "build_request_para_table", "build_para_set", "build_para_reset",
+    "build_ota_begin", "build_ota_data", "build_ota_end",
+    "build_ota_abort", "build_device_reboot",
     "decode_meta_info", "decode_channel_define", "decode_state_define",
     "decode_event_define", "decode_data_report", "decode_state_report",
     "decode_event_report", "decode_heartbeat", "decode_command_response",
+    "decode_para_table_report",
 ]

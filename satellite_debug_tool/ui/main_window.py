@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.log_view import LogView
 from satellite_debug_tool.ui.playback_view import PlaybackView
@@ -82,12 +83,18 @@ class MainWindow(QMainWindow):
         self._live = LiveView(settings=self._settings)
         self._playback = PlaybackView()
         self._log = LogView()
+        self._device = DeviceView()
         self._tabs.addTab(self._live, "实时")
         self._tabs.addTab(self._playback, "回放")
         self._tabs.addTab(self._log, "Log")
+        self._tabs.addTab(self._device, "设备")
         self._tabs.currentChanged.connect(self._on_tab_changed)
 
-        for view in (self._live, self._playback, self._log):
+        # M9: 连接共享 — Live Tab 的 worker 和帧数据广播给 Device Tab
+        self._live.connected_worker_changed.connect(self._device.set_worker)
+        self._live.frame_received.connect(self._device._on_frame_received)
+
+        for view in (self._live, self._playback, self._log, self._device):
             view.status_message.connect(self._on_status_message)
 
         self.setCentralWidget(self._tabs)
@@ -156,7 +163,7 @@ class MainWindow(QMainWindow):
             f"background: {pal['bg']}; }}"
         )
         # 广播到 view
-        for view in (self._live, self._playback, self._log):
+        for view in (self._live, self._playback, self._log, self._device):
             if hasattr(view, "set_theme"):
                 view.set_theme(theme, "small")
 

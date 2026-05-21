@@ -70,6 +70,9 @@ class LiveView(QWidget):
 
     # 短消息上报到 MainWindow statusbar：(message, timeout_ms)
     status_message = Signal(str, int)
+    # M9: 连接共享 — DeviceView 通过这些信号接入同一条链路
+    connected_worker_changed = Signal(object)  # emit worker 或 None
+    frame_received = Signal(object)            # emit 每个 parsed FrameV2Record
 
     def __init__(self, settings: Settings, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -479,6 +482,11 @@ class LiveView(QWidget):
         if self._worker:
             self._worker.disconnect()
 
+    @property
+    def worker(self):
+        """当前 BaseWorker 实例，未连接时为 None。供 DeviceView 共享连接。"""
+        return self._worker if self._is_connected else None
+
     def _on_connected(self):
         self._is_connected = True
         self._connect_btn.setEnabled(False)
@@ -488,6 +496,7 @@ class LiveView(QWidget):
         self._type_combo.setEnabled(False)
         self._control_panel.set_enabled(True)
         self._status_strip.set_link_state(connected=True)
+        self.connected_worker_changed.emit(self._worker)
 
         self._receiver.reset()
         if self._worker is not None:
@@ -603,7 +612,11 @@ class LiveView(QWidget):
         self._status_strip.set_link_state(connected=True)
 
     def _on_disconnected(self):
+        # M9: 断开前通知设备关闭数据上报
+        if self._debug_enabled and self._worker is not None:
+            self._worker.send(build_debug_enable_v2(False))
         self._is_connected = False
+        self.connected_worker_changed.emit(None)
         self._connect_btn.setEnabled(True)
         self._disconnect_btn.setEnabled(False)
         self._debug_btn.setEnabled(False)
@@ -647,6 +660,9 @@ class LiveView(QWidget):
 
         records = self._receiver.feed(data)
         for rec in records:
+            # M9: 广播给 DeviceView 等外部消费者
+            self.frame_received.emit(rec)
+
             if self._handshake is not None:
                 self._handshake.feed(rec)
 

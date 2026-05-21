@@ -29,6 +29,7 @@ from .codec_v2 import (
     decode_event_report,
     decode_heartbeat,
     decode_meta_info,
+    decode_para_table_report,
     decode_state_define,
     decode_state_report,
 )
@@ -69,6 +70,7 @@ _DECODERS = {
     int(CmdType.STATE_REPORT): decode_state_report,
     int(CmdType.EVENT_REPORT): decode_event_report,
     int(CmdType.HEARTBEAT): decode_heartbeat,
+    int(CmdType.PARA_TABLE_REPORT): decode_para_table_report,
 }
 
 

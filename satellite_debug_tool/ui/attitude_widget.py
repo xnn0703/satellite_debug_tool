@@ -148,8 +148,10 @@ class AttitudeWidget(QWidget):
         self._tgt_az_ch = ""
         self._tgt_el_ch = ""
         self._have_tgt = False
-        # 扫描轨迹（机体系点，每帧加一个）
+        # 扫描轨迹（世界系点，每帧加一个）
         self._scan_trail: deque = deque(maxlen=SCAN_TRAIL_LEN)
+        # 机体→世界旋转矩阵（由 update_attitude 维护）
+        self._body_rot = np.eye(3, dtype=np.float64)
 
         self._setup_ui()
 
@@ -476,6 +478,12 @@ class AttitudeWidget(QWidget):
         self._aircraft.setTransform(transform)
         # 机头箭头与机体共享变换，始终指示当前机头方向
         self._nose_arrow.setTransform(transform)
+        # 保存 3x3 旋转矩阵，供 update_pointing 将机体系波束方向变换到世界系
+        self._body_rot = np.array(
+            [[r00, r01, r02],
+             [r10, r11, r12],
+             [r20, r21, r22]], dtype=np.float64
+        )
 
         # Update value labels
         self._roll_val_lbl.setText(f"{roll:.1f}°")
@@ -510,14 +518,17 @@ class AttitudeWidget(QWidget):
         empty2 = np.empty((0, 3), dtype=np.float32)
 
         # ---- 天线法向（绿） + 扫描轨迹 ----
+        # ant_az/ant_el 是机体系下的波束方向，乘以机体旋转矩阵变换到世界系，
+        # 这样设备姿态变化时波束在空间中的指向保持不变（天线波束跟踪在补偿姿态）。
         if self._have_ant and ant_az is not None and ant_el is not None:
             self._ant_az_value = float(ant_az)
             self._ant_el_value = float(ant_el)
-            v_ant = _pointing_unit_vec(ant_az, ant_el) * R_POINTING
+            v_body = _pointing_unit_vec(ant_az, ant_el) * R_POINTING
+            v_world = (self._body_rot @ v_body.astype(np.float64)).astype(np.float32)
             self._ant_line.setData(
-                pos=np.array([[0, 0, 0], v_ant], dtype=np.float32)
+                pos=np.array([[0, 0, 0], v_world], dtype=np.float32)
             )
-            self._scan_trail.append(v_ant.copy())
+            self._scan_trail.append(v_world.copy())
             if len(self._scan_trail) >= 2:
                 self._trail_line.setData(
                     pos=np.asarray(self._scan_trail, dtype=np.float32)
@@ -569,8 +580,9 @@ class AttitudeWidget(QWidget):
         self._roll_value = 0.0
         self._pitch_value = 0.0
         self._yaw_value = 0.0
-        self._aircraft.setTransform(np.eye(3, dtype=np.float32))
-        self._nose_arrow.setTransform(np.eye(3, dtype=np.float32))
+        self._aircraft.setTransform(np.eye(4, dtype=np.float32))
+        self._nose_arrow.setTransform(np.eye(4, dtype=np.float32))
+        self._body_rot = np.eye(3, dtype=np.float64)
         self._roll_val_lbl.setText("0.0°")
         self._pitch_val_lbl.setText("0.0°")
         self._yaw_val_lbl.setText("0.0°")
