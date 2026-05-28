@@ -816,10 +816,17 @@ class LiveView(QWidget):
             self.status_message.emit("Recording stopped", 3000)
         else:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_name = f"recording_{timestamp}.sdb"
+            rec_dir = self._settings.get("paths.recording_dir", "") or ""
+            if rec_dir:
+                from pathlib import Path as _Path
+                initial = str(_Path(rec_dir) / default_name)
+            else:
+                initial = default_name
             filepath, _ = QFileDialog.getSaveFileName(
                 self,
                 "Save Recording",
-                f"recording_{timestamp}.sdb",
+                initial,
                 "SDB Files (*.sdb);;All Files (*)",
             )
             if filepath:
@@ -847,10 +854,11 @@ class LiveView(QWidget):
 
     def _on_import_clicked(self):
         """M7：此入口保留向后兼容；新建议用回放 Tab 独立 DataStore。"""
+        last_dir = self._settings.get("paths.recording_dir", "") or ""
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Import Data (Live)",
-            "",
+            last_dir,
             "SDB Files (*.sdb);;All Files (*)",
         )
         if not filepath:

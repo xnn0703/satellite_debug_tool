@@ -77,11 +77,12 @@ class DeviceView(QWidget):
 
     status_message = Signal(str, int)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, settings=None):
         super().__init__(parent)
         self._worker = None
         self._theme = "dark"
         self._scale = "small"
+        self._settings = settings   # 可选；用于读取 paths.firmware_dir 作为打开默认目录
 
         # 设备信息缓存（来自 MetaInfo）
         self._hw_type = "—"
@@ -399,8 +400,11 @@ class DeviceView(QWidget):
     # ---- OTA ----
 
     def _on_select_firmware(self):
+        last_dir = ""
+        if self._settings is not None:
+            last_dir = self._settings.get("paths.firmware_dir", "") or ""
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择固件文件", "", "Firmware (*.bin);;All Files (*)"
+            self, "选择固件文件", last_dir, "Firmware (*.bin);;All Files (*)"
         )
         if not path:
             return

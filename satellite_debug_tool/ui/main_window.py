@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
     QMainWindow,
+    QPushButton,
     QStatusBar,
     QTabWidget,
     QToolBar,
@@ -29,6 +30,7 @@ from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.log_view import LogView
 from satellite_debug_tool.ui.playback_view import PlaybackView
+from satellite_debug_tool.ui.settings_dialog import SettingsDialog
 
 
 class MainWindow(QMainWindow):
@@ -71,19 +73,26 @@ class MainWindow(QMainWindow):
         self._toolbar.addWidget(QLabel("主题:"))
         self._toolbar.addWidget(self._theme_combo)
 
-        # spacer 让后续元素靠右（暂无元素，预留扩展）
+        # spacer 让后续元素靠右
         spacer = QWidget()
         from PySide6.QtWidgets import QSizePolicy
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._toolbar.addWidget(spacer)
 
+        # 设置按钮（配置路径等）
+        self._settings_btn = QPushButton("⚙ 设置")
+        self._settings_btn.setFixedWidth(80)
+        self._settings_btn.setToolTip("配置文件保存 / 加载的默认目录")
+        self._settings_btn.clicked.connect(self._on_open_settings)
+        self._toolbar.addWidget(self._settings_btn)
+
         # ---------- 中部 QTabWidget ----------
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.North)
         self._live = LiveView(settings=self._settings)
-        self._playback = PlaybackView()
-        self._log = LogView()
-        self._device = DeviceView()
+        self._playback = PlaybackView(settings=self._settings)
+        self._log = LogView(settings=self._settings)
+        self._device = DeviceView(settings=self._settings)
         self._tabs.addTab(self._live, "实时")
         self._tabs.addTab(self._playback, "回放")
         self._tabs.addTab(self._log, "Log")
@@ -182,3 +191,10 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         if sb is not None:
             sb.showMessage(msg, timeout_ms)
+
+    # ============================ 设置 ============================
+
+    def _on_open_settings(self):
+        """点击 ⚙ 设置按钮：弹出路径配置弹窗。"""
+        dlg = SettingsDialog(self._settings, self)
+        dlg.exec()  # 阻塞；用户点确定后 settings 已经写入并保存

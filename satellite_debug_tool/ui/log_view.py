@@ -117,9 +117,10 @@ def _build_virtual_profile_dict(result: WindTermLogResult) -> dict:
 class LogView(QWidget):
     status_message = Signal(str, int)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, settings=None):
         super().__init__(parent)
         self._theme = "dark"
+        self._settings = settings   # 可选；用于读取 paths.log_dir 作为打开默认目录
 
         # 独立 store；max_channels 调大以容纳实测 68 列
         self._data_store = DataStore(max_channels=128, buffer_capacity=None)
@@ -248,8 +249,11 @@ class LogView(QWidget):
     # ============================ 业务 ============================
 
     def _on_open_clicked(self):
+        last_dir = ""
+        if self._settings is not None:
+            last_dir = self._settings.get("paths.log_dir", "") or ""
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open WindTerm Log", "",
+            self, "Open WindTerm Log", last_dir,
             "Log Files (*.log *.txt);;All Files (*)",
         )
         if not filepath:

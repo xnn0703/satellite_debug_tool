@@ -47,9 +47,10 @@ class PlaybackView(QWidget):
 
     status_message = Signal(str, int)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, settings=None):
         super().__init__(parent)
         self._theme = "dark"
+        self._settings = settings   # 可选；用于读取 paths.recording_dir 作为打开默认目录
 
         # ---------- 独立的数据/profile 三件套 ----------
         self._data_store = DataStore(buffer_capacity=None)   # 无界，保留全部
@@ -185,7 +186,9 @@ class PlaybackView(QWidget):
     # ============================ 业务 ============================
 
     def _on_open_clicked(self):
-        last_dir = ""   # 后续可以接 settings 持久化（M7 plan §4.7 已列）
+        last_dir = ""
+        if self._settings is not None:
+            last_dir = self._settings.get("paths.recording_dir", "") or ""
         filepath, _ = QFileDialog.getOpenFileName(
             self, "Open SDB v2 Recording", last_dir,
             "SDB Files (*.sdb);;All Files (*)",

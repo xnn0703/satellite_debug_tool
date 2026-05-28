@@ -10,7 +10,12 @@ class Settings:
         "serial": {"default_baudrate": "115200", "last_port": ""},
         "udp": {"remote_ip": "192.168.1.12", "remote_port": 4004, "local_port": 45678},
         "ui": {"time_window": 10.0, "theme": "Dark", "max_visible_channels": 8},
-        "recording": {"default_path": ""},
+        "recording": {"default_path": ""},  # 旧字段，保留兼容，不再使用
+        "paths": {
+            "recording_dir": "",  # Live 录制 / Playback 加载 .sdb 的默认目录
+            "log_dir": "",        # Log Tab 导入 WindTerm .log 的默认目录
+            "firmware_dir": "",   # Device Tab OTA 选择 .bin 的默认目录
+        },
     }
 
     def __init__(self):
