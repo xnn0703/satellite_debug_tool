@@ -1,34 +1,59 @@
 """
 3D Attitude / Pointing Scene Widget (pyqtgraph OpenGL).
 
-M4 升级内容：
-- 默认机体改为**扁平长方体**（相控阵卫通终端外形），+X 机头方向
-  未来可通过 `set_body_model(mesh_data)` 接入具体设备的 STL/OBJ 模型
-- 在机体坐标系内绘制：
-  · 卫星矢量（红）—— 由 `tgt_az/tgt_el` 通道算出
-  · 天线实际法向（绿）—— 由 `ant_az/ant_el` 通道算出
-  · 误差夹角扇面（半透明黄）—— 两矢量间插值三角形
-  · 扫描轨迹（淡蓝）—— 最近 N 个 ant_az/el 历史点
-- 7 路通道绑定：roll/pitch/yaw/tgt_az/tgt_el/ant_az/ant_el
-  auto_bind_from_profile 扩展到这 7 路
+**2026-05-25 几何重写**：完全反向设备端 beampointing 计算链，让 widget 显示
+绝对空间方向（GEO 卫星跟踪锁定时，波束端点应稳定在固定空间点附近）。
 
-**坐标系约定**（相控阵波束坐标系 → 机体坐标系）：
-- 机体系：+X 机头 / +Y 左翼 / +Z 天顶
-- az = 0° 对应机头右方向（-Y），从 +Z 俯视**逆时针**增大
-- el = 0° 指天顶（+Z），90° 指设备水平面（XY）
+═══════════════════════════════════════════════════════════════════════════
+坐标系约定
+═══════════════════════════════════════════════════════════════════════════
+- **widget 视觉世界 = NWU**：+X 北 / +Y 西 / +Z 上（右手系，+Z 朝上直观显示）
+- **设备 body = FRD**：     +X 前 / +Y 右 / +Z 下（航空标准，与下位机一致）
+- **设备 geo  = NED**：     +X 北 / +Y 东 / +Z 下（航空/航海标准）
+- **mesh 模型 = FLU**：     +X 前 / +Y 左 / +Z 上（pyqtgraph 友好，+Z 朝上）
 
-**2026-04-21 简化**：去掉 tgt_az/tgt_el 目标卫星矢量 + 误差扇面 —— 下位机实际
-只上报实时波束指向（ant_az/ant_el），没有"目标方向"独立通道。只保留：
-  - 天线实际法向（绿线）= 当前 ant_az/ant_el
-  - 扫描轨迹（淡蓝点迹）= 历史 ant 方向
-若未来有目标方向需求可把 tgt_* 相关代码加回（保留在 git history）。
-- 转换到单位矢量：
-    phi   = radians(AZ_PHI_OFFSET_DEG + AZ_SIGN * az)
-    theta = radians(el)
-    x = sin(theta) * cos(phi)
-    y = sin(theta) * sin(phi)
-    z = cos(theta)
-  若设备实际方向相反，只改下面两个常数即可。
+各坐标系间映射：
+    P = diag(1, -1, -1)            # Y, Z 翻号，det=+1 保持右手系
+    NED ↔ NWU： v_world = P · v_geo
+    FRD ↔ FLU： v_mesh  = P · v_body
+
+载体姿态 DCM（与下位机 bp_dcm_body_to_geo 一致）：
+    R_body2geo = Rz(yaw) · Ry(pitch) · Rx(roll)   # 标准右手 ZYX Tait-Bryan
+    yaw   : 绕 body +Z(下) 右手定则，北=0 CW+
+    pitch : 绕 body +Y(右) 右手定则，抬头+
+    roll  : 绕 body +X(前) 右手定则，右翼下沉+
+
+═══════════════════════════════════════════════════════════════════════════
+波束几何反向解链（_ant_to_world_nwu）
+═══════════════════════════════════════════════════════════════════════════
+设备上报 `ant_az/ant_el` 是阵面驱动角（Layer 3 输出），需依次反向：
+
+  Step 1 — 反 Layer 3 输出规整（afd01 mount）：
+      el_up   = 90 - ant_el       # el_is_zenith=true，输入为天顶距
+      az_math = -ant_az           # az_ccw_positive=false，硬件 CCW → 数学 CW
+
+  Step 2 — 重建阵面单位向量 v_array：
+      v_array = ( cos(el_up)·cos(az_math),
+                  cos(el_up)·sin(az_math),
+                  -sin(el_up) )
+
+  Step 3 — array → body (FRD)：
+      R_array2body = Rz(+90°)            # afd01 mount_yaw=+90°
+      v_body = R_array2body · v_array
+             = (-v_array.y, v_array.x, v_array.z)
+
+  Step 4 — body → geo (NED)：
+      v_geo = R_body2geo · v_body
+
+  Step 5 — geo → world (NWU)：
+      v_world = P · v_geo
+
+═══════════════════════════════════════════════════════════════════════════
+mesh 姿态变换
+═══════════════════════════════════════════════════════════════════════════
+mesh 顶点在 FLU 系内构造，要变换到 widget 世界系 NWU：
+    p_world_NWU = P · R_body2geo · P · p_mesh_FLU = (P R P) · p_mesh
+零姿态时 P·I·P = I，mesh 与世界轴自然对齐（机头朝北 +X，左翼朝西 +Y，顶 +Z）。
 """
 from typing import Optional
 from collections import deque
@@ -45,73 +70,47 @@ from satellite_debug_tool.ui import styles as S
 
 
 # ------ 坐标系常数（见文件头注释） ------
-AZ_PHI_OFFSET_DEG = 270.0    # az=0 对应 -Y（机头右），phi = 270° + az
-AZ_SIGN = +1                 # +1 = az 增大时逆时针；-1 翻转为顺时针
-R_POINTING = 4.0             # 卫星/天线矢量画到球面半径
+R_POINTING = 4.0             # 波束矢量画到球面半径
 SCAN_TRAIL_LEN = 300         # 扫描轨迹最长保留点数
 
+# NED↔NWU 映射（也用于 FRD↔FLU）：Y,Z 翻号，det=+1 保持右手系
+P_NED_NWU = np.diag([1.0, -1.0, -1.0]).astype(np.float64)
 
-def _pointing_unit_vec(az_deg: float, el_deg: float) -> np.ndarray:
-    """az/el (deg) → 机体系单位矢量 (3,) float32。"""
-    phi = np.radians(AZ_PHI_OFFSET_DEG + AZ_SIGN * az_deg)
-    theta = np.radians(el_deg)
-    st = np.sin(theta)
-    return np.array(
-        [st * np.cos(phi), st * np.sin(phi), np.cos(theta)],
-        dtype=np.float32,
-    )
+# afd01 阵面装机参数（与设备端 bp_mount_afd01_default 同步）：
+# mount_yaw=+90° → R_array2body = Rz(+90°)，array +X → body +Y（机头右）
+# az_ccw_positive=false：硬件 az_out = -az_math
+# el_is_zenith=true：硬件 el_out = 90 - el_up
+_MOUNT_YAW_DEG = 90.0
 
 
-def _build_error_fan(
-    v_a: np.ndarray, v_b: np.ndarray, segments: int = 12,
-) -> tuple[np.ndarray, np.ndarray]:
-    """构造从原点到 v_a/v_b 两矢量之间的三角扇（球面插值）。
+def _ant_to_world_nwu(
+    ant_az_deg: float,
+    ant_el_deg: float,
+    R_body2geo: np.ndarray,
+) -> np.ndarray:
+    """阵面驱动角 (ant_az, ant_el) + 姿态 DCM → widget 世界系 (NWU) 单位向量。
 
-    返回 (vertices (N+2, 3) float32, faces (N, 3) uint32)。
-    segments 越大扇面越光滑；同向/反向/零矢量时退化为空。
+    完全反向 Layer 3 + Layer 2 计算链；文件头有详细 5 步说明。返回 float32 (3,)。
+
+    Args:
+        ant_az_deg: 设备上报阵面方位角（硬件 CCW+，[0, 360)）
+        ant_el_deg: 设备上报阵面仰角（天顶距，0=朝天 90=水平）
+        R_body2geo: 当前载体姿态 DCM（3x3 float64），由 update_attitude 维护
     """
-    segments = max(2, int(segments))
-    va = np.asarray(v_a, dtype=np.float64)
-    vb = np.asarray(v_b, dtype=np.float64)
-    na = np.linalg.norm(va)
-    nb = np.linalg.norm(vb)
-    if na < 1e-6 or nb < 1e-6:
-        return (
-            np.empty((0, 3), dtype=np.float32),
-            np.empty((0, 3), dtype=np.uint32),
-        )
-    ua = va / na
-    ub = vb / nb
-    dot = float(np.clip(np.dot(ua, ub), -1.0, 1.0))
-    # 几乎同向：没有可见扇面
-    if dot > 0.9999:
-        return (
-            np.empty((0, 3), dtype=np.float32),
-            np.empty((0, 3), dtype=np.uint32),
-        )
-    r = 0.5 * (na + nb)                       # 扇面半径取两矢量平均长度
-    omega = np.arccos(dot)
-    sin_omega = np.sin(omega)
-
-    # 球面线性插值（slerp），生成 segments+1 个点
-    ts = np.linspace(0.0, 1.0, segments + 1)
-    if sin_omega < 1e-6:
-        # 近反向：退化为线性插值避免 0/0
-        arc = (1 - ts)[:, None] * ua + ts[:, None] * ub
-    else:
-        s0 = np.sin((1 - ts) * omega) / sin_omega
-        s1 = np.sin(ts * omega) / sin_omega
-        arc = s0[:, None] * ua + s1[:, None] * ub
-    arc *= r
-
-    # 顶点：原点 + 弧上 segments+1 个点
-    verts = np.vstack([[0.0, 0.0, 0.0], arc]).astype(np.float32)
-    # 面：扇形三角 (0, i, i+1)
-    faces = np.empty((segments, 3), dtype=np.uint32)
-    faces[:, 0] = 0
-    faces[:, 1] = np.arange(1, segments + 1)
-    faces[:, 2] = np.arange(2, segments + 2)
-    return verts, faces
+    # Step 1 + 2: 反 Layer 3 输出规整，重建阵面单位向量
+    el_up = np.radians(90.0 - ant_el_deg)
+    az_math = np.radians(-ant_az_deg)
+    ce = np.cos(el_up)
+    v_array = np.array([ce * np.cos(az_math),
+                        ce * np.sin(az_math),
+                        -np.sin(el_up)], dtype=np.float64)
+    # Step 3: array → body FRD，Rz(+90°)·v = (-v.y, v.x, v.z)
+    v_body = np.array([-v_array[1], v_array[0], v_array[2]], dtype=np.float64)
+    # Step 4: body FRD → geo NED
+    v_geo = R_body2geo @ v_body
+    # Step 5: geo NED → world NWU
+    v_world = P_NED_NWU @ v_geo
+    return v_world.astype(np.float32)
 
 
 class AttitudeWidget(QWidget):
@@ -203,7 +202,7 @@ class AttitudeWidget(QWidget):
         self._nose_arrow = self._create_nose_arrow()
         self._gl_view.addItem(self._nose_arrow)
 
-        # M4: 实时波束矢量（绿）+ 扫描轨迹（淡蓝）。已去掉 tgt 卫星矢量 + 误差扇面。
+        # 实时波束矢量（绿）+ 扫描轨迹（淡蓝），已反向解链到 widget 世界系 (NWU)
         empty2 = np.empty((0, 3), dtype=np.float32)
         self._ant_line = GLLinePlotItem(pos=empty2, color=(0.30, 0.95, 0.50, 1.0), width=2.5)
         self._trail_line = GLLinePlotItem(
@@ -211,12 +210,6 @@ class AttitudeWidget(QWidget):
         )
         for it in (self._ant_line, self._trail_line):
             self._gl_view.addItem(it)
-        # 占位空对象，update_pointing / clear 仍会引用；不加到 3D 视图
-        self._tgt_line = GLLinePlotItem(pos=empty2, color=(0, 0, 0, 0), width=0)
-        self._err_mesh = GLMeshItem(
-            vertexes=empty2, faces=np.empty((0, 3), dtype=np.uint32),
-            smooth=False, drawEdges=False, color=(0, 0, 0, 0),
-        )
 
         layout.addWidget(self._gl_view, stretch=1)
 
@@ -245,58 +238,52 @@ class AttitudeWidget(QWidget):
         self._apply_label_styles()
 
     def _create_axes(self) -> dict:
-        """Create X, Y, Z reference axes."""
-        # X axis (red) - forward
-        x_data = np.array([[0, 0, 0], [3, 0, 0]], dtype=np.float32)
+        """世界系（NWU）参考轴：红 = +X 北 / 绿 = +Y 西 / 蓝 = +Z 上。"""
+        x_data = np.array([[0, 0, 0], [3, 0, 0]], dtype=np.float32)  # +X 北
         x_line = GLLinePlotItem(pos=x_data, color=(1, 0, 0, 1), width=2)
-        # Y axis (green) - right
-        y_data = np.array([[0, 0, 0], [0, 3, 0]], dtype=np.float32)
+        y_data = np.array([[0, 0, 0], [0, 3, 0]], dtype=np.float32)  # +Y 西
         y_line = GLLinePlotItem(pos=y_data, color=(0, 1, 0, 1), width=2)
-        # Z axis (blue) - down
-        z_data = np.array([[0, 0, 0], [0, 0, 3]], dtype=np.float32)
+        z_data = np.array([[0, 0, 0], [0, 0, 3]], dtype=np.float32)  # +Z 上
         z_line = GLLinePlotItem(pos=z_data, color=(0, 0, 1, 1), width=2)
         return {"x": x_line, "y": y_line, "z": z_line}
 
     def _create_aircraft(self) -> GLMeshItem:
-        """默认机体模型：带明显楔形机头的扁平长方体（相控阵卫通终端外形）。
+        """默认机体模型：扁平矩形板（相控阵卫通终端外形）。
 
-        尺寸 4.0 × 1.4 × 0.3（长 × 宽 × 高），长宽比约 2.9:1 让"长边"一眼可辨。
-        机头方向沿 +X：前 40% 长度是楔形（顶面斜削到底面前缘），形成明显船头状。
-        机头再配一个红色箭头指示器（见 `_create_nose_arrow`），杜绝朝向歧义。
-
-        未来通过 `set_body_model(mesh_data)` 接入具体设备的实测模型。
+        实物形态：左右长、前后短、上下扁的相控阵面板。
+        - X（前后）= 短边：半长 0.6 → 全长 1.2（机头方向）
+        - Y（左右）= 长边：半宽 1.8 → 全宽 3.6（左翼为 +Y）
+        - Z（上下）= 厚度：半高 0.08 → 全厚 0.16
+        长宽比约 3:1，与用户示意图一致。机头朝向通过红色箭头单独标识
+        （见 `_create_nose_arrow`），不再在 mesh 上做楔形。
         """
-        L, W, H = 2.0, 0.7, 0.15   # 半长 / 半宽 / 半高
-        nose_len = L * 0.4         # 机头楔形长度（占半长 40%，整机占 20%）
-
-        # 8 顶点：底面 4 角完整矩形 + 顶面 4 角（机头端向后缩 nose_len）
+        L, W, H = 0.6, 1.8, 0.08
         verts = np.array([
             # 底面（z=-H）
-            [-L, +W, -H],              # 0 tail_left_bottom
-            [-L, -W, -H],              # 1 tail_right_bottom
-            [+L, -W, -H],              # 2 nose_right_bottom（机头尖端右角）
-            [+L, +W, -H],              # 3 nose_left_bottom（机头尖端左角）
-            # 顶面（z=+H），机头端只到 x=+L-nose_len
-            [-L, +W, +H],              # 4 tail_left_top
-            [-L, -W, +H],              # 5 tail_right_top
-            [+L - nose_len, -W, +H],   # 6 nose_right_top（楔形折线点）
-            [+L - nose_len, +W, +H],   # 7 nose_left_top（楔形折线点）
+            [-L, +W, -H],   # 0 tail_left_bottom
+            [-L, -W, -H],   # 1 tail_right_bottom
+            [+L, -W, -H],   # 2 nose_right_bottom
+            [+L, +W, -H],   # 3 nose_left_bottom
+            # 顶面（z=+H）
+            [-L, +W, +H],   # 4 tail_left_top
+            [-L, -W, +H],   # 5 tail_right_top
+            [+L, -W, +H],   # 6 nose_right_top
+            [+L, +W, +H],   # 7 nose_left_top
         ], dtype=np.float32)
 
-        # 三角面（顶点顺序遵循右手法则，法线朝外）
         faces = np.array([
             # 底面 (法线 -Z)
             [0, 3, 2], [0, 2, 1],
-            # 顶面（被机头楔形截短，法线 +Z）
+            # 顶面 (法线 +Z)
             [4, 5, 6], [4, 6, 7],
-            # 机尾面 (-X, 法线 -X)
+            # 机尾 (-X)
             [0, 1, 5], [0, 5, 4],
-            # 左侧面 (+Y, 四边形梯形)
+            # 左侧 (+Y)
             [0, 4, 7], [0, 7, 3],
-            # 右侧面 (-Y, 四边形梯形)
+            # 右侧 (-Y)
             [1, 2, 6], [1, 6, 5],
-            # 机头楔形斜面：从顶面 nose_* 斜下到底面 +X 边
-            [7, 6, 2], [7, 2, 3],
+            # 机头 (+X)
+            [3, 7, 6], [3, 6, 2],
         ], dtype=np.uint32)
 
         md = MeshData(vertexes=verts, faces=faces)
@@ -313,12 +300,12 @@ class AttitudeWidget(QWidget):
         """机头方向指示箭头：红色小四棱锥，底面在 +X 端外侧，尖端沿 +X 指。
 
         与 aircraft 共享 setTransform（即随姿态一起旋转），永远指示机头方向。
-        尺寸相对机体很小（长约 0.35，宽 0.25），避免视觉喧宾夺主。
+        相控阵面板很宽（Y ±1.8），箭头放在 +X 端中间，尺寸适当大些保持可见。
         """
-        # 机头（+X）端顶点位置
-        nose_x = 2.0  # 对齐 _create_aircraft 的 L
+        # 机头（+X）端顶点位置；body 半长 L=0.6
+        nose_x = 0.6
         base = nose_x + 0.05     # 箭头基面 x
-        tip = base + 0.45        # 箭头尖端 x
+        tip = base + 0.50        # 箭头尖端 x
         half = 0.18              # 基面半宽/半高
 
         verts = np.array([
@@ -468,22 +455,20 @@ class AttitudeWidget(QWidget):
         r21 = cos_p * sin_r
         r22 = cos_p * cos_r
 
-        # Build 4x4 transformation matrix (rotation only, no translation)
-        transform = np.array(
-            [[r00, r01, r02, 0],
-             [r10, r11, r12, 0],
-             [r20, r21, r22, 0],
-             [0,   0,   0,   1]], dtype=np.float32
-        )
-        self._aircraft.setTransform(transform)
-        # 机头箭头与机体共享变换，始终指示当前机头方向
-        self._nose_arrow.setTransform(transform)
-        # 保存 3x3 旋转矩阵，供 update_pointing 将机体系波束方向变换到世界系
+        # 保存 R_body2geo（FRD→NED），供波束反向解链使用
         self._body_rot = np.array(
             [[r00, r01, r02],
              [r10, r11, r12],
              [r20, r21, r22]], dtype=np.float64
         )
+        # mesh 在 FLU 系内构造，要变换到 widget 世界系 NWU：M = P · R · P
+        # 零姿态时 P·I·P = I，mesh 自然对齐世界轴（详见文件头说明）
+        M = P_NED_NWU @ self._body_rot @ P_NED_NWU
+        transform = np.eye(4, dtype=np.float32)
+        transform[:3, :3] = M.astype(np.float32)
+        self._aircraft.setTransform(transform)
+        # 机头箭头与机体共享变换，始终指示当前机头方向
+        self._nose_arrow.setTransform(transform)
 
         # Update value labels
         self._roll_val_lbl.setText(f"{roll:.1f}°")
@@ -513,18 +498,19 @@ class AttitudeWidget(QWidget):
         ant_az: Optional[float],
         ant_el: Optional[float],
     ) -> None:
-        """由 MainWindow 每帧调用。tgt_* 参数已弃用（恒为 None），仅保留签名兼容。"""
-        _ = tgt_az, tgt_el  # 显式吃掉未使用参数，避免 linter 警告
+        """由 MainWindow 每帧调用。tgt_* 参数已弃用（恒为 None），仅保留签名兼容。
+
+        ant_az/ant_el 经 `_ant_to_world_nwu` 反向解链得到 widget 世界系 (NWU)
+        单位向量，乘半径 R_POINTING 画线。GEO 卫星跟踪锁定时，端点应稳定在
+        固定空间点附近（与载体摇摆无关）。
+        """
+        _ = tgt_az, tgt_el  # 显式吃掉未使用参数
         empty2 = np.empty((0, 3), dtype=np.float32)
 
-        # ---- 天线法向（绿） + 扫描轨迹 ----
-        # ant_az/ant_el 是机体系下的波束方向，乘以机体旋转矩阵变换到世界系，
-        # 这样设备姿态变化时波束在空间中的指向保持不变（天线波束跟踪在补偿姿态）。
         if self._have_ant and ant_az is not None and ant_el is not None:
             self._ant_az_value = float(ant_az)
             self._ant_el_value = float(ant_el)
-            v_body = _pointing_unit_vec(ant_az, ant_el) * R_POINTING
-            v_world = (self._body_rot @ v_body.astype(np.float64)).astype(np.float32)
+            v_world = _ant_to_world_nwu(ant_az, ant_el, self._body_rot) * R_POINTING
             self._ant_line.setData(
                 pos=np.array([[0, 0, 0], v_world], dtype=np.float32)
             )
@@ -537,7 +523,7 @@ class AttitudeWidget(QWidget):
                 self._trail_line.setData(pos=empty2)
         else:
             self._ant_line.setData(pos=empty2)
-        # 2026-04-21: combo 已移除，不再需要高亮
+            self._trail_line.setData(pos=empty2)
 
     # ---------- 主题 / 字号 (M6) ----------
 
@@ -586,7 +572,7 @@ class AttitudeWidget(QWidget):
         self._roll_val_lbl.setText("0.0°")
         self._pitch_val_lbl.setText("0.0°")
         self._yaw_val_lbl.setText("0.0°")
-        # M4: 清指向矢量 / 扫描轨迹
+        # 清指向矢量 / 扫描轨迹
         empty2 = np.empty((0, 3), dtype=np.float32)
         self._ant_line.setData(pos=empty2)
         self._trail_line.setData(pos=empty2)

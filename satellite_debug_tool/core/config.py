@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from pathlib import Path
@@ -25,8 +26,9 @@ class Settings:
         self._load()
 
     def _load(self):
-        # 如果文件不存在，使用默认配置
-        self._config = self.DEFAULT_CONFIG.copy()
+        # deepcopy 防止 _merge_config 把用户值写进 DEFAULT_CONFIG 的子 dict
+        # （shallow copy 会让多个 Settings 实例共享嵌套 dict 引用 → 跨实例污染）
+        self._config = copy.deepcopy(self.DEFAULT_CONFIG)
 
         if self._config_file.exists():
             try:
