@@ -12,7 +12,7 @@ DataStore / ProfileStore）。
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from satellite_debug_tool import __version__
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.device_view import DeviceView
@@ -31,6 +32,10 @@ from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.log_view import LogView
 from satellite_debug_tool.ui.playback_view import PlaybackView
 from satellite_debug_tool.ui.settings_dialog import SettingsDialog
+from satellite_debug_tool.ui.update_dialog import (
+    UpdateDialog,
+    silent_background_check,
+)
 
 
 class MainWindow(QMainWindow):
@@ -79,10 +84,17 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._toolbar.addWidget(spacer)
 
+        # M11：检查更新按钮
+        self._update_btn = QPushButton("🔄 检查更新")
+        self._update_btn.setFixedWidth(110)
+        self._update_btn.setToolTip("手动检查并下载最新版本（也可在设置中开关启动自检）")
+        self._update_btn.clicked.connect(self._on_check_update_clicked)
+        self._toolbar.addWidget(self._update_btn)
+
         # 设置按钮（配置路径等）
         self._settings_btn = QPushButton("⚙ 设置")
         self._settings_btn.setFixedWidth(80)
-        self._settings_btn.setToolTip("配置文件保存 / 加载的默认目录")
+        self._settings_btn.setToolTip("配置文件保存 / 加载的默认目录 / 更新设置")
         self._settings_btn.clicked.connect(self._on_open_settings)
         self._toolbar.addWidget(self._settings_btn)
 
@@ -110,6 +122,10 @@ class MainWindow(QMainWindow):
 
         # ---------- 底部 statusbar ----------
         self.setStatusBar(QStatusBar())
+        # M11：状态栏右下角显示当前版本号
+        self._version_label = QLabel(f"v{__version__}")
+        self._version_label.setStyleSheet("padding: 0 8px; color: #888;")
+        self.statusBar().addPermanentWidget(self._version_label)
 
         # ---------- 应用主题 + 恢复 active tab ----------
         self._apply_theme(self._theme)
@@ -118,6 +134,10 @@ class MainWindow(QMainWindow):
             if self._tabs.tabText(i) == active:
                 self._tabs.setCurrentIndex(i)
                 break
+
+        # M11：启动后台静默检查更新（settings.update.auto_check 控制）
+        self._bg_check_thread = None
+        QTimer.singleShot(2000, self._kick_silent_update_check)
 
     # ============================ 主题 ============================
 
@@ -155,6 +175,20 @@ class MainWindow(QMainWindow):
             f"background-color: {pal['input_bg']}; color: {pal['text']}; "
             f"border: 1px solid {pal['input_border']}; padding: 2px 6px; border-radius: 2px;"
         )
+        # 设置按钮：跟随主题（暗色主题下默认按钮文字与背景对比度不够，专门设置）
+        btn_chrome_style = (
+            f"QPushButton {{ background-color: {pal['input_bg']}; color: {pal['text']}; "
+            f"border: 1px solid {pal['input_border']}; border-radius: 2px; padding: 2px 10px; }}"
+            f"QPushButton:hover {{ background-color: {pal['card_alt']}; }}"
+            f"QPushButton:pressed {{ background-color: {pal['primary']}; color: white; }}"
+        )
+        self._settings_btn.setStyleSheet(btn_chrome_style)
+        self._update_btn.setStyleSheet(btn_chrome_style)
+        # 版本号 label 也跟随主题
+        if hasattr(self, "_version_label"):
+            self._version_label.setStyleSheet(
+                f"padding: 0 8px; color: {pal['text_muted']};"
+            )
         # toolbar 上 QLabel "主题:" 也要刷新
         for lbl in self._toolbar.findChildren(QLabel):
             lbl.setStyleSheet(f"color: {pal['text']}; background: transparent;")
@@ -196,5 +230,31 @@ class MainWindow(QMainWindow):
 
     def _on_open_settings(self):
         """点击 ⚙ 设置按钮：弹出路径配置弹窗。"""
-        dlg = SettingsDialog(self._settings, self)
-        dlg.exec()  # 阻塞；用户点确定后 settings 已经写入并保存
+        # 把当前 LiveView 的 profile_store 传给设置弹窗，让"管理图表分组"按钮能用
+        profile_store = getattr(self._live, "_profile_store", None)
+        dlg = SettingsDialog(self._settings, self, profile_store=profile_store)
+        dlg.exec()
+
+    # ============================ M11 更新 ============================
+
+    def _on_check_update_clicked(self):
+        """点击 🔄 检查更新：手动触发，弹 UpdateDialog 立即开始检查。"""
+        dlg = UpdateDialog(self._settings, parent=self, auto_start=True)
+        dlg.exec()
+
+    def _kick_silent_update_check(self):
+        """启动后 2s 调用：根据 settings.update.auto_check 决定是否后台静默检查。"""
+        self._bg_check_thread = silent_background_check(
+            self._settings,
+            parent=self,
+            on_new_version=self._on_silent_check_found_new,
+        )
+
+    def _on_silent_check_found_new(self, latest):
+        """后台检查发现新版：状态栏提示，用户点击 / 工具栏按钮可展开 UpdateDialog。"""
+        msg = (
+            f"🆕 发现新版本 {latest.tag_name}（当前 v{__version__}）— 点工具栏「检查更新」更新"
+        )
+        sb = self.statusBar()
+        if sb is not None:
+            sb.showMessage(msg, 15000)

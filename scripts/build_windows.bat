@@ -27,7 +27,7 @@ if errorlevel 1 (
 )
 
 REM ---- ensure runtime deps ----
-"%PY%" -c "import PySide6, pyqtgraph, serial, numpy" 2>nul
+"%PY%" -c "import PySide6, pyqtgraph, serial, numpy, py7zr, psutil" 2>nul
 if errorlevel 1 (
     echo [build_windows] Installing runtime deps...
     "%PY%" -m pip install -r satellite_debug_tool\requirements.txt || goto :err
@@ -40,8 +40,20 @@ if exist dist  rmdir /s /q dist
 echo [build_windows] Building main app...
 "%PY%" -m PyInstaller --noconfirm satellite_debug_tool.spec || goto :err
 
+echo [build_windows] Building updater (M11)...
+"%PY%" -m PyInstaller --noconfirm updater.spec || goto :err
+
 echo [build_windows] Building simulator...
 "%PY%" -m PyInstaller --noconfirm device_simulator.spec || goto :err
+
+REM ---- M11: embed updater into main install dir ----
+REM Copy updater.exe + updater/_internal contents into SatelliteDebugTool/
+if exist "dist\updater" if exist "dist\SatelliteDebugTool" (
+    echo [build_windows] Embedding updater into main install dir...
+    copy /Y "dist\updater\updater.exe" "dist\SatelliteDebugTool\updater.exe" >nul
+    REM merge _internal (copy missing files; duplicates ok)
+    xcopy /E /Y /I /Q "dist\updater\_internal" "dist\SatelliteDebugTool\_internal" >nul
+)
 
 REM ---- archive ----
 set "APP_ZIP=%RELEASE_DIR%\SatelliteDebugTool-Windows-x86_64.zip"

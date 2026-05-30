@@ -63,36 +63,56 @@ pip install pyinstaller
 
 ---
 
-## 方式二：GitHub Actions 自动构建
+## 方式二：GitHub Actions 自动构建 + Gitee 发版（M11）
 
-已内置 `.github/workflows/build.yml`，**push/tag/手动** 任一方式触发。
+`.github/workflows/build.yml` 5 个 job：
 
-### 触发方式
+| Job | 触发条件 | 用途 |
+|------|---------|------|
+| `prepare-release` | tag `v*` / 手动 dispatch | 在 Gitee 建空 release 拿 ID |
+| `build-windows` | tag / dispatch | windows-latest 出 7z 分卷 → 上传 Gitee + GH Release |
+| `build-macos` | tag / dispatch | macos-14 (arm64) 出 7z 分卷 → 上传 Gitee + GH Release |
+| `finalize-release` | tag / dispatch 全过后 | 生成 release body + 清理旧 release |
+| `ci-only-build` | 推 master/main | 仅本地构建验证，结果上传 GH artifact，不发版 |
 
-- **Push 到 main/master** 或打 tag `v*.*.*`：自动跑所有平台
-- 在 Actions 页面手动：点 `Run workflow`
-  - `mark_release=true` 会同时创建**草稿 Release**，把 3 份 zip 挂上去
-
-### 构建矩阵
-
-| Runner | 产物 |
-|--------|------|
-| macos-14 (Apple Silicon) | `SatelliteDebugTool-macOS-arm64.zip` + 模拟器 |
-| macos-13 (Intel) | `SatelliteDebugTool-macOS-x86_64.zip` + 模拟器 |
-| windows-latest | `SatelliteDebugTool-Windows-x86_64.zip` + 模拟器 |
-
-### 下载产物
-
-- **构建完成**：Actions → 选中该 run → 下拉滚动找 **Artifacts** 卡片 → 点 zip 下载（保留 30 天）
-- **打 tag 后**：Releases 页面找到对应版本的草稿 Release，把所有 zip 都下下来
-
-### tag 一次性出 3 平台正式 release
+### 发版流程（标准）
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
-# CI 构建完成后，到 Releases 页把草稿发布即可
+# 1. 改 satellite_debug_tool/__init__.py.__version__
+vim satellite_debug_tool/__init__.py    # 例如 "1.0.0" → "1.1.0"
+
+# 2. commit + 打 tag（tag 名要与 __version__ 一致 + 加 v 前缀）
+git add satellite_debug_tool/__init__.py
+git commit -m "chore: bump version to 1.1.0"
+git tag v1.1.0
+git push origin master
+git push origin v1.1.0      # ← 推 tag 触发 release CI
+
+# 3. 在 GitHub Actions 页面看进度
+#    - prepare-release   ~30s
+#    - build-windows + build-macos  并行 ~10-15min
+#    - finalize-release  ~30s
+
+# 4. 完成后查 Gitee 发版仓库 https://gitee.com/soft-hertz/satellite_debug_tool_release/releases
+#    应能看到完整 release body + 全部分卷
 ```
+
+### 失败排查
+
+- **prepare-release 失败**：检查 `secrets.GITEE_TOKEN` 是否在 repo settings 中配好，且有发版仓库的写权限
+- **build-windows/mac 失败**：查 PyInstaller 输出；通常是新依赖没在 spec 的 `hiddenimports` 里
+- **Gitee 上传失败**：单卷重试 3-5 次仍失败时 job 直接挂；等几分钟（Gitee 偶尔抽风）后重新触发 workflow_dispatch
+- **finalize 跳过**：build-* 任一失败 finalize 不跑，release body 会停在 "Pending build..."；手动到 Gitee 修
+
+### 仅 CI 构建（不发版）
+
+push 到 master/main 不打 tag → 跑 `ci-only-build`，产物上传 GH artifact（7 天保留）。
+Actions → run → Artifacts 卡片下载。
+
+### 手动触发
+
+Actions 页面 → Build & Release → Run workflow → 填 tag（例 `v0.1.0-rc1`）→ Run。
+适合预发版本测试，不需要打真实 git tag。
 
 ---
 

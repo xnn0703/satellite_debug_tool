@@ -29,7 +29,7 @@ if ! $PY -c "import PyInstaller" >/dev/null 2>&1; then
     echo "[build_macos] 安装 pyinstaller..."
     $PY -m pip install pyinstaller
 fi
-$PY -c "import PySide6, pyqtgraph, serial, numpy" || {
+$PY -c "import PySide6, pyqtgraph, serial, numpy, py7zr, psutil" || {
     echo "[build_macos] 运行依赖缺失，执行 pip install -r satellite_debug_tool/requirements.txt 后重试"
     exit 1
 }
@@ -40,8 +40,21 @@ rm -rf build dist
 echo "[build_macos] 打包 主程序..."
 $PY -m PyInstaller --noconfirm satellite_debug_tool.spec
 
+echo "[build_macos] 打包 updater（M11 升级器）..."
+$PY -m PyInstaller --noconfirm updater.spec
+
 echo "[build_macos] 打包 模拟器..."
 $PY -m PyInstaller --noconfirm device_simulator.spec
+
+# ---- M11：把 updater 二进制塞进 .app 的 Contents/MacOS 旁边 ----
+# updater 自带 _internal/，整个目录复制到 Contents/MacOS/ 下
+if [[ -d "dist/SatelliteDebugTool.app" && -d "dist/updater" ]]; then
+    APP_MACOS="dist/SatelliteDebugTool.app/Contents/MacOS"
+    cp -R dist/updater/_internal "$APP_MACOS/" 2>/dev/null || true
+    cp dist/updater/updater "$APP_MACOS/updater"
+    chmod +x "$APP_MACOS/updater"
+    echo "[build_macos] ✅ updater 已嵌入 $APP_MACOS/"
+fi
 
 # ---- 归档 ----
 APP_ZIP="$RELEASE_DIR/SatelliteDebugTool-macOS-$ARCH.zip"

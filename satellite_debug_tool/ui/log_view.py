@@ -208,6 +208,7 @@ class LogView(QWidget):
         self._chart.setMinimumHeight(400)
         self._chart.set_dark_theme(True)
         self._chart.set_profile_store(self._profile_store)
+        self._chart.set_settings(self._settings)   # M10 P7
         # M8：mode 切换后重新灌数据 + Y autorange（否则切完曲线消失）
         self._chart.mode_changed.connect(self._on_chart_mode_changed)
         root.addWidget(self._chart, 1)

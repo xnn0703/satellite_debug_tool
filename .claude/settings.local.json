@@ -47,7 +47,8 @@
       "Bash(PYTHONPATH=. python3 *)",
       "Bash(awk -F'::' '{print $1}')",
       "Bash(QT_QPA_PLATFORM=offscreen timeout 4 python3 -m satellite_debug_tool.main)",
-      "Bash(QT_QPA_PLATFORM=offscreen python3 *)"
+      "Bash(QT_QPA_PLATFORM=offscreen python3 *)",
+      "Bash(QT_QPA_PLATFORM=offscreen PYTHONPATH=. python3 *)"
     ]
   }
 }

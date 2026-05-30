@@ -10,12 +10,30 @@ class Settings:
         "general": {"connection_type": "Serial"},
         "serial": {"default_baudrate": "115200", "last_port": ""},
         "udp": {"remote_ip": "192.168.1.12", "remote_port": 4004, "local_port": 45678},
-        "ui": {"time_window": 10.0, "theme": "Dark", "max_visible_channels": 8},
+        "ui": {
+            "time_window": 10.0,
+            "theme": "Dark",
+            "max_visible_channels": 8,
+            # M10 F3b：Live Tab 主体 QSplitter 的列宽（左 ChannelPanel + chart + attitude + state/event）
+            "live_top_splitter_sizes": [],
+        },
         "recording": {"default_path": ""},  # 旧字段，保留兼容，不再使用
         "paths": {
             "recording_dir": "",  # Live 录制 / Playback 加载 .sdb 的默认目录
             "log_dir": "",        # Log Tab 导入 WindTerm .log 的默认目录
             "firmware_dir": "",   # Device Tab OTA 选择 .bin 的默认目录
+        },
+        # M10 F1/F2：chart UX 持久化
+        "chart": {
+            "normalize": False,                  # F1：归一化 toggle 状态
+            "custom_groups": {},                 # F2：{hw_type: {gid_str: {"title": str, "channels": [name, ...]}}}
+        },
+        # M11：自动升级相关
+        "update": {
+            "auto_check": True,                  # 启动后台静默检查（默认开）
+            "check_interval_hours": 24,          # 距上次检查不足该时长不重复查（友好对待 Gitee API）
+            "last_check_iso": "",                # 上次检查时间（UTC ISO 字符串）
+            "skip_version": "",                  # 用户跳过的 tag；同 tag 不再弹窗
         },
     }
 
