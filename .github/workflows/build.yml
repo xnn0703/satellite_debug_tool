@@ -24,6 +24,10 @@ env:
   GITHUB_OWNER: xnn0703
   GITHUB_REPO: satellite_debug_tool
 
+# 给所有 job 默认权限：contents: write 是创建 / 上传 GitHub Release 所需
+permissions:
+  contents: write
+
 jobs:
 
   # ============================================================
