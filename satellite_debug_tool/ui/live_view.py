@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -56,6 +55,7 @@ from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.io.data_recorder import DataRecorder
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
+from satellite_debug_tool.ui.channel_panel import ChannelPanel
 from satellite_debug_tool.ui.chart_widget import COLORS
 from satellite_debug_tool.ui.control_panel_widget import ControlPanelWidget
 from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
@@ -275,14 +275,23 @@ class LiveView(QWidget):
         self._dashboard.mode_requested.connect(self._on_dashboard_mode_requested)
         root.addWidget(self._dashboard)
 
-        # ---------- 主区：splitter ----------
+        # ---------- 主区：左 ChannelPanel + 右内容（chart + attitude + state/event） ----------
+        # M10 F3b：把原来横向 channel_panel 抽到 chart 区域左侧
         splitter = QSplitter(Qt.Vertical)
         top_splitter = QSplitter(Qt.Horizontal)
+        self._top_splitter = top_splitter   # 保存引用供持久化
 
+        # 左侧：通道选择面板
+        self._channel_panel = ChannelPanel()
+        self._channel_panel.setMinimumWidth(160)
+        top_splitter.addWidget(self._channel_panel)
+
+        # chart
         self._chart = GroupedChartWidget()
         self._chart.setMinimumHeight(400)
         self._chart.set_dark_theme(True)
         self._chart.set_profile_store(self._profile_store)
+        self._chart.set_settings(self._settings)   # M10 P7：恢复归一化状态等
         top_splitter.addWidget(self._chart)
 
         self._attitude = AttitudeWidget()
@@ -303,42 +312,15 @@ class LiveView(QWidget):
         right_panel.setStretchFactor(1, 1)
         top_splitter.addWidget(right_panel)
 
-        top_splitter.setStretchFactor(0, 3)
-        top_splitter.setStretchFactor(1, 1)
+        # stretch：通道 0、chart 4、attitude 1、state/event 1
+        top_splitter.setStretchFactor(0, 0)
+        top_splitter.setStretchFactor(1, 4)
         top_splitter.setStretchFactor(2, 1)
+        top_splitter.setStretchFactor(3, 1)
+        # 默认尺寸（首次启动时；后续从 settings 恢复）
+        top_splitter.setSizes([200, 800, 380, 280])
+        top_splitter.splitterMoved.connect(self._on_top_splitter_moved)
         splitter.addWidget(top_splitter)
-
-        # ---------- Channel 勾选 panel ----------
-        channel_panel = QWidget()
-        channel_panel.setObjectName("channel_panel")
-        channel_panel.setStyleSheet(
-            f"background-color: {S.PANEL_DARK}; border: 1px solid {S.BORDER}; border-radius: 2px;"
-        )
-        channel_layout = QVBoxLayout(channel_panel)
-        channel_layout.setContentsMargins(8, 8, 8, 8)
-
-        channel_header = QLabel("Channel Selection")
-        channel_header.setStyleSheet(f"color: {S.TEXT}; font-weight: bold;")
-        channel_layout.addWidget(channel_header)
-
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setStyleSheet(f"background-color: {S.BG_DARK}; border: none;")
-
-        self._channel_widget = QWidget()
-        self._channel_widget.setStyleSheet("background-color: transparent;")
-        self._channel_layout = QGridLayout(self._channel_widget)
-        self._channel_layout.setContentsMargins(0, 0, 0, 0)
-        self._channel_layout.setSpacing(4)   # M7：紧凑
-        self._channel_checks: dict = {}
-        self._channel_dots: dict = {}
-        self._channel_value_labels: dict = {}
-        self._channel_containers: dict = {}
-        self._channel_colors: dict = {}
-
-        self._scroll.setWidget(self._channel_widget)
-        channel_layout.addWidget(self._scroll)
-        channel_panel.setMinimumHeight(80)
 
         self._control_panel = ControlPanelWidget()
         self._control_panel.setMaximumHeight(80)   # M7：防 splitter 拖动吞掉曲线区
@@ -349,11 +331,12 @@ class LiveView(QWidget):
         self._control_panel.channel_enable_changed.connect(self._on_channel_enable_changed)
 
         splitter.addWidget(self._control_panel)
-        splitter.addWidget(channel_panel)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 0)
-        splitter.setStretchFactor(2, 1)
         root.addWidget(splitter)
+
+        # 启动后恢复 splitter 状态（如果有持久化值）
+        QTimer.singleShot(0, self._restore_splitter_state)
 
         # ---------- 底部统计行（替代原 QStatusBar 的 4 个 permanent widget） ----------
         stats_row = QWidget()
@@ -527,6 +510,22 @@ class LiveView(QWidget):
 
     # ----- 命令下发 -----
 
+    # ---------- splitter 状态持久化（M10 F3b） ----------
+
+    def _on_top_splitter_moved(self, *_args) -> None:
+        if self._settings is None:
+            return
+        sizes = self._top_splitter.sizes()
+        self._settings.set("ui.live_top_splitter_sizes", sizes)
+
+    def _restore_splitter_state(self) -> None:
+        if self._settings is None:
+            return
+        sizes = self._settings.get("ui.live_top_splitter_sizes", None)
+        if isinstance(sizes, list) and len(sizes) == self._top_splitter.count() \
+                and all(isinstance(s, int) and s >= 0 for s in sizes):
+            self._top_splitter.setSizes(sizes)
+
     def _send_control_frame(self, frame: bytes) -> bool:
         if self._worker is None or not self._is_connected:
             self.status_message.emit("未连接，命令未发送", 3000)
@@ -585,10 +584,9 @@ class LiveView(QWidget):
     def _on_profile_changed_sync(self, hw_type: str) -> None:
         if hw_type:
             self._hw_label.setText(f"设备: {hw_type}")
-        for key, cb in self._channel_checks.items():
-            new_label = self._channel_display_label(key)
-            if cb.text() != new_label:
-                cb.setText(new_label)
+        # Profile 变化时刷新每条通道在 ChannelPanel 里显示的名字（带 unit）
+        for key in self._channel_panel.channel_names():
+            self._channel_panel.set_label(key, self._channel_display_label(key))
         hw = self._profile_store.current_hw_type()
         if hw is None:
             return
@@ -710,69 +708,25 @@ class LiveView(QWidget):
             attitude_options = channels
         self._attitude.set_channel_options(attitude_options)
 
-        existing_names = set(self._channel_checks.keys())
-        new_names = set(channels) - existing_names
-
-        pal = S.palette(self._theme)
-        row_h = 28
-        dot_sz = 10
+        existing_names = set(self._channel_panel.channel_names())
+        channel_set = set(channels)
+        new_names = channel_set - existing_names
+        # 新增通道：颜色按现有数量取 COLORS 索引（保证稳定）
         for name in new_names:
-            idx = len(self._channel_checks)
-            cols = 8
-            row = idx // cols
-            col = idx % cols
+            idx = len(self._channel_panel.channel_names())
             color = COLORS[idx % len(COLORS)]
-            container = QWidget()
-            container.setFixedHeight(row_h)
-            container.setStyleSheet(
-                f"background-color: {pal['panel']}; border-left: 4px solid {color}; "
-                f"border-radius: 3px; padding: 4px 8px;"
+            self._channel_panel.add_channel(
+                name, color, self._channel_display_label(name)
             )
-            container_layout = QHBoxLayout(container)
-            container_layout.setContentsMargins(0, 0, 0, 0)
-            container_layout.setSpacing(4)
-            dot = QLabel()
-            dot.setFixedSize(dot_sz, dot_sz)
-            dot.setStyleSheet(
-                f"background-color: {color}; border-radius: {dot_sz // 2}px;"
-            )
-            cb = QCheckBox(self._channel_display_label(name))
-            cb.setChecked(True)
-            cb.setStyleSheet(
-                f"color: {pal['text']}; border: none; padding: 0px 4px; background: transparent;"
-            )
-            value_label = QLabel("--")
-            value_label.setStyleSheet(
-                f"color: {pal['text']}; min-width: 60px; text-align: right; background: transparent;"
-            )
-            container_layout.addWidget(dot)
-            container_layout.addWidget(cb)
-            container_layout.addWidget(value_label)
-            container_layout.addStretch()
-            self._channel_layout.addWidget(container, row, col)
-            self._channel_checks[name] = cb
-            self._channel_dots[name] = dot
-            self._channel_value_labels[name] = value_label
-            self._channel_containers[name] = container
-            self._channel_colors[name] = color
-
-        for name in list(self._channel_checks.keys()):
-            if name not in channels:
-                container = self._channel_containers[name]
-                self._channel_layout.removeWidget(container)
-                container.deleteLater()
-                del self._channel_checks[name]
-                del self._channel_dots[name]
-                del self._channel_value_labels[name]
-                del self._channel_containers[name]
-
-        for name, cb in self._channel_checks.items():
-            if not cb.isChecked() or name not in channels:
-                continue
+        # 消失的通道：从 panel 移除
+        for name in existing_names - channel_set:
+            self._channel_panel.remove_channel(name)
+        # 最新值刷新到 panel
+        for name in self._channel_panel.channel_names():
             ch = self._data_store.get_channel(name)
             latest = ch.get_latest() if ch else None
             if latest:
-                self._channel_value_labels[name].setText(f"{latest[1]:.2f}")
+                self._channel_panel.update_value(name, f"{latest[1]:.2f}")
 
         def _latest(ch_name: str):
             if not ch_name:
@@ -910,21 +864,8 @@ class LiveView(QWidget):
             if hasattr(self._event_timeline, "_update_count"):
                 self._event_timeline._update_count()
 
-        for name in list(self._channel_checks.keys()):
-            cb = self._channel_checks[name]
-            dot = self._channel_dots[name]
-            value_label = self._channel_value_labels[name]
-            container = self._channel_containers[name]
-            self._channel_layout.removeWidget(container)
-            cb.deleteLater()
-            dot.deleteLater()
-            value_label.deleteLater()
-            container.deleteLater()
-        self._channel_checks.clear()
-        self._channel_dots.clear()
-        self._channel_value_labels.clear()
-        self._channel_containers.clear()
-        self._channel_colors.clear()
+        for name in list(self._channel_panel.channel_names()):
+            self._channel_panel.remove_channel(name)
 
         self._channel_count_label.setText("Channels: 0")
         self._frame_count_label.setText("Frames: 0")
@@ -1003,34 +944,5 @@ class LiveView(QWidget):
                 f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
             )
 
-        # Channel panel
-        channel_panel = self.findChild(QWidget, "channel_panel")
-        if channel_panel:
-            channel_panel.setStyleSheet(
-                f"background-color: {panel}; border: 1px solid {border}; border-radius: 2px;"
-            )
-        self._scroll.setStyleSheet(f"background-color: {bg}; border: none;")
-        self._channel_widget.setStyleSheet("background-color: transparent;")
-        row_h = 28
-        dot_sz = 10
-        for name, container in self._channel_containers.items():
-            color = self._channel_colors.get(name, "#888888")
-            container.setFixedHeight(row_h)
-            container.setStyleSheet(
-                f"background-color: {panel}; border-left: 4px solid {color}; "
-                f"border-radius: 3px; padding: 4px 8px;"
-            )
-        for name, dot in self._channel_dots.items():
-            color = self._channel_colors.get(name, "#888888")
-            dot.setFixedSize(dot_sz, dot_sz)
-            dot.setStyleSheet(
-                f"background-color: {color}; border-radius: {dot_sz // 2}px;"
-            )
-        for cb in self._channel_checks.values():
-            cb.setStyleSheet(
-                f"color: {text}; border: none; padding: 0px 4px; background: transparent;"
-            )
-        for lbl in self._channel_value_labels.values():
-            lbl.setStyleSheet(
-                f"color: {text}; min-width: 60px; text-align: right; background: transparent;"
-            )
+        # Channel panel：交给 ChannelPanel 自己刷主题
+        self._channel_panel.apply_theme(theme, scale)

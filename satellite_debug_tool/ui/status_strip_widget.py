@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QScrollArea,
+    QSizePolicy,
     QWidget,
 )
 
@@ -32,6 +32,7 @@ from satellite_debug_tool.core.protocol import (
     StateType,
 )
 from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.ui.flow_layout import FlowLayout
 
 # 与 StatePanel 同源的色标
 _ENUM_LEVEL_COLORS = {
@@ -91,7 +92,7 @@ class _Chip(QFrame):
 
 
 class StatusStripWidget(QFrame):
-    """32px 高的横条状态带。"""
+    """自适应换行的状态条：用 FlowLayout 替代横向滚动条。"""
 
     MAX_CRITICAL_STATES = 6
 
@@ -112,22 +113,13 @@ class StatusStripWidget(QFrame):
         self._theme = "dark"
         self._scale = "medium"
 
-        # 外层只放一个横向滚动区；chip 真正的 row 放进 _inner
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QScrollArea.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._inner = QWidget()
-        self._scroll.setWidget(self._inner)
-        outer.addWidget(self._scroll, 1)
+        # FlowLayout 直接挂在 QFrame 上，宽度变化时 chip 自动换行
+        self._flow = FlowLayout(self, margin=4, h_spacing=6, v_spacing=4)
 
-        row = QHBoxLayout(self._inner)
-        row.setContentsMargins(8, 3, 8, 3)
-        row.setSpacing(6)
+        # 高度跟随内容（行数 × chip 高 + spacing），不再固定 36px
+        sp = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
 
         # 固定 chips
         self._link_chip = _Chip("LINK")
@@ -137,22 +129,13 @@ class StatusStripWidget(QFrame):
         self._beat_chip = _Chip("BEAT")
         self._beat_chip.set_dot(_LINK_IDLE)
         self._beat_chip.setToolTip("每收到一帧 HEARTBEAT 闪一下绿灯（可验证下位机存活）")
-        row.addWidget(self._link_chip)
-        row.addWidget(self._recording_chip)
-        row.addWidget(self._beat_chip)
+        self._flow.addWidget(self._link_chip)
+        self._flow.addWidget(self._recording_chip)
+        self._flow.addWidget(self._beat_chip)
 
-        # 分隔符
+        # 分隔符（在 flow 中作为普通 item，换行时会留在自然位置）
         self._sep = QLabel("|")
-        row.addWidget(self._sep)
-
-        # 动态 chips 区域
-        self._dynamic_host = QWidget()
-        self._dynamic_layout = QHBoxLayout(self._dynamic_host)
-        self._dynamic_layout.setContentsMargins(0, 0, 0, 0)
-        self._dynamic_layout.setSpacing(6)
-        row.addWidget(self._dynamic_host, 1)
-
-        row.addStretch(1)
+        self._flow.addWidget(self._sep)
 
         # Beat 灭灯定时器
         self._beat_timer = QTimer(self)
@@ -167,6 +150,14 @@ class StatusStripWidget(QFrame):
         self.set_recording(False)
         self.set_link_state(connected=False)
 
+    # ---- 让父布局正确分配高度（FlowLayout 是高度跟随宽度的布局） ----
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 (Qt API)
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._flow.heightForWidth(width)
+
     def set_dark_theme(self, is_dark: bool) -> None:
         """兼容老接口：bool → 三档主题中的 dark/light。"""
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -176,21 +167,16 @@ class StatusStripWidget(QFrame):
         self._is_dark = self._theme != "light"
         self._scale = scale
         p = S.palette(self._theme)
-        # 条带高度：chip 字号 + padding + 给可能出现的横向滚动条留位
-        chip_px = S.font_px(11, scale)
-        bar_h = max(36, chip_px + 18 + 12)   # 12px scrollbar 空间
-        self.setFixedHeight(bar_h)
+        # 高度由 FlowLayout heightForWidth 控制，不再 setFixedHeight
         self.setStyleSheet(
             f"StatusStripWidget {{ background-color: {p['bg']}; "
             f"border-top: 1px solid {p['border']}; border-bottom: 1px solid {p['border']}; }}"
         )
-        self._scroll.setStyleSheet(
-            f"QScrollArea {{ background-color: {p['bg']}; border: none; }}"
-        )
-        self._inner.setStyleSheet(f"background-color: {p['bg']};")
         self._sep.setStyleSheet(f"color: {p['text_faint']}; padding: 0 4px;")
         for chip in (self._link_chip, self._recording_chip, self._beat_chip, *self._state_chips.values()):
             chip.apply_theme(self._theme, self._scale)
+        # 主题切换后让 FlowLayout 重新计算（updateGeometry 触发 heightForWidth 重算）
+        self.updateGeometry()
 
     # ---- Public ----
 
@@ -236,8 +222,9 @@ class StatusStripWidget(QFrame):
     # ---- 重建动态 chips ----
 
     def _clear_dynamic(self) -> None:
+        # 从 FlowLayout 移除动态 chip（固定 chip + 分隔符之后的所有 item）
         for chip in self._state_chips.values():
-            self._dynamic_layout.removeWidget(chip)
+            self._flow.removeWidget(chip)
             chip.deleteLater()
         self._state_chips.clear()
         self._state_entries.clear()
@@ -252,7 +239,6 @@ class StatusStripWidget(QFrame):
         for entry in critical:
             chip = _Chip(entry.name)
             chip.apply_theme(self._theme, self._scale)
-            # M6: 给每个状态 chip 加 tooltip，悬停显示类型 + 枚举说明
             if entry.state_type == int(StateType.BOOL):
                 tip = f"[BOOL] state_id={entry.state_id}  {entry.name}"
                 if entry.flags & STATE_FLAG_INVERSE:
@@ -266,13 +252,14 @@ class StatusStripWidget(QFrame):
                     f"{enum_lines or '  (无枚举项)'}"
                 )
             chip.setToolTip(tip)
-            self._dynamic_layout.addWidget(chip)
+            self._flow.addWidget(chip)
             self._state_chips[entry.state_id] = chip
             self._state_entries[entry.state_id] = entry
             # 回灌当前值
             current = self._states.get_value(self._current_hw, entry.state_id)
             if current is not None:
                 self._apply_state(chip, entry, current)
+        self.updateGeometry()
 
     def _apply_state(self, chip: _Chip, entry: StateDefEntry, value: int) -> None:
         if entry.state_type == int(StateType.BOOL):

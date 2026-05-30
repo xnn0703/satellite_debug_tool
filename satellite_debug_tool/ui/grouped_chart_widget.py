@@ -166,6 +166,14 @@ class GroupedChartWidget(QWidget):
         # 回放/Log 模式不降（用户 zoom in 看细节靠 pyqtgraph auto-downsample）
         self._live_setdata_max_points: int = 3000
 
+        # M10 F1：归一化开关 + 各 plot 原始 Y 范围（toggle off 时恢复用）
+        self._normalize: bool = False
+        self._plot_y_ranges: Dict[int, tuple] = {}   # plot_key -> (ymin, ymax)
+        # M10 F4：每个 plot 是否被用户手动调过 Y（视觉提示用）
+        self._y_overridden: Dict[int, bool] = {}
+        # M10 P7：Settings 注入（用于 normalize 状态持久化），可选
+        self._settings = None
+
         # pyqtgraph 全局默认：抗锯齿 + 黑背景
         pg.setConfigOptions(antialias=True)
 
@@ -193,12 +201,31 @@ class GroupedChartWidget(QWidget):
             "一键隐藏所有曲线，再用 legend 单独勾选要看的（再点恢复全部显示）"
         )
         self._btn_hide_all.toggled.connect(self._on_hide_all_toggled)
-        for b in (self._btn_combined, self._btn_stacked, self._btn_hide_all):
+        # M10 F1：归一化 toggle — 各曲线按自身 min-max 缩放到 [0, 1]，
+        # 解决 yaw ±180° 大波动把 roll/pitch 压平看不见的问题
+        self._btn_normalize = QPushButton("归一化")
+        self._btn_normalize.setCheckable(True)
+        self._btn_normalize.setToolTip(
+            "Y 轴显示模式：绝对值 / 各曲线按自身 min-max 归一化到 [0,1]\n"
+            "归一化用当前可视窗口数据计算范围，legend 显示真实 [min..max]"
+        )
+        self._btn_normalize.toggled.connect(self._on_normalize_toggled)
+        # M10 F4：Y 自动 — 用户手动缩放 Y 后一键复位回 display_min/max
+        self._btn_y_auto = QPushButton("Y 自动")
+        self._btn_y_auto.setToolTip(
+            "复位所有子图 Y 轴到 display_min/max（或归一化的 [0,1]）。\n"
+            "用户用鼠标手动缩放 Y 后，被改动的子图 Y 轴文字变橙色提示"
+        )
+        self._btn_y_auto.clicked.connect(self._on_y_auto_clicked)
+        for b in (self._btn_combined, self._btn_stacked, self._btn_hide_all,
+                  self._btn_normalize, self._btn_y_auto):
             b.setFixedHeight(24)
         toolbar.addWidget(self._btn_combined)
         toolbar.addWidget(self._btn_stacked)
         toolbar.addSpacing(8)
         toolbar.addWidget(self._btn_hide_all)
+        toolbar.addWidget(self._btn_normalize)
+        toolbar.addWidget(self._btn_y_auto)
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
@@ -261,6 +288,127 @@ class GroupedChartWidget(QWidget):
         for _channel_id, (_group_id, curve, _entry) in self._curves.items():
             curve.setVisible(not checked)
         self._btn_hide_all.setText("全部显示" if checked else "全部隐藏")
+
+    # ---- M10 F1：归一化 ----
+
+    def _on_normalize_toggled(self, on: bool) -> None:
+        """切换 Y 轴显示模式（绝对值 / 归一化）。"""
+        self._normalize = bool(on)
+        # 切换 Y 范围：归一化时 [-0.05, 1.05] + 隐藏 Y 刻度，否则恢复 display_min/max
+        for plot_key, plot in self._plots.items():
+            if self._normalize:
+                plot.setYRange(-0.05, 1.05, padding=0)
+                plot.getAxis("left").setStyle(showValues=False)
+            else:
+                orig = self._plot_y_ranges.get(plot_key)
+                if orig is not None:
+                    plot.setYRange(orig[0], orig[1], padding=0.05)
+                plot.getAxis("left").setStyle(showValues=True)
+        # 持久化到 settings.chart.normalize
+        if self._settings is not None:
+            self._settings.set("chart.normalize", self._normalize)
+
+    def set_settings(self, settings) -> None:
+        """注入 Settings；构造后由调用方（LiveView / PlaybackView / LogView）传入。
+
+        立即恢复 settings.chart.normalize 状态。
+        """
+        self._settings = settings
+        if settings is not None:
+            saved = bool(settings.get("chart.normalize", False))
+            if saved != self._normalize:
+                self._btn_normalize.setChecked(saved)   # 触发 _on_normalize_toggled
+
+    @staticmethod
+    def _normalize_ys(ys, ys_for_range) -> np.ndarray:
+        """把 ys 按 ys_for_range 的 min-max 映射到 [0, 1]。
+
+        ys_for_range 通常等于 ys（同一段数据自我归一化）；当需要按"可视窗口"
+        子集计算范围时由调用方先切片再传入。空数据 / 平直线 → 返回 0.5。
+        """
+        if ys.size == 0:
+            return ys.astype(np.float32)
+        ref = ys_for_range if ys_for_range.size > 0 else ys
+        vmin = float(ref.min())
+        vmax = float(ref.max())
+        if vmax - vmin < 1e-9:
+            return np.full(ys.shape, 0.5, dtype=np.float32)
+        return ((ys.astype(np.float32) - vmin) / (vmax - vmin)).astype(np.float32)
+
+    def _update_legend_label(self, plot, curve, base_name: str,
+                             ymin: float, ymax: float) -> None:
+        """归一化模式下把 legend 标签从 `roll` 改成 `roll [-5.2..3.1]`。"""
+        if plot.legend is None:
+            return
+        for sample, label in plot.legend.items:
+            if sample.item is curve:
+                label.setText(f"{base_name} [{ymin:.2g}..{ymax:.2g}]")
+                break
+
+    def _restore_legend_label(self, plot, curve, base_name: str) -> None:
+        """归一化关闭时恢复纯名字 legend。"""
+        if plot.legend is None:
+            return
+        for sample, label in plot.legend.items:
+            if sample.item is curve:
+                label.setText(base_name)
+                break
+
+    # ---- M10 F4：独立 Y + 复位 ----
+
+    def _connect_user_y_override(self, plot_key: int, plot) -> None:
+        """监听用户用鼠标手动调 Y 后，标记该子图为"非自动"状态。
+
+        pyqtgraph ViewBox.sigRangeChangedManually 只在用户交互（拖拽/滚轮）时触发，
+        程序化 setYRange 不会，正好用来区分。
+        """
+        vb = plot.getViewBox()
+        vb.sigRangeChangedManually.connect(
+            lambda _mask, pk=plot_key: self._on_user_y_override(pk)
+        )
+
+    def _on_user_y_override(self, plot_key: int) -> None:
+        if self._y_overridden.get(plot_key):
+            return
+        self._y_overridden[plot_key] = True
+        plot = self._plots.get(plot_key)
+        if plot is not None:
+            # 橙色 = 非自动；提醒用户"该子图 Y 是你自己调的"
+            plot.getAxis("left").setTextPen("#FFA500")
+
+    def _on_y_auto_clicked(self) -> None:
+        """复位所有子图 Y 到 display 范围（或归一化的 [0,1]）。"""
+        for plot_key, plot in self._plots.items():
+            if self._normalize:
+                plot.setYRange(-0.05, 1.05, padding=0)
+            else:
+                rng = self._plot_y_ranges.get(plot_key)
+                if rng is not None:
+                    plot.setYRange(rng[0], rng[1], padding=0.05)
+            # 清掉 override 标记，轴色恢复
+            self._y_overridden[plot_key] = False
+            plot.getAxis("left").setTextPen(self._plot_axis_color())
+
+    # ---- M10 F2：自定义分组读取 ----
+
+    def _get_custom_groups_for_current_hw(self) -> Optional[dict]:
+        """从 settings 读取当前 hw_type 的自定义分组；没有则返回 None。"""
+        if self._settings is None or self._current_hw is None:
+            return None
+        all_custom = self._settings.get("chart.custom_groups", {}) or {}
+        custom = all_custom.get(self._current_hw)
+        if not custom:
+            return None
+        return custom
+
+    def _custom_group_title(self, group_id: int) -> str:
+        """优先用 custom_groups 里的 title，否则用 _group_title 默认。"""
+        custom = self._get_custom_groups_for_current_hw()
+        if custom is not None:
+            entry = custom.get(str(group_id))
+            if entry and entry.get("title"):
+                return str(entry["title"])
+        return _group_title(group_id)
 
     def set_all_visible(self, visible: bool) -> None:
         """程序化一键切换所有曲线显隐（rebuild 后用，恢复用户上次状态）。"""
@@ -412,7 +560,7 @@ class GroupedChartWidget(QWidget):
             tail_n = self._max_visible_points_live
 
         latest_x = None
-        for channel_id, (group_id, curve, _entry) in self._curves.items():
+        for channel_id, (group_id, curve, entry) in self._curves.items():
             buf = data_store.get_channel(channel_key(channel_id))
             if buf is None:
                 continue
@@ -429,7 +577,26 @@ class GroupedChartWidget(QWidget):
                 xs_sec, ys = _downsample_peak(
                     xs_sec, ys, self._live_setdata_max_points
                 )
-            curve.setData(xs_sec, ys)
+
+            # M10 F1：归一化模式 —— 各曲线按自身可视窗口 min-max 映射到 [0, 1]
+            if self._normalize:
+                plot = self._plots.get(group_id)
+                # 切片：只用当前可视窗口内的数据计算范围
+                if plot is not None:
+                    x0, x1 = plot.viewRange()[0]
+                    mask = (xs_sec >= x0) & (xs_sec <= x1)
+                    ys_for_range = ys[mask] if mask.any() else ys
+                else:
+                    ys_for_range = ys
+                ymin = float(ys_for_range.min())
+                ymax = float(ys_for_range.max())
+                ys_draw = self._normalize_ys(ys, ys_for_range)
+                curve.setData(xs_sec, ys_draw)
+                if plot is not None:
+                    self._update_legend_label(plot, curve, entry.name, ymin, ymax)
+            else:
+                curve.setData(xs_sec, ys)
+
             if xs_sec.size and (latest_x is None or xs_sec[-1] > latest_x):
                 latest_x = float(xs_sec[-1])
 
@@ -550,6 +717,8 @@ class GroupedChartWidget(QWidget):
         self._plots.clear()
         self._curves.clear()
         self._event_lines.clear()
+        self._plot_y_ranges.clear()   # rebuild 时丢旧 Y 范围
+        self._y_overridden.clear()    # M10 F4：rebuild 重置 override 标记
         # 切换 mode / profile 时丢弃旧的 X 原点，避免新图沿用旧时间轴
         self._x_origin_ms = None
         self._x_view_max = 0.0
@@ -597,6 +766,8 @@ class GroupedChartWidget(QWidget):
         self._btn_combined.setStyleSheet(btn_style)
         self._btn_stacked.setStyleSheet(btn_style)
         self._btn_hide_all.setStyleSheet(btn_style)
+        self._btn_normalize.setStyleSheet(btn_style)
+        self._btn_y_auto.setStyleSheet(btn_style)
 
     def _rebuild_combined(self, channels: List[ChannelDefEntry]) -> None:
         """所有通道叠一张大图，共用 Y 轴。Y 范围取所有通道 display_min/max 包络，
@@ -630,18 +801,45 @@ class GroupedChartWidget(QWidget):
         y_mins = [c.display_min for c in channels]
         y_maxs = [c.display_max for c in channels]
         if y_mins and y_maxs:
-            plot.setYRange(min(y_mins), max(y_maxs), padding=0.05)
+            ymin, ymax = min(y_mins), max(y_maxs)
+            plot.setYRange(ymin, ymax, padding=0.05)
+            self._plot_y_ranges[0] = (ymin, ymax)   # 记录供归一化 toggle off 恢复
         # 初始 X 范围：0 ~ time_window，新数据到来后 refresh() 滚窗
         plot.setXRange(0.0, self._time_window, padding=0)
         self._x_view_max = self._time_window
         self._plots[0] = plot
+        # 若 rebuild 时已是归一化模式，立即应用 [-0.05, 1.05]
+        if self._normalize:
+            plot.setYRange(-0.05, 1.05, padding=0)
+            plot.getAxis("left").setStyle(showValues=False)
+        # M10 F4：监听用户手动调 Y
+        self._connect_user_y_override(0, plot)
 
     def _rebuild_stacked(self, channels: List[ChannelDefEntry]) -> None:
         """按 group_id 分子图，各自独立 Y 轴，共享 X 轴。
-        总高度 = 子图数 × _STACKED_SUBPLOT_HEIGHT，超过可视区由 QScrollArea 滚动。"""
+        总高度 = 子图数 × _STACKED_SUBPLOT_HEIGHT，超过可视区由 QScrollArea 滚动。
+
+        M10 F2：优先读 settings.chart.custom_groups[hw_type] 覆盖 profile 默认 group_id；
+        未配置或未注入 settings 时回退到 ch.group_id。
+        """
         groups: Dict[int, List[ChannelDefEntry]] = {}
-        for ch in channels:
-            groups.setdefault(ch.group_id, []).append(ch)
+        custom = self._get_custom_groups_for_current_hw()
+        if custom:
+            # 自定义分组：按通道名查 ChannelDefEntry，未被分组的通道丢弃（不画）
+            by_name = {ch.name: ch for ch in channels}
+            for gid_str, g in custom.items():
+                gid = int(gid_str)
+                bucket = groups.setdefault(gid, [])
+                for name in g.get("channels", []):
+                    ch = by_name.get(name)
+                    if ch is not None:
+                        bucket.append(ch)
+        else:
+            for ch in channels:
+                groups.setdefault(ch.group_id, []).append(ch)
+
+        # 空组直接跳过（用户可能新建空组占位，没有曲线就别画子图）
+        groups = {gid: chs for gid, chs in groups.items() if chs}
 
         n_groups = len(groups)
         # 给 GraphicsLayoutWidget 一个明确的最小总高度，触发 QScrollArea 滚动条
@@ -652,7 +850,9 @@ class GroupedChartWidget(QWidget):
 
         for row_idx, group_id in enumerate(sorted(groups.keys())):
             group_channels = groups[group_id]
-            plot: pg.PlotItem = self._gl.addPlot(row=row_idx, col=0, title=_group_title(group_id))
+            plot: pg.PlotItem = self._gl.addPlot(
+                row=row_idx, col=0, title=self._custom_group_title(group_id)
+            )
             plot.setMinimumHeight(_STACKED_SUBPLOT_HEIGHT - 20)  # 留一些 layout 余量
             plot.setLabel("left", "Value")
             plot.showGrid(x=True, y=True, alpha=0.25)
@@ -682,9 +882,17 @@ class GroupedChartWidget(QWidget):
             y_mins = [c.display_min for c in group_channels]
             y_maxs = [c.display_max for c in group_channels]
             if y_mins and y_maxs:
-                plot.setYRange(min(y_mins), max(y_maxs), padding=0.05)
+                ymin, ymax = min(y_mins), max(y_maxs)
+                plot.setYRange(ymin, ymax, padding=0.05)
+                self._plot_y_ranges[group_id] = (ymin, ymax)
 
             self._plots[group_id] = plot
+            # 归一化模式 rebuild 后立即应用
+            if self._normalize:
+                plot.setYRange(-0.05, 1.05, padding=0)
+                plot.getAxis("left").setStyle(showValues=False)
+            # M10 F4：监听用户手动调 Y
+            self._connect_user_y_override(group_id, plot)
 
         if first_plot is not None:
             first_plot.setLabel("bottom", "Time", units="s")
