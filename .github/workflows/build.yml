@@ -177,100 +177,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ============================================================
-  # 2b. build-macos  (arm64)
-  # ============================================================
-  build-macos:
-    runs-on: macos-14
-    needs: prepare-release
-    if: always() && (needs.prepare-release.result == 'success' || github.event_name == 'workflow_dispatch')
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r satellite_debug_tool/requirements.txt
-
-      - name: Install 7-Zip
-        run: brew install p7zip
-
-      - name: Build (main + updater + simulator)
-        run: |
-          chmod +x scripts/build_macos.sh
-          ./scripts/build_macos.sh
-
-      - name: Layout release dir
-        run: |
-          TAG="${{ needs.prepare-release.outputs.tag }}"
-          NAME="satellite_debug_tool-mac-${TAG}"
-          mkdir -p "release/${NAME}"
-          cp -R dist/SatelliteDebugTool.app "release/${NAME}/"
-          [ -f BUILDING.md ] && cp BUILDING.md "release/${NAME}/使用说明.md" || true
-          echo "RELEASE_NAME=${NAME}" >> $GITHUB_ENV
-
-      - name: 7z split (30 MB volumes)
-        run: |
-          NAME="${RELEASE_NAME}"
-          # -snl 保留符号链接（mac .app 的 Python.framework / Qt frameworks
-          # 内含大量 symlink，不加 -snl 会被序列化成文本文件，导致 dlopen 失败）
-          7z a -t7z -mx=9 -mf=off -mmt=on -snl -v30m \
-            "release/${NAME}.7z" "release/${NAME}/" > /dev/null
-          ls -lh release/${NAME}.7z.*
-
-      - name: Upload to Gitee release
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          REL_ID: ${{ needs.prepare-release.outputs.gitee_release_id }}
-        run: |
-          NAME="${RELEASE_NAME}"
-          for f in release/${NAME}.7z.*; do
-            attempt=0
-            ok=0
-            while [[ $attempt -lt 5 && $ok -eq 0 ]]; do
-              attempt=$((attempt+1))
-              echo "Uploading $f (attempt $attempt)..."
-              if curl -sS --max-time 3600 -X POST \
-                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${REL_ID}/attach_files" \
-                -F "access_token=${GITEE_TOKEN}" \
-                -F "file=@${f}"; then
-                ok=1
-              else
-                sleep 10
-              fi
-            done
-            if [[ $ok -eq 0 ]]; then
-              echo "::error::Failed to upload $f after 5 attempts"
-              exit 1
-            fi
-          done
-
-      - name: Upload to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare-release.outputs.tag }}
-          name: Release ${{ needs.prepare-release.outputs.tag }}
-          draft: false
-          prerelease: false
-          files: release/satellite_debug_tool-mac-${{ needs.prepare-release.outputs.tag }}.7z.*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # build-macos 已移除：mac 在线打包遇到 PyInstaller .app symlink 复杂性
+  # （Python.framework / Qt frameworks 1500+ symlinks + 7z 不稳定），改本地脚本：
+  #     ./scripts/build_macos.sh
+  # 本地脚本会自动 venv + 装依赖 + ditto 打包，产物 release/SatelliteDebugTool-macOS-<arch>.zip
+  # mac 用户拿到 zip 解压双击即可；mac 平台不走自动升级链路（updater 仍嵌入但触发频率为零）。
 
   # ============================================================
   # 3. finalize-release  生成最终 release body + 清理旧 release
   # ============================================================
   finalize-release:
     runs-on: ubuntu-latest
-    needs: [prepare-release, build-windows, build-macos]
-    if: always() && needs.build-windows.result == 'success' && needs.build-macos.result == 'success' && needs.prepare-release.result == 'success'
+    needs: [prepare-release, build-windows]
+    if: always() && needs.build-windows.result == 'success' && needs.prepare-release.result == 'success'
     steps:
       - name: Generate release body
         id: body
@@ -285,36 +204,30 @@ jobs:
           import json, os
           d = json.loads('''$ASSETS_JSON''')
           assets = d.get("assets") or []
-          mac = sorted([a for a in assets if "-mac-" in a.get("name", "")], key=lambda x: x["name"])
           win = sorted([a for a in assets if "-win-" in a.get("name", "")], key=lambda x: x["name"])
           tag = os.environ["TAG"]
-          gh_owner = os.environ.get("GITHUB_OWNER", "${{ env.GITHUB_OWNER }}")
-          gh_repo = os.environ.get("GITHUB_REPO", "${{ env.GITHUB_REPO }}")
           out = [f"# Satellite Debug Tool {tag}", ""]
-          out += ["## 下载（推荐从 Gitee）", ""]
-          if mac:
-              out.append("### macOS (Apple Silicon)")
-              for a in mac:
-                  mb = a.get("size", 0) / 1024 / 1024
-                  out.append(f"- [{a['name']}]({a['browser_download_url']}) ({mb:.2f} MB)")
-              out.append("")
           if win:
-              out.append("### Windows (x86_64)")
+              out += ["## Windows (x86_64) — 下载分卷", ""]
               for a in win:
                   mb = a.get("size", 0) / 1024 / 1024
                   out.append(f"- [{a['name']}]({a['browser_download_url']}) ({mb:.2f} MB)")
               out.append("")
           out += [
+              "## macOS",
+              "",
+              "macOS 不在 CI 自动出包（PyInstaller .app symlink 与 7z 兼容性问题）。",
+              "请联系维护者获取 mac 版 zip，或自己从源码 `./scripts/build_macos.sh` 本地编译。",
+              "",
               "## 安装",
               "",
-              "1. 下载平台对应的全部分卷（`.7z.001`, `.7z.002`, ...）",
-              "2. 用 [7-Zip](https://www.7-zip.org/) 或 [The Unarchiver](https://theunarchiver.com/) 解压第一个分卷（其余自动合并）",
-              f"3. macOS: 拖 SatelliteDebugTool.app 到 /Applications；首次打开见 [BUILDING.md](https://github.com/{gh_owner}/{gh_repo}/blob/master/BUILDING.md) 解决「无法验证开发者」提示",
-              "4. Windows: 解压后双击 SatelliteDebugTool.exe；首次运行 SmartScreen 选「仍要运行」",
+              "**Windows**：下载平台对应的全部分卷（`.7z.001`, `.7z.002`, ...），",
+              "用 [7-Zip](https://www.7-zip.org/) 解压第一个分卷（其余自动合并），",
+              "解压后双击 `SatelliteDebugTool.exe`；首次运行 SmartScreen 选「仍要运行」。",
               "",
               "## 自动升级",
               "",
-              "应用内置自动升级。默认每 24h 后台检查；也可工具栏点 🔄 检查更新 手动触发。",
+              "**Windows** 应用内置自动升级。默认每 24h 后台检查；也可工具栏点 🔄 检查更新 手动触发。",
               "",
               "---",
               "",
@@ -353,19 +266,9 @@ jobs:
   # 4. ci-only-build  (master/main 推送 → 仅本地构建验证 + 上传 GH artifact)
   # ============================================================
   ci-only-build:
-    name: CI build (no release)
+    name: CI build (no release, win only)
     if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            arch: arm64
-            script: bash scripts/build_macos.sh
-          - os: windows-latest
-            arch: x86_64
-            script: scripts\build_windows.bat
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -378,12 +281,12 @@ jobs:
           pip install pyinstaller
           pip install -r satellite_debug_tool/requirements.txt
       - name: Build
-        shell: bash
-        run: ${{ matrix.script }}
+        shell: cmd
+        run: scripts\build_windows.bat
       - name: Upload CI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SatelliteDebugTool-${{ runner.os }}-${{ matrix.arch }}-ci
+          name: SatelliteDebugTool-Windows-ci
           path: release/*.zip
           retention-days: 7
           if-no-files-found: warn

@@ -6,19 +6,26 @@
 ## 一图流
 
 ```
-改版本号 → commit → 打 tag → push tag
+改版本号 → commit → 打 tag → push tag (gitee+github)
                               ↓
                   GitHub Actions 触发 build.yml
                               ↓
    prepare-release (Gitee 建空 release)
                 ↓
-   build-windows + build-macos 并行
-   (PyInstaller → 7z 30MB 分卷 → 上传 Gitee + GH)
+   build-windows (PyInstaller → 7z 30MB 分卷 → 上传 Gitee + GH)
                 ↓
    finalize-release (拼 markdown body + 清旧 release)
                 ↓
    完成 ✅  https://gitee.com/soft-hertz/satellite_debug_tool_release/releases
+                              ↓
+   （可选）本机出 mac 包  ./scripts/build_macos.sh
+                              ↓
+   release/SatelliteDebugTool-macOS-<arch>.zip → 自行分发
 ```
+
+**注**：mac 不走 CI（PyInstaller .app 与 7z symlink 兼容性问题难修），
+本地脚本一键打包，产物 zip 分发给 mac 用户即可。
+mac 平台不走自动升级链路（updater 仍嵌入但 Gitee 上无 mac asset 可拉）。
 
 ## 前置检查（每次发版前）
 
@@ -68,7 +75,7 @@ git push origin v1.1.0
 
 打开 https://github.com/xnn0703/satellite_debug_tool/actions 看进度：
 - prepare-release（30s）
-- build-windows + build-macos（10-15min 并行）
+- build-windows（约 10min）
 - finalize-release（30s）
 
 中间任一失败 → 修问题 → 再走一遍（先删本地 + 远端 tag，改完再 push）

@@ -71,9 +71,12 @@ pip install pyinstaller
 |------|---------|------|
 | `prepare-release` | tag `v*` / 手动 dispatch | 在 Gitee 建空 release 拿 ID |
 | `build-windows` | tag / dispatch | windows-latest 出 7z 分卷 → 上传 Gitee + GH Release |
-| `build-macos` | tag / dispatch | macos-14 (arm64) 出 7z 分卷 → 上传 Gitee + GH Release |
 | `finalize-release` | tag / dispatch 全过后 | 生成 release body + 清理旧 release |
-| `ci-only-build` | 推 master/main | 仅本地构建验证，结果上传 GH artifact，不发版 |
+| `ci-only-build` | 推 master/main | 仅 win 本地构建验证，结果上传 GH artifact，不发版 |
+
+> **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 压缩兼容性问题，
+> 改本地脚本 `./scripts/build_macos.sh` 自动 venv + 装依赖 + ditto 打包。
+> 详见下方"本地 mac 打包"章节。
 
 ### 发版流程（标准）
 
@@ -90,11 +93,40 @@ git push origin v1.1.0      # ← 推 tag 触发 release CI
 
 # 3. 在 GitHub Actions 页面看进度
 #    - prepare-release   ~30s
-#    - build-windows + build-macos  并行 ~10-15min
+#    - build-windows     ~10min
 #    - finalize-release  ~30s
 
 # 4. 完成后查 Gitee 发版仓库 https://gitee.com/soft-hertz/satellite_debug_tool_release/releases
-#    应能看到完整 release body + 全部分卷
+#    应能看到 win 分卷 + release body
+
+# 5. mac 包本地出（仅 win 走 CI；mac 见下一节"本地 mac 打包"）
+./scripts/build_macos.sh
+# 产物 release/SatelliteDebugTool-macOS-<arch>.zip 自行分发给 mac 用户
+```
+
+---
+
+## 方式三：本地 mac 打包（mac 不走 CI）
+
+```bash
+./scripts/build_macos.sh
+```
+
+脚本自动：
+- 创建 `.venv`（如无）
+- 装 requirements.txt + pyinstaller
+- 跑 PyInstaller（主程序 + updater + simulator）
+- 把 updater 嵌入 `.app/Contents/MacOS/`
+- `xattr -cr` 清 quarantine（本机直接双击就能开）
+- `ditto -c -k` 出单文件 zip 给同事分发
+
+产物：
+- `dist/SatelliteDebugTool.app` — 本机直接 `open` 打开
+- `release/SatelliteDebugTool-macOS-<arch>.zip` — 分发给同事
+
+对方拿到 zip 解压后首次打开若报"无法验证开发者"，让对方终端跑：
+```bash
+xattr -cr <解压目录>/SatelliteDebugTool.app
 ```
 
 ### 失败排查
