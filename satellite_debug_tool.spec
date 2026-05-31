@@ -31,6 +31,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 pyside6_datas, pyside6_binaries, pyside6_hidden = collect_all("PySide6")
 pyqtgraph_datas, pyqtgraph_binaries, pyqtgraph_hidden = collect_all("pyqtgraph")
+# M11 fix: PyOpenGL（pyqtgraph.opengl 3D 姿态显示需要），全包确保 GLU/GL 子模块齐
+opengl_datas, opengl_binaries, opengl_hidden = collect_all("OpenGL")
 
 # 本项目包本身：tests 目录不要进发行包
 extra_hidden = collect_submodules(
@@ -41,19 +43,18 @@ extra_hidden = collect_submodules(
 a = Analysis(
     [ENTRY],
     pathex=[str(ROOT)],
-    binaries=pyside6_binaries + pyqtgraph_binaries,
-    datas=pyside6_datas + pyqtgraph_datas + [
+    binaries=pyside6_binaries + pyqtgraph_binaries + opengl_binaries,
+    datas=pyside6_datas + pyqtgraph_datas + opengl_datas + [
         # M11：升级器需要知道去哪个仓库拉版本
         (str(ROOT / "release.config.json"), "."),
     ],
     hiddenimports=(
         pyside6_hidden
         + pyqtgraph_hidden
+        + opengl_hidden
         + extra_hidden
         + [
             "serial.tools.list_ports",
-            "OpenGL",              # pyqtgraph 3D 需要
-            "OpenGL.GL",
         ]
     ),
     hookspath=[],

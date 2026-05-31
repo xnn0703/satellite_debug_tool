@@ -29,7 +29,7 @@ if ! $PY -c "import PyInstaller" >/dev/null 2>&1; then
     echo "[build_macos] 安装 pyinstaller..."
     $PY -m pip install pyinstaller
 fi
-$PY -c "import PySide6, pyqtgraph, serial, numpy, py7zr, psutil" || {
+$PY -c "import PySide6, pyqtgraph, serial, numpy, py7zr, psutil, OpenGL" || {
     echo "[build_macos] 运行依赖缺失，执行 pip install -r satellite_debug_tool/requirements.txt 后重试"
     exit 1
 }

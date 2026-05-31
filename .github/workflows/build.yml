@@ -219,7 +219,9 @@ jobs:
       - name: 7z split (30 MB volumes)
         run: |
           NAME="${RELEASE_NAME}"
-          7z a -t7z -mx=9 -mf=off -mmt=on -v30m \
+          # -snl 保留符号链接（mac .app 的 Python.framework / Qt frameworks
+          # 内含大量 symlink，不加 -snl 会被序列化成文本文件，导致 dlopen 失败）
+          7z a -t7z -mx=9 -mf=off -mmt=on -snl -v30m \
             "release/${NAME}.7z" "release/${NAME}/" > /dev/null
           ls -lh release/${NAME}.7z.*
 

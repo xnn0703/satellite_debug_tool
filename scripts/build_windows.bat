@@ -27,7 +27,7 @@ if errorlevel 1 (
 )
 
 REM ---- ensure runtime deps ----
-"%PY%" -c "import PySide6, pyqtgraph, serial, numpy, py7zr, psutil" 2>nul
+"%PY%" -c "import PySide6, pyqtgraph, serial, numpy, py7zr, psutil, OpenGL" 2>nul
 if errorlevel 1 (
     echo [build_windows] Installing runtime deps...
     "%PY%" -m pip install -r satellite_debug_tool\requirements.txt || goto :err
