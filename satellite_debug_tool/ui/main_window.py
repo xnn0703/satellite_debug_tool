@@ -61,46 +61,14 @@ class MainWindow(QMainWindow):
         theme_raw = self._settings.get("ui.theme", "dark")
         self._theme = self._normalize_theme(theme_raw)
 
-        # ---------- 顶部全局 toolbar（主题切换 + 活动 tab 标识占位） ----------
-        self._toolbar = QToolBar()
-        self._toolbar.setMovable(False)
-        self._toolbar.setFixedHeight(32)
-        self.addToolBar(self._toolbar)
+        # ---------- 顶部全局 gbar（品牌 + 居中 Tab 药丸 + 右侧控件，Mission Console） ----------
+        self._build_global_bar()
 
-        self._theme_combo = QComboBox()
-        self._theme_combo.addItems([S.THEME_LABELS[t] for t in S.THEMES])
-        self._theme_combo.setFixedWidth(110)
-        self._theme_combo.setCurrentText(S.THEME_LABELS.get(self._theme, "深色"))
-        self._theme_combo.setToolTip(
-            "深色:桌面开发 / 深色·高对比:车载强光屏 500cd/m² / 浅色:日间外场"
-        )
-        self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
-        self._toolbar.addWidget(QLabel("主题:"))
-        self._toolbar.addWidget(self._theme_combo)
-
-        # spacer 让后续元素靠右
-        spacer = QWidget()
-        from PySide6.QtWidgets import QSizePolicy
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._toolbar.addWidget(spacer)
-
-        # M11：检查更新按钮（图标在 _apply_theme 里按主题着色）
-        self._update_btn = QPushButton("检查更新")
-        self._update_btn.setFixedWidth(110)
-        self._update_btn.setToolTip("手动检查并下载最新版本（也可在设置中开关启动自检）")
-        self._update_btn.clicked.connect(self._on_check_update_clicked)
-        self._toolbar.addWidget(self._update_btn)
-
-        # 设置按钮（配置路径等）
-        self._settings_btn = QPushButton("设置")
-        self._settings_btn.setFixedWidth(76)
-        self._settings_btn.setToolTip("配置文件保存 / 加载的默认目录 / 更新设置")
-        self._settings_btn.clicked.connect(self._on_open_settings)
-        self._toolbar.addWidget(self._settings_btn)
-
-        # ---------- 中部 QTabWidget ----------
+        # ---------- 中部 QTabWidget（原生 tab bar 隐藏，由药丸驱动） ----------
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.North)
+        self._tabs.tabBar().hide()   # gbar 药丸接管 tab 切换
+        self._tabs.setDocumentMode(True)
         self._live = LiveView(settings=self._settings)
         self._playback = PlaybackView(settings=self._settings)
         self._log = LogView(settings=self._settings)
@@ -110,6 +78,7 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._log, "Log")
         self._tabs.addTab(self._device, "设备")
         self._tabs.currentChanged.connect(self._on_tab_changed)
+        self._tabs.currentChanged.connect(self._sync_tab_pills)
 
         # M9: 连接共享 — Live Tab 的 worker 和帧数据广播给 Device Tab
         self._live.connected_worker_changed.connect(self._device.set_worker)
@@ -138,6 +107,102 @@ class MainWindow(QMainWindow):
         # M11：启动后台静默检查更新（settings.update.auto_check 控制）
         self._bg_check_thread = None
         QTimer.singleShot(2000, self._kick_silent_update_check)
+
+    # ============================ 全局顶栏 ============================
+
+    def _build_global_bar(self):
+        """Mission Console 顶栏：左品牌 + 居中 Tab 药丸 + 右侧控件。"""
+        from PySide6.QtWidgets import QHBoxLayout, QSizePolicy
+
+        self._toolbar = QToolBar()
+        self._toolbar.setMovable(False)
+        self._toolbar.setFixedHeight(48)
+        self.addToolBar(self._toolbar)
+
+        bar = QWidget()
+        bar.setObjectName("gbar")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(12, 0, 10, 0)
+        row.setSpacing(10)
+
+        # 左：品牌（渐变方块 + 卫星图标 + 标题）
+        self._brand_mark = QLabel()
+        self._brand_mark.setObjectName("brandMark")
+        self._brand_mark.setFixedSize(26, 26)
+        self._brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._brand_text = QLabel("Satellite Debug Tool")
+        self._brand_text.setObjectName("brandText")
+        row.addWidget(self._brand_mark)
+        row.addWidget(self._brand_text)
+        row.addStretch(1)
+
+        # 中：Tab 药丸（seg--accent）
+        self._tab_pillbar = QWidget()
+        self._tab_pillbar.setObjectName("tabPills")
+        pill_row = QHBoxLayout(self._tab_pillbar)
+        pill_row.setContentsMargins(3, 3, 3, 3)
+        pill_row.setSpacing(2)
+        self._tab_pills: list[QPushButton] = []
+        pill_defs = [("实时", "activity"), ("回放", "history"), ("Log", "list"), ("设备", "cpu")]
+        for idx, (label, icon_name) in enumerate(pill_defs):
+            b = QPushButton(label)
+            b.setObjectName("tabPill")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setProperty("iconName", icon_name)
+            b.clicked.connect(lambda _checked, i=idx: self._tabs.setCurrentIndex(i))
+            pill_row.addWidget(b)
+            self._tab_pills.append(b)
+        row.addWidget(self._tab_pillbar)
+        row.addStretch(1)
+
+        # 右：主题切换 + 检查更新 + 设置（图标按钮）
+        self._theme_btn = QPushButton()
+        self._theme_btn.setObjectName("iconBtn")
+        self._theme_btn.setFixedSize(30, 30)
+        self._theme_btn.setToolTip("循环切换主题：深色 → 强光 → 浅色")
+        self._theme_btn.clicked.connect(self._on_cycle_theme)
+        self._update_btn = QPushButton("检查更新")
+        self._update_btn.setProperty("variant", "ghost")
+        self._update_btn.setToolTip("手动检查并下载最新版本（也可在设置中开关启动自检）")
+        self._update_btn.clicked.connect(self._on_check_update_clicked)
+        self._settings_btn = QPushButton()
+        self._settings_btn.setObjectName("iconBtn")
+        self._settings_btn.setFixedSize(30, 30)
+        self._settings_btn.setToolTip("配置文件保存 / 加载的默认目录 / 更新设置")
+        self._settings_btn.clicked.connect(self._on_open_settings)
+        row.addWidget(self._theme_btn)
+        row.addWidget(self._update_btn)
+        row.addWidget(self._settings_btn)
+
+        bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._toolbar.addWidget(bar)
+        # 保留隐藏的 _theme_combo 以兼容旧代码 / 测试引用
+        self._theme_combo = QComboBox()
+        self._theme_combo.addItems([S.THEME_LABELS[t] for t in S.THEMES])
+        self._theme_combo.setCurrentText(S.THEME_LABELS.get(self._theme, "深色"))
+        self._theme_combo.hide()
+
+    def _on_cycle_theme(self):
+        """循环 dark → dark_hc → light → dark。"""
+        order = list(S.THEMES)
+        try:
+            nxt = order[(order.index(self._theme) + 1) % len(order)]
+        except ValueError:
+            nxt = "dark"
+        self._theme = nxt
+        self._apply_theme(nxt)
+        self._settings.set("ui.theme", nxt)
+        self._settings.save()
+
+    def _sync_tab_pills(self, index: int):
+        """QTabWidget 切换 → 同步药丸选中态 + 图标着色。"""
+        from satellite_debug_tool.ui import icons as _ic
+        pal = S.palette(self._theme)
+        for i, b in enumerate(getattr(self, "_tab_pills", [])):
+            b.setChecked(i == index)
+            col = pal["accent_2"] if i == index else pal["text_2"]
+            b.setIcon(_ic.icon(b.property("iconName"), color=col, size=13))
 
     # ============================ 主题 ============================
 
@@ -180,47 +245,78 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             f"QMainWindow {{ background-color: {pal['bg']}; color: {pal['text']}; }}"
         )
-        self._toolbar.setStyleSheet(
-            f"background-color: {pal['panel']}; border: none; padding: 2px 4px;"
-        )
-        self._theme_combo.setStyleSheet(
-            f"background-color: {pal['input_bg']}; color: {pal['text']}; "
-            f"border: 1px solid {pal['input_border']}; padding: 2px 6px; border-radius: 2px;"
-        )
-        # 设置 / 检查更新按钮：清空内联样式交给全局 QSS，仅设图标着色
-        try:
-            from satellite_debug_tool.ui import icons as _ic
-            self._settings_btn.setStyleSheet("")
-            self._update_btn.setStyleSheet("")
-            self._settings_btn.setIcon(_ic.icon("settings", color=pal["text_2"], size=15))
-            self._update_btn.setIcon(_ic.icon("refresh", color=pal["text_2"], size=15))
-        except Exception:
-            pass
+        self._style_global_bar(pal)
         # 版本号 label 也跟随主题
         if hasattr(self, "_version_label"):
             self._version_label.setStyleSheet(
                 f"padding: 0 8px; color: {pal['text_muted']};"
             )
-        # toolbar 上 QLabel "主题:" 也要刷新
-        for lbl in self._toolbar.findChildren(QLabel):
-            lbl.setStyleSheet(f"color: {pal['text']}; background: transparent;")
         # statusbar
         sb = self.statusBar()
         if sb is not None:
-            sb.setStyleSheet(f"background-color: {pal['panel']}; color: {pal['text']};")
-        # QTabWidget 标签条
+            sb.setStyleSheet(
+                f"QStatusBar {{ background-color: {pal['panel']}; color: {pal['text_2']}; "
+                f"border-top: 1px solid {pal['border']}; }}"
+            )
+        # QTabWidget pane（tab bar 已隐藏，只留内容边框）
         self._tabs.setStyleSheet(
-            f"QTabBar::tab {{ background: {pal['panel']}; color: {pal['text_muted']}; "
-            f"padding: 6px 16px; border: 1px solid {pal['border']}; }}"
-            f"QTabBar::tab:selected {{ background: {pal['bg']}; color: {pal['text']}; "
-            f"border-bottom: 2px solid {pal['primary']}; }}"
-            f"QTabWidget::pane {{ border: 1px solid {pal['border']}; "
-            f"background: {pal['bg']}; }}"
+            f"QTabWidget::pane {{ border: 0; background: {pal['bg']}; }}"
         )
         # 广播到 view
         for view in (self._live, self._playback, self._log, self._device):
             if hasattr(view, "set_theme"):
                 view.set_theme(theme, "small")
+
+    def _style_global_bar(self, pal: dict):
+        """gbar 品牌 + 药丸 Tab + 右侧图标按钮的主题样式。"""
+        from satellite_debug_tool.ui import icons as _ic
+
+        # 顶栏容器
+        self._toolbar.setStyleSheet(
+            f"QToolBar {{ background-color: {pal['panel']}; border: 0; "
+            f"border-bottom: 1px solid {pal['border']}; padding: 0; }}"
+            f"#gbar {{ background: transparent; }}"
+        )
+        # 品牌方块：青色渐变 + 卫星图标
+        self._brand_mark.setStyleSheet(
+            f"#brandMark {{ border-radius: 7px; background: qlineargradient("
+            f"x1:0,y1:0,x2:1,y2:1, stop:0 {pal['accent']}, stop:1 {pal['accent_dim']}); }}"
+        )
+        self._brand_mark.setPixmap(
+            _ic.icon("satellite", color=pal["accent_ink"], size=15).pixmap(15, 15)
+        )
+        self._brand_text.setStyleSheet(
+            f"#brandText {{ color: {pal['text']}; font-weight: 600; font-size: "
+            f"{S.font_px(13, 'small')}px; background: transparent; }}"
+        )
+        # Tab 药丸容器 + 按钮
+        self._tab_pillbar.setStyleSheet(
+            f"#tabPills {{ background-color: {pal['panel_2']}; "
+            f"border: 1px solid {pal['border']}; border-radius: 6px; }}"
+            f"#tabPill {{ background: transparent; border: 0; border-radius: 4px; "
+            f"color: {pal['text_2']}; padding: 4px 13px; font-size: {S.font_px(12,'small')}px; }}"
+            f"#tabPill:hover {{ color: {pal['text']}; }}"
+            f"#tabPill:checked {{ background-color: {pal['card_2']}; color: {pal['accent_2']}; "
+            f"font-weight: 600; }}"
+        )
+        for b in self._tab_pills:
+            name = b.property("iconName")
+            on = b.isChecked()
+            col = pal["accent_2"] if on else pal["text_2"]
+            b.setIcon(_ic.icon(name, color=col, size=13))
+        # 右侧图标按钮 + ghost 检查更新
+        icon_btn_qss = (
+            f"#iconBtn {{ background: transparent; border: 1px solid transparent; "
+            f"border-radius: 6px; }}"
+            f"#iconBtn:hover {{ background-color: {pal['card_2']}; }}"
+        )
+        self._theme_btn.setStyleSheet(icon_btn_qss)
+        self._settings_btn.setStyleSheet(icon_btn_qss)
+        self._update_btn.setStyleSheet("")  # 走全局 QSS ghost variant
+        theme_icon = {"dark": "moon", "dark_hc": "contrast", "light": "sun"}.get(self._theme, "moon")
+        self._theme_btn.setIcon(_ic.icon(theme_icon, color=pal["text_2"], size=15))
+        self._settings_btn.setIcon(_ic.icon("settings", color=pal["text_2"], size=15))
+        self._update_btn.setIcon(_ic.icon("refresh", color=pal["text_2"], size=13))
 
     # ============================ Tab / 状态 ============================
 

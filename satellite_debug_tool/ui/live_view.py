@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -148,6 +149,30 @@ class LiveView(QWidget):
         self._toolbar_scroll.setWidget(self._toolbar)
         root.addWidget(self._toolbar_scroll)
 
+        # 设备状态卡（Mission Console conn-state）：图标框 + 设备名 / 连接状态点
+        self._conn_card = QFrame()
+        self._conn_card.setObjectName("connCard")
+        cc_row = QHBoxLayout(self._conn_card)
+        cc_row.setContentsMargins(11, 5, 13, 5)
+        cc_row.setSpacing(9)
+        self._cs_icon = QLabel()
+        self._cs_icon.setObjectName("csIcon")
+        self._cs_icon.setFixedSize(28, 28)
+        self._cs_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cc_meta = QVBoxLayout()
+        cc_meta.setContentsMargins(0, 0, 0, 0)
+        cc_meta.setSpacing(1)
+        self._cs_dev = QLabel("—")
+        self._cs_dev.setObjectName("csDev")
+        self._cs_stat = QLabel("Disconnected")
+        self._cs_stat.setObjectName("csStat")
+        cc_meta.addWidget(self._cs_dev)
+        cc_meta.addWidget(self._cs_stat)
+        cc_row.addWidget(self._cs_icon)
+        cc_row.addLayout(cc_meta)
+        self._toolbar.addWidget(self._conn_card)
+        self._toolbar.addSeparator()
+
         self._type_combo = QComboBox()
         self._type_combo.addItems(["Serial", "UDP"])
         self._type_combo.setFixedWidth(70)
@@ -205,15 +230,15 @@ class LiveView(QWidget):
         self._toolbar.addWidget(self._config_stack)
         self._toolbar.addSeparator()
 
-        # 按钮加了图标后需更宽以容下 图标+文字（用 minHeight + minWidth，不锁死宽）
+        # Connect = 主按钮(accent + plug)；Disconnect = 危险图标按钮(连接后才有意义)
         self._connect_btn = QPushButton("Connect")
-        self._connect_btn.setMinimumSize(94, 29)
+        self._connect_btn.setMinimumSize(92, 29)
         self._connect_btn.setToolTip("打开串口 / 绑定 UDP 端口并启动握手")
         self._connect_btn.clicked.connect(self._on_connect_clicked)
         self._toolbar.addWidget(self._connect_btn)
 
-        self._disconnect_btn = QPushButton("Disconnect")
-        self._disconnect_btn.setMinimumSize(108, 29)
+        self._disconnect_btn = QPushButton("")   # icon-only（设计）
+        self._disconnect_btn.setFixedSize(30, 29)
         self._disconnect_btn.setEnabled(False)
         self._disconnect_btn.setToolTip("断开连接（不清空已接收的数据/Profile）")
         self._disconnect_btn.clicked.connect(self._on_disconnect_clicked)
@@ -222,28 +247,26 @@ class LiveView(QWidget):
         self._toolbar.addSeparator()
 
         self._debug_btn = QPushButton("Debug: OFF")
-        self._debug_btn.setMinimumSize(108, 29)
+        self._debug_btn.setMinimumSize(100, 29)
         self._debug_btn.setEnabled(False)
         self._debug_btn.setToolTip("下发 CONTROL.DEBUG_ENABLE，开启/关闭下位机数据上报")
         self._debug_btn.clicked.connect(self._on_debug_toggled)
         self._toolbar.addWidget(self._debug_btn)
 
-        self._toolbar.addSeparator()
-
-        self._record_btn = QPushButton("Record")
-        self._record_btn.setMinimumSize(90, 29)
+        self._record_btn = QPushButton("REC")
+        self._record_btn.setMinimumSize(74, 29)
         self._record_btn.setToolTip("开始/停止录制 .sdb v2（含 profile 快照）")
         self._record_btn.clicked.connect(self._on_record_clicked)
         self._toolbar.addWidget(self._record_btn)
 
         self._import_btn = QPushButton("Import")
-        self._import_btn.setMinimumSize(88, 29)
+        self._import_btn.setMinimumSize(84, 29)
         self._import_btn.setToolTip("（M7：建议改用回放 Tab）离线导入 .sdb v2 到 Live 视图")
         self._import_btn.clicked.connect(self._on_import_clicked)
         self._toolbar.addWidget(self._import_btn)
 
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setMinimumSize(80, 29)
+        self._clear_btn = QPushButton("")   # icon-only ghost（设计）
+        self._clear_btn.setFixedSize(30, 29)
         self._clear_btn.setToolTip(
             "清空曲线/Dashboard/事件/计数（保留 Profile 与 StatePanel 当前状态）"
         )
@@ -254,30 +277,38 @@ class LiveView(QWidget):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._toolbar.addWidget(spacer)
 
+        # 隐藏的兼容 label（旧逻辑仍引用 _hw_label / _conn_status_label）
         self._hw_label = QLabel("设备: —")
-        self._hw_label.setToolTip("当前连接设备的 hw_type（来自下位机 META_INFO）")
-        self._hw_label.setStyleSheet(
-            f"color: {S.TEXT}; font-weight: bold; padding: 4px 8px; "
-            f"border-left: 1px solid {S.BORDER};"
-        )
-        self._toolbar.addWidget(self._hw_label)
-
+        self._hw_label.hide()
         self._conn_status_label = QLabel("Disconnected")
-        self._conn_status_label.setStyleSheet(
-            f"color: {S.TEXT}; font-weight: bold; padding: 4px 8px;"
-        )
-        self._toolbar.addWidget(self._conn_status_label)
+        self._conn_status_label.hide()
 
-        # ---------- StatusStrip / Dashboard ----------
+        # 统计行（Mission Console statline）：FPS / CH / FRM / ERR，移到连接条右侧
+        self._statline = QWidget()
+        self._statline.setObjectName("statline")
+        sl_row = QHBoxLayout(self._statline)
+        sl_row.setContentsMargins(4, 0, 8, 0)
+        sl_row.setSpacing(14)
+        self._fps_label = QLabel("FPS 0")
+        self._channel_count_label = QLabel("CH 0")
+        self._frame_count_label = QLabel("FRM 0")
+        self._error_count_label = QLabel("ERR 0")
+        self._error_count_label.setObjectName("statErr")
+        for lbl in (self._fps_label, self._channel_count_label,
+                    self._frame_count_label, self._error_count_label):
+            lbl.setObjectName(lbl.objectName() or "statItem")
+            sl_row.addWidget(lbl)
+        self._toolbar.addWidget(self._statline)
+
+        # ---------- StatusStrip（全宽） ----------
         self._status_strip = StatusStripWidget(self._profile_store, self._state_store)
         root.addWidget(self._status_strip)
 
+        # Dashboard（KPI 卡行）—— 移到中心列顶部（设计 kpi-row）
         self._dashboard = DashboardWidget(self._profile_store, self._state_store)
         self._dashboard.mode_requested.connect(self._on_dashboard_mode_requested)
-        root.addWidget(self._dashboard)
 
-        # ---------- 主区：左 ChannelPanel + 右内容（chart + attitude + state/event） ----------
-        # M10 F3b：把原来横向 channel_panel 抽到 chart 区域左侧
+        # ---------- 主区：3 列 左 ChannelPanel | 中(KPI+chart) | 右 rpanel ----------
         splitter = QSplitter(Qt.Vertical)
         top_splitter = QSplitter(Qt.Horizontal)
         self._top_splitter = top_splitter   # 保存引用供持久化
@@ -289,23 +320,32 @@ class LiveView(QWidget):
         self._channel_panel.selection_changed.connect(self._on_channel_visibility_changed)
         top_splitter.addWidget(self._channel_panel)
 
-        # chart
+        # 中心列：KPI 卡行 + chart
+        center_col = QWidget()
+        center_v = QVBoxLayout(center_col)
+        center_v.setContentsMargins(0, 0, 0, 0)
+        center_v.setSpacing(4)
+        center_v.addWidget(self._dashboard)
         self._chart = GroupedChartWidget()
-        self._chart.setMinimumHeight(400)
+        self._chart.setMinimumHeight(360)
         self._chart.set_dark_theme(True)
         self._chart.set_profile_store(self._profile_store)
         self._chart.set_settings(self._settings)   # M10 P7：恢复归一化状态等
         # D6：切单图/分组模式后曲线重建为全可见 → 重新套用通道勾选态
         self._chart.mode_changed.connect(lambda *_: self._resync_channel_visibility())
-        top_splitter.addWidget(self._chart)
+        center_v.addWidget(self._chart, 1)
+        top_splitter.addWidget(center_col)
+
+        # 右栏 rpanel：姿态 3D（上）+ 状态面板（中）+ 事件时间线（下），合为一列
+        right_panel = QSplitter(Qt.Vertical)
+        right_panel.setObjectName("rpanel")
+        right_panel.setMinimumWidth(300)
 
         self._attitude = AttitudeWidget()
-        self._attitude.setMinimumWidth(350)
+        self._attitude.setMinimumHeight(220)
         self._attitude.set_dark_theme(True)
-        top_splitter.addWidget(self._attitude)
+        right_panel.addWidget(self._attitude)
 
-        right_panel = QSplitter(Qt.Vertical)
-        right_panel.setMinimumWidth(260)
         self._state_panel = StatePanelWidget(
             self._profile_store, self._state_store, data_store=self._data_store
         )
@@ -313,17 +353,17 @@ class LiveView(QWidget):
         self._event_timeline = EventTimelineWidget(self._event_log)
         self._event_timeline.jump_requested.connect(self._chart.jump_to_timestamp)
         right_panel.addWidget(self._event_timeline)
-        right_panel.setStretchFactor(0, 1)
-        right_panel.setStretchFactor(1, 1)
+        right_panel.setStretchFactor(0, 0)   # 姿态固定高
+        right_panel.setStretchFactor(1, 0)   # 状态紧凑
+        right_panel.setStretchFactor(2, 1)   # 事件填充
+        right_panel.setSizes([240, 200, 320])
         top_splitter.addWidget(right_panel)
 
-        # stretch：通道 0、chart 4、attitude 1、state/event 1
+        # 3 列：通道 / chart / 右栏
         top_splitter.setStretchFactor(0, 0)
-        top_splitter.setStretchFactor(1, 4)
-        top_splitter.setStretchFactor(2, 1)
-        top_splitter.setStretchFactor(3, 1)
-        # 默认尺寸（首次启动时；后续从 settings 恢复）
-        top_splitter.setSizes([200, 800, 380, 280])
+        top_splitter.setStretchFactor(1, 1)
+        top_splitter.setStretchFactor(2, 0)
+        top_splitter.setSizes([212, 868, 320])
         top_splitter.splitterMoved.connect(self._on_top_splitter_moved)
         splitter.addWidget(top_splitter)
 
@@ -342,25 +382,6 @@ class LiveView(QWidget):
 
         # 启动后恢复 splitter 状态（如果有持久化值）
         QTimer.singleShot(0, self._restore_splitter_state)
-
-        # ---------- 底部统计行（替代原 QStatusBar 的 4 个 permanent widget） ----------
-        stats_row = QWidget()
-        stats_row.setObjectName("statsRow")
-        stats_row.setMaximumHeight(22)
-        self._stats_row = stats_row   # _apply_theme 里按主题刷新
-        stats_layout = QHBoxLayout(stats_row)
-        stats_layout.setContentsMargins(8, 2, 8, 2)
-        stats_layout.setSpacing(8)
-        self._fps_label = QLabel("FPS: 0")
-        self._channel_count_label = QLabel("Channels: 0")
-        self._frame_count_label = QLabel("Total Frames: 0")
-        self._error_count_label = QLabel("Errors: 0")
-        stats_layout.addStretch(1)
-        for w in (self._fps_label, QLabel("|"), self._channel_count_label,
-                  QLabel("|"), self._frame_count_label, QLabel("|"),
-                  self._error_count_label):
-            stats_layout.addWidget(w)
-        root.addWidget(stats_row)
 
         # ---------- timers ----------
         self._update_timer = QTimer()
@@ -412,7 +433,8 @@ class LiveView(QWidget):
             pass
         self._set_variant(self._connect_btn, "primary")
         self._set_variant(self._disconnect_btn, "danger")
-        for btn in (self._debug_btn, self._record_btn, self._import_btn, self._clear_btn):
+        self._set_variant(self._clear_btn, "ghost")
+        for btn in (self._debug_btn, self._record_btn, self._import_btn):
             self._set_variant(btn, "")
         # 输入控件清内联样式 → 全局 QSS 接管
         for w in (self._type_combo, self._port_combo, self._baudrate_combo,
@@ -478,7 +500,7 @@ class LiveView(QWidget):
             self._is_connected = True
         else:
             self._conn_status_label.setText("Connection Failed")
-            self._conn_status_label.setStyleSheet(f"color: {S.ERROR};")
+            self._set_conn_state(False, dev="—", detail="Connection Failed")
 
     def _on_disconnect_clicked(self):
         self._debug_enabled = False
@@ -497,7 +519,7 @@ class LiveView(QWidget):
         self._connect_btn.setEnabled(False)
         self._disconnect_btn.setEnabled(True)
         self._debug_btn.setEnabled(True)
-        self._conn_status_label.setStyleSheet(f"color: {S.SUCCESS};")
+        self._set_conn_state(True, dev="—", detail=self._conn_status_label.text())
         self._type_combo.setEnabled(False)
         self._control_panel.set_enabled(True)
         self._status_strip.set_link_state(connected=True)
@@ -524,6 +546,7 @@ class LiveView(QWidget):
     def _on_handshake_ready(self, hw_type: str):
         self.status_message.emit(f"Profile ready: {hw_type}", 3000)
         self._hw_label.setText(f"设备: {hw_type}")
+        self._set_conn_state(True, dev=hw_type, detail=self._conn_status_label.text())
         self._state_panel.set_hw_type(hw_type)
         self._dashboard.set_hw_type(hw_type)
         self._status_strip.set_hw_type(hw_type)
@@ -603,6 +626,21 @@ class LiveView(QWidget):
             return key
         return f"{entry.name} ({entry.unit})" if entry.unit else entry.name
 
+    def _channel_group_title(self, key: str) -> str:
+        """通道 key → 分组标题（用 profile group_id；无则"其它"）。"""
+        hw = self._profile_store.current_hw_type()
+        if hw is None or not key.startswith("ch_"):
+            return "其它"
+        try:
+            cid = int(key.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return "其它"
+        entry = self._profile_store.get_channel(hw, cid)
+        if entry is None:
+            return "其它"
+        from satellite_debug_tool.ui.grouped_chart_widget import _group_title
+        return _group_title(entry.group_id)
+
     def _on_channel_visibility_changed(self, name: str, checked: bool) -> None:
         """D6 P0：ChannelPanel 勾选 → 控制 chart 该曲线显隐。"""
         self._chart.set_channel_visible(name, checked)
@@ -652,8 +690,8 @@ class LiveView(QWidget):
         self._debug_enabled = False
         self._debug_btn.setText("Debug: OFF")
         self._conn_status_label.setText("Disconnected")
-        self._conn_status_label.setStyleSheet(f"color: {S.TEXT};")
         self._hw_label.setText("设备: —")
+        self._set_conn_state(False, dev="—", detail="Disconnected")
         self._type_combo.setEnabled(True)
         self._control_panel.set_enabled(False)
         self._status_strip.set_link_state(connected=False)
@@ -678,7 +716,7 @@ class LiveView(QWidget):
 
     def _on_error(self, msg: str):
         self._error_count += 1
-        self._error_count_label.setText(f"Errors: {self._error_count}")
+        self._error_count_label.setText(f"ERR {self._error_count}")
         self.status_message.emit(f"Error: {msg}", 5000)
 
     def _on_data_received(self, data: bytes):
@@ -721,11 +759,11 @@ class LiveView(QWidget):
         self._frame_times.append(current_time)
         self._frame_times = [t for t in self._frame_times if current_time - t < 1.0]
         fps = len(self._frame_times)
-        self._fps_label.setText(f"FPS: {fps}")
+        self._fps_label.setText(f"FPS {fps}")
 
         channels = self._data_store.get_all_channels()
-        self._channel_count_label.setText(f"Channels: {len(channels)}")
-        self._frame_count_label.setText(f"Frames: {self._frame_count}")
+        self._channel_count_label.setText(f"CH {len(channels)}")
+        self._frame_count_label.setText(f"FRM {self._frame_count}")
 
         hw = self._profile_store.current_hw_type()
         if hw is not None:
@@ -740,12 +778,13 @@ class LiveView(QWidget):
         existing_names = set(self._channel_panel.channel_names())
         channel_set = set(channels)
         new_names = channel_set - existing_names
-        # 新增通道：颜色按现有数量取 COLORS 索引（保证稳定）
-        for name in new_names:
+        # 新增通道：颜色按现有数量取 COLORS 索引（保证稳定）；按 profile group 分组
+        for name in sorted(new_names):
             idx = len(self._channel_panel.channel_names())
             color = COLORS[idx % len(COLORS)]
             self._channel_panel.add_channel(
-                name, color, self._channel_display_label(name)
+                name, color, self._channel_display_label(name),
+                group=self._channel_group_title(name),
             )
         # 消失的通道：从 panel 移除
         for name in existing_names - channel_set:
@@ -907,9 +946,9 @@ class LiveView(QWidget):
         for name in list(self._channel_panel.channel_names()):
             self._channel_panel.remove_channel(name)
 
-        self._channel_count_label.setText("Channels: 0")
-        self._frame_count_label.setText("Frames: 0")
-        self._error_count_label.setText("Errors: 0")
+        self._channel_count_label.setText("CH 0")
+        self._frame_count_label.setText("FRM 0")
+        self._error_count_label.setText("ERR 0")
         self.status_message.emit("Display cleared", 2000)
 
     # ============================ 主题应用 ============================
@@ -954,9 +993,10 @@ class LiveView(QWidget):
                 child.setFont(fixed)
         except Exception:
             pass
-        self._toolbar_scroll.setFixedHeight(36)
+        self._toolbar_scroll.setFixedHeight(48)
         self._toolbar_scroll.setStyleSheet(
-            f"QScrollArea {{ background-color: {panel}; border: none; }}"
+            f"QScrollArea {{ background-color: {panel}; border: none; "
+            f"border-bottom: 1px solid {border}; }}"
         )
         self._serial_widget.setStyleSheet("background-color: transparent;")
         self._udp_widget.setStyleSheet("background-color: transparent;")
@@ -967,15 +1007,41 @@ class LiveView(QWidget):
 
         # 连接条按钮 + 输入控件：交给全局 QSS + variant（Mission Console）
         self._style_toolbar_buttons(theme)
-
-        # 底部统计行：按主题刷新（等宽数字 + 弱色），用 objectName 选择器避免 cascade
-        if hasattr(self, "_stats_row"):
-            mono = S.monospace_family()
-            self._stats_row.setStyleSheet(
-                f"#statsRow {{ background-color: {panel}; border-top: 1px solid {border}; }}"
-                f"#statsRow QLabel {{ color: {pal['text_3']}; font-family: \"{mono}\"; "
-                f"font-size: {S.font_px(11, scale)}px; background: transparent; }}"
-            )
+        # 设备状态卡 + 统计行
+        self._style_conn_card(pal, scale)
 
         # Channel panel：交给 ChannelPanel 自己刷主题
         self._channel_panel.apply_theme(theme, scale)
+
+    def _style_conn_card(self, pal: dict, scale: str) -> None:
+        """设备状态卡 + statline 的主题样式 + 当前连接态着色。"""
+        mono = S.monospace_family()
+        connected = bool(self._is_connected)
+        tint = pal["ok"] if connected else pal["err"]
+        tint_soft = pal["ok_soft"] if connected else pal["err_soft"]
+        self._conn_card.setStyleSheet(
+            f"#connCard {{ background-color: {pal['card']}; border: 1px solid {pal['border_2']}; "
+            f"border-radius: 7px; }}"
+            f"#csIcon {{ background-color: {tint_soft}; border-radius: 7px; }}"
+            f"#csDev {{ color: {pal['text']}; font-family: \"{mono}\"; font-weight: 600; "
+            f"font-size: {S.font_px(13, scale)}px; }}"
+            f"#csStat {{ color: {pal['text_2']}; font-size: {S.font_px(10, scale)}px; }}"
+        )
+        try:
+            from satellite_debug_tool.ui import icons as _ic
+            self._cs_icon.setPixmap(_ic.icon("satellite", color=tint, size=16).pixmap(16, 16))
+        except Exception:
+            pass
+        # statline
+        self._statline.setStyleSheet(
+            f"#statline QLabel {{ color: {pal['text_3']}; font-family: \"{mono}\"; "
+            f"font-size: {S.font_px(11, scale)}px; }}"
+            f"#statErr {{ color: {pal['text_3']}; font-family: \"{mono}\"; "
+            f"font-size: {S.font_px(11, scale)}px; }}"
+        )
+
+    def _set_conn_state(self, connected: bool, dev: str = "—", detail: str = "") -> None:
+        """更新设备状态卡显示（dev 名 + 状态文案）+ 重新着色。"""
+        self._cs_dev.setText(dev or "—")
+        self._cs_stat.setText(detail or ("LINK OK" if connected else "Disconnected"))
+        self._style_conn_card(S.palette(self._theme), "small")

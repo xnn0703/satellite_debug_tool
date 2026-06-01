@@ -125,10 +125,70 @@ ChannelPanel 色块与曲线同源。
 
 ---
 
-## 待办 / 后续可选
+---
 
-- 打包真实 IBM Plex 字体到 assets/fonts/（当前系统回退）
-- ConnectionToolbar 进一步按设计的「状态卡 + 输入 + 动作 + 统计」四段重排
-- EventTimeline 未读数字徽标（设计 P1）
-- 3D 姿态盒的 Mission Console 描边/辉光风格细化
-- StatusStrip 超出收 `+N 更多` 可展开（设计建议）
+# 第二轮：结构性重构（R1–R6）
+
+第一轮（D1–D8）只做了 token/QSS 配色层「换肤」，但用 Microsoft Edge headless 渲染
+设计原型 `Prototype.html` 后发现：设计稿是一套**完全不同的布局结构**，不是重新着色。
+第二轮按原型逐组件重建布局。参考截图存 `doc/screenshots/PROTO_*.png`。
+
+## R1 — 全局顶栏重构
+
+MainWindow 顶栏从 [主题 combo | spacer | 更新 | 设置] + QTabWidget 原生 tab bar
+改为单条 gbar：
+- **左**：品牌 = 青色渐变圆角方块(satellite 图标) + "Satellite Debug Tool"
+- **中**：seg--accent 药丸 Tab（实时/回放/Log/设备，带图标，选中 card_2 底 + accent_2 字）
+- **右**：主题切换图标(moon/contrast/sun 循环) + 检查更新 ghost + 设置图标
+- QTabWidget `tabBar().hide()`，由药丸驱动 setCurrentIndex；currentChanged 反向同步药丸
+
+## R2 — 连接条重构
+
+live_view cbar：
+- **左设备状态卡** connCard：satellite 图标框(ok/err 软底着色) + 设备名(mono) / 连接状态文案
+- Type/IP/Port 字段
+- Connect = primary(plug) / Disconnect = danger icon-only / Debug / REC / Import / Clear ghost icon-only
+- **右 statline**：FPS / CH / FRM / ERR（等宽，从底部移到连接条右侧）
+- 删除底部 stats_row；toolbar 高度 36→48 容下状态卡
+
+## R3 — 通道面板重构
+
+ChannelPanel：
+- 标题行 "通道" + 计数徽标 "checked / total"
+- 全选 / 清空 / 反选(layers 图标)
+- 搜索框（search 图标 + "筛选通道…" + 实时过滤）
+- **按 profile group 分组**：姿态/指向/信号/位置 分组标题分隔线（修了 header 插入 off-by-one）
+- 未勾选行整行变暗（色块去饱和 + 文字弱化）
+- live_view 传 `group=_channel_group_title(name)`
+
+## R4 — 右栏重构（3 列布局）
+
+主区从 4 列 [通道|chart|attitude|state/event] 改为 **3 列** [通道|中心|右栏]：
+- 姿态 3D 从独立列移入右栏顶部
+- 右栏 rpanel = 垂直 [attitude, state_panel, event_timeline]
+
+## R5 — 中心区 KPI 卡行
+
+Dashboard（KPI 卡行）从全宽移入**中心列顶部**（center_col = [dashboard, chart]），
+匹配设计 kpi-row 在 chart 之上的布局。
+
+## R6 — 回归 + 截图核对
+
+- **438 pytest 全过**（零退化）
+- 连接态截图 `UI_redesign_connected.png`：设备卡 afd01/LINK OK、通道面板分组+实时值、
+  分组堆叠图(姿态/指向/信号)、多色信号曲线 —— 与 PROTO_live.png 高度一致
+- 三主题截图 `UI_redesign_{dark,light,hc}.png`
+
+## 已知差异（与原型）
+
+- KPI 卡：设计是 roll/pitch/yaw/snr/lock 派生值卡；本项目 Dashboard 是 profile STATE 驱动
+  （需 STATE_DEFINE），语义不同，未强行对齐
+- 右栏「状态」未改成设计的 2×2 简单网格，沿用 StatePanelWidget（profile 驱动更完整）
+- 图表未做成每图独立 card 边框（沿用 pyqtgraph stacked + 组标题）
+
+## 后续可选
+
+- 打包真实 IBM Plex 字体到 assets/fonts/
+- 右栏区段标题（姿态 3D / 状态 / 事件）+ 图标
+- EventTimeline 未读数字徽标
+- StatusStrip 超出收 `+N 更多`
