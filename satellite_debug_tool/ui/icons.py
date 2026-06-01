@@ -119,7 +119,7 @@ def icon(name: str, color: str = "#D6E0E9", size: int = 16, stroke: float = 1.7)
 def _render(name: str, color: str, size: int, stroke: float):
     from PySide6.QtGui import QIcon, QPixmap, QPainter
     from PySide6.QtSvg import QSvgRenderer
-    from PySide6.QtCore import QByteArray, Qt
+    from PySide6.QtCore import QByteArray, QRectF, Qt
 
     try:
         from PySide6.QtWidgets import QApplication
@@ -135,11 +135,14 @@ def _render(name: str, color: str, size: int, stroke: float):
 
     markup = svg_markup(name, color, stroke)
     renderer = QSvgRenderer(QByteArray(markup.encode("utf-8")))
-    px = QPixmap(int(size * dpr), int(size * dpr))
+    px = QPixmap(int(round(size * dpr)), int(round(size * dpr)))
     px.setDevicePixelRatio(dpr)
     px.fill(Qt.GlobalColor.transparent)
     painter = QPainter(px)
-    renderer.render(painter)
+    # 显式渲染到 size×size 逻辑矩形（QPixmap 已设 dpr，painter 逻辑坐标 = size）。
+    # 不传 rect 时 render() 用 device-px 的 viewport，在 dpr>1 的画布上会把图标
+    # 放大 dpr 倍、只显示左上角 —— Retina 上 icon 被截断的根因。
+    renderer.render(painter, QRectF(0.0, 0.0, float(size), float(size)))
     painter.end()
 
     result = QIcon(px)
