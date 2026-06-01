@@ -61,7 +61,13 @@
       "Read(//opt/homebrew/opt/p7zip/bin/**)",
       "Bash(/opt/homebrew/opt/p7zip/bin/7z l *)",
       "Bash(bash -n scripts/build_macos.sh)",
-      "Bash(./scripts/build_macos.sh *)"
+      "Bash(./scripts/build_macos.sh *)",
+      "Bash(claude --version)",
+      "Bash(brew info *)",
+      "Bash(brew uninstall *)",
+      "Bash(SATELLITE_NO_UPDATE_CHECK=1 QT_QPA_PLATFORM=offscreen PYTHONPATH=. python3 -c ' *)",
+      "Bash(curl -sSL --max-time 30 -o /tmp/plexmono.ttf https://github.com/IBM/plex/raw/master/IBM-Plex-Mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf)",
+      "Read(//tmp/**)"
     ]
   }
 }

@@ -33,40 +33,16 @@ from satellite_debug_tool.core.protocol import ChannelDefEntry
 from satellite_debug_tool.ui import styles as S
 
 
-# 高区分度定性调色板（Sasha Trubetskoy "20 simple distinct colors"，
-# 挑选适合深色背景的亮色，去掉纯黑/海军蓝等过暗项）。
-# 旧 _GROUP_PALETTES 每组只 2-4 个同色系颜色 —— 信号组 7+ 通道时两种绿
-# 循环导致完全分不开。改成统一大调色板，stacked 每组内按索引取色（每组
-# 是独立子图，组间撞色不影响同图区分）；combined 也用同一套。
-_DISTINCT_PALETTE = [
-    "#E6194B",  # 红
-    "#3CB44B",  # 绿
-    "#FFE119",  # 黄
-    "#4363D8",  # 蓝
-    "#F58231",  # 橙
-    "#42D4F4",  # 青
-    "#F032E6",  # 品红
-    "#BFEF45",  # 黄绿
-    "#FABED4",  # 粉
-    "#469990",  # 蓝绿
-    "#DCBEFF",  # 薰衣草
-    "#9A6324",  # 棕
-    "#FFD8B1",  # 杏
-    "#AAFFC3",  # 薄荷
-    "#911EB4",  # 紫
-    "#808000",  # 橄榄
-    "#FF7F50",  # 珊瑚
-    "#A9A9A9",  # 灰
-    "#00CED1",  # 暗青
-    "#FFFFFF",  # 白
-]
+# Mission Console 信号色板（16 色高区分度，相邻通道色相拉开）。
+# 来自 styles.SIGNAL_PALETTE —— 三主题下同一通道保持一致；适配深蓝仪表台背景。
+_DISTINCT_PALETTE = list(S.SIGNAL_PALETTE)
 
-# 与 EventLog level 对应的事件竖线颜色
+# 与 EventLog level 对应的事件竖线颜色（Mission Console 语义色）
 _EVENT_LEVEL_COLORS = {
-    0: "#808080",   # DEBUG
-    1: "#4EC9B0",   # INFO
-    2: "#DCDCAA",   # WARN
-    3: "#F14C4C",   # ERROR
+    0: "#586976",   # DEBUG  → text_3 灰
+    1: "#38BDF8",   # INFO   → info 蓝
+    2: "#FBBF24",   # WARN   → warn 黄
+    3: "#FB7185",   # ERROR  → err 红
 }
 
 # stacked 模式下每个子图固定目标高度（像素）。
@@ -288,6 +264,18 @@ class GroupedChartWidget(QWidget):
         for _channel_id, (_group_id, curve, _entry) in self._curves.items():
             curve.setVisible(not checked)
         self._btn_hide_all.setText("全部显示" if checked else "全部隐藏")
+
+    def set_channel_visible(self, channel_name: str, visible: bool) -> None:
+        """按 DataStore 通道 key（如 "ch_03"）控制单条曲线显隐（D6 P0 修复）。
+
+        ChannelPanel 勾选框直接连这里 —— 勾选 = 显示曲线，所见即所得。
+        rebuild（切 mode / profile）后曲线会重建，由 live_view 重新同步勾选态。
+        """
+        from satellite_debug_tool.core.data.data_store import channel_key
+        for channel_id, (_group_id, curve, _entry) in self._curves.items():
+            if channel_key(channel_id) == channel_name:
+                curve.setVisible(bool(visible))
+                return
 
     # ---- M10 F1：归一化 ----
 

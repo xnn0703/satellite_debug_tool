@@ -232,7 +232,7 @@ class LogView(QWidget):
 
     def _apply_theme(self):
         p = S.palette(self._theme)
-        self.setStyleSheet(f"background-color: {p['bg']}; color: {p['text']};")
+        self.setStyleSheet(f"LogView {{ background-color: {p['bg']}; color: {p['text']}; }}")
         self._file_label.setStyleSheet(
             f"color: {p['text_muted']}; padding: 0 8px; background: transparent;"
         )

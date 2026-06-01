@@ -205,14 +205,15 @@ class LiveView(QWidget):
         self._toolbar.addWidget(self._config_stack)
         self._toolbar.addSeparator()
 
+        # 按钮加了图标后需更宽以容下 图标+文字（用 minHeight + minWidth，不锁死宽）
         self._connect_btn = QPushButton("Connect")
-        self._connect_btn.setFixedSize(70, 28)
+        self._connect_btn.setMinimumSize(94, 29)
         self._connect_btn.setToolTip("打开串口 / 绑定 UDP 端口并启动握手")
         self._connect_btn.clicked.connect(self._on_connect_clicked)
         self._toolbar.addWidget(self._connect_btn)
 
         self._disconnect_btn = QPushButton("Disconnect")
-        self._disconnect_btn.setFixedSize(80, 28)
+        self._disconnect_btn.setMinimumSize(108, 29)
         self._disconnect_btn.setEnabled(False)
         self._disconnect_btn.setToolTip("断开连接（不清空已接收的数据/Profile）")
         self._disconnect_btn.clicked.connect(self._on_disconnect_clicked)
@@ -221,7 +222,7 @@ class LiveView(QWidget):
         self._toolbar.addSeparator()
 
         self._debug_btn = QPushButton("Debug: OFF")
-        self._debug_btn.setFixedSize(90, 28)
+        self._debug_btn.setMinimumSize(108, 29)
         self._debug_btn.setEnabled(False)
         self._debug_btn.setToolTip("下发 CONTROL.DEBUG_ENABLE，开启/关闭下位机数据上报")
         self._debug_btn.clicked.connect(self._on_debug_toggled)
@@ -230,19 +231,19 @@ class LiveView(QWidget):
         self._toolbar.addSeparator()
 
         self._record_btn = QPushButton("Record")
-        self._record_btn.setFixedSize(70, 28)
+        self._record_btn.setMinimumSize(90, 29)
         self._record_btn.setToolTip("开始/停止录制 .sdb v2（含 profile 快照）")
         self._record_btn.clicked.connect(self._on_record_clicked)
         self._toolbar.addWidget(self._record_btn)
 
         self._import_btn = QPushButton("Import")
-        self._import_btn.setFixedSize(70, 28)
+        self._import_btn.setMinimumSize(88, 29)
         self._import_btn.setToolTip("（M7：建议改用回放 Tab）离线导入 .sdb v2 到 Live 视图")
         self._import_btn.clicked.connect(self._on_import_clicked)
         self._toolbar.addWidget(self._import_btn)
 
         self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setFixedSize(60, 28)
+        self._clear_btn.setMinimumSize(80, 29)
         self._clear_btn.setToolTip(
             "清空曲线/Dashboard/事件/计数（保留 Profile 与 StatePanel 当前状态）"
         )
@@ -284,6 +285,8 @@ class LiveView(QWidget):
         # 左侧：通道选择面板
         self._channel_panel = ChannelPanel()
         self._channel_panel.setMinimumWidth(160)
+        # D6 P0 修复：勾选 = 控制曲线显隐（所见即所得）
+        self._channel_panel.selection_changed.connect(self._on_channel_visibility_changed)
         top_splitter.addWidget(self._channel_panel)
 
         # chart
@@ -292,6 +295,8 @@ class LiveView(QWidget):
         self._chart.set_dark_theme(True)
         self._chart.set_profile_store(self._profile_store)
         self._chart.set_settings(self._settings)   # M10 P7：恢复归一化状态等
+        # D6：切单图/分组模式后曲线重建为全可见 → 重新套用通道勾选态
+        self._chart.mode_changed.connect(lambda *_: self._resync_channel_visibility())
         top_splitter.addWidget(self._chart)
 
         self._attitude = AttitudeWidget()
@@ -340,10 +345,9 @@ class LiveView(QWidget):
 
         # ---------- 底部统计行（替代原 QStatusBar 的 4 个 permanent widget） ----------
         stats_row = QWidget()
+        stats_row.setObjectName("statsRow")
         stats_row.setMaximumHeight(22)
-        stats_row.setStyleSheet(
-            f"background-color: {S.PANEL_DARK}; color: {S.TEXT};"
-        )
+        self._stats_row = stats_row   # _apply_theme 里按主题刷新
         stats_layout = QHBoxLayout(stats_row)
         stats_layout.setContentsMargins(8, 2, 8, 2)
         stats_layout.setSpacing(8)
@@ -374,28 +378,46 @@ class LiveView(QWidget):
         self._apply_button_styles_initial()
 
     def _apply_button_styles_initial(self):
-        """setup_ui 期间应用一次按钮 / 输入框样式，避免 _apply_theme 调用前显示裸样式。"""
-        pal = S.palette(self._theme)
-        self._connect_btn.setStyleSheet(
-            f"background-color: {pal['primary']}; color: white; border: none; border-radius: 2px;"
-        )
-        self._disconnect_btn.setStyleSheet(
-            f"background-color: {pal['error']}; color: white; border: none; border-radius: 2px;"
-        )
-        self._debug_btn.setStyleSheet(
-            f"background-color: {pal['button_bg']}; color: {pal['text']}; border: none; border-radius: 2px;"
-        )
-        for btn in (self._record_btn, self._import_btn, self._clear_btn):
-            btn.setStyleSheet(
-                f"background-color: {pal['primary']}; color: white; border: none; border-radius: 2px;"
-            )
-        common_input = (
-            f"background-color: {pal['input_bg']}; color: {pal['text']}; "
-            f"border: none; padding: 4px; border-radius: 2px;"
-        )
+        """setup_ui 期间应用一次按钮 / 输入框样式，避免 _apply_theme 调用前显示裸样式。
+
+        Mission Console：按钮交给全局 QSS + variant 属性；这里只设 variant + 图标。
+        Connect = 主按钮(accent)；Disconnect = 危险(err)；其余 = 次按钮(默认)。
+        """
+        self._style_toolbar_buttons(self._theme)
+
+    @staticmethod
+    def _set_variant(widget, variant: str) -> None:
+        """设按钮 variant 属性并 repolish，让全局 QSS 的 [variant=...] 规则生效。"""
+        widget.setProperty("variant", variant)
+        widget.setStyleSheet("")    # 清内联，交给全局 QSS
+        st = widget.style()
+        st.unpolish(widget)
+        st.polish(widget)
+
+    def _style_toolbar_buttons(self, theme: str) -> None:
+        """统一设连接条按钮的 variant + 图标着色（被 initial 与 _apply_theme 共用）。"""
+        pal = S.palette(theme)
+        try:
+            from satellite_debug_tool.ui import icons as _ic
+            ink = pal["accent_ink"]
+            t2 = pal["text_2"]
+            err = pal["err"]
+            self._connect_btn.setIcon(_ic.icon("plug", color=ink, size=14))
+            self._disconnect_btn.setIcon(_ic.icon("unplug", color=err, size=14))
+            self._debug_btn.setIcon(_ic.icon("activity", color=t2, size=14))
+            self._record_btn.setIcon(_ic.icon("record", color=t2, size=14))
+            self._import_btn.setIcon(_ic.icon("import", color=t2, size=14))
+            self._clear_btn.setIcon(_ic.icon("trash", color=t2, size=14))
+        except Exception:
+            pass
+        self._set_variant(self._connect_btn, "primary")
+        self._set_variant(self._disconnect_btn, "danger")
+        for btn in (self._debug_btn, self._record_btn, self._import_btn, self._clear_btn):
+            self._set_variant(btn, "")
+        # 输入控件清内联样式 → 全局 QSS 接管
         for w in (self._type_combo, self._port_combo, self._baudrate_combo,
                   self._remote_ip, self._remote_port, self._local_port):
-            w.setStyleSheet(common_input)
+            w.setStyleSheet("")
 
     # ============================ 连接 / 工作流 ============================
 
@@ -581,6 +603,15 @@ class LiveView(QWidget):
             return key
         return f"{entry.name} ({entry.unit})" if entry.unit else entry.name
 
+    def _on_channel_visibility_changed(self, name: str, checked: bool) -> None:
+        """D6 P0：ChannelPanel 勾选 → 控制 chart 该曲线显隐。"""
+        self._chart.set_channel_visible(name, checked)
+
+    def _resync_channel_visibility(self) -> None:
+        """曲线重建后把 ChannelPanel 当前勾选态重新套到曲线上。"""
+        for name in self._channel_panel.channel_names():
+            self._chart.set_channel_visible(name, self._channel_panel.is_checked(name))
+
     def _on_profile_changed_sync(self, hw_type: str) -> None:
         if hw_type:
             self._hw_label.setText(f"设备: {hw_type}")
@@ -638,11 +669,9 @@ class LiveView(QWidget):
         frame = build_debug_enable_v2(self._debug_enabled)
         if self._worker.send(frame):
             self._debug_btn.setText(f"Debug: {'ON' if self._debug_enabled else 'OFF'}")
-            pal = S.palette(self._theme)
-            self._debug_btn.setStyleSheet(
-                f"background-color: {pal['success'] if self._debug_enabled else pal['button_bg']}; "
-                f"color: white; border: none; border-radius: 2px;"
-            )
+            # ON 用 checked 态（accent-soft），OFF 用默认次按钮 —— 走全局 QSS
+            self._debug_btn.setCheckable(True)
+            self._debug_btn.setChecked(self._debug_enabled)
         else:
             self._debug_enabled = not self._debug_enabled
             self.status_message.emit("Failed to send debug command", 3000)
@@ -763,10 +792,13 @@ class LiveView(QWidget):
             self._is_recording = False
             self._status_strip.set_recording(False)
             self._record_btn.setText("Record")
-            pal = S.palette(self._theme)
-            self._record_btn.setStyleSheet(
-                f"background-color: {pal['primary']}; color: white; border: none; border-radius: 2px;"
-            )
+            # 恢复次按钮样式（红色录制图标 → 灰）
+            try:
+                from satellite_debug_tool.ui import icons as _ic
+                self._record_btn.setIcon(_ic.icon("record", color=S.palette(self._theme)["text_2"], size=14))
+            except Exception:
+                pass
+            self._record_btn.setStyleSheet("")
             self.status_message.emit("Recording stopped", 3000)
         else:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -796,9 +828,17 @@ class LiveView(QWidget):
                     self._is_recording = True
                     self._status_strip.set_recording(True)
                     self._record_btn.setText("Stop")
+                    # 录制中 = 危险态（红底）+ 红录制图标
                     pal = S.palette(self._theme)
+                    try:
+                        from satellite_debug_tool.ui import icons as _ic
+                        self._record_btn.setIcon(_ic.icon("record", color=pal["err"], size=14))
+                    except Exception:
+                        pass
                     self._record_btn.setStyleSheet(
-                        f"background-color: {pal['error']}; color: white; border: none; border-radius: 2px;"
+                        f"QPushButton {{ background-color: {pal['card_2']}; color: {pal['err']}; "
+                        f"border: 1px solid {pal['err']}; border-radius: 5px; padding: 4px 11px; "
+                        f"font-weight: 600; }}"
                     )
                     suffix = " + profile" if profile_dict else ""
                     self.status_message.emit(f"Recording to {filepath}{suffix}", 3000)
@@ -884,7 +924,8 @@ class LiveView(QWidget):
         primary = pal["primary"]
         error = pal["error"]
 
-        self.setStyleSheet(f"background-color: {bg}; color: {text};")
+        # 用 LiveView 选择器，避免 bare 声明 cascade 到子按钮（盖掉 variant 主按钮色）
+        self.setStyleSheet(f"LiveView {{ background-color: {bg}; color: {text}; }}")
 
         def dispatch(w):
             if hasattr(w, "set_theme"):
@@ -900,9 +941,9 @@ class LiveView(QWidget):
         ):
             dispatch(w)
 
-        # 工具栏
+        # 工具栏（用 QToolBar 选择器，避免 bare 声明 cascade 到子按钮）
         self._toolbar.setStyleSheet(
-            f"background-color: {panel}; border: none; padding: 4px;"
+            f"QToolBar {{ background-color: {panel}; border: none; padding: 4px; }}"
         )
         try:
             from PySide6.QtGui import QFont
@@ -924,24 +965,16 @@ class LiveView(QWidget):
         for w in self._udp_widget.findChildren(QLabel):
             w.setStyleSheet(f"color: {text}; background-color: transparent;")
 
-        for widget in (self._type_combo, self._port_combo, self._baudrate_combo,
-                       self._remote_ip, self._remote_port, self._local_port):
-            widget.setStyleSheet(
-                f"background-color: {input_bg}; color: {text}; "
-                f"border: none; padding: 4px; border-radius: 2px;"
-            )
-        self._connect_btn.setStyleSheet(
-            f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
-        )
-        self._disconnect_btn.setStyleSheet(
-            f"background-color: {error}; color: white; border: none; border-radius: 2px;"
-        )
-        self._debug_btn.setStyleSheet(
-            f"background-color: {pal['button_bg']}; color: {text}; border: none; border-radius: 2px;"
-        )
-        for btn in (self._record_btn, self._import_btn, self._clear_btn):
-            btn.setStyleSheet(
-                f"background-color: {primary}; color: white; border: none; border-radius: 2px;"
+        # 连接条按钮 + 输入控件：交给全局 QSS + variant（Mission Console）
+        self._style_toolbar_buttons(theme)
+
+        # 底部统计行：按主题刷新（等宽数字 + 弱色），用 objectName 选择器避免 cascade
+        if hasattr(self, "_stats_row"):
+            mono = S.monospace_family()
+            self._stats_row.setStyleSheet(
+                f"#statsRow {{ background-color: {panel}; border-top: 1px solid {border}; }}"
+                f"#statsRow QLabel {{ color: {pal['text_3']}; font-family: \"{mono}\"; "
+                f"font-size: {S.font_px(11, scale)}px; background: transparent; }}"
             )
 
         # Channel panel：交给 ChannelPanel 自己刷主题

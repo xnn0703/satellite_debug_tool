@@ -1,0 +1,160 @@
+/* ============================================================
+   Satellite Debug Tool — Core component styles
+   Requires tokens.css. Used by direction page + prototype.
+   ============================================================ */
+
+* { box-sizing: border-box; }
+
+.app, .surface {
+  font-family: var(--font-sans);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  font-size: var(--fz-base);
+}
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.num  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+
+/* ---------- Panels & cards ---------- */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 11px;
+  font: 500 var(--fz-sm)/1 var(--font-sans);
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  user-select: none;
+}
+.btn:hover { background: var(--card-hover); border-color: var(--text-3); }
+.btn:active { transform: translateY(.5px); }
+.btn svg { opacity: .85; }
+.btn--sm { height: 24px; padding: 0 8px; font-size: var(--fz-xs); }
+.btn--lg { height: 32px; padding: 0 14px; }
+.btn--icon { padding: 0; width: 28px; justify-content: center; }
+.btn--icon.btn--sm { width: 24px; }
+
+.btn--primary {
+  background: var(--accent); color: var(--accent-ink);
+  border-color: transparent; font-weight: 600;
+  box-shadow: 0 0 0 1px var(--accent) inset, 0 1px 8px var(--accent-soft);
+}
+.btn--primary:hover { background: var(--accent-2); border-color: transparent; }
+.btn--primary svg { opacity: 1; }
+
+.btn--danger { background: var(--err-soft); color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+.btn--danger:hover { background: color-mix(in srgb, var(--err) 18%, var(--card)); }
+
+.btn--ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn--ghost:hover { background: var(--card-2); color: var(--text); }
+
+.btn[disabled] { opacity: .4; cursor: not-allowed; pointer-events: none; }
+.btn.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-2); }
+
+/* ---------- Segmented control ---------- */
+.seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.seg > button {
+  height: 24px; padding: 0 12px; border: 0; background: transparent;
+  color: var(--text-2); font: 500 var(--fz-sm)/1 var(--font-sans);
+  border-radius: 3px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  transition: background var(--dur), color var(--dur);
+}
+.seg > button:hover { color: var(--text); }
+.seg > button.is-active { background: var(--card-2); color: var(--text); box-shadow: var(--shadow-1); }
+.seg--accent > button.is-active { color: var(--accent-2); }
+
+/* ---------- Fields ---------- */
+.field {
+  display: inline-flex; align-items: center; height: 28px; padding: 0 9px;
+  background: var(--panel-2); border: 1px solid var(--border-2); border-radius: var(--r-sm);
+  color: var(--text); font: 400 var(--fz-sm)/1 var(--font-mono); gap: 6px; min-width: 0;
+}
+.field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field > input, .field > select {
+  border: 0; background: transparent; color: inherit; font: inherit; outline: 0; width: 100%; min-width: 0;
+}
+.field-label { font-size: var(--fz-xs); color: var(--text-2); font-family: var(--font-sans); margin-right: 2px; }
+.stepper { display: inline-flex; flex-direction: column; margin-left: 2px; }
+.stepper button { width: 16px; height: 12px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; display: grid; place-items: center; }
+.stepper button:hover { color: var(--text); }
+
+/* ---------- Status chips (dot system) ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px 0 8px;
+  border-radius: var(--r-pill); font: 500 var(--fz-xs)/1 var(--font-sans);
+  background: var(--card-2); border: 1px solid var(--border); color: var(--text-2);
+}
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
+.chip b { color: var(--text); font-weight: 600; font-family: var(--font-mono); }
+.chip.is-ok   { background: var(--ok-soft);   border-color: color-mix(in srgb,var(--ok) 35%,transparent);   color: var(--ok); }
+.chip.is-ok   .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.chip.is-warn { background: var(--warn-soft); border-color: color-mix(in srgb,var(--warn) 35%,transparent); color: var(--warn); }
+.chip.is-warn .dot { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+.chip.is-err  { background: var(--err-soft);  border-color: color-mix(in srgb,var(--err) 40%,transparent);  color: var(--err); }
+.chip.is-err  .dot { background: var(--err); box-shadow: 0 0 6px var(--err); }
+.chip.is-info { background: var(--info-soft); border-color: color-mix(in srgb,var(--info) 35%,transparent); color: var(--info); }
+.chip.is-info .dot { background: var(--info); box-shadow: 0 0 6px var(--info); }
+.chip.is-ok b, .chip.is-warn b, .chip.is-err b, .chip.is-info b { color: inherit; }
+
+/* ---------- KPI card ---------- */
+.kpi {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 9px 12px 10px; min-width: 116px; position: relative; overflow: hidden;
+}
+.kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .8; }
+.kpi.kpi--warn::before { background: var(--warn); }
+.kpi.kpi--err::before { background: var(--err); }
+.kpi .k-label { font-size: var(--fz-micro); letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); display: flex; align-items: center; gap: 5px; }
+.kpi .k-val { font: 600 var(--fz-kpi)/1 var(--font-mono); color: var(--text); margin-top: 5px; font-variant-numeric: tabular-nums; }
+.kpi .k-unit { font-size: var(--fz-sm); color: var(--text-2); font-weight: 500; margin-left: 3px; }
+.kpi .k-sub { font-size: var(--fz-micro); color: var(--text-3); margin-top: 3px; font-family: var(--font-mono); }
+.kpi .k-trend { position: absolute; right: 10px; top: 10px; color: var(--text-3); }
+
+/* ---------- Channel row ---------- */
+.ch-row {
+  display: grid; grid-template-columns: 16px 10px 1fr auto; align-items: center; gap: 8px;
+  height: 26px; padding: 0 8px; border-radius: var(--r-xs); cursor: pointer;
+  color: var(--text-2); transition: background var(--dur);
+}
+.ch-row:hover { background: var(--card-2); }
+.ch-row.is-on { color: var(--text); }
+.ch-row .ch-box { width: 13px; height: 13px; border-radius: 3px; border: 1.5px solid var(--text-3); display: grid; place-items: center; }
+.ch-row.is-on .ch-box { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ch-row .ch-swatch { width: 9px; height: 3px; border-radius: 2px; }
+.ch-row .ch-name { font-size: var(--fz-sm); }
+.ch-row .ch-val { font: 500 var(--fz-sm)/1 var(--font-mono); color: var(--text); font-variant-numeric: tabular-nums; }
+.ch-row.is-off { opacity: .5; }
+.ch-row.is-off .ch-val { color: var(--text-3); }
+
+/* ---------- Event timeline item ---------- */
+.evt { display: grid; grid-template-columns: auto auto 1fr; gap: 9px; align-items: center; padding: 6px 10px; border-radius: var(--r-xs); cursor: pointer; border-left: 2px solid transparent; }
+.evt:hover { background: var(--card-2); }
+.evt .evt-time { font: 500 var(--fz-xs)/1 var(--font-mono); color: var(--text-3); }
+.evt .evt-lvl { font: 600 9px/1 var(--font-mono); letter-spacing: .05em; padding: 2px 5px; border-radius: 3px; background: var(--card-2); color: var(--text-2); }
+.evt .evt-msg { font-size: var(--fz-sm); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evt.lvl-inf { border-left-color: var(--info); } .evt.lvl-inf .evt-lvl { color: var(--info); background: var(--info-soft); }
+.evt.lvl-wrn { border-left-color: var(--warn); } .evt.lvl-wrn .evt-lvl { color: var(--warn); background: var(--warn-soft); }
+.evt.lvl-err { border-left-color: var(--err);  } .evt.lvl-err .evt-lvl { color: var(--err);  background: var(--err-soft); }
+.evt.lvl-ok  { border-left-color: var(--ok);   } .evt.lvl-ok  .evt-lvl { color: var(--ok);   background: var(--ok-soft); }
+
+/* ---------- Section label ---------- */
+.sec-label { font-size: var(--fz-micro); letter-spacing: .12em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
+
+/* ---------- Scrollbar ---------- */
+.scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+.scroll::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; }
+.scroll::-webkit-scrollbar-track { background: transparent; }

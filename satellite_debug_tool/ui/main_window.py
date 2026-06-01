@@ -84,16 +84,16 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._toolbar.addWidget(spacer)
 
-        # M11：检查更新按钮
-        self._update_btn = QPushButton("🔄 检查更新")
+        # M11：检查更新按钮（图标在 _apply_theme 里按主题着色）
+        self._update_btn = QPushButton("检查更新")
         self._update_btn.setFixedWidth(110)
         self._update_btn.setToolTip("手动检查并下载最新版本（也可在设置中开关启动自检）")
         self._update_btn.clicked.connect(self._on_check_update_clicked)
         self._toolbar.addWidget(self._update_btn)
 
         # 设置按钮（配置路径等）
-        self._settings_btn = QPushButton("⚙ 设置")
-        self._settings_btn.setFixedWidth(80)
+        self._settings_btn = QPushButton("设置")
+        self._settings_btn.setFixedWidth(76)
         self._settings_btn.setToolTip("配置文件保存 / 加载的默认目录 / 更新设置")
         self._settings_btn.clicked.connect(self._on_open_settings)
         self._toolbar.addWidget(self._settings_btn)
@@ -165,6 +165,18 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, theme: str):
         """全局 chrome + 广播到三个 view。"""
         pal = S.palette(theme)
+        # Mission Console：先把全局 QSS 注入 QApplication（chrome 控件统一底色），
+        # 再让各 widget 的 per-widget setStyleSheet 覆盖局部细节
+        try:
+            from PySide6.QtWidgets import QApplication
+            from satellite_debug_tool.ui import qss as _qss
+            from satellite_debug_tool.ui import icons as _icons
+            app = QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(_qss.build(theme, "small"))
+            _icons.clear_cache()   # 主题切换 → 图标重新着色
+        except Exception:
+            pass
         self.setStyleSheet(
             f"QMainWindow {{ background-color: {pal['bg']}; color: {pal['text']}; }}"
         )
@@ -175,15 +187,15 @@ class MainWindow(QMainWindow):
             f"background-color: {pal['input_bg']}; color: {pal['text']}; "
             f"border: 1px solid {pal['input_border']}; padding: 2px 6px; border-radius: 2px;"
         )
-        # 设置按钮：跟随主题（暗色主题下默认按钮文字与背景对比度不够，专门设置）
-        btn_chrome_style = (
-            f"QPushButton {{ background-color: {pal['input_bg']}; color: {pal['text']}; "
-            f"border: 1px solid {pal['input_border']}; border-radius: 2px; padding: 2px 10px; }}"
-            f"QPushButton:hover {{ background-color: {pal['card_alt']}; }}"
-            f"QPushButton:pressed {{ background-color: {pal['primary']}; color: white; }}"
-        )
-        self._settings_btn.setStyleSheet(btn_chrome_style)
-        self._update_btn.setStyleSheet(btn_chrome_style)
+        # 设置 / 检查更新按钮：清空内联样式交给全局 QSS，仅设图标着色
+        try:
+            from satellite_debug_tool.ui import icons as _ic
+            self._settings_btn.setStyleSheet("")
+            self._update_btn.setStyleSheet("")
+            self._settings_btn.setIcon(_ic.icon("settings", color=pal["text_2"], size=15))
+            self._update_btn.setIcon(_ic.icon("refresh", color=pal["text_2"], size=15))
+        except Exception:
+            pass
         # 版本号 label 也跟随主题
         if hasattr(self, "_version_label"):
             self._version_label.setStyleSheet(

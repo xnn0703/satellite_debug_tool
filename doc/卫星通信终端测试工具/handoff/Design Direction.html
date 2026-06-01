@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>卫星调试工具 · 视觉方向</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="live.css">
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+
+<header class="studio-head">
+  <div class="brand">
+    <span class="mark" data-icon="satellite" data-size="18"></span>
+    <div>
+      <h1>卫星调试工具 · 视觉方向</h1>
+      <div class="sub">Mission Console — 工程师向仪表台美学 · Phase 1 设计语言</div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="theme-switch" id="themeSwitch">
+    <button data-t="dark" class="on"><span data-icon="moon" data-size="14"></span>深色</button>
+    <button data-t="dark-hc"><span data-icon="contrast" data-size="14"></span>强光</button>
+    <button data-t="light"><span data-icon="sun" data-size="14"></span>浅色</button>
+  </div>
+</header>
+
+<main class="studio-body" id="stage">
+
+  <!-- 0 · MEMO -->
+  <section class="block">
+    <div class="block-head"><span class="idx">00</span><h2>设计立场</h2></div>
+    <div class="memo">
+      <p><span class="tag">Mission Console</span>我把这套工具当成<strong>仪表台</strong>来设计，而不是普通桌面软件。参照示波器、地面站、SIGINT 终端的视觉语言：<strong class="accent">深蓝近黑的底</strong>、克制的青色信号强调、发丝级分隔线、数字一律等宽。目标是让 8 小时联调时眼睛不累、信息一眼能找到、强光屏下也读得清。</p>
+      <p>三件事统一收口：<strong>① 设计 token</strong>（颜色/字号/间距/圆角，三套主题同源）<strong>② 一套线性图标</strong>替换满屏 emoji <strong>③ 三类基础组件</strong>（按钮/输入/卡片）规范。下面先给设计语言与核心组件，再把它套到最复杂的<strong>实时 Tab</strong> 上做一个完整样板，最后针对你点名的几个高频组件（状态条 / 通道面板 / 事件线 / 3D 姿态）给方向变体。</p>
+      <p class="hint" style="color:var(--text-3);font-size:12px;margin:0">右上角可切换 <strong>深色 / 强光（户外高对比）/ 浅色</strong> 三套主题，实时预览同一套设计在不同环境下的表现。</p>
+    </div>
+  </section>
+
+  <!-- 1 · PALETTE -->
+  <section class="block">
+    <div class="block-head"><span class="idx">01</span><h2>主题色板</h2><div class="note">三套主题共用同一组语义角色（bg / card / accent / 状态色），切换时组件零改动。强光主题不是简单加对比，而是纯黑底 + 高饱和信号色。</div></div>
+    <div class="pal-grid" id="palGrid"></div>
+  </section>
+
+  <!-- 2 · SIGNAL -->
+  <section class="block">
+    <div class="block-head"><span class="idx">02</span><h2>信号调色板</h2><div class="note">曲线专用的 16 色高区分度色板，相邻通道色相拉开，色盲友好。</div></div>
+    <div class="stage"><div class="sig-grid" id="sigGrid"></div></div>
+  </section>
+
+  <!-- 3 · TYPE -->
+  <section class="block">
+    <div class="block-head"><span class="idx">03</span><h2>字体与字号</h2><div class="note">界面文字用 IBM Plex Sans（工程感、中文回退苹方/雅黑）；一切数字、值标签、表格用 IBM Plex Mono 等宽，对齐跳动数据。</div></div>
+    <div class="stage">
+      <div class="type-list" id="typeList"></div>
+    </div>
+  </section>
+
+  <!-- 4 · ICONS -->
+  <section class="block">
+    <div class="block-head"><span class="idx">04</span><h2>图标系统</h2><div class="note">统一 1.7px 描边的线性图标，几何工程风，全本地 SVG（外场离线可用），替换原来的 ⚙ 🔄 ● emoji。</div></div>
+    <div class="stage"><div class="icon-grid" id="iconGrid"></div></div>
+  </section>
+
+  <!-- 5 · COMPONENTS -->
+  <section class="block">
+    <div class="block-head"><span class="idx">05</span><h2>核心组件</h2><div class="note">按钮 / 输入 / 分段控件 / 状态胶囊 / KPI 卡 / 通道行 / 事件项 —— 全部高频复用件。</div></div>
+    <div class="stage">
+      <div class="shelf">
+        <div class="shelf-card">
+          <div class="cap">按钮 · Buttons</div>
+          <div class="shelf-row">
+            <button class="btn btn--primary"><span data-icon="plug" data-size="14"></span>Connect</button>
+            <button class="btn"><span data-icon="import" data-size="14"></span>Import</button>
+            <button class="btn btn--danger"><span data-icon="unplug" data-size="14"></span>Disconnect</button>
+            <button class="btn btn--ghost"><span data-icon="trash" data-size="14"></span>Clear</button>
+            <button class="btn is-active"><span data-icon="record" data-size="14"></span>REC</button>
+            <button class="btn btn--icon"><span data-icon="settings" data-size="15"></span></button>
+            <button class="btn btn--sm"><span data-icon="map" data-size="12"></span>地图</button>
+            <button class="btn" disabled>Disabled</button>
+          </div>
+        </div>
+        <div class="shelf-row">
+          <div class="shelf-card">
+            <div class="cap">输入 · Fields</div>
+            <div class="shelf-row">
+              <label class="field"><span class="field-label">IP</span><input value="192.168.1.12" size="11"></label>
+              <label class="field"><span class="field-label">Port</span><input value="4004" size="5" class="num"><span class="stepper"><button data-icon="chevronUp" data-size="10"></button><button data-icon="chevronDown" data-size="10"></button></span></label>
+              <label class="field"><span class="field-label">Type</span><select><option>UDP</option><option>Serial</option></select><span data-icon="chevronDown" data-size="12" style="color:var(--text-3)"></span></label>
+            </div>
+          </div>
+          <div class="shelf-card">
+            <div class="cap">分段 · Segmented</div>
+            <div class="shelf-row">
+              <div class="seg seg--accent"><button class="is-active">单图</button><button>分组</button></div>
+              <div class="seg"><button class="is-active"><span data-icon="grid" data-size="13"></span></button><button><span data-icon="columns" data-size="13"></span></button><button><span data-icon="list" data-size="13"></span></button></div>
+            </div>
+          </div>
+        </div>
+        <div class="shelf-card">
+          <div class="cap">状态胶囊 · Status chips</div>
+          <div class="shelf-row">
+            <span class="chip is-ok"><span class="dot"></span>LINK <b>OK</b></span>
+            <span class="chip is-info"><span class="dot"></span>TRACE <b>SCAN</b></span>
+            <span class="chip is-ok"><span class="dot"></span>GPS <b>3D</b></span>
+            <span class="chip is-warn"><span class="dot"></span>INS <b>ALIGN</b></span>
+            <span class="chip is-err"><span class="dot"></span>LOCK <b>LOST</b></span>
+            <span class="chip"><span class="dot"></span>MODEM <b>—</b></span>
+          </div>
+        </div>
+        <div class="shelf-row" style="align-items:stretch">
+          <div class="shelf-card" style="flex:1;min-width:300px">
+            <div class="cap">KPI 卡 · 关键指标</div>
+            <div class="shelf-row" id="kpiShelf"></div>
+          </div>
+          <div class="shelf-card" style="width:230px">
+            <div class="cap">通道行 · Channel rows</div>
+            <div id="chShelf"></div>
+          </div>
+          <div class="shelf-card" style="flex:1;min-width:280px">
+            <div class="cap">事件项 · Event items</div>
+            <div id="evtShelf"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · HERO -->
+  <section class="block">
+    <div class="block-head"><span class="idx">06</span><h2>样板：实时 Tab</h2><div class="note">把设计语言套到最复杂的实时页面。重点修了文档里的痛点：Connect 主按钮强调 · 状态条单行不跳高 · 通道勾选=显隐 · 事件线未读徽标 · 底部 stats 上移。</div></div>
+    <div class="stage stage--pad0">
+      <div class="live" id="hero"></div>
+    </div>
+    <div class="hint">↑ 这是静态样板，用于确认视觉方向。确认后我会把它做成可点击、带模拟数据的完整 4-Tab 交互原型。</div>
+  </section>
+
+  <!-- 7 · EXPLORATIONS -->
+  <section class="block">
+    <div class="block-head"><span class="idx">07</span><h2>高频组件 · 方向变体</h2><div class="note">你点名的几个组件，各给 2 个方向。最终可在原型里用 Tweaks 混搭。</div></div>
+    <div class="explore-grid" id="exploreGrid"></div>
+  </section>
+
+  <!-- 8 · NEXT -->
+  <section class="block">
+    <div class="block-head"><span class="idx">08</span><h2>下一步</h2></div>
+    <div class="steps">
+      <div class="step"><div class="n">A</div><h4>你来定方向</h4><p>确认整体气质（深蓝仪表台）、强调色（青）、图标风格。对任何变体可直接圈选评论。</p></div>
+      <div class="step"><div class="n">B</div><h4>我做完整原型</h4><p>实时 / 回放 / Log / 设备 四个 Tab 全做成可点击、带模拟遥测数据的交互原型，含连接流程、拖时间轴、参数读写、OTA 进度。</p></div>
+      <div class="step"><div class="n">C</div><h4>Tweaks 可调</h4><p>主题、密度（紧凑/舒适）、强调色、状态条样式、3D 取景等做成面板开关，你实时切换对比。</p></div>
+    </div>
+  </section>
+
+</main>
+
+<script src="icons.js"></script>
+<script src="charts.js"></script>
+<script src="direction.js"></script>
+</body>
+</html>

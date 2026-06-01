@@ -34,21 +34,22 @@ from satellite_debug_tool.core.protocol import (
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.flow_layout import FlowLayout
 
-# 与 StatePanel 同源的色标
+# Mission Console 语义色标（与 StatePanel 同源）
 _ENUM_LEVEL_COLORS = {
-    0: "#4EC9B0",
-    1: "#DCDCAA",
-    2: "#F14C4C",
-    3: "#808080",
+    0: "#34D399",   # ok 绿
+    1: "#FBBF24",   # warn 黄
+    2: "#FB7185",   # err 红
+    3: "#586976",   # idle 灰
 }
-_BOOL_ON = "#4EC9B0"
-_BOOL_OFF = "#555555"
-_LINK_OK = "#4EC9B0"
-_LINK_BAD = "#F14C4C"
-_LINK_IDLE = "#808080"
+_BOOL_ON = "#34D399"
+_BOOL_OFF = "#586976"
+_LINK_OK = "#34D399"
+_LINK_BAD = "#FB7185"
+_LINK_IDLE = "#586976"
 
 
-def _dot(color: str, size: int = 12) -> str:
+def _dot(color: str, size: int = 8) -> str:
+    """状态圆点：Mission Console 点阵风（8px + 同色辉光）。"""
     return (
         f"background-color: {color}; border-radius: {size // 2}px; "
         f"min-width: {size}px; max-width: {size}px; "
@@ -79,9 +80,10 @@ class _Chip(QFrame):
         self._scale = scale
         p = S.palette(self._theme)
         self.setStyleSheet(
-            f"QFrame {{ background-color: {p['card']}; border: 1px solid {p['border']}; "
-            f"border-radius: 10px; padding: 2px 6px; }}"
-            f"QLabel {{ border: none; color: {p['text']}; font-size: {S.font_px(11, scale)}px; }}"
+            f"QFrame {{ background-color: {p['card_2']}; border: 1px solid {p['border']}; "
+            f"border-radius: 11px; padding: 2px 7px; }}"
+            f"QLabel {{ border: none; color: {p['text_2']}; "
+            f"font-size: {S.font_px(11, scale)}px; background: transparent; }}"
         )
 
     def set_dot(self, color: str) -> None:

@@ -1,0 +1,168 @@
+/* ============================================================
+   Satellite Debug Tool — Redesign Design Tokens
+   "Mission Console" engineering aesthetic
+   Three themes: dark (default) · dark-hc (outdoor) · light
+   ============================================================ */
+
+:root {
+  /* ---- Type ---- */
+  --font-sans: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  /* ---- Radius ---- */
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-pill: 999px;
+
+  /* ---- Spacing scale ---- */
+  --s-1: 2px;  --s-2: 4px;  --s-3: 6px;  --s-4: 8px;
+  --s-5: 12px; --s-6: 16px; --s-7: 20px; --s-8: 24px; --s-9: 32px;
+
+  /* ---- Type scale (px) ---- */
+  --fz-micro: 10px;
+  --fz-xs: 11px;
+  --fz-sm: 12px;
+  --fz-base: 13px;
+  --fz-md: 14px;
+  --fz-lg: 16px;
+  --fz-kpi: 26px;
+  --fz-kpi-lg: 34px;
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(.4, 0, .2, 1);
+  --dur: 140ms;
+}
+
+/* ================= DARK (default) ================= */
+:root,
+[data-theme="dark"] {
+  --bg:          #090D12;
+  --bg-grid:     #0d1219;
+  --panel:       #0E141C;
+  --panel-2:     #10171F;
+  --card:        #121A24;
+  --card-2:      #16202C;
+  --card-hover:  #1A2632;
+  --border:      #1F2C38;
+  --border-2:    #2A3B49;
+  --border-glow: #2DD4BF33;
+
+  --text:        #D6E0E9;
+  --text-2:      #8696A4;
+  --text-3:      #586976;
+  --text-inv:    #04110F;
+
+  --accent:      #2DD4BF;
+  --accent-2:    #5EEAD4;
+  --accent-dim:  #14B8A6;
+  --accent-soft: #2dd4bf1f;
+  --accent-ink:  #04110F;
+
+  --info:        #38BDF8;
+  --ok:          #34D399;
+  --warn:        #FBBF24;
+  --err:         #FB7185;
+  --violet:      #A78BFA;
+
+  --ok-soft:    #34d3991f;
+  --warn-soft:  #fbbf241f;
+  --err-soft:   #fb71851f;
+  --info-soft:  #38bdf81f;
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 4px 16px rgba(0,0,0,.45);
+  --shadow-pop: 0 12px 40px rgba(0,0,0,.6);
+  --grid-line: rgba(255,255,255,.04);
+}
+
+/* ================= DARK HIGH-CONTRAST (outdoor / 强光屏) ================= */
+[data-theme="dark-hc"] {
+  --bg:          #000000;
+  --bg-grid:     #000000;
+  --panel:       #060606;
+  --panel-2:     #0a0a0a;
+  --card:        #0E0E0E;
+  --card-2:      #141414;
+  --card-hover:  #1c1c1c;
+  --border:      #3A3A3A;
+  --border-2:    #545454;
+  --border-glow: #00F5D466;
+
+  --text:        #FFFFFF;
+  --text-2:      #C8C8C8;
+  --text-3:      #909090;
+  --text-inv:    #000000;
+
+  --accent:      #00F5D4;
+  --accent-2:    #5BFFE6;
+  --accent-dim:  #00D9BD;
+  --accent-soft: #00f5d422;
+  --accent-ink:  #00120F;
+
+  --info:        #4DC4FF;
+  --ok:          #00FF95;
+  --warn:        #FFD000;
+  --err:         #FF5470;
+  --violet:      #C4A6FF;
+
+  --ok-soft:    #00ff9522;
+  --warn-soft:  #ffd00022;
+  --err-soft:   #ff547022;
+  --info-soft:  #4dc4ff22;
+
+  --shadow-1: none;
+  --shadow-2: 0 4px 16px rgba(0,0,0,.6);
+  --shadow-pop: 0 12px 40px rgba(0,0,0,.8);
+  --grid-line: rgba(255,255,255,.08);
+}
+
+/* ================= LIGHT ================= */
+[data-theme="light"] {
+  --bg:          #EEF1F4;
+  --bg-grid:     #e7ebef;
+  --panel:       #F6F8FA;
+  --panel-2:     #FFFFFF;
+  --card:        #FFFFFF;
+  --card-2:      #F4F7F9;
+  --card-hover:  #EDF1F4;
+  --border:      #D8DEE4;
+  --border-2:    #C2CCD4;
+  --border-glow: #0EA5A433;
+
+  --text:        #1B2630;
+  --text-2:      #5A6976;
+  --text-3:      #8895A0;
+  --text-inv:    #FFFFFF;
+
+  --accent:      #0EA5A4;
+  --accent-2:    #0D9488;
+  --accent-dim:  #0F766E;
+  --accent-soft: #0ea5a414;
+  --accent-ink:  #FFFFFF;
+
+  --info:        #0284C7;
+  --ok:          #059669;
+  --warn:        #B45309;
+  --err:         #DC2626;
+  --violet:      #7C3AED;
+
+  --ok-soft:    #05966914;
+  --warn-soft:  #b4530914;
+  --err-soft:   #dc262614;
+  --info-soft:  #0284c714;
+
+  --shadow-1: 0 1px 2px rgba(16,32,48,.08);
+  --shadow-2: 0 4px 16px rgba(16,32,48,.10);
+  --shadow-pop: 0 12px 40px rgba(16,32,48,.18);
+  --grid-line: rgba(16,32,48,.05);
+}
+
+/* ---- Signal palette: high-distinction curve colors ---- */
+:root {
+  --sig-1:  #2DD4BF;  --sig-2:  #38BDF8;  --sig-3:  #FBBF24;  --sig-4:  #FB7185;
+  --sig-5:  #A78BFA;  --sig-6:  #4ADE80;  --sig-7:  #FB923C;  --sig-8:  #22D3EE;
+  --sig-9:  #F472B6;  --sig-10: #A3E635;  --sig-11: #818CF8;  --sig-12: #FCD34D;
+  --sig-13: #2DD4BF;  --sig-14: #F87171;  --sig-15: #60A5FA;  --sig-16: #C084FC;
+}

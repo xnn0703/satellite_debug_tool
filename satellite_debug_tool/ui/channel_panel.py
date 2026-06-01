@@ -76,11 +76,32 @@ class _ChannelRow(QWidget):
         layout.addWidget(self._value_label)
 
     def _on_checkbox_toggled(self, checked: bool) -> None:
+        self._apply_checked_visual(checked)
         self.toggled.emit(self._name, checked)
 
     def _apply_dot_color(self) -> None:
+        self._apply_checked_visual(self._checkbox.isChecked())
+
+    def _apply_checked_visual(self, checked: bool) -> None:
+        """未勾选 = 整行变暗（色块去饱和、文字弱化），所见即所得。"""
+        # 色块：勾选用真彩，未勾用弱灰
+        dot_color = self._color if checked else "#586976"
         self._dot.setStyleSheet(
-            f"background-color: {self._color}; border-radius: {_DOT_SIZE // 2}px;"
+            f"background-color: {dot_color}; border-radius: {_DOT_SIZE // 2}px;"
+        )
+        p = getattr(self, "_pal", None)
+        if not p:
+            return
+        nm = p["text"] if checked else p["text_3"]
+        vl = p["text_2"] if checked else p["text_3"]
+        npx = getattr(self, "_name_px", 11)
+        vpx = getattr(self, "_value_px", 10)
+        mono = getattr(self, "_mono", "Menlo, Consolas, monospace")
+        self._name_label.setStyleSheet(
+            f"color: {nm}; font-size: {npx}px; background: transparent;"
+        )
+        self._value_label.setStyleSheet(
+            f"color: {vl}; font-size: {vpx}px; font-family: {mono}; background: transparent;"
         )
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt API)
@@ -111,23 +132,26 @@ class _ChannelRow(QWidget):
         self._checkbox.blockSignals(True)
         self._checkbox.setChecked(checked)
         self._checkbox.blockSignals(False)
+        self._apply_checked_visual(checked)
 
     def apply_theme_styles(self, p: dict, value_px: int, name_px: int) -> None:
+        # 缓存供 _apply_checked_visual 复用
+        self._pal = p
+        self._name_px = name_px
+        self._value_px = value_px
+        try:
+            from satellite_debug_tool.ui import styles as _S
+            self._mono = f'"{_S.monospace_family()}"'
+        except Exception:
+            self._mono = "Menlo, Consolas, monospace"
         # 整行：默认透明 + hover 微高亮
         self.setStyleSheet(
             f"_ChannelRow {{ background-color: transparent; border-radius: 3px; }}"
-            f"_ChannelRow:hover {{ background-color: {p['card_alt']}; }}"
+            f"_ChannelRow:hover {{ background-color: {p['card_hover']}; }}"
         )
-        self._name_label.setStyleSheet(
-            f"color: {p['text']}; font-size: {name_px}px; background: transparent;"
-        )
-        self._value_label.setStyleSheet(
-            f"color: {p['text_muted']}; font-size: {value_px}px; "
-            f"font-family: Menlo, Consolas, monospace; background: transparent;"
-        )
-        self._checkbox.setStyleSheet(
-            f"QCheckBox {{ background: transparent; }}"
-        )
+        self._checkbox.setStyleSheet("QCheckBox { background: transparent; }")
+        # 按当前勾选态着色（含未勾变暗）
+        self._apply_checked_visual(self._checkbox.isChecked())
 
 
 class ChannelPanel(QWidget):

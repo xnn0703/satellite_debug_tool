@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark" data-density="compact" data-accent="teal">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Satellite Debug Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="live.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app" id="app">
+  <!-- global bar -->
+  <div class="gbar">
+    <div class="gbar-brand"><span class="gmark" data-icon="satellite" data-size="15"></span>Satellite Debug Tool</div>
+    <div class="seg seg--accent gtabs" id="tabs">
+      <button data-tab="live" class="is-active"><span data-icon="activity" data-size="13"></span>实时</button>
+      <button data-tab="playback"><span data-icon="history" data-size="13"></span>回放</button>
+      <button data-tab="log"><span data-icon="list" data-size="13"></span>Log</button>
+      <button data-tab="device"><span data-icon="cpu" data-size="13"></span>设备</button>
+    </div>
+    <div class="gbar-right">
+      <button class="btn btn--icon btn--ghost" id="themeBtn" title="主题"><span data-icon="moon" data-size="15"></span></button>
+      <button class="btn btn--ghost btn--sm" id="updateBtn"><span data-icon="refresh" data-size="13"></span>检查更新</button>
+      <button class="btn btn--icon btn--ghost" id="settingsBtn" title="设置"><span data-icon="settings" data-size="15"></span></button>
+    </div>
+  </div>
+  <!-- tab view -->
+  <div class="view" id="view"></div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="icons.js"></script>
+<script src="charts.js"></script>
+<script src="chart-canvas.js"></script>
+<script src="state.js"></script>
+<script src="tab-live.js"></script>
+<script src="tab-playback.js"></script>
+<script src="tab-log.js"></script>
+<script src="tab-device.js"></script>
+<script src="modals.js"></script>
+<script src="tweaks.js"></script>
+<script src="shell.js"></script>
+</body>
+</html>

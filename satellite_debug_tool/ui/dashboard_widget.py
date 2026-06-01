@@ -125,34 +125,28 @@ class KpiCard(QFrame):
         self.setMinimumWidth(min_w)
 
     def _apply_style(self, normal: bool) -> None:
+        """Mission Console KPI 卡：左 2px accent 竖条（告警变 err），微标签 + 等宽数字。"""
         p = S.palette(self._theme)
-        if normal:
-            card_bg = p["card"]
-            border = p["border"]
-        else:
-            # 告警色：三档主题下分别挑一档
-            if self._theme == "dark_hc":
-                card_bg = "#2A0000"
-            elif self._theme == "light":
-                card_bg = "#FFE8E8"
-            else:
-                card_bg = "#3B1F1F"
-            border = p["error"]
+        card_bg = p["card"]
+        # 左竖条颜色：正常 accent，告警 err
+        bar = p["accent"] if normal else p["err"]
         name_px = S.font_px(self._NAME_BASE_PX, self._scale)
         unit_px = S.font_px(self._UNIT_BASE_PX, self._scale)
         self.setStyleSheet(
-            f"KpiCard {{ background-color: {card_bg}; border: 1px solid {border}; "
-            f"border-radius: 4px; }}"
+            f"KpiCard {{ background-color: {card_bg}; "
+            f"border: 1px solid {p['border']}; border-left: 2px solid {bar}; "
+            f"border-radius: 7px; }}"
         )
+        # 微标签：大写感（字距 Qt 不支持，用弱色 + 600 字重替代）
         self._name_label.setStyleSheet(
-            f"color: {p['text_muted']}; font-size: {name_px}px; font-weight: 600; "
+            f"color: {p['text_3']}; font-size: {name_px}px; font-weight: 600; "
             f"background: transparent;"
         )
         self._value_label.setStyleSheet(
-            f"color: {p['value_number']}; background: transparent;"
+            f"color: {p['text'] if normal else p['err']}; background: transparent;"
         )
         self._unit_label.setStyleSheet(
-            f"color: {p['text_muted']}; font-size: {unit_px}px; background: transparent;"
+            f"color: {p['text_2']}; font-size: {unit_px}px; background: transparent;"
         )
 
     def update_value(self, value: Optional[float]) -> None:
