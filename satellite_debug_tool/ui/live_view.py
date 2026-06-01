@@ -208,21 +208,21 @@ class LiveView(QWidget):
         udp_layout.setSpacing(4)
 
         self._remote_ip = QLineEdit("192.168.1.12")
-        self._remote_ip.setFixedWidth(100)
+        self._remote_ip.setMinimumWidth(124)   # 容下完整 IP（等宽字体）
         udp_layout.addWidget(QLabel("Remote IP:"))
         udp_layout.addWidget(self._remote_ip)
 
         self._remote_port = QSpinBox()
         self._remote_port.setRange(1, 65535)
         self._remote_port.setValue(4004)
-        self._remote_port.setFixedWidth(70)
+        self._remote_port.setMinimumWidth(78)
         udp_layout.addWidget(QLabel("Remote Port:"))
         udp_layout.addWidget(self._remote_port)
 
         self._local_port = QSpinBox()
         self._local_port.setRange(1, 65535)
         self._local_port.setValue(45678)
-        self._local_port.setFixedWidth(70)
+        self._local_port.setMinimumWidth(82)
         udp_layout.addWidget(QLabel("Local Port:"))
         udp_layout.addWidget(self._local_port)
         self._config_stack.addWidget(self._udp_widget)
@@ -1022,10 +1022,12 @@ class LiveView(QWidget):
         self._conn_card.setStyleSheet(
             f"#connCard {{ background-color: {pal['card']}; border: 1px solid {pal['border_2']}; "
             f"border-radius: 7px; }}"
+            f"#connCard QLabel {{ background: transparent; }}"
             f"#csIcon {{ background-color: {tint_soft}; border-radius: 7px; }}"
             f"#csDev {{ color: {pal['text']}; font-family: \"{mono}\"; font-weight: 600; "
-            f"font-size: {S.font_px(13, scale)}px; }}"
-            f"#csStat {{ color: {pal['text_2']}; font-size: {S.font_px(10, scale)}px; }}"
+            f"font-size: {S.font_px(13, scale)}px; background: transparent; }}"
+            f"#csStat {{ color: {pal['text_2']}; font-size: {S.font_px(10, scale)}px; "
+            f"background: transparent; }}"
         )
         try:
             from satellite_debug_tool.ui import icons as _ic
