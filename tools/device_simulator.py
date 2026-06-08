@@ -212,6 +212,13 @@ def _afd01_profile() -> ProfileSpec:
         return max(0.0, base + random.uniform(-1.5, 1.5))
     def cpu(t: float)   -> float: return 25 + 10 * math.sin(t * 0.1)
 
+    # GPS 轨迹：南京新街口附近，模拟车载终端缓慢游走（椭圆 + 前向漂移），
+    # 录制几分钟后回放可在离线地图上看到一段清晰轨迹 + 起点(绿)/终点(红)。
+    _LAT0, _LON0 = 32.0603, 118.7969
+    def gps_lat(t: float) -> float: return _LAT0 + 0.0050 * math.sin(t * 0.020) + 0.00008 * t
+    def gps_lon(t: float) -> float: return _LON0 + 0.0065 * math.cos(t * 0.020) + 0.00010 * t
+    def gps_alt(t: float) -> float: return 25.0 + 8.0 * math.sin(t * 0.06)
+
     return ProfileSpec(
         hw_type="afd01", fw_ver="afd01-sim-2.0", device_sn="SIM-AFD01-001",
         channels=[
@@ -226,6 +233,10 @@ def _afd01_profile() -> ProfileSpec:
             ChannelSpec(8, "err_az",   "°",  3, False, -10,  10,  lambda t: 0.3 * math.sin(t)),
             ChannelSpec(9, "err_el",   "°",  3, False, -10,  10,  lambda t: 0.2 * math.cos(t)),
             ChannelSpec(10, "snr",     "dB", 2, True,  0,    60,  snr),
+            # 位置（group 4）—— 离线地图按 gps_lat / gps_lon 通道名自动启用
+            ChannelSpec(11, "gps_lat", "°",  4, True,  31.5, 32.5,  gps_lat),
+            ChannelSpec(12, "gps_lon", "°",  4, True,  118.5, 119.5, gps_lon),
+            ChannelSpec(13, "gps_alt", "m",  4, False, 0,    200,   gps_alt),
             ChannelSpec(15, "cpu_load","%",  5, False, 0,    100, cpu),
         ],
         states=[
