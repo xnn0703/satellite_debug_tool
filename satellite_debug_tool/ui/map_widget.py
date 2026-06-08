@@ -70,11 +70,13 @@ class MapWidget(QWidget):
         tiles_root: Optional[Path] = None,
         region: Optional[str] = None,
         parent: Optional[QWidget] = None,
+        tianditu_token: str = "",
     ):
         super().__init__(parent)
         self._tiles_root = tiles_root or DEFAULT_TILES_ROOT
         self._region: Optional[Path] = None
         self._region_label: Optional[str] = region
+        self._tianditu_token = (tianditu_token or "").strip()
         self._pending_js: list[str] = []   # HTML 还没加载完时缓冲的 JS 调用
         self._loaded = False
         self._theme = "dark"
@@ -91,10 +93,18 @@ class MapWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self._view = QWebEngineView(self)
+        # 天地图对浏览器 UA(Mozilla) 强制 Referer 白名单校验 → 403；非浏览器 UA 放行。
+        # QWebEngine 默认 Chromium UA 会被挡，改成自定义 UA 即可正常拉天地图瓦片。
+        try:
+            from satellite_debug_tool import __version__ as _ver
+            self._view.page().profile().setHttpUserAgent(f"satellite_debug_tool/{_ver}")
+        except Exception:
+            pass
         # 允许 file:// 协议加载本地资源（Leaflet 引用 ./leaflet/leaflet.js 等）
         settings = self._view.settings()
         settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
-        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, False)
+        # 在线地图（天地图）需要本地 HTML 访问远程瓦片
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
         layout.addWidget(self._view)
         self._view.loadFinished.connect(self._on_load_finished)
 
@@ -109,13 +119,8 @@ class MapWidget(QWidget):
             _LOG.warning("map.html load failed")
             return
         self._loaded = True
-        # 注入 tile URL
-        if self._region is not None:
-            url = _tiles_url_template(self._region)
-            attribution = f"© OpenStreetMap · 离线缓存 {self._region.name}"
-            self._call_js(f"setTileURL({json.dumps(url)}, {json.dumps(attribution)}, 19)")
-        else:
-            self._call_js("setTileURL(null, '', 19)")
+        # 选源：有天地图 token → 在线天地图（坐标准）；否则 → OSM 离线缓存
+        self._apply_tile_source()
         # 主题
         self._call_js(f"setTheme({json.dumps(self._theme)})")
         # 把缓冲的 JS 调用回放
@@ -123,6 +128,28 @@ class MapWidget(QWidget):
             self._call_js(code)
         self._pending_js.clear()
         self.map_ready.emit()
+
+    def _apply_tile_source(self) -> None:
+        """按当前配置选择瓦片源：天地图在线优先，回落 OSM 离线，再回落 placeholder。"""
+        if self._tianditu_token:
+            attribution = "© 天地图 (WGS-84)"
+            self._call_js(
+                f"setTiandituOnline({json.dumps(self._tianditu_token)}, "
+                f"{json.dumps(attribution)}, 18)"
+            )
+            return
+        if self._region is not None:
+            url = _tiles_url_template(self._region)
+            attribution = f"© OpenStreetMap · 离线缓存 {self._region.name}"
+            self._call_js(f"setTileURL({json.dumps(url)}, {json.dumps(attribution)}, 19)")
+        else:
+            self._call_js("setTileURL(null, '', 19)")
+
+    def set_tianditu_token(self, token: str) -> None:
+        """设置/更新天地图 token；已加载则立即切换瓦片源。"""
+        self._tianditu_token = (token or "").strip()
+        if self._loaded:
+            self._apply_tile_source()
 
     # =============================== API ===============================
 

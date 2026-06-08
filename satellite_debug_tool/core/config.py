@@ -35,6 +35,10 @@ class Settings:
             "last_check_iso": "",                # 上次检查时间（UTC ISO 字符串）
             "skip_version": "",                  # 用户跳过的 tag；同 tag 不再弹窗
         },
+        # 地图：天地图在线 token（WGS-84 坐标，与 GPS 一致）；空则回落 OSM 离线缓存
+        "map": {
+            "tianditu_token": "",                # lbs.tianditu.gov.cn 申请的应用密钥(tk)
+        },
     }
 
     def __init__(self):

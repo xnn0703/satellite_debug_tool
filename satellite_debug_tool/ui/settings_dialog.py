@@ -69,6 +69,20 @@ class SettingsDialog(QDialog):
             "选择固件导入目录"
         )
 
+        # 地图：天地图 token（在线地图 + GPS 轨迹，坐标准）
+        td_row = QHBoxLayout()
+        td_lbl = QLabel("天地图 token:")
+        td_lbl.setMinimumWidth(120)
+        self._tianditu_edit = QLineEdit(self._settings.get("map.tianditu_token", ""))
+        self._tianditu_edit.setPlaceholderText("lbs.tianditu.gov.cn 申请的应用密钥（留空用 OSM 离线）")
+        self._tianditu_edit.setToolTip(
+            "天地图在线瓦片密钥（tk）。填入后回放/Log 地图用天地图（WGS-84 坐标，"
+            "与 GPS 一致）；留空则回落到 OSM 离线缓存瓦片。"
+        )
+        td_row.addWidget(td_lbl)
+        td_row.addWidget(self._tianditu_edit, 1)
+        outer.addLayout(td_row)
+
         # M10 F2：图表分组管理入口（profile_store 提供时启用）
         chart_row = QHBoxLayout()
         chart_row.addWidget(QLabel("图表分组:"))
@@ -162,6 +176,8 @@ class SettingsDialog(QDialog):
         self._settings.set("paths.recording_dir", self._recording_edit.text().strip())
         self._settings.set("paths.log_dir", self._log_edit.text().strip())
         self._settings.set("paths.firmware_dir", self._firmware_edit.text().strip())
+        # 地图 token
+        self._settings.set("map.tianditu_token", self._tianditu_edit.text().strip())
         # M11：更新设置
         self._settings.set("update.auto_check", bool(self._cb_auto_check.isChecked()))
         self._settings.set("update.check_interval_hours", int(self._spin_interval.value()))

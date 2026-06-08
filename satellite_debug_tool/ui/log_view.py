@@ -410,7 +410,10 @@ class LogView(QWidget):
 
     def _build_map_dock(self) -> None:
         from satellite_debug_tool.ui.map_widget import MapWidget
-        self._map_widget = MapWidget()
+        token = ""
+        if self._settings is not None:
+            token = self._settings.get("map.tianditu_token", "") or ""
+        self._map_widget = MapWidget(tianditu_token=token)
         self._map_widget.set_theme(self._theme, "small")
         self._map_dock = QDockWidget("地图 — Log", self)
         self._map_dock.setAllowedAreas(Qt.NoDockWidgetArea)
