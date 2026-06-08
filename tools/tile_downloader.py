@@ -21,13 +21,34 @@ from __future__ import annotations
 
 import argparse
 import math
+import ssl
 import sys
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
+
+
+def make_ssl_context(insecure: bool = False) -> Optional[ssl.SSLContext]:
+    """构造 HTTPS SSL 上下文。
+
+    macOS 上 python.org 安装的 Python 不走系统证书库，默认 urllib 验证会报
+    CERTIFICATE_VERIFY_FAILED。优先用 certifi 的 CA bundle；insecure=True 时
+    跳过验证（OSM 公开瓦片，低风险兜底）。
+    """
+    if insecure:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        # certifi 不可用 → 用默认（可能仍失败，提示用户加 --insecure）
+        return ssl.create_default_context()
 
 
 __all__ = [
@@ -121,6 +142,7 @@ def download_tile(
     url_template: str,
     dest_path: Path,
     timeout: float = 15.0,
+    ssl_context: Optional[ssl.SSLContext] = None,
 ) -> bool:
     """下载单个 tile。返回 True 表示成功（或已存在）。失败抛异常。"""
     if dest_path.exists() and dest_path.stat().st_size > 0:
@@ -130,7 +152,7 @@ def download_tile(
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest_path.with_suffix(".png.tmp")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context) as resp:
             data = resp.read()
         tmp_path.write_bytes(data)
         tmp_path.replace(dest_path)
@@ -152,10 +174,12 @@ def download_tiles(
     url_template: str = DEFAULT_TILE_URL_TEMPLATE,
     rate_per_sec: float = 2.0,
     progress_cb=None,
+    insecure: bool = False,
 ) -> dict:
     """主入口。返回 stats dict。"""
     root = cache_dir / label
     root.mkdir(parents=True, exist_ok=True)
+    ssl_context = make_ssl_context(insecure)
 
     tiles = list(iter_tiles(bbox, zooms))
     total = len(tiles)
@@ -181,7 +205,7 @@ def download_tiles(
                 time.sleep(interval - delta)
         last_req = time.monotonic()
         try:
-            download_tile(t, url_template, dest)
+            download_tile(t, url_template, dest, ssl_context=ssl_context)
             downloaded += 1
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
             failed += 1
@@ -230,13 +254,15 @@ def main(argv: list[str] | None = None) -> int:
                    help="tile URL 模板（含 {z}/{x}/{y} 占位）")
     p.add_argument("--rate", type=float, default=2.0,
                    help="每秒请求数上限（OSM fair use 默认 2）")
+    p.add_argument("--insecure", action="store_true",
+                   help="跳过 HTTPS 证书验证（macOS python.org 证书问题兜底；OSM 公开瓦片低风险）")
     args = p.parse_args(argv)
 
     bbox = parse_bbox(args.bbox)
     zooms = parse_zoom_spec(args.zoom)
     print(f"区域: {bbox}, zoom: {zooms}, label: {args.label}")
     print(f"  缓存目录: {Path(args.cache) / args.label}")
-    print(f"  限速: {args.rate} req/s")
+    print(f"  限速: {args.rate} req/s" + ("（不验证证书）" if args.insecure else ""))
 
     stats = download_tiles(
         bbox=bbox,
@@ -246,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         url_template=args.source,
         rate_per_sec=args.rate,
         progress_cb=_default_progress,
+        insecure=args.insecure,
     )
     print(f"完成: 总 {stats['total']}, 新下 {stats['downloaded']}, "
           f"跳过 {stats['skipped']}, 失败 {stats['failed']}")
