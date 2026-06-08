@@ -166,6 +166,27 @@ def download_tile(
         raise
 
 
+class _RateGate:
+    """跨线程共享的全局限速器（简单令牌间隔 + Lock）。"""
+
+    def __init__(self, rate_per_sec: float):
+        import threading
+        self._interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def wait(self) -> None:
+        if self._interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            sleep_for = self._next - now
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+                now = time.monotonic()
+            self._next = now + self._interval
+
+
 def download_tiles(
     bbox: tuple[float, float, float, float],
     zooms: list[int],
@@ -175,50 +196,63 @@ def download_tiles(
     rate_per_sec: float = 2.0,
     progress_cb=None,
     insecure: bool = False,
+    workers: int = 1,
 ) -> dict:
-    """主入口。返回 stats dict。"""
+    """主入口。返回 stats dict。
+
+    workers>1 时并行下载（共享全局限速器：总速率仍受 rate_per_sec 约束，
+    但多线程隐藏每请求的网络往返延迟 → 实测可比单线程快数倍）。
+    """
     root = cache_dir / label
     root.mkdir(parents=True, exist_ok=True)
     ssl_context = make_ssl_context(insecure)
 
     tiles = list(iter_tiles(bbox, zooms))
     total = len(tiles)
-    interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
+    gate = _RateGate(rate_per_sec)
 
-    downloaded = 0
-    skipped = 0
-    failed = 0
+    import threading
+    state_lock = threading.Lock()
+    counters = {"downloaded": 0, "skipped": 0, "failed": 0, "done": 0}
     failed_tiles: list[TileCoord] = []
-    last_req = 0.0
 
-    for i, t in enumerate(tiles, start=1):
+    def _bump(key: str, tile: Optional[TileCoord] = None) -> None:
+        with state_lock:
+            counters[key] += 1
+            counters["done"] += 1
+            if tile is not None:
+                failed_tiles.append(tile)
+            done = counters["done"]
+        if progress_cb:
+            progress_cb(done, total, counters["downloaded"],
+                        counters["skipped"], counters["failed"])
+
+    def _work(t: TileCoord) -> None:
         dest = t.to_path(root)
         if dest.exists() and dest.stat().st_size > 0:
-            skipped += 1
-            if progress_cb:
-                progress_cb(i, total, downloaded, skipped, failed)
-            continue
-        # 限速
-        if interval > 0:
-            delta = time.monotonic() - last_req
-            if delta < interval:
-                time.sleep(interval - delta)
-        last_req = time.monotonic()
+            _bump("skipped")
+            return
+        gate.wait()
         try:
             download_tile(t, url_template, dest, ssl_context=ssl_context)
-            downloaded += 1
+            _bump("downloaded")
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
-            failed += 1
-            failed_tiles.append(t)
+            _bump("failed", tile=t)
             print(f"  ! failed z={t.z} x={t.x} y={t.y}: {exc}", file=sys.stderr)
-        if progress_cb:
-            progress_cb(i, total, downloaded, skipped, failed)
+
+    if workers <= 1:
+        for t in tiles:
+            _work(t)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(_work, tiles))
 
     return {
         "total": total,
-        "downloaded": downloaded,
-        "skipped": skipped,
-        "failed": failed,
+        "downloaded": counters["downloaded"],
+        "skipped": counters["skipped"],
+        "failed": counters["failed"],
         "failed_tiles": failed_tiles,
         "root": root,
     }
@@ -253,7 +287,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--source", default=DEFAULT_TILE_URL_TEMPLATE,
                    help="tile URL 模板（含 {z}/{x}/{y} 占位）")
     p.add_argument("--rate", type=float, default=2.0,
-                   help="每秒请求数上限（OSM fair use 默认 2）")
+                   help="每秒请求数上限（OSM fair use 默认 2；自建/CDN 源可调高）")
+    p.add_argument("--workers", type=int, default=1,
+                   help="并行下载线程数（默认 1；建议 4-8，配合 --rate 提速）")
     p.add_argument("--insecure", action="store_true",
                    help="跳过 HTTPS 证书验证（macOS python.org 证书问题兜底；OSM 公开瓦片低风险）")
     args = p.parse_args(argv)
@@ -262,7 +298,8 @@ def main(argv: list[str] | None = None) -> int:
     zooms = parse_zoom_spec(args.zoom)
     print(f"区域: {bbox}, zoom: {zooms}, label: {args.label}")
     print(f"  缓存目录: {Path(args.cache) / args.label}")
-    print(f"  限速: {args.rate} req/s" + ("（不验证证书）" if args.insecure else ""))
+    print(f"  限速: {args.rate} req/s, 并行: {args.workers}"
+          + ("（不验证证书）" if args.insecure else ""))
 
     stats = download_tiles(
         bbox=bbox,
@@ -273,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
         rate_per_sec=args.rate,
         progress_cb=_default_progress,
         insecure=args.insecure,
+        workers=args.workers,
     )
     print(f"完成: 总 {stats['total']}, 新下 {stats['downloaded']}, "
           f"跳过 {stats['skipped']}, 失败 {stats['failed']}")
