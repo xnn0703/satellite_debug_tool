@@ -63,7 +63,6 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-import pyqtgraph.opengl as gl
 from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLMeshItem, MeshData
 
 from satellite_debug_tool.ui import styles as S
@@ -72,6 +71,12 @@ from satellite_debug_tool.ui import styles as S
 # ------ 坐标系常数（见文件头注释） ------
 R_POINTING = 4.0             # 波束矢量画到球面半径
 SCAN_TRAIL_LEN = 300         # 扫描轨迹最长保留点数
+
+# 默认相机：距离拉远到能同时框住模型(±1.8)+波束(半径4)+扫描椭圆，
+# 仰角压低些避免波束顶端被裁。复位视角与初始化共用这组参数。
+_CAM_DISTANCE = 14.0
+_CAM_ELEVATION = 22.0
+_CAM_AZIMUTH = 45.0
 
 # NED↔NWU 映射（也用于 FRD↔FLU）：Y,Z 翻号，det=+1 保持右手系
 P_NED_NWU = np.diag([1.0, -1.0, -1.0]).astype(np.float64)
@@ -151,6 +156,15 @@ class AttitudeWidget(QWidget):
         self._scan_trail: deque = deque(maxlen=SCAN_TRAIL_LEN)
         # 机体→世界旋转矩阵（由 update_attitude 维护）
         self._body_rot = np.eye(3, dtype=np.float64)
+        # 设备 STL 模型朝向（STL 轴 → widget FLU：X=机头/Y=左翼/Z=天顶）。
+        # afd01 STL：Z(厚度52)=天顶, X(长241)=机头方向；不对就改这几个参数翻向。
+        self._model_up_axis = 2
+        self._model_nose_axis = 0
+        self._model_nose_sign = 1.0
+        self._loaded_model_hw = None
+        # 设备 STL 原始 verts/faces（加载后保留，切主题时重新烘焙明暗）
+        self._device_verts = None
+        self._device_faces = None
 
         self._setup_ui()
 
@@ -169,7 +183,8 @@ class AttitudeWidget(QWidget):
         topbar_layout.addStretch(1)
         self._reset_view_btn = QPushButton("复位视角")
         self._reset_view_btn.setToolTip(
-            "把 3D 相机恢复到默认角度（distance=10 / elev=30 / azim=45）"
+            f"把 3D 相机恢复到默认角度"
+            f"（distance={_CAM_DISTANCE:g} / elev={_CAM_ELEVATION:g} / azim={_CAM_AZIMUTH:g}）"
         )
         self._reset_view_btn.clicked.connect(self._reset_view)
         topbar_layout.addWidget(self._reset_view_btn)
@@ -177,15 +192,15 @@ class AttitudeWidget(QWidget):
 
         # ---- 3D OpenGL view ----
         self._gl_view = GLViewWidget()
-        self._gl_view.setCameraPosition(distance=10, elevation=30, azimuth=45)
+        self._gl_view.setCameraPosition(
+            distance=_CAM_DISTANCE, elevation=_CAM_ELEVATION, azimuth=_CAM_AZIMUTH
+        )
         self._gl_view.setBackgroundColor(0x1E, 0x1E, 0x1E)
 
-        # 栅格
-        grid = gl.GLGridItem()
-        grid.setSize(20, 20)
-        grid.setSpacing(1, 1)
-        grid.setColor((0x3C, 0x3C, 0x3C, 0.8))
-        self._gl_view.addItem(grid)
+        # 地面参考网格已移除：z=0 网格平面会横穿居中的设备模型，网格线在穿出
+        # 模型边缘处显示成白色斜纹（很扎眼），且对姿态判读帮助不大。保留 None
+        # 占位让 _apply_scene_colors 的 grid 分支安全跳过。
+        self._grid = None
 
         # 参考轴（body frame）
         self._axes = self._create_axes()
@@ -204,12 +219,19 @@ class AttitudeWidget(QWidget):
 
         # 实时波束矢量（绿）+ 扫描轨迹（淡蓝），已反向解链到 widget 世界系 (NWU)
         empty2 = np.empty((0, 3), dtype=np.float32)
-        self._ant_line = GLLinePlotItem(pos=empty2, color=(0.30, 0.95, 0.50, 1.0), width=2.5)
+        # antialias=True：macOS GL 常把 width>1 截成 1px，开抗锯齿能让粗细生效，
+        # 否则浅色背景下细线很淡看不清。
+        self._ant_line = GLLinePlotItem(
+            pos=empty2, color=(0.30, 0.95, 0.50, 1.0), width=3.5, antialias=True
+        )
         self._trail_line = GLLinePlotItem(
-            pos=empty2, color=(0.50, 0.80, 1.0, 0.70), width=1.5,
+            pos=empty2, color=(0.50, 0.80, 1.0, 0.70), width=2.0, antialias=True
         )
         for it in (self._ant_line, self._trail_line):
             self._gl_view.addItem(it)
+
+        # 场景元素（grid/beam/trail/axes）颜色按当前主题刷一遍
+        self._apply_scene_colors()
 
         layout.addWidget(self._gl_view, stretch=1)
 
@@ -336,21 +358,106 @@ class AttitudeWidget(QWidget):
         mesh.setColor((0.95, 0.20, 0.20, 0.95))   # 醒目的红
         return mesh
 
-    def set_body_model(self, mesh_data: MeshData) -> None:
-        """替换默认长方体为自定义 3D 模型（未来接设备 STL/OBJ 用）。
+    def set_body_model(self, mesh_data: MeshData, draw_edges: bool = False) -> None:
+        """替换默认长方体为自定义 3D 模型（设备 STL/OBJ 用）。
 
-        调用方负责保证 mesh_data 顶点单位与默认模型一致（长边 ~3 单位）。
+        从 mesh_data 取顶点/面后保存，转交 _rebuild_device_body 按当前主题烘焙
+        明暗。draw_edges 已弃用（大网格描边会糊成一团），保留签名兼容。
         """
-        if self._body is not None:
-            self._gl_view.removeItem(self._body)
-        self._body = GLMeshItem(
-            meshdata=mesh_data,
-            smooth=False,
-            drawEdges=True,
-            edgeColor=(0.45, 0.55, 0.75, 1),
+        _ = draw_edges
+        try:
+            verts = np.asarray(mesh_data.vertexes(), dtype=np.float32)
+            faces = np.asarray(mesh_data.faces())
+        except Exception:
+            return
+        self._device_verts = verts
+        self._device_faces = faces
+        self._rebuild_device_body()
+
+    def _body_shade_params(self):
+        """返回 (base_rgb, ambient, light_dir)，按主题调亮度，保证白底/黑底都清晰。"""
+        if self._theme == "light":
+            # 白底：整体压暗，最亮面也只到中灰蓝，轮廓清楚不发白
+            return (0.40, 0.46, 0.56), 0.42, (0.35, 0.45, 0.82)
+        # 黑底：整体提亮，金属灰蓝
+        return (0.66, 0.72, 0.82), 0.30, (0.35, 0.45, 0.82)
+
+    def _bake_lambert_facecolors(self, verts: np.ndarray, faces: np.ndarray) -> np.ndarray:
+        """给每个三角面烘焙 Lambert 明暗（与背景无关），返回 (M,4) float32 RGBA。
+
+        STL 无贴图/颜色，靠固定方向光的明暗体现立体细节。用 |n·L| 双面受光，
+        避免 CAD 模型法线朝向不一致时背面变纯黑。intensity ∈ [ambient, 1]。
+        """
+        base, ambient, light = self._body_shade_params()
+        tri = verts[faces.astype(np.intp)]                    # (M,3,3)
+        n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
+        L = np.asarray(light, dtype=np.float64)
+        L /= np.linalg.norm(L)
+        lam = np.clip(np.abs(n @ L), 0.0, 1.0)                # (M,) 双面受光
+        inten = ambient + (1.0 - ambient) * lam
+        rgba = np.ones((faces.shape[0], 4), dtype=np.float32)
+        rgba[:, :3] = (inten[:, None] * np.asarray(base)).astype(np.float32)
+        return rgba
+
+    def _rebuild_device_body(self) -> None:
+        """用当前主题烘焙的 Lambert 面色重建设备 mesh（无 device 模型时 no-op）。"""
+        if self._device_verts is None or self._device_faces is None:
+            return
+        rgba = self._bake_lambert_facecolors(self._device_verts, self._device_faces)
+        md = MeshData(
+            vertexes=self._device_verts, faces=self._device_faces, faceColors=rgba
         )
-        self._body.setColor((0.35, 0.45, 0.65, 0.95))
+        prev_tf = None
+        if self._body is not None:
+            try:
+                prev_tf = self._body.transform()
+            except Exception:
+                prev_tf = None
+            self._gl_view.removeItem(self._body)
+        # shader=None → 直接用烘焙好的面色，不被着色器二次调制（'shaded' 会把
+        # 轮廓洗白，在白底上糊成黑块）。smooth=False 保持每面独立明暗。
+        self._body = GLMeshItem(meshdata=md, smooth=False, drawEdges=False, shader=None)
+        # 关键：update_attitude 旋转的是 self._aircraft，必须同步指向新 mesh
+        self._aircraft = self._body
         self._gl_view.addItem(self._body)
+        # 换上真实设备模型后，抽象红箭头既被大面板包住看不见、也不再需要
+        self._nose_arrow.setVisible(False)
+        # 沿用换模型前的姿态变换，避免重建时停在零姿态一帧
+        try:
+            self._aircraft.setTransform(prev_tf or self._nose_arrow.transform())
+        except Exception:
+            pass
+
+    def try_load_device_model(self, hw_type: str) -> bool:
+        """尝试加载 ~/.satellite_debug_tool/models/<hw_type>.stl 替换默认模型。
+
+        找到并加载成功返回 True；否则保持默认占位长方体返回 False。
+        设备 STL 不入仓库（可能是公司专有几何），放本地模型目录按需加载。
+        """
+        if not hw_type:
+            return False
+        if getattr(self, "_loaded_model_hw", None) == hw_type:
+            return True   # 同一设备已加载，幂等
+        from pathlib import Path
+        model_path = Path.home() / ".satellite_debug_tool" / "models" / f"{hw_type}.stl"
+        if not model_path.is_file():
+            return False
+        try:
+            from satellite_debug_tool.ui.stl_loader import load_stl, normalize_mesh
+            verts, faces = load_stl(model_path)
+            verts = normalize_mesh(
+                verts, target_size=3.6,
+                up_axis=self._model_up_axis,
+                nose_axis=self._model_nose_axis,
+                nose_sign=self._model_nose_sign,
+            )
+            md = MeshData(vertexes=verts, faces=faces)
+            self.set_body_model(md, draw_edges=False)
+            self._loaded_model_hw = hw_type
+            return True
+        except Exception:
+            return False
 
     def set_channel_options(self, names: list[str]) -> None:
         """旧 API：曾用于刷新 combo 候选项。2026-04-21 combo 已移除，
@@ -489,7 +596,9 @@ class AttitudeWidget(QWidget):
 
     def _reset_view(self) -> None:
         """把 3D 相机恢复到默认角度。"""
-        self._gl_view.setCameraPosition(distance=10, elevation=30, azimuth=45)
+        self._gl_view.setCameraPosition(
+            distance=_CAM_DISTANCE, elevation=_CAM_ELEVATION, azimuth=_CAM_AZIMUTH
+        )
 
     def update_pointing(
         self,
@@ -559,7 +668,40 @@ class AttitudeWidget(QWidget):
             self._gl_view.setBackgroundColor(0xFF, 0xFF, 0xFF)
         else:
             self._gl_view.setBackgroundColor(0x1E, 0x1E, 0x1E)
+        self._apply_scene_colors()
         self._apply_label_styles()
+
+    def _apply_scene_colors(self) -> None:
+        """按主题刷新 3D 场景里 grid / 波束 / 扫描轨迹 / 参考轴的颜色。
+
+        浅色背景下原来的亮绿波束、淡蓝轨迹、深灰栅格几乎看不见，这里给浅色主题
+        换成深而饱和的颜色，保证在白底上对比足够。"""
+        light = self._theme == "light"
+        if light:
+            grid_color = (0.80, 0.80, 0.84, 0.45)   # 浅灰，淡淡的参考网格不抢眼
+            beam_color = (0.00, 0.42, 0.00, 1.0)    # 纯饱和深绿，白底上细线也醒目
+            trail_color = (0.05, 0.20, 0.75, 0.95)  # 饱和深蓝
+            ax_x = (0.80, 0.00, 0.00, 1.0)          # 北：红
+            ax_y = (0.00, 0.45, 0.00, 1.0)          # 西：深绿
+            ax_z = (0.05, 0.10, 0.85, 1.0)          # 上：蓝
+        else:
+            grid_color = (0x3C / 255, 0x3C / 255, 0x3C / 255, 0.8)
+            beam_color = (0.30, 0.95, 0.50, 1.0)
+            trail_color = (0.50, 0.80, 1.0, 0.70)
+            ax_x = (1.0, 0.0, 0.0, 1.0)
+            ax_y = (0.0, 1.0, 0.0, 1.0)
+            ax_z = (0.30, 0.45, 1.0, 1.0)
+        if getattr(self, "_grid", None) is not None:
+            self._grid.setColor(grid_color)
+        self._ant_line.setData(color=beam_color)
+        self._trail_line.setData(color=trail_color)
+        axes = getattr(self, "_axes", {}) or {}
+        for key, col in (("x", ax_x), ("y", ax_y), ("z", ax_z)):
+            if key in axes:
+                axes[key].setData(color=col)
+        # 设备模型明暗按主题重新烘焙（白底压暗 / 黑底提亮）
+        if getattr(self, "_device_verts", None) is not None:
+            self._rebuild_device_body()
 
     def clear(self) -> None:
         """Reset the body to default orientation and clear pointing scene."""

@@ -342,7 +342,7 @@ class LiveView(QWidget):
         right_panel.setMinimumWidth(300)
 
         self._attitude = AttitudeWidget()
-        self._attitude.setMinimumHeight(220)
+        self._attitude.setMinimumHeight(300)
         self._attitude.set_dark_theme(True)
         right_panel.addWidget(self._attitude)
 
@@ -353,10 +353,10 @@ class LiveView(QWidget):
         self._event_timeline = EventTimelineWidget(self._event_log)
         self._event_timeline.jump_requested.connect(self._chart.jump_to_timestamp)
         right_panel.addWidget(self._event_timeline)
-        right_panel.setStretchFactor(0, 0)   # 姿态固定高
+        right_panel.setStretchFactor(0, 1)   # 姿态可随窗口增高（波束不被裁）
         right_panel.setStretchFactor(1, 0)   # 状态紧凑
         right_panel.setStretchFactor(2, 1)   # 事件填充
-        right_panel.setSizes([240, 200, 320])
+        right_panel.setSizes([340, 200, 300])
         top_splitter.addWidget(right_panel)
 
         # 3 列：通道 / chart / 右栏
@@ -552,6 +552,8 @@ class LiveView(QWidget):
         self._status_strip.set_hw_type(hw_type)
         self._chart.set_hw_type(hw_type)
         self._control_panel.set_hw_type(hw_type)
+        # 有设备专属 STL 模型（~/.satellite_debug_tool/models/<hw_type>.stl）则替换默认占位
+        self._attitude.try_load_device_model(hw_type)
 
     # ----- 命令下发 -----
 
