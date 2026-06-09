@@ -13,11 +13,13 @@ GroupedChartWidget — profile 驱动的分组曲线图。
 from __future__ import annotations
 
 import math
+import time
 from typing import Dict, List, Optional
 
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
@@ -142,9 +144,18 @@ class GroupedChartWidget(QWidget):
         # 回放/Log 模式不降（用户 zoom in 看细节靠 pyqtgraph auto-downsample）
         self._live_setdata_max_points: int = 3000
 
-        # M10 F1：归一化开关 + 各 plot 原始 Y 范围（toggle off 时恢复用）
+        # M10 F1 / M12：归一化。self._normalize = 工具栏全局默认（rebuild 时套到每个子图）；
+        # self._plot_normalize = 每个子图的实际开关（M12：可单独归一化某个表）
         self._normalize: bool = False
+        self._plot_normalize: Dict[int, bool] = {}        # plot_key -> 是否归一化
+        self._plot_norm_actions: Dict[int, QAction] = {}  # plot_key -> 右键菜单 action
+        self._plot_titles: Dict[int, str] = {}            # plot_key -> 原始标题（加「·归一」标记用）
         self._plot_y_ranges: Dict[int, tuple] = {}   # plot_key -> (ymin, ymax)
+        # M12：legend [min..max] 文字节流 —— 数学映射每帧做，但文字 ≤1Hz 才改，
+        # 避免每帧改 legend 触发图例重排导致卡顿
+        self._legend_label_by_curve: Dict[int, object] = {}  # id(curve) -> LabelItem
+        self._last_legend_ts: float = 0.0
+        self._legend_update_interval: float = 1.0            # 秒
         # M10 F4：每个 plot 是否被用户手动调过 Y（视觉提示用）
         self._y_overridden: Dict[int, bool] = {}
         # M10 P7：Settings 注入（用于 normalize 状态持久化），可选
@@ -280,21 +291,91 @@ class GroupedChartWidget(QWidget):
     # ---- M10 F1：归一化 ----
 
     def _on_normalize_toggled(self, on: bool) -> None:
-        """切换 Y 轴显示模式（绝对值 / 归一化）。"""
+        """工具栏全局开关：一键把所有子图设为归一化 / 绝对值。"""
         self._normalize = bool(on)
-        # 切换 Y 范围：归一化时 [-0.05, 1.05] + 隐藏 Y 刻度，否则恢复 display_min/max
-        for plot_key, plot in self._plots.items():
-            if self._normalize:
-                plot.setYRange(-0.05, 1.05, padding=0)
-                plot.getAxis("left").setStyle(showValues=False)
-            else:
-                orig = self._plot_y_ranges.get(plot_key)
-                if orig is not None:
-                    plot.setYRange(orig[0], orig[1], padding=0.05)
-                plot.getAxis("left").setStyle(showValues=True)
-        # 持久化到 settings.chart.normalize
+        for plot_key in list(self._plots.keys()):
+            self._set_plot_normalize(plot_key, self._normalize, sync_action=True)
+        # 持久化全局默认（rebuild 时作为各子图初始状态）
         if self._settings is not None:
             self._settings.set("chart.normalize", self._normalize)
+
+    def _is_plot_normalized(self, plot_key: int) -> bool:
+        return bool(self._plot_normalize.get(plot_key, False))
+
+    def _on_plot_normalize_toggled(self, plot_key: int, on: bool) -> None:
+        """右键菜单：只切换某一个子图的归一化。"""
+        self._set_plot_normalize(plot_key, bool(on), sync_action=False)
+        # 同步工具栏按钮：全部子图都归一化才算「全局开」
+        all_on = bool(self._plots) and all(
+            self._is_plot_normalized(k) for k in self._plots
+        )
+        if all_on != self._btn_normalize.isChecked():
+            self._btn_normalize.blockSignals(True)
+            self._btn_normalize.setChecked(all_on)
+            self._btn_normalize.blockSignals(False)
+            self._normalize = all_on
+
+    def _set_plot_normalize(self, plot_key: int, on: bool, sync_action: bool) -> None:
+        """设置单个子图归一化状态 + 切 Y 范围 + 标题标记 + 同步右键勾选态。"""
+        self._plot_normalize[plot_key] = on
+        self._apply_plot_normalize_view(plot_key, on)
+        self._apply_plot_title_marker(plot_key, on)
+        # 状态变了 → 让下一帧立刻刷新 legend [min..max]（不必等 1s 节流窗）
+        self._last_legend_ts = 0.0
+        if sync_action:
+            act = self._plot_norm_actions.get(plot_key)
+            if act is not None and act.isChecked() != on:
+                act.blockSignals(True)
+                act.setChecked(on)
+                act.blockSignals(False)
+
+    def _apply_plot_normalize_view(self, plot_key: int, on: bool) -> None:
+        """归一化时该子图 Y → [-0.05,1.05] 并隐藏 Y 刻度；否则恢复 display 范围。"""
+        plot = self._plots.get(plot_key)
+        if plot is None:
+            return
+        if on:
+            plot.setYRange(-0.05, 1.05, padding=0)
+            plot.getAxis("left").setStyle(showValues=False)
+        else:
+            orig = self._plot_y_ranges.get(plot_key)
+            if orig is not None:
+                plot.setYRange(orig[0], orig[1], padding=0.05)
+            plot.getAxis("left").setStyle(showValues=True)
+            # 关闭归一化 → 恢复纯名字 legend
+            for channel_id, (gid, curve, entry) in self._curves.items():
+                if gid == plot_key:
+                    self._restore_legend_label(plot, curve, entry.name)
+
+    def _apply_plot_title_marker(self, plot_key: int, on: bool) -> None:
+        """归一化的子图标题追加「 · 归一」，关闭时去掉。"""
+        plot = self._plots.get(plot_key)
+        if plot is None:
+            return
+        base = self._plot_titles.get(plot_key, "")
+        plot.setTitle(f"{base} · 归一" if on else base)
+
+    def _register_plot(self, plot_key: int, plot, base_title: str) -> None:
+        """rebuild 时登记子图：存标题、缓存 legend、加右键「归一化此图」、套全局默认。
+
+        必须在 self._plots[plot_key]=plot 且该子图所有 curve 建好之后调用。
+        """
+        self._plot_titles[plot_key] = base_title
+        self._cache_legend_labels(plot)
+        # 右键菜单加 checkable「归一化此图」
+        try:
+            menu = plot.getViewBox().menu
+            act = QAction("归一化此图", menu)
+            act.setCheckable(True)
+            act.toggled.connect(
+                lambda on, pk=plot_key: self._on_plot_normalize_toggled(pk, on)
+            )
+            menu.addAction(act)
+            self._plot_norm_actions[plot_key] = act
+        except Exception:
+            pass
+        # 套用全局默认（同步右键勾选 + Y 范围 + 标题标记）
+        self._set_plot_normalize(plot_key, self._normalize, sync_action=True)
 
     def set_settings(self, settings) -> None:
         """注入 Settings；构造后由调用方（LiveView / PlaybackView / LogView）传入。
@@ -308,39 +389,45 @@ class GroupedChartWidget(QWidget):
                 self._btn_normalize.setChecked(saved)   # 触发 _on_normalize_toggled
 
     @staticmethod
-    def _normalize_ys(ys, ys_for_range) -> np.ndarray:
+    def _normalize_ys(ys, ys_for_range):
         """把 ys 按 ys_for_range 的 min-max 映射到 [0, 1]。
 
-        ys_for_range 通常等于 ys（同一段数据自我归一化）；当需要按"可视窗口"
-        子集计算范围时由调用方先切片再传入。空数据 / 平直线 → 返回 0.5。
+        返回 (ys_draw, vmin, vmax)。ys_for_range 通常等于 ys（同一段数据自我
+        归一化）；按可视窗口子集计算时由调用方先切片再传入。vmin/vmax 顺带
+        返回，供 legend 文字复用，免得再算一遍 min/max。空 / 平直线 → 0.5。
         """
         if ys.size == 0:
-            return ys.astype(np.float32)
+            return ys.astype(np.float32), 0.0, 0.0
         ref = ys_for_range if ys_for_range.size > 0 else ys
         vmin = float(ref.min())
         vmax = float(ref.max())
         if vmax - vmin < 1e-9:
-            return np.full(ys.shape, 0.5, dtype=np.float32)
-        return ((ys.astype(np.float32) - vmin) / (vmax - vmin)).astype(np.float32)
+            return np.full(ys.shape, 0.5, dtype=np.float32), vmin, vmax
+        ys_draw = ((ys.astype(np.float32) - vmin) / (vmax - vmin)).astype(np.float32)
+        return ys_draw, vmin, vmax
 
-    def _update_legend_label(self, plot, curve, base_name: str,
-                             ymin: float, ymax: float) -> None:
-        """归一化模式下把 legend 标签从 `roll` 改成 `roll [-5.2..3.1]`。"""
+    def _cache_legend_labels(self, plot) -> None:
+        """rebuild 后把 plot 的 legend (sample→label) 按 id(curve) 建索引，
+        让 _update_legend_label O(1) 命中，干掉每帧 O(N²) 遍历。"""
         if plot.legend is None:
             return
         for sample, label in plot.legend.items:
-            if sample.item is curve:
-                label.setText(f"{base_name} [{ymin:.2g}..{ymax:.2g}]")
-                break
+            item = getattr(sample, "item", None)
+            if item is not None:
+                self._legend_label_by_curve[id(item)] = label
+
+    def _update_legend_label(self, curve, base_name: str,
+                             ymin: float, ymax: float) -> None:
+        """归一化模式下把 legend 标签从 `roll` 改成 `roll [-5.2..3.1]`（O(1) 查表）。"""
+        label = self._legend_label_by_curve.get(id(curve))
+        if label is not None:
+            label.setText(f"{base_name} [{ymin:.2g}..{ymax:.2g}]")
 
     def _restore_legend_label(self, plot, curve, base_name: str) -> None:
-        """归一化关闭时恢复纯名字 legend。"""
-        if plot.legend is None:
-            return
-        for sample, label in plot.legend.items:
-            if sample.item is curve:
-                label.setText(base_name)
-                break
+        """归一化关闭时恢复纯名字 legend（O(1) 查表，plot 参数保留兼容签名）。"""
+        label = self._legend_label_by_curve.get(id(curve))
+        if label is not None:
+            label.setText(base_name)
 
     # ---- M10 F4：独立 Y + 复位 ----
 
@@ -365,9 +452,9 @@ class GroupedChartWidget(QWidget):
             plot.getAxis("left").setTextPen("#FFA500")
 
     def _on_y_auto_clicked(self) -> None:
-        """复位所有子图 Y 到 display 范围（或归一化的 [0,1]）。"""
+        """复位所有子图 Y 到 display 范围（已归一化的子图复位到 [0,1]）。"""
         for plot_key, plot in self._plots.items():
-            if self._normalize:
+            if self._is_plot_normalized(plot_key):
                 plot.setYRange(-0.05, 1.05, padding=0)
             else:
                 rng = self._plot_y_ranges.get(plot_key)
@@ -547,6 +634,11 @@ class GroupedChartWidget(QWidget):
         else:
             tail_n = self._max_visible_points_live
 
+        # M12：legend [min..max] 文字 ≤1Hz 才更新（数学映射仍每帧），避免每帧
+        # 改 legend 触发图例重排卡顿。下面循环里只在 do_legend 为真时改文字。
+        now = time.monotonic()
+        do_legend = (now - self._last_legend_ts) >= self._legend_update_interval
+
         latest_x = None
         for channel_id, (group_id, curve, entry) in self._curves.items():
             buf = data_store.get_channel(channel_key(channel_id))
@@ -566,8 +658,8 @@ class GroupedChartWidget(QWidget):
                     xs_sec, ys, self._live_setdata_max_points
                 )
 
-            # M10 F1：归一化模式 —— 各曲线按自身可视窗口 min-max 映射到 [0, 1]
-            if self._normalize:
+            # M10 F1 / M12：按「该曲线所属子图」是否归一化分别处理（可单表归一化）
+            if self._is_plot_normalized(group_id):
                 plot = self._plots.get(group_id)
                 # 切片：只用当前可视窗口内的数据计算范围
                 if plot is not None:
@@ -576,17 +668,18 @@ class GroupedChartWidget(QWidget):
                     ys_for_range = ys[mask] if mask.any() else ys
                 else:
                     ys_for_range = ys
-                ymin = float(ys_for_range.min())
-                ymax = float(ys_for_range.max())
-                ys_draw = self._normalize_ys(ys, ys_for_range)
+                ys_draw, vmin, vmax = self._normalize_ys(ys, ys_for_range)
                 curve.setData(xs_sec, ys_draw)
-                if plot is not None:
-                    self._update_legend_label(plot, curve, entry.name, ymin, ymax)
+                if do_legend:
+                    self._update_legend_label(curve, entry.name, vmin, vmax)
             else:
                 curve.setData(xs_sec, ys)
 
             if xs_sec.size and (latest_x is None or xs_sec[-1] > latest_x):
                 latest_x = float(xs_sec[-1])
+
+        if do_legend:
+            self._last_legend_ts = now
 
         if latest_x is None or self._auto_range:
             return
@@ -707,6 +800,11 @@ class GroupedChartWidget(QWidget):
         self._event_lines.clear()
         self._plot_y_ranges.clear()   # rebuild 时丢旧 Y 范围
         self._y_overridden.clear()    # M10 F4：rebuild 重置 override 标记
+        # M12：rebuild 丢弃旧的归一化/legend 缓存（plot_key、curve 对象都变了）
+        self._plot_normalize.clear()
+        self._plot_norm_actions.clear()
+        self._plot_titles.clear()
+        self._legend_label_by_curve.clear()
         # 切换 mode / profile 时丢弃旧的 X 原点，避免新图沿用旧时间轴
         self._x_origin_ms = None
         self._x_view_max = 0.0
@@ -780,8 +878,11 @@ class GroupedChartWidget(QWidget):
         for i, ch in enumerate(channels):
             color = _COMBINED_PALETTE[i % len(_COMBINED_PALETTE)]
             label = f"{ch.name} ({ch.unit})" if ch.unit else ch.name
+            # antialias=False：曲线关抗锯齿（坐标轴/文字仍走全局 AA）。归一化后
+            # 噪声信号铺满全高变密集锯齿，AA 描这种长路径极慢 —— 这是归一化卡顿主因。
             curve = plot.plot(
-                [], [], pen=pg.mkPen(color=color, width=1.5), name=label
+                [], [], pen=pg.mkPen(color=color, width=1.5), name=label,
+                antialias=False,
             )
             self._curves[ch.channel_id] = (0, curve, ch)
 
@@ -796,10 +897,8 @@ class GroupedChartWidget(QWidget):
         plot.setXRange(0.0, self._time_window, padding=0)
         self._x_view_max = self._time_window
         self._plots[0] = plot
-        # 若 rebuild 时已是归一化模式，立即应用 [-0.05, 1.05]
-        if self._normalize:
-            plot.setYRange(-0.05, 1.05, padding=0)
-            plot.getAxis("left").setStyle(showValues=False)
+        # M12：登记子图（legend 缓存 + 右键归一化菜单 + 套全局默认 Y 范围）
+        self._register_plot(0, plot, "全部通道")
         # M10 F4：监听用户手动调 Y
         self._connect_user_y_override(0, plot)
 
@@ -861,8 +960,10 @@ class GroupedChartWidget(QWidget):
             for i, ch in enumerate(group_channels):
                 # 组内按索引从高区分度调色板取色（每组独立子图，组间撞色无妨）
                 color = _DISTINCT_PALETTE[i % len(_DISTINCT_PALETTE)]
+                # antialias=False：见 _rebuild_combined 注释（归一化卡顿主因）
                 curve = plot.plot(
-                    [], [], pen=pg.mkPen(color=color, width=1.5), name=ch.name
+                    [], [], pen=pg.mkPen(color=color, width=1.5), name=ch.name,
+                    antialias=False,
                 )
                 self._curves[ch.channel_id] = (group_id, curve, ch)
 
@@ -875,10 +976,8 @@ class GroupedChartWidget(QWidget):
                 self._plot_y_ranges[group_id] = (ymin, ymax)
 
             self._plots[group_id] = plot
-            # 归一化模式 rebuild 后立即应用
-            if self._normalize:
-                plot.setYRange(-0.05, 1.05, padding=0)
-                plot.getAxis("left").setStyle(showValues=False)
+            # M12：登记子图（legend 缓存 + 右键归一化菜单 + 套全局默认 Y 范围）
+            self._register_plot(group_id, plot, self._custom_group_title(group_id))
             # M10 F4：监听用户手动调 Y
             self._connect_user_y_override(group_id, plot)
 
