@@ -64,6 +64,7 @@ from satellite_debug_tool.ui.event_timeline_widget import EventTimelineWidget
 from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
 from satellite_debug_tool.ui.state_panel_widget import StatePanelWidget
 from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
+from satellite_debug_tool.ui.simulation_panel_widget import SimulationPanelWidget
 
 
 class LiveView(QWidget):
@@ -96,6 +97,9 @@ class LiveView(QWidget):
         self._debug_enabled = False
         self._recorder = None
         self._is_recording = False
+        # 仿真模式
+        self._mock_modem: object | None = None  # MockModem 实例（延迟导入）
+        self._sim_active = False
         self._frame_times: list[float] = []
         self._theme = "dark"
         self._is_dark_theme = True
@@ -273,6 +277,15 @@ class LiveView(QWidget):
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         self._toolbar.addWidget(self._clear_btn)
 
+        self._toolbar.addSeparator()
+
+        self._sim_btn = QPushButton("仿真")
+        self._sim_btn.setMinimumSize(74, 29)
+        self._sim_btn.setCheckable(True)
+        self._sim_btn.setToolTip("切换仿真模式（模拟对星，无需真实设备）")
+        self._sim_btn.clicked.connect(self._on_sim_toggled)
+        self._toolbar.addWidget(self._sim_btn)
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._toolbar.addWidget(spacer)
@@ -359,11 +372,19 @@ class LiveView(QWidget):
         right_panel.setSizes([340, 200, 300])
         top_splitter.addWidget(right_panel)
 
-        # 3 列：通道 / chart / 右栏
+        # 仿真面板（默认隐藏，仿真模式时作为第 4 列显示）
+        self._sim_panel = SimulationPanelWidget()
+        self._sim_panel.setVisible(False)
+        self._sim_panel.setMinimumWidth(240)
+        self._sim_panel.setMaximumWidth(300)
+        top_splitter.addWidget(self._sim_panel)
+
+        # 列：通道 / chart / 右栏 / 仿真面板(隐藏)
         top_splitter.setStretchFactor(0, 0)
         top_splitter.setStretchFactor(1, 1)
         top_splitter.setStretchFactor(2, 0)
-        top_splitter.setSizes([212, 868, 320])
+        top_splitter.setStretchFactor(3, 0)
+        top_splitter.setSizes([212, 868, 320, 0])
         top_splitter.splitterMoved.connect(self._on_top_splitter_moved)
         splitter.addWidget(top_splitter)
 
@@ -429,12 +450,13 @@ class LiveView(QWidget):
             self._record_btn.setIcon(_ic.icon("record", color=t2, size=14))
             self._import_btn.setIcon(_ic.icon("import", color=t2, size=14))
             self._clear_btn.setIcon(_ic.icon("trash", color=t2, size=14))
+            self._sim_btn.setIcon(_ic.icon("satellite", color=t2, size=14))
         except Exception:
             pass
         self._set_variant(self._connect_btn, "primary")
         self._set_variant(self._disconnect_btn, "danger")
         self._set_variant(self._clear_btn, "ghost")
-        for btn in (self._debug_btn, self._record_btn, self._import_btn):
+        for btn in (self._debug_btn, self._record_btn, self._import_btn, self._sim_btn):
             self._set_variant(btn, "")
         # 输入控件清内联样式 → 全局 QSS 接管
         for w in (self._type_combo, self._port_combo, self._baudrate_combo,
@@ -952,6 +974,86 @@ class LiveView(QWidget):
         self._frame_count_label.setText("FRM 0")
         self._error_count_label.setText("ERR 0")
         self.status_message.emit("Display cleared", 2000)
+
+    # ============================ 仿真模式 ============================
+
+    def _on_sim_toggled(self, checked: bool) -> None:
+        if checked:
+            self._start_simulation()
+        else:
+            self._stop_simulation()
+
+    def _start_simulation(self) -> None:
+        from satellite_debug_tool.core.simulation.mock_modem import MockModem
+        self._mock_modem = MockModem(self)
+        self._mock_modem.snr_updated.connect(self._sim_panel.update_snr)
+        self._mock_modem.report_received.connect(self._sim_panel.update_report)
+        self._mock_modem.metrics_updated.connect(self._sim_panel.update_metrics)
+
+        # 连接面板信号
+        self._sim_panel.satellite_changed.connect(self._on_sim_sat_changed)
+        self._sim_panel.blockage_requested.connect(self._on_sim_blockage)
+        self._sim_panel.rain_fade_changed.connect(self._on_sim_rain_changed)
+        if hasattr(self._sim_panel, 'snr_baseline_changed'):
+            self._sim_panel.snr_baseline_changed.connect(self._on_sim_baseline)
+        if hasattr(self._sim_panel, 'heading_changed'):
+            self._sim_panel.heading_changed.connect(self._on_sim_heading)
+
+        self._mock_modem.start(port=45679, remote_addr=("127.0.0.1", 5004),
+                               sat_lon=134.0, band="Ka")
+
+        self._sim_active = True
+        self._sim_panel.setVisible(True)
+        # 给仿真面板分配宽度（第4列）
+        sizes = self._top_splitter.sizes()
+        if len(sizes) == 4:
+            total = sum(sizes[:3])
+            sim_w = 280
+            chart_w = max(400, total - sizes[0] - sizes[2] - sim_w)
+            self._top_splitter.setSizes([sizes[0], chart_w, sizes[2], sim_w])
+        self._sim_btn.setText("停止仿真")
+        self._set_variant(self._sim_btn, "danger")
+        self._control_panel.set_enabled(True)
+        self.status_message.emit("仿真模式已启动 (MockModem UDP 45679)", 3000)
+
+    def _stop_simulation(self) -> None:
+        if self._mock_modem:
+            self._mock_modem.stop()
+            self._mock_modem = None
+
+        self._sim_active = False
+        self._sim_panel.setVisible(False)
+        # 收回仿真面板宽度
+        sizes = self._top_splitter.sizes()
+        if len(sizes) == 4:
+            sim_w = sizes[3]
+            self._top_splitter.setSizes([sizes[0], sizes[1] + sim_w, sizes[2], 0])
+        self._sim_btn.setText("仿真")
+        self._set_variant(self._sim_btn, "")
+        self._control_panel.set_enabled(False)
+        self.status_message.emit("仿真模式已停止", 2000)
+
+    def _on_sim_sat_changed(self, lon: float, freq: float) -> None:
+        if self._mock_modem:
+            band = "Ka" if freq > 15.0 else "Ku"
+            self._mock_modem.set_satellite(lon, band)
+
+    def _on_sim_blockage(self, duration_s: float) -> None:
+        if self._mock_modem:
+            self._mock_modem.inject_blockage(duration_s)
+            self.status_message.emit(f"遮挡注入 ({duration_s}s)", 2000)
+
+    def _on_sim_rain_changed(self, db: float) -> None:
+        if self._mock_modem:
+            self._mock_modem.set_rain_fade(db)
+
+    def _on_sim_baseline(self, db: float) -> None:
+        if self._mock_modem:
+            self._mock_modem.set_snr_baseline(db)
+
+    def _on_sim_heading(self, heading: float) -> None:
+        if self._mock_modem:
+            self._mock_modem.set_heading(heading)
 
     # ============================ 主题应用 ============================
 
