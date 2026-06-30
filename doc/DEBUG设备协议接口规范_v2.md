@@ -54,15 +54,15 @@
 ┌────────┬──────────┬──────────┬──────────┬────────┬────────┬────────┐
 │  帧头   │ 设备类型  │ 命令类型  │ 数据长度  │  数据  │  CRC   │  帧尾  │
 │ 2字节   │ 1字节     │ 1字节     │ 2字节    │ 可变   │ 2字节   │ 1字节  │
-│ AA 55   │ 0D       │ 01..0A   │ 小端序   │        │ 小端序  │ EE    │
+│ AA 55   │ 0D       │ 01..0C   │ 小端序   │        │ 小端序  │ EE    │
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
 
-`DATA` 段最大长度：**512 字节**（v2 从 v1 的 ~300B 提升，用于承载 `CHANNEL_DEFINE` 等长帧）。
+`DATA` 段最大长度：**1024 字节**。早期 v2 版本按 512 字节设计；2026-04-24 起为兼容 esa01 27 路 channel 的 `CHANNEL_DEFINE` 长帧，上位机接收上限与测试基线已同步上调到 1024 字节。afd01 / ufd45 等旧设备继续发送 ≤512 字节帧时仍兼容。
 
-> 下位机调整点：`DEBUG_MAX_FRAME_LENGTH` 从 320 调至 **540**（512 + 帧头 9 + CRC 2 + 帧尾 1，16 字节对齐取 540）。
+> 下位机调整点：若设备端也需要发送 1024 字节 DATA 长帧，帧缓冲需按 **至少 1036 字节** 预留（与上位机 `MAX_FRAME_LENGTH = MAX_DATA_LENGTH + 12` 对齐）。
 
 ---
 
@@ -80,8 +80,10 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x08 | `STATE_REPORT`     | D→H | 状态变化 或 周期 | 5 Hz |
 | 0x09 | `EVENT_REPORT`     | D→H | 事件触发 | 按需 |
 | 0x0A | `HEARTBEAT`        | D→H | 周期 | 1 Hz |
+| 0x0B | `PARA_TABLE_REPORT`| D→H | 参数表请求响应 | 按需 |
+| 0x0C | `PROFILE_SEMANTICS`| D→H | 启动 + 周期 / 请求 | 0.2 Hz |
 
-**定义帧（0x04/0x05/0x06/0x07）**：下位机启动后立刻全量发送，之后每 5 秒重发一次（处理 UDP 丢包 / 上位机后接入）。上位机也可主动 `CONTROL` 请求重发。
+**定义帧（0x04/0x05/0x06/0x07/0x0C）**：下位机启动后立刻全量发送，之后每 5 秒重发一次（处理 UDP 丢包 / 上位机后接入）。上位机也可主动 `CONTROL` 请求重发。`PROFILE_SEMANTICS` 是 M13 扩展帧，不参与握手 ready 判定；旧上位机可忽略，旧下位机缺失时上位机按名称 fallback。
 
 ---
 
@@ -95,11 +97,11 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 
 ```
 timestamp      uint32      设备启动后毫秒数
-channel_count  uint8       本帧携带的通道数 (1~16)
+channel_count  uint8       本帧携带的通道数 (1~32)
 channel[N]     { uint8 channel_id; float32 value; }   每条 5 字节
 ```
 
-**帧长估算**：`9 + 4 + 1 + 5×N + 2 + 1 = 17 + 5N`。N=16 时 97 字节；100 Hz 时 9.7 KB/s。
+**帧长估算**：`9 + 4 + 1 + 5×N + 2 + 1 = 17 + 5N`。N=32 时 177 字节；100 Hz 时 17.7 KB/s。
 
 **下位机实现建议**：
 - 按 `channel_id` 自增顺序一次打包全部通道，避免分帧
@@ -137,6 +139,15 @@ payload   bytes      长度由 sub_cmd 决定
 | 0x08 | `SET_TRACE_MODE`       | `u8 mode`                  | 切换跟踪模式，mode 定义同固件 `trace_mode_t` |
 | 0x09 | `CHANNEL_ENABLE_MASK`  | `u32 bitmask_lo + u32 bitmask_hi` | 仅上报置位通道（节省带宽） |
 | 0x0A | `RESET_STATS`          | —                          | 复位下位机统计（丢包、错误计数等） |
+| 0x0B | `REQUEST_PARA_TABLE`   | —                          | 请求参数表，设备以 `PARA_TABLE_REPORT` 响应 |
+| 0x0C | `PARA_SET`             | `name_len + name + value_len + value` | 设置参数 |
+| 0x0D | `PARA_RESET`           | —                          | 恢复参数默认值 |
+| 0x0E | `OTA_BEGIN`            | `file_size u32 + name_len + filename` | OTA 开始 |
+| 0x0F | `OTA_DATA`             | `seq u16 + chunk`          | OTA 数据块 |
+| 0x10 | `OTA_END`              | `crc32 u32`                | OTA 结束校验 |
+| 0x11 | `OTA_ABORT`            | —                          | OTA 中止 |
+| 0x12 | `DEVICE_REBOOT`        | —                          | 请求设备重启 |
+| 0x13 | `REQUEST_PROFILE_SEMANTICS` | —                      | 请求重发 `PROFILE_SEMANTICS` |
 
 ### 5.4 `META_INFO` (0x04) — 元信息
 
@@ -275,6 +286,48 @@ reserved        uint32
 
 上位机若 **3 秒未收到心跳**，应视为下位机断线。
 
+### 5.11 `PROFILE_SEMANTICS` (0x0C) — Profile 语义扩展
+
+**用途**：在不修改 `CHANNEL_DEFINE` / `STATE_DEFINE` 二进制格式的前提下，补充通道角色、状态角色、控制绑定和设备能力。上位机应优先使用本帧中的显式语义；缺失时继续按历史名称约定 fallback。
+
+**兼容性**：
+
+- 新上位机收到本帧后写入 profile JSON schema v2 / SDB header。
+- 旧上位机遇到未知 `cmd=0x0C` 应忽略为 RawFrame。
+- 本帧不参与握手 ready 条件，丢失或旧固件不发送时不影响基本调试。
+- 下位机只有在实际支持某控制子命令时，才应声明对应 `control_subcmd`；例如当前 debug core 尚未实现 `SET_TRACE_MODE` 时，应只声明 `trace_mode` role，不声明 control binding。
+
+**DATA 段格式**：
+
+```
+table_ver      uint8
+channel_count  uint8
+channel[N]:
+    channel_id   uint8
+    role_count   uint8
+    role[M]:     uint8 len + utf8 role
+
+state_count    uint8
+state[N]:
+    state_id             uint8
+    role                 uint8 len + utf8 role
+    control_subcmd       uint8      0=无控制绑定；非 0 时对应 CONTROL 子命令
+    control_value_from   uint8      0=enum_value
+
+capability_count uint8
+capability[N]:
+    name       uint8 len + utf8
+    supported  uint8      0/1
+```
+
+首批推荐 role：
+
+| 类型 | role |
+|------|------|
+| channel | `gps_lat`, `gps_lon`, `gps_alt`, `gps_num_sv`, `gps_speed`, `gps_cog`, `gps_vel_n`, `gps_vel_e`, `gps_vel_d`, `gps_cog_std`, `roll`, `pitch`, `yaw`, `antenna_az`, `antenna_el`, `target_az`, `target_el`, `snr`, `pointing_error` |
+| state | `trace_mode`, `lock_flag`, `gps_fix`, `ins_status`, `ins_ready`, `pll_locked`, `modem_connected` |
+| capability | `parameters`, `ota`, `sample_rate`, `user_mark`, `channel_enable_mask` |
+
 ---
 
 ## 6. 响应码（扩展）
@@ -302,6 +355,7 @@ Device                                  Host
   | --- CHANNEL_DEFINE (0x05) -------->|   上位机建立通道表
   | --- STATE_DEFINE (0x06) ---------->|   上位机建立状态字表
   | --- EVENT_DEFINE (0x07) ---------->|   上位机建立事件表
+  | --- PROFILE_SEMANTICS (0x0C) ----->|   可选：上位机建立语义角色
   | --- STATE_REPORT (0x08) 全量 ----->|   上位机点亮所有指示灯
   | --- HEARTBEAT (0x0A) ------------->|
   |                                    |
@@ -319,6 +373,7 @@ CONTROL(REQUEST_META_INFO)
 CONTROL(REQUEST_CHANNEL_DEFINE)
 CONTROL(REQUEST_STATE_DEFINE)
 CONTROL(REQUEST_EVENT_DEFINE)
+CONTROL(REQUEST_PROFILE_SEMANTICS)   # 可选；旧固件不支持时不影响 ready
 ```
 
 下位机收到应立即（500ms 内）回应所有定义帧。
@@ -398,7 +453,7 @@ W5500 UDP 实测吞吐 ≥ 1 MB/s，**余量充足**（利用率 ~1%）。
 
 - ROM：定义表字符串常量，估算 ~1 KB
 - RAM：channel/state 表结构 ~300 B；event 去重环形缓冲 ~200 B；总增量 < 1 KB
-- 帧缓冲 `DEBUG_MAX_FRAME_LENGTH` 从 320 → 540，增 220 B
+- 帧缓冲：早期 afd01 / ufd45 的 512 字节 DATA 帧可继续使用约 540 B 缓冲；若启用 1024 字节 DATA 长帧，`DEBUG_MAX_FRAME_LENGTH` 需预留至少 1036 B。
 
 ### 9.4 实时性要求
 

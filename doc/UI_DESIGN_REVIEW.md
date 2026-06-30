@@ -172,7 +172,7 @@
 - 数字右对齐，等宽字体（Menlo / Consolas）
 
 **已知 UX 问题**：
-- ⚠️ checkbox 当前**不控制曲线显隐**（只控制值标签是否刷新）—— 用户期望落差很大
+- checkbox 已改为控制曲线显隐，符合“勾选 = 显示曲线”的直觉
 - 通道数 14+ 时面板撑高，需要垂直滚动
 - 当前值刷新频率 5Hz，数字跳动可能晃眼
 
@@ -255,7 +255,7 @@
 
 | 痛点 | 当前现状 | 设计师值得 review |
 |------|---------|-----------------|
-| ChannelPanel checkbox 含义 | 只控制 label 刷新，不控制 chart 显隐 | ✓ 建议改成控制曲线显隐 |
+| ChannelPanel checkbox 含义 | 已控制 chart 曲线显隐 | 继续 review 多通道滚动和当前值跳动 |
 | 工具栏按钮密度高 | 顶部 ConnectionToolbar 10+ 按钮，部分文字按钮 | ✓ 是否分组 / 改图标 |
 | StatusStrip 换行后高度变化突兀 | FlowLayout 直接撑 | ✓ 是否加动画或保最高 |
 | Dashboard / StatePanel 信息重复 | 状态在两处都显示 | ✓ 是否合并 |
@@ -531,7 +531,7 @@ KPI 数字、值标签、表格数字字段强制等宽：
 
 ### P0 — 影响用户决策正确性
 
-1. **ChannelPanel checkbox 行为反直觉**：用户期望勾选 = 显示曲线，实际只控制值标签。建议改成同时控制 chart curve.setVisible。
+1. **ChannelPanel 多通道密度**：checkbox 已控制曲线显隐；设计师重点看 20+ 通道时滚动、搜索、全选/清空的效率。
 2. **GroupedChart「归一化」打开后 Y 轴刻度消失**，新用户不知道发生了什么。可能需要：开关旁有小图标提示 + 第一次开有 tooltip。
 
 ### P1 — 影响效率

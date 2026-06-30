@@ -10,6 +10,7 @@ from .codec_v2 import (
     build_request_channel_define,
     build_request_state_define,
     build_request_event_define,
+    build_request_profile_semantics,
     build_user_mark,
     build_set_sample_rate,
     build_set_trace_mode,
@@ -25,6 +26,7 @@ from .codec_v2 import (
     build_ota_abort,
     build_device_reboot,
     decode_para_table_report,
+    decode_profile_semantics,
 )
 from .frame_receiver_v2 import FrameReceiverV2
 from .frame_v2 import (
@@ -46,6 +48,8 @@ from .frame_v2 import (
     StateSample, StateReport,
     EventReport, Heartbeat, CommandResponse,
     ParaEntry, ParaTableReport,
+    ProfileSemanticChannelEntry, ProfileSemanticStateEntry,
+    ProfileSemanticCapabilityEntry, ProfileSemanticsReport,
     RawFrame, FrameV2Record,
 )
 
@@ -59,12 +63,13 @@ __all__ = [
     "build_debug_enable_v2",
     "build_request_meta_info", "build_request_channel_define",
     "build_request_state_define", "build_request_event_define",
+    "build_request_profile_semantics",
     "build_user_mark", "build_set_sample_rate", "build_set_trace_mode",
     "build_channel_enable_mask", "build_reset_stats",
     "build_request_para_table", "build_para_set", "build_para_reset",
     "build_ota_begin", "build_ota_data", "build_ota_end",
     "build_ota_abort", "build_device_reboot",
-    "decode_para_table_report",
+    "decode_para_table_report", "decode_profile_semantics",
     # receiver
     "FrameReceiverV2",
     # constants
@@ -88,5 +93,7 @@ __all__ = [
     "StateSample", "StateReport",
     "EventReport", "Heartbeat", "CommandResponse",
     "ParaEntry", "ParaTableReport",
+    "ProfileSemanticChannelEntry", "ProfileSemanticStateEntry",
+    "ProfileSemanticCapabilityEntry", "ProfileSemanticsReport",
     "RawFrame", "FrameV2Record",
 ]

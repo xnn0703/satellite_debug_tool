@@ -31,7 +31,12 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.data import DataStore
 from satellite_debug_tool.core.log_parser import WindTermLogParser, WindTermLogResult
-from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.core.profile import (
+    CHANNEL_ROLE_GPS_LAT,
+    CHANNEL_ROLE_GPS_LON,
+    ProfileStore,
+)
+from satellite_debug_tool.core.profile.semantics import infer_channel_roles
 from satellite_debug_tool.core.protocol import ChannelSample, DataReport
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
@@ -39,10 +44,6 @@ from satellite_debug_tool.ui.time_range_control import TimeRangeControl
 
 
 _VIRTUAL_HW_TYPE = "windterm_log"
-
-GPS_LAT_CHANNEL_NAME = "gps_lat"
-GPS_LON_CHANNEL_NAME = "gps_lon"
-
 
 def _infer_group_id(name: str) -> int:
     """按列名前缀映射到 GroupedChartWidget 已有的 group 配色（仅启发式）。
@@ -69,7 +70,7 @@ def _infer_group_id(name: str) -> int:
 
 
 def _build_virtual_profile_dict(result: WindTermLogResult) -> dict:
-    """从 parser 结果构造一份 schema_version=1 的 profile dict，喂给 ProfileStore。
+    """从 parser 结果构造一份 schema_version=2 的 profile dict，喂给 ProfileStore。
 
     每列 ChannelDefEntry：
     - channel_id = 列索引
@@ -78,6 +79,7 @@ def _build_virtual_profile_dict(result: WindTermLogResult) -> dict:
     - display_min / display_max = 该列数据 min/max ± 5% padding（防止全 0 列退化）
     """
     channels = []
+    semantic_channels: dict[str, dict[str, list[str]]] = {}
     for i, col in enumerate(result.columns):
         col_data = result.data[:, i] if result.data.size else None
         if col_data is None or col_data.size == 0:
@@ -101,15 +103,24 @@ def _build_virtual_profile_dict(result: WindTermLogResult) -> dict:
             "display_min": dmin,
             "display_max": dmax,
         })
+        roles = infer_channel_roles(col)
+        if roles:
+            semantic_channels[str(i)] = {"roles": roles}
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "hw_type": _VIRTUAL_HW_TYPE,
         "channel_table_ver": 1,
         "state_table_ver": 0,
         "event_table_ver": 0,
+        "semantics_table_ver": 1,
         "channels": channels,
         "states": [],
         "events": [],
+        "semantics": {
+            "channels": semantic_channels,
+            "states": {},
+            "capabilities": {},
+        },
         "meta": None,
     }
 
@@ -392,14 +403,16 @@ class LogView(QWidget):
     # ====================== M8: 地图集成 ======================
 
     def _detect_gps_columns(self, result: WindTermLogResult) -> bool:
-        """在解析结果列名中查 gps_lat / gps_lon；返回 True 表示找到。"""
+        """在虚拟 profile 中按 semantic role 查 GPS 列；返回 True 表示找到。"""
+        _ = result
         self._gps_lat_id = None
         self._gps_lon_id = None
-        for i, name in enumerate(result.columns):
-            if name == GPS_LAT_CHANNEL_NAME:
-                self._gps_lat_id = i
-            elif name == GPS_LON_CHANNEL_NAME:
-                self._gps_lon_id = i
+        lat = self._profile_store.find_channel_by_role(_VIRTUAL_HW_TYPE, CHANNEL_ROLE_GPS_LAT)
+        lon = self._profile_store.find_channel_by_role(_VIRTUAL_HW_TYPE, CHANNEL_ROLE_GPS_LON)
+        if lat is not None:
+            self._gps_lat_id = lat.channel_id
+        if lon is not None:
+            self._gps_lon_id = lon.channel_id
         return self._gps_lat_id is not None and self._gps_lon_id is not None
 
     def _toggle_map(self) -> None:

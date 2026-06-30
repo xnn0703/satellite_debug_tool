@@ -300,7 +300,7 @@ class ModeButtonGroup(QFrame):
         self._title = QLabel(state.name)
         self._title.setToolTip(
             f"[ENUM] state_id={state.state_id}  {state.name}\n"
-            f"点击按钮发送 CONTROL.SET_TRACE_MODE（或等价子命令）"
+            f"点击按钮发送 profile control_binding 指定的 CONTROL 子命令"
         )
         outer.addWidget(self._title)
 
@@ -483,12 +483,31 @@ class DashboardWidget(QWidget):
             self._current_hw = hw_type
         if hw_type != self._current_hw:
             return
-        # 幂等：关键 profile 子集（critical channels）未变时跳过
+        # 幂等：关键 profile 子集（critical channels + critical enum states +
+        # control binding）未变时跳过。语义帧可能晚于 DEFINE 到达，必须进入签名。
         channels = [c for c in self._profile.get_channels(hw_type) if c.critical]
-        new_sig = tuple(
+        channel_sig = tuple(
             (c.channel_id, c.name, c.unit, c.display_min, c.display_max) for c in channels
         )
-        if getattr(self, "_dash_signature", None) == new_sig and self._cards:
+        enum_states = [
+            s for s in self._profile.get_states(hw_type)
+            if s.critical and s.state_type == StateType.ENUM
+        ]
+        state_sig = []
+        for state in enum_states:
+            binding = self._profile.get_state_control_binding(hw_type, state.state_id)
+            binding_sig = None if binding is None else (binding.subcmd, binding.value_from)
+            state_sig.append((
+                state.state_id,
+                state.name,
+                tuple((e.value, e.level, e.name) for e in state.enums),
+                binding_sig,
+            ))
+        new_sig = (channel_sig, tuple(state_sig))
+        if (
+            getattr(self, "_dash_signature", None) == new_sig
+            and (self._cards or self._mode_groups or self._status_chips)
+        ):
             return
         self._dash_signature = new_sig
         self._rebuild()
@@ -506,17 +525,18 @@ class DashboardWidget(QWidget):
     # ---- 重建 ----
 
     def _clear(self) -> None:
-        for c in self._cards.values():
-            self._cards_row.removeWidget(c)
-            c.deleteLater()
+        while self._cards_row.count():
+            item = self._cards_row.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         self._cards.clear()
-        for g in self._mode_groups.values():
-            self._modes_row.removeWidget(g)
-            g.deleteLater()
+        while self._modes_row.count():
+            item = self._modes_row.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         self._mode_groups.clear()
-        for chip in self._status_chips.values():
-            self._modes_row.removeWidget(chip)
-            chip.deleteLater()
         self._status_chips.clear()
 
     def _rebuild(self) -> None:
@@ -527,10 +547,14 @@ class DashboardWidget(QWidget):
             return
 
         channels = [c for c in self._profile.get_channels(self._current_hw) if c.critical]
+        enum_states = [
+            s for s in self._profile.get_states(self._current_hw)
+            if s.critical and s.state_type == StateType.ENUM
+        ]
 
-        if not channels:
+        if not channels and not enum_states:
             self._empty_label.setText(
-                f"[{self._current_hw}] profile 无 critical channel"
+                f"[{self._current_hw}] profile 无 critical channel/state"
             )
             self._empty_label.show()
             return
@@ -543,3 +567,19 @@ class DashboardWidget(QWidget):
             self._cards_row.addWidget(card)
             self._cards[ch.channel_id] = card
         self._cards_row.addStretch(1)
+
+        # ---- ENUM 状态：有 control_binding 才可点击，否则只读显示 ----
+        for state in enum_states:
+            binding = self._profile.get_state_control_binding(self._current_hw, state.state_id)
+            if binding is not None:
+                group = ModeButtonGroup(state)
+                group.set_theme(self._theme, self._scale)
+                group.mode_requested.connect(self.mode_requested)
+                self._modes_row.addWidget(group)
+                self._mode_groups[state.state_id] = group
+            else:
+                chip = EnumStatusChip(state)
+                chip.set_theme(self._theme, self._scale)
+                self._modes_row.addWidget(chip)
+                self._status_chips[state.state_id] = chip
+        self._modes_row.addStretch(1)

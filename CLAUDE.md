@@ -31,9 +31,9 @@ pytest satellite_debug_tool/tests/test_frame_v2.py -v       # 单文件
 pytest satellite_debug_tool/tests -k "crc"                  # 按 pattern
 ```
 
-> **已知 baseline 失败**：`test_codec_v2.py::test_oversize_data_rejected`（payload 513B < 新 MAX_DATA_LENGTH 1024，需更新为 1025B）
+> 当前没有固定允许失败的 pytest baseline；全量测试失败时按真实回归调查。
 
-## Architecture (M1–M7)
+## Architecture (Current M1–M12)
 
 ### Package Structure
 
@@ -46,7 +46,7 @@ satellite_debug_tool/
 │   ├── profile/        # ProfileStore + ProfileCache（设备 profile 驱动 UI）
 │   ├── log_parser/     # WindTerm log 解析
 │   └── config.py       # 用户配置 (~/.satellite_debug_tool/settings.json)
-├── ui/                 # PySide6 界面（三 Tab：Live / Playback / Log）
+├── ui/                 # PySide6 界面（四 Tab：Live / Playback / Log / Device）
 │   ├── assets/         # Leaflet 离线地图 bundle
 │   └── ...             # 各 widget（chart / dashboard / state / event / attitude / map）
 ├── io/                 # SDB v2 录制（DataRecorder）/ 导入（DataImporter）
@@ -56,7 +56,7 @@ tools/
 └── tile_downloader.py  # OSM tile 离线下载 CLI（python -m tools.tile_downloader）
 ```
 
-### 三 Tab 数据流（M7）
+### 四 Tab 数据流
 
 ```
 Live Tab
@@ -77,6 +77,13 @@ Log Tab
     ↓
   虚拟 ProfileStore (hw_type="windterm_log") + DataStore (无界, max_channels=128)
   每行 → DataReport(行号*100ms, samples) → DataStore.update
+
+Device Tab
+  共享 Live worker + frame_received
+    ↓
+  META_INFO / PARA_TABLE_REPORT / COMMAND_RESPONSE
+    ↓
+  设备信息 / 参数表读写 / OTA BEGIN-DATA-END-ABORT / 等待重启上线
 ```
 
 ### 关键类
@@ -90,6 +97,7 @@ Log Tab
 - **DataRecorder** ([io/data_recorder.py](satellite_debug_tool/io/data_recorder.py)): 异步（threading.Thread + queue）；SDB v2 文件头内嵌 profile JSON
 - **WindTermLogParser** ([core/log_parser/windterm_log.py](satellite_debug_tool/core/log_parser/windterm_log.py)): 正则识别 `track_debug_print_table_header:` / `track_table_row_bynav:`，非数字列整列剔除，行号 × 100ms 占位时间戳
 - **MapWidget** ([ui/map_widget.py](satellite_debug_tool/ui/map_widget.py)): Leaflet + QWebEngine 离线地图。自动检测 `~/.satellite_debug_tool/tiles/<region>/` 目录，单向 `runJavaScript` 调 JS API（setTrack / setTrackHighlight / addEvent / clear），HTML 异步加载期间 JS 调用进缓冲队列
+- **DeviceView** ([ui/device_view.py](satellite_debug_tool/ui/device_view.py)): 共享 Live 连接；设备信息、参数表、OTA 状态机
 - **tile_downloader** ([tools/tile_downloader.py](tools/tile_downloader.py)): OSM 离线 tile 下载 CLI；WGS84 → Web Mercator tile 坐标 + 限速 + 断点续传
 
 ### 协议 v2 摘要
@@ -106,6 +114,7 @@ Log Tab
 - **GroupedChart 防闪烁**：固定 Y 范围 + X 滚屏阈值 1s（不每帧 setXRange）+ pyqtgraph setDownsampling("peak", auto=True) + setClipToView
 - **profile 幂等**：META 5s 周期广播但只在 hw_type / 版本变化时 emit profile_changed
 - **录制异步**：write_frame 非阻塞 queue.put_nowait，后台线程刷盘
+- **归一化性能优化（M12）**：legend 文本节流、O(1) label 缓存、per-plot 归一化、数据曲线关闭抗锯齿
 
 ## 重要约定
 
@@ -121,12 +130,15 @@ Log Tab
 ## 关键文档
 
 - [doc/optimization_plan.md](doc/optimization_plan.md) — M1–M6 整体优化计划（v1.2）
+- [doc/upper_pc_function_definition_vnext.md](doc/upper_pc_function_definition_vnext.md) — 当前上位机功能定义与后续路线
 - [doc/M7_plan.md](doc/M7_plan.md) — M7 Tab 化 + 字号固化 + log 解析
 - [doc/M7_acceptance.md](doc/M7_acceptance.md) — M7 验收锚点 + 自评
 - [doc/M7_dev_log.md](doc/M7_dev_log.md) — M7 实施日志
 - [doc/M8_plan.md](doc/M8_plan.md) — M8 离线地图（GPS 轨迹 + 事件）
 - [doc/M8_acceptance.md](doc/M8_acceptance.md) — M8 验收锚点 + 自评
 - [doc/M8_dev_log.md](doc/M8_dev_log.md) — M8 实施日志
+- [doc/M10_plan.md](doc/M10_plan.md) / [doc/M11_plan.md](doc/M11_plan.md) / [doc/M12_plan.md](doc/M12_plan.md) — 后续局部优化计划
+- [doc/simulation_delivery.md](doc/simulation_delivery.md) — 当前仿真交付与遗留
 - [doc/DEBUG设备协议接口规范_v2.md](doc/DEBUG设备协议接口规范_v2.md) — 协议权威规范
 - [doc/development_log.md](doc/development_log.md) — M1–M6 实施日志
 - [doc/acceptance_log.md](doc/acceptance_log.md) — F-/A- 系列验收跟踪

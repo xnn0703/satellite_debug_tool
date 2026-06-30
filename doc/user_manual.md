@@ -27,10 +27,10 @@
 # 1. 建虚拟环境 + 安装依赖
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r satellite_debug_tool/requirements.txt
 
 # 2. 启动上位机
-python -m satellite_debug_tool
+python3 -m satellite_debug_tool.main
 
 # 3. (可选) 无真机时可以用 UDP 模拟器
 python tools/device_simulator.py --profile afd01 -v
@@ -44,20 +44,18 @@ python tools/device_simulator.py --profile afd01 -v
 ## 2. 界面总览
 
 ```
-┌── 工具栏 (Type / Remote / Connect / Debug / Record / Import / Clear / 主题 / 字号) ──┐
+┌── 全局栏 (Satellite Debug Tool / 实时 / 回放 / Log / 设备 / 主题 / 更新 / 设置) ──┐
+├── Live 工具栏 (Type / Remote / Connect / Debug / Record / Import / Clear / 仿真) ─┤
 ├── 状态条 (LINK / REC / BEAT / critical states...) ────────────────────────────┤
 ├── Dashboard (KPI 卡片 + 模式按钮) ──────────────────────────────────────────┤
-│ ┌────────────────────┬──────────┬────────────────┐
-│ │  分组 / 单图曲线   │  3D 场景 │  状态灯板       │
-│ │                    │          │  事件时间线     │
-│ └────────────────────┴──────────┴────────────────┘
+│ ┌──────────┬────────────────┬──────────┬────────────────────┐
+│ │ 通道面板 │ 分组/单图曲线  │ 3D 场景  │ 状态灯板/事件时间线 │
+│ └──────────┴────────────────┴──────────┴────────────────────┘
 ├── 控制面板 (采样率 / 标记 / 通道使能 / 复位) ─────────────────────────────────┤
-├── 通道选择 (按 profile 展示，可勾选) ─────────────────────────────────────────┤
 └── 状态栏 (链路类型 / FPS / Channels / Frames / Errors) ──────────────────────┘
 ```
 
-所有区域都由下位机 profile 驱动（通道 / 状态 / 事件 / 枚举），
-新增设备型号时上位机**零改动**。
+Live 的主要显示区域由下位机 profile 驱动（通道 / 状态 / 事件 / 枚举）。新增设备型号通常无需改 UI；地图、3D 和模式控制这类高级语义目前仍依赖命名约定，后续会通过 profile 语义字段收口。
 
 ---
 
@@ -123,7 +121,7 @@ X 轴显示相对启动时间（秒），防止 pyqtgraph 自动切 ks 单位抖
 底部一排带色圆点的复选框：
 
 - 颜色与曲线颜色对应
-- 取消勾选可在通道标签区隐藏（曲线本身仍在，为了对比保留）
+- 取消勾选会隐藏对应曲线；重新勾选后恢复显示
 - 当前值实时显示在右侧
 
 ---
@@ -181,26 +179,21 @@ HH:MM:SS.mmm  [LVL] hw_type  event_name  · payload 预览
 
 未来具体设备的 STL/OBJ 模型接入后，这里会自动换成设备实物造型。
 
-### 6.2 通道绑定（2 行 7 路）
+### 6.2 通道绑定
 
-**姿态**（第 1 行）：roll / pitch / yaw
+当前版本不再提供手动通道下拉选择，连接后会按 profile 通道名自动绑定：
 
-**指向**（第 2 行）：tgt_az / tgt_el / ant_az / ant_el
+- **姿态**：roll / pitch / yaw
+- **指向**：ant_az / ant_el
 
-握手时优先**按 hw_type 分桶**恢复你之前的绑定（A6）；若该 hw 没保存过，
-会按 profile 通道名自动匹配（`roll`/`pitch`/`yaw`/`tgt_*`/`ant_*`）。
-
-手动改下拉后会自动保存到 `~/.satellite_debug_tool/settings.json`
-的 `attitude.<hw_type>.<axis>_channel` 键。
+若新型号通道命名不同，当前需要在 profile 命名上兼容，或后续通过 profile 语义字段扩展。
 
 ### 6.3 3D 场景元素
 
 | 元素 | 颜色 | 触发条件 |
 |------|------|---------|
 | 机体 + 参考轴（X 红 / Y 绿 / Z 蓝） | — | 始终显示 |
-| 卫星矢量 | 红线 | tgt_az + tgt_el 通道都绑定 |
 | 天线实际法向 | 绿线 | ant_az + ant_el 通道都绑定 |
-| 误差扇面 | 半透明琥珀 | 两矢量都存在 |
 | 扫描轨迹（最近 300 点） | 淡蓝点迹 | ant 通道绑定 |
 
 **视角控制**：
@@ -268,9 +261,9 @@ Dashboard 下方的**模式按钮组**（AUTO / MANUAL / STANDBY 等）：
 
 ## 9. 主题与字号
 
-工具栏最右两个下拉：
+全局栏右侧的主题按钮会循环切换：
 
-### 主题（3 档）
+### 主题
 
 | 主题 | 背景 | 文字 | 用途 |
 |------|------|------|------|
@@ -278,26 +271,13 @@ Dashboard 下方的**模式按钮组**（AUTO / MANUAL / STANDBY 等）：
 | **深色·高对比** | `#000000` | `#F5F5F5` | 车载强光屏 500cd/m² |
 | **浅色** | `#FAFAFA` | `#333333` | 日间外场 |
 
-### 字号（4 档）
+当前 UI 字号固定为 small（12px 基准），不再暴露字号切换入口。`styles.py` 内部仍保留 `FONT_SCALES` API 兼容旧测试和组件调用。
 
-| 档 | 基准比例 | 基准 12px → |
-|---|---------|-------------|
-| 小 | 1.00 | 12px |
-| 中 | 1.17 | 14px（默认） |
-| 大 | 1.50 | 18px |
-| 超大 | 1.83 | 22px |
-
-- **Dashboard KPI 数字字体锁等宽族**，字号随档缩放
-- **所有水平密集行**（工具栏 / StatusStrip / Dashboard / 通道选择）
-  在超大档下**出现横向滚动条**，不会被挤出屏幕
-- **工具栏字号固定 12px**（不随全局字号缩放），保证任意档下都能找到主题/字号下拉
-
-配置持久化到 `~/.satellite_debug_tool/settings.json`：
+主题配置持久化到 `~/.satellite_debug_tool/settings.json`：
 
 ```json
 {
-  "ui.theme": "dark_hc",
-  "ui.font_scale": "xlarge"
+  "ui.theme": "dark_hc"
 }
 ```
 
@@ -313,12 +293,10 @@ A: 该 profile 可能没注册事件（比如某个调试阶段的固件），�
 也可能 EventLog 被清空过，Clear 按钮不清 profile 但清事件缓冲。
 
 ### Q: 切了设备型号后 3D 绑定变了？
-A: A6 已按 hw_type 分桶保存绑定，切回原 hw 应该恢复。如果是**首次**连接
-另一个 hw 型号，会走 auto_bind 规则自动匹配。
+A: 当前版本按 profile 通道名自动绑定 roll/pitch/yaw/ant_az/ant_el，不再保存手动绑定。新型号通道名不一致时，需要先让 profile 命名兼容，后续计划用 profile 语义字段解决。
 
-### Q: 超大字号下找不到字号下拉？
-A: 工具栏已锁定 12px 不随字号缩放，且装不下时底部会出现横滚条，
-往右滚就能看到。
+### Q: 为什么没有字号下拉？
+A: M7 后 UI 字号固化为 small，避免不同字号下工具栏和图表区域反复挤压。强光场景优先使用“深色高对比”主题。
 
 ### Q: 曲线每隔几秒整体闪一下？
 A: 已于 2026-04-18 根因修复（`ProfileStore.apply_meta` 幂等化 +
@@ -341,7 +319,7 @@ A: 两个地方：
 
 ```
 ~/.satellite_debug_tool/
-├── settings.json          # UI 配置（主题 / 字号 / attitude 绑定 / 连接参数...）
+├── settings.json          # UI 配置（主题 / 连接参数 / 默认路径 / 更新设置...）
 ├── profiles/
 │   ├── afd01.json         # afd01 的 channel/state/event 表缓存
 │   └── ufd45.json         # 同上
@@ -358,7 +336,7 @@ A: 两个地方：
 
 - **Clear**：清曲线 / Dashboard / 事件 / 计数（保留 profile 与 StatePanel 状态）
 - **Record**：切录制开关
-- **Import**：打开离线 `.sdb`
+- **Import**：兼容入口，打开离线 `.sdb`；常规回放建议使用“回放”Tab
 - **Debug: ON/OFF**：下发 DEBUG_ENABLE，控制下位机是否上报
 
 ---
@@ -366,6 +344,7 @@ A: 两个地方：
 ## 附录 B：开发者参考
 
 - 协议规范：[`doc/DEBUG设备协议接口规范_v2.md`](./DEBUG设备协议接口规范_v2.md)
+- 当前功能定义：[`doc/upper_pc_function_definition_vnext.md`](./upper_pc_function_definition_vnext.md)
 - 优化计划：[`doc/optimization_plan.md`](./optimization_plan.md)
 - 开发日志：[`doc/development_log.md`](./development_log.md)
 - 验收日志：[`doc/acceptance_log.md`](./acceptance_log.md)

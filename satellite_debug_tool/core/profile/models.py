@@ -11,6 +11,7 @@ from satellite_debug_tool.core.protocol import (
     MetaInfo,
     StateDefEntry,
 )
+from .semantics import ProfileSemantics
 
 
 @dataclass
@@ -26,10 +27,12 @@ class DeviceProfile:
     channel_table_ver: Optional[int] = None
     state_table_ver: Optional[int] = None
     event_table_ver: Optional[int] = None
+    semantics_table_ver: Optional[int] = None
 
     channels: Dict[int, ChannelDefEntry] = field(default_factory=dict)
     states: Dict[int, StateDefEntry] = field(default_factory=dict)
     events: Dict[int, EventDefEntry] = field(default_factory=dict)
+    semantics: ProfileSemantics = field(default_factory=ProfileSemantics)
 
     meta: Optional[MetaInfo] = None
 

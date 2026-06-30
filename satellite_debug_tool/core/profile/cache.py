@@ -19,11 +19,13 @@ from satellite_debug_tool.core.protocol import (
     StateEnumItem,
 )
 from .models import DeviceProfile
+from .semantics import semantics_from_dict, semantics_to_dict
 
 
 DEFAULT_CACHE_DIR = Path.home() / ".satellite_debug_tool" / "profiles"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 
 
 # ---------- dataclass ↔ dict 转换 ----------
@@ -82,9 +84,11 @@ def profile_to_dict(profile: DeviceProfile) -> dict:
         "channel_table_ver": profile.channel_table_ver,
         "state_table_ver": profile.state_table_ver,
         "event_table_ver": profile.event_table_ver,
+        "semantics_table_ver": profile.semantics_table_ver,
         "channels": [_channel_to_dict(c) for c in profile.channel_list()],
         "states": [_state_to_dict(s) for s in profile.state_list()],
         "events": [_event_to_dict(e) for e in profile.event_list()],
+        "semantics": semantics_to_dict(profile.semantics),
         "meta": None if profile.meta is None else {
             "protocol_ver": profile.meta.protocol_ver,
             "fw_ver": profile.meta.fw_ver,
@@ -96,13 +100,14 @@ def profile_to_dict(profile: DeviceProfile) -> dict:
 
 def profile_from_dict(d: dict) -> DeviceProfile:
     schema = int(d.get("schema_version", 0))
-    if schema != SCHEMA_VERSION:
+    if schema not in SUPPORTED_SCHEMA_VERSIONS:
         raise ValueError(f"unsupported profile schema_version={schema}")
 
     p = DeviceProfile(hw_type=str(d["hw_type"]))
     p.channel_table_ver = d.get("channel_table_ver")
     p.state_table_ver = d.get("state_table_ver")
     p.event_table_ver = d.get("event_table_ver")
+    p.semantics_table_ver = d.get("semantics_table_ver")
 
     for c in d.get("channels", []):
         entry = _channel_from_dict(c)
@@ -113,6 +118,8 @@ def profile_from_dict(d: dict) -> DeviceProfile:
     for e in d.get("events", []):
         entry = _event_from_dict(e)
         p.events[entry.event_id] = entry
+    if schema >= 2:
+        p.semantics = semantics_from_dict(d.get("semantics"))
 
     meta_dict = d.get("meta")
     if meta_dict:

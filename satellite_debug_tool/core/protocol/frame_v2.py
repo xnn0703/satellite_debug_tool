@@ -58,6 +58,7 @@ class CmdType(IntEnum):
     EVENT_REPORT = 0x09
     HEARTBEAT = 0x0A
     PARA_TABLE_REPORT = 0x0B
+    PROFILE_SEMANTICS = 0x0C
 
 
 class SubCmd(IntEnum):
@@ -82,6 +83,7 @@ class SubCmd(IntEnum):
     OTA_END = 0x10
     OTA_ABORT = 0x11
     DEVICE_REBOOT = 0x12
+    REQUEST_PROFILE_SEMANTICS = 0x13
 
 
 class RespCode(IntEnum):
@@ -322,6 +324,42 @@ class ParaTableReport:
     params: List[ParaEntry] = field(default_factory=list)
 
 
+@dataclass
+class ProfileSemanticChannelEntry:
+    """PROFILE_SEMANTICS 中单个 channel 的 role 声明。"""
+
+    channel_id: int
+    roles: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ProfileSemanticStateEntry:
+    """PROFILE_SEMANTICS 中单个 state 的 role/control 声明。"""
+
+    state_id: int
+    role: str = ""
+    control_subcmd: int = 0
+    control_value_from: int = 0
+
+
+@dataclass
+class ProfileSemanticCapabilityEntry:
+    """PROFILE_SEMANTICS 中单个 capability 声明。"""
+
+    name: str
+    supported: bool
+
+
+@dataclass
+class ProfileSemanticsReport:
+    """0x0C PROFILE_SEMANTICS 载荷。"""
+
+    table_ver: int
+    channels: List[ProfileSemanticChannelEntry] = field(default_factory=list)
+    states: List[ProfileSemanticStateEntry] = field(default_factory=list)
+    capabilities: List[ProfileSemanticCapabilityEntry] = field(default_factory=list)
+
+
 # 解析后返回的 union 类型
 FrameV2Record = Union[
     DataReport,
@@ -334,6 +372,7 @@ FrameV2Record = Union[
     EventReport,
     Heartbeat,
     ParaTableReport,
+    ProfileSemanticsReport,
     # 未识别/未解码的控制帧等，保留原始 cmd+data
     "RawFrame",
 ]
@@ -369,5 +408,7 @@ __all__ = [
     "StateSample", "StateReport",
     "EventReport", "Heartbeat", "CommandResponse",
     "ParaEntry", "ParaTableReport",
+    "ProfileSemanticChannelEntry", "ProfileSemanticStateEntry",
+    "ProfileSemanticCapabilityEntry", "ProfileSemanticsReport",
     "RawFrame", "FrameV2Record",
 ]

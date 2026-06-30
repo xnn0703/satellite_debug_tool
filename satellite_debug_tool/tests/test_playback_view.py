@@ -121,6 +121,42 @@ class TestGpsDetectionAndMap:
         pv._profile_store.import_dict(profile_dict)
         assert pv._detect_gps_channels() is False
 
+    def test_profile_with_gps_roles_enables_button(self, qapp):
+        """通道名不叫 gps_lat/gps_lon，但 schema v2 role 正确时应启用地图。"""
+        from satellite_debug_tool.ui.playback_view import PlaybackView
+        pv = PlaybackView()
+        profile_dict = {
+            "schema_version": 2,
+            "hw_type": "test_hw",
+            "channel_table_ver": 1,
+            "state_table_ver": 0,
+            "event_table_ver": 0,
+            "semantics_table_ver": 1,
+            "channels": [
+                {"channel_id": 10, "data_type": 0, "group_id": 4, "flags": 0,
+                 "name": "lat_deg", "unit": "°",
+                 "display_min": -90.0, "display_max": 90.0},
+                {"channel_id": 11, "data_type": 0, "group_id": 4, "flags": 0,
+                 "name": "lon_deg", "unit": "°",
+                 "display_min": -180.0, "display_max": 180.0},
+            ],
+            "states": [],
+            "events": [],
+            "semantics": {
+                "channels": {
+                    "10": {"roles": ["gps_lat"]},
+                    "11": {"roles": ["gps_lon"]},
+                },
+                "states": {},
+                "capabilities": {},
+            },
+            "meta": None,
+        }
+        pv._profile_store.import_dict(profile_dict)
+        assert pv._detect_gps_channels("test_hw") is True
+        assert pv._gps_lat_id == 10
+        assert pv._gps_lon_id == 11
+
 
 class TestStatusMessage:
     def test_open_no_file_no_op(self, qapp, monkeypatch):

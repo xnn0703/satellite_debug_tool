@@ -43,6 +43,10 @@ from .frame_v2 import (
     SubCmd,
     ParaEntry,
     ParaTableReport,
+    ProfileSemanticCapabilityEntry,
+    ProfileSemanticChannelEntry,
+    ProfileSemanticStateEntry,
+    ProfileSemanticsReport,
 )
 
 
@@ -98,6 +102,10 @@ def build_request_state_define() -> bytes:
 
 def build_request_event_define() -> bytes:
     return build_control(SubCmd.REQUEST_EVENT_DEFINE)
+
+
+def build_request_profile_semantics() -> bytes:
+    return build_control(SubCmd.REQUEST_PROFILE_SEMANTICS)
 
 
 def build_user_mark(mark_id: int, text: str = "") -> bytes:
@@ -430,12 +438,76 @@ def decode_para_table_report(data: bytes) -> ParaTableReport:
     return ParaTableReport(table_ver=table_ver, params=params)
 
 
+def decode_profile_semantics(data: bytes) -> ProfileSemanticsReport:
+    """PROFILE_SEMANTICS(0x0C): semantic roles/capabilities extension."""
+    if len(data) < 2:
+        raise CodecError("PROFILE_SEMANTICS too short")
+    table_ver = data[0]
+    channel_count = data[1]
+    off = 2
+    channels: List[ProfileSemanticChannelEntry] = []
+    for _ in range(channel_count):
+        if off + 2 > len(data):
+            raise CodecError("PROFILE_SEMANTICS channel header overflow")
+        channel_id = data[off]
+        role_count = data[off + 1]
+        off += 2
+        roles: List[str] = []
+        for _r in range(role_count):
+            role, off = _read_u8_prefixed_utf8(data, off)
+            roles.append(role)
+        channels.append(ProfileSemanticChannelEntry(channel_id=channel_id, roles=roles))
+
+    if off >= len(data):
+        raise CodecError("PROFILE_SEMANTICS state_count missing")
+    state_count = data[off]
+    off += 1
+    states: List[ProfileSemanticStateEntry] = []
+    for _ in range(state_count):
+        if off >= len(data):
+            raise CodecError("PROFILE_SEMANTICS state_id missing")
+        state_id = data[off]
+        off += 1
+        role, off = _read_u8_prefixed_utf8(data, off)
+        if off + 2 > len(data):
+            raise CodecError("PROFILE_SEMANTICS state control overflow")
+        control_subcmd = data[off]
+        control_value_from = data[off + 1]
+        off += 2
+        states.append(ProfileSemanticStateEntry(
+            state_id=state_id,
+            role=role,
+            control_subcmd=control_subcmd,
+            control_value_from=control_value_from,
+        ))
+
+    if off >= len(data):
+        raise CodecError("PROFILE_SEMANTICS capability_count missing")
+    capability_count = data[off]
+    off += 1
+    capabilities: List[ProfileSemanticCapabilityEntry] = []
+    for _ in range(capability_count):
+        name, off = _read_u8_prefixed_utf8(data, off)
+        if off >= len(data):
+            raise CodecError("PROFILE_SEMANTICS capability value missing")
+        supported = data[off] != 0
+        off += 1
+        capabilities.append(ProfileSemanticCapabilityEntry(name=name, supported=supported))
+    return ProfileSemanticsReport(
+        table_ver=table_ver,
+        channels=channels,
+        states=states,
+        capabilities=capabilities,
+    )
+
+
 __all__ = [
     "CodecError",
     "build_frame", "build_control",
     "build_debug_enable_v2",
     "build_request_meta_info", "build_request_channel_define",
     "build_request_state_define", "build_request_event_define",
+    "build_request_profile_semantics",
     "build_user_mark", "build_set_sample_rate", "build_set_trace_mode",
     "build_channel_enable_mask", "build_reset_stats",
     "build_request_para_table", "build_para_set", "build_para_reset",
@@ -444,5 +516,5 @@ __all__ = [
     "decode_meta_info", "decode_channel_define", "decode_state_define",
     "decode_event_define", "decode_data_report", "decode_state_report",
     "decode_event_report", "decode_heartbeat", "decode_command_response",
-    "decode_para_table_report",
+    "decode_para_table_report", "decode_profile_semantics",
 ]

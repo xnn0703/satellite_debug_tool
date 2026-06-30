@@ -499,12 +499,29 @@ class AttitudeWidget(QWidget):
             if hit:
                 picks[axis] = hit
 
-        # 直接写字段（不走 combo / 信号 / settings 持久化）
-        self._roll_ch   = picks.get("roll",   "")
-        self._pitch_ch  = picks.get("pitch",  "")
-        self._yaw_ch    = picks.get("yaw",    "")
-        self._ant_az_ch = picks.get("ant_az", "")
-        self._ant_el_ch = picks.get("ant_el", "")
+        self.set_auto_bindings(
+            roll=picks.get("roll", ""),
+            pitch=picks.get("pitch", ""),
+            yaw=picks.get("yaw", ""),
+            ant_az=picks.get("ant_az", ""),
+            ant_el=picks.get("ant_el", ""),
+        )
+
+    def set_auto_bindings(
+        self,
+        *,
+        roll: str = "",
+        pitch: str = "",
+        yaw: str = "",
+        ant_az: str = "",
+        ant_el: str = "",
+    ) -> None:
+        """直接写入自动绑定结果；供 profile semantic role 优先覆盖。"""
+        self._roll_ch = roll
+        self._pitch_ch = pitch
+        self._yaw_ch = yaw
+        self._ant_az_ch = ant_az
+        self._ant_el_ch = ant_el
         self._have_ant  = bool(self._ant_az_ch and self._ant_el_ch)
         if not self._have_ant:
             # 切设备或通道缺失时清掉残留扫描轨迹

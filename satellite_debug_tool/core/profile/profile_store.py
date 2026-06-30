@@ -30,10 +30,22 @@ from satellite_debug_tool.core.protocol import (
     ChannelDefEntry,
     EventDefEntry,
     MetaInfo,
+    ProfileSemanticsReport,
     StateDefEntry,
+    SubCmd,
 )
 from .cache import ProfileCache, profile_from_dict, profile_to_dict
 from .models import DeviceProfile
+from .semantics import (
+    CONTROL_SUBCMD_SET_TRACE_MODE,
+    CONTROL_VALUE_FROM_ENUM_VALUE,
+    ChannelSemantic,
+    ControlBinding,
+    ProfileSemantics,
+    StateSemantic,
+    infer_channel_roles,
+    infer_state_role,
+)
 
 
 class ProfileStore(QObject):
@@ -91,6 +103,82 @@ class ProfileStore(QObject):
     def get_event(self, hw_type: str, event_id: int) -> Optional[EventDefEntry]:
         p = self._profiles.get(hw_type)
         return None if p is None else p.get_event(event_id)
+
+    def find_channels_by_role(self, hw_type: str, role: str) -> List[ChannelDefEntry]:
+        """按 semantic role 查 channel；显式 role 优先，缺失时按旧名称推断。"""
+        p = self._profiles.get(hw_type)
+        if p is None:
+            return []
+        wanted = role.strip().lower()
+        explicit: List[ChannelDefEntry] = []
+        for cid, semantic in p.semantics.channels.items():
+            if wanted in {r.strip().lower() for r in semantic.roles}:
+                entry = p.get_channel(cid)
+                if entry is not None:
+                    explicit.append(entry)
+        if explicit:
+            return sorted(explicit, key=lambda c: c.channel_id)
+
+        fallback = [
+            ch for ch in p.channel_list()
+            if wanted in infer_channel_roles(ch.name)
+        ]
+        return sorted(fallback, key=lambda c: c.channel_id)
+
+    def find_channel_by_role(self, hw_type: str, role: str) -> Optional[ChannelDefEntry]:
+        channels = self.find_channels_by_role(hw_type, role)
+        return channels[0] if channels else None
+
+    def find_state_by_role(self, hw_type: str, role: str) -> Optional[StateDefEntry]:
+        """按 semantic role 查 state；显式 role 优先，缺失时按旧名称推断。"""
+        p = self._profiles.get(hw_type)
+        if p is None:
+            return None
+        wanted = role.strip().lower()
+        explicit: List[StateDefEntry] = []
+        for sid, semantic in p.semantics.states.items():
+            if semantic.role is not None and semantic.role.strip().lower() == wanted:
+                entry = p.get_state(sid)
+                if entry is not None:
+                    explicit.append(entry)
+        if explicit:
+            return sorted(explicit, key=lambda s: s.state_id)[0]
+
+        for state in p.state_list():
+            if infer_state_role(state.name) == wanted:
+                return state
+        return None
+
+    def get_state_control_binding(self, hw_type: str, state_id: int) -> Optional[ControlBinding]:
+        """返回 state 的可控绑定。
+
+        如果显式语义声明了该 state 但没有 control，视作只读，不再走旧 fallback。
+        这样新固件可声明 role，同时避免误报尚未实现的控制能力。
+        """
+        p = self._profiles.get(hw_type)
+        if p is None:
+            return None
+        explicit = p.semantics.states.get(state_id)
+        if explicit is not None:
+            return explicit.control
+
+        state = p.get_state(state_id)
+        if state is None:
+            return None
+        if state_id == 0 or infer_state_role(state.name) == "trace_mode":
+            return ControlBinding(
+                subcmd=CONTROL_SUBCMD_SET_TRACE_MODE,
+                value_from=CONTROL_VALUE_FROM_ENUM_VALUE,
+            )
+        return None
+
+    def has_capability(self, hw_type: str, name: str, default: bool = False) -> bool:
+        p = self._profiles.get(hw_type)
+        if p is None:
+            return default
+        if name in p.semantics.capabilities:
+            return bool(p.semantics.capabilities[name])
+        return default
 
     # ----- 写入：来自 FrameReceiverV2 下发 -----
 
@@ -154,6 +242,17 @@ class ProfileStore(QObject):
             return
         p.event_table_ver = int(table_ver)
         p.events = {e.event_id: e for e in entries}
+        self._persist(hw_type)
+        self.profile_changed.emit(hw_type)
+
+    def apply_profile_semantics(self, hw_type: str, report: ProfileSemanticsReport) -> None:
+        """收到 PROFILE_SEMANTICS 扩展帧，更新当前 hw_type 的语义层。"""
+        p = self._get_or_create(hw_type)
+        semantics = self._semantics_from_report(report)
+        if p.semantics_table_ver == report.table_ver and p.semantics == semantics:
+            return
+        p.semantics_table_ver = int(report.table_ver)
+        p.semantics = semantics
         self._persist(hw_type)
         self.profile_changed.emit(hw_type)
 
@@ -233,3 +332,38 @@ class ProfileStore(QObject):
             except OSError:
                 # 缓存写失败不影响运行时
                 pass
+
+    def _semantics_from_report(self, report: ProfileSemanticsReport) -> ProfileSemantics:
+        semantics = ProfileSemantics()
+        for ch in report.channels:
+            roles = [str(r).strip().lower() for r in ch.roles if str(r).strip()]
+            if roles:
+                semantics.channels[int(ch.channel_id)] = ChannelSemantic(roles=roles)
+        for state in report.states:
+            role = str(state.role).strip().lower()
+            control = None
+            if state.control_subcmd:
+                control = ControlBinding(
+                    subcmd=self._control_subcmd_name(state.control_subcmd),
+                    value_from=self._control_value_from_name(state.control_value_from),
+                )
+            if role or control is not None:
+                semantics.states[int(state.state_id)] = StateSemantic(
+                    role=role or None,
+                    control=control,
+                )
+        semantics.capabilities = {
+            str(cap.name): bool(cap.supported) for cap in report.capabilities
+        }
+        return semantics
+
+    def _control_subcmd_name(self, value: int) -> str:
+        try:
+            return SubCmd(int(value)).name
+        except ValueError:
+            return f"0x{int(value) & 0xFF:02X}"
+
+    def _control_value_from_name(self, value: int) -> str:
+        if int(value) == 0:
+            return CONTROL_VALUE_FROM_ENUM_VALUE
+        return f"raw_{int(value) & 0xFF}"

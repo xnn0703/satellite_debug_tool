@@ -28,7 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.data import DataStore, EventLog, StateStore
-from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.core.profile import (
+    CHANNEL_ROLE_GPS_LAT,
+    CHANNEL_ROLE_GPS_LON,
+    ProfileStore,
+)
 from satellite_debug_tool.core.protocol import DataReport, EventReport, StateReport
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.ui import styles as S
@@ -36,10 +40,6 @@ from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
 from satellite_debug_tool.ui.event_timeline_widget import EventTimelineWidget
 from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
 from satellite_debug_tool.ui.time_range_control import TimeRangeControl
-
-
-GPS_LAT_CHANNEL_NAME = "gps_lat"
-GPS_LON_CHANNEL_NAME = "gps_lon"
 
 
 class PlaybackView(QWidget):
@@ -373,11 +373,12 @@ class PlaybackView(QWidget):
                     hw = next(iter(profiles))
         if hw is None:
             return False
-        for ch in self._profile_store.get_channels(hw):
-            if ch.name == GPS_LAT_CHANNEL_NAME:
-                self._gps_lat_id = ch.channel_id
-            elif ch.name == GPS_LON_CHANNEL_NAME:
-                self._gps_lon_id = ch.channel_id
+        lat = self._profile_store.find_channel_by_role(hw, CHANNEL_ROLE_GPS_LAT)
+        lon = self._profile_store.find_channel_by_role(hw, CHANNEL_ROLE_GPS_LON)
+        if lat is not None:
+            self._gps_lat_id = lat.channel_id
+        if lon is not None:
+            self._gps_lon_id = lon.channel_id
         return self._gps_lat_id is not None and self._gps_lon_id is not None
 
     def _toggle_map(self) -> None:

@@ -4,8 +4,8 @@
 receiver / handshake / data_store / state_store / event_log / 各 widget
 持有 / 录制 / 主题切换分发）全部内化到此类。
 
-MainWindow 现在只剩 QTabWidget 壳：顶部全局主题切换 + 三个 Tab(Live /
-Playback / Log) + 共享 statusbar。LiveView 通过 ``status_message`` 信号把短
+MainWindow 现在只剩 QTabWidget 壳：顶部全局主题切换 + 四个 Tab(Live /
+Playback / Log / Device) + 共享 statusbar。LiveView 通过 ``status_message`` 信号把短
 消息上报到 MainWindow statusbar；主题由 MainWindow 调 ``set_theme(theme)``
 广播下来。
 """
@@ -38,7 +38,17 @@ from PySide6.QtWidgets import (
 from satellite_debug_tool.core.comm import SerialWorker, UdpWorker
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, StateStore
-from satellite_debug_tool.core.profile import ProfileCache, ProfileStore
+from satellite_debug_tool.core.profile import (
+    CHANNEL_ROLE_ANTENNA_AZ,
+    CHANNEL_ROLE_ANTENNA_EL,
+    CHANNEL_ROLE_PITCH,
+    CHANNEL_ROLE_ROLL,
+    CHANNEL_ROLE_YAW,
+    CONTROL_SUBCMD_SET_TRACE_MODE,
+    CONTROL_VALUE_FROM_ENUM_VALUE,
+    ProfileCache,
+    ProfileStore,
+)
 from satellite_debug_tool.core.protocol import (
     DataReport,
     EventReport,
@@ -614,14 +624,27 @@ class LiveView(QWidget):
             self.status_message.emit("已请求下位机复位统计", 2000)
 
     def _on_dashboard_mode_requested(self, state_id: int, target_value: int) -> None:
-        if state_id == 0:
+        hw = self._profile_store.current_hw_type()
+        if hw is None:
+            self.status_message.emit("尚未完成 profile 握手，模式切换未发送", 3000)
+            return
+        binding = self._profile_store.get_state_control_binding(hw, state_id)
+        if binding is None:
+            self.status_message.emit(
+                f"state_id={state_id} 未声明 control_binding，模式切换未发送", 3000,
+            )
+            return
+        if (
+            binding.subcmd == CONTROL_SUBCMD_SET_TRACE_MODE
+            and binding.value_from == CONTROL_VALUE_FROM_ENUM_VALUE
+        ):
             if self._send_control_frame(build_set_trace_mode(target_value)):
                 self.status_message.emit(
                     f"已请求切换模式（state_id={state_id} → {target_value}）", 2000,
                 )
         else:
             self.status_message.emit(
-                f"state_id={state_id} 的模式切换暂未下发（协议待扩展）", 3000,
+                f"control_binding={binding.subcmd}/{binding.value_from} 暂未支持", 3000,
             )
 
     # ----- EventLog → Chart -----
@@ -688,11 +711,35 @@ class LiveView(QWidget):
             name_to_key[ch.name.lower()] = f"ch_{ch.channel_id:02d}"
         if not name_to_key:
             return
-        sig = tuple(sorted(name_to_key.items()))
+        role_to_axis = {
+            "roll": CHANNEL_ROLE_ROLL,
+            "pitch": CHANNEL_ROLE_PITCH,
+            "yaw": CHANNEL_ROLE_YAW,
+            "ant_az": CHANNEL_ROLE_ANTENNA_AZ,
+            "ant_el": CHANNEL_ROLE_ANTENNA_EL,
+        }
+        semantic_picks: dict[str, str] = {}
+        for axis, role in role_to_axis.items():
+            ch = self._profile_store.find_channel_by_role(hw, role)
+            if ch is not None:
+                semantic_picks[axis] = f"ch_{ch.channel_id:02d}"
+        sig = (
+            tuple(sorted(name_to_key.items())),
+            tuple(sorted(semantic_picks.items())),
+        )
         if getattr(self, "_attitude_bind_sig", None) == sig:
             return
         self._attitude_bind_sig = sig
         self._attitude.auto_bind_from_profile(name_to_key)
+        fallback_roll, fallback_pitch, fallback_yaw = self._attitude.current_attitude_bindings()
+        _, _, fallback_ant_az, fallback_ant_el = self._attitude.current_pointing_bindings()
+        self._attitude.set_auto_bindings(
+            roll=semantic_picks.get("roll", fallback_roll),
+            pitch=semantic_picks.get("pitch", fallback_pitch),
+            yaw=semantic_picks.get("yaw", fallback_yaw),
+            ant_az=semantic_picks.get("ant_az", fallback_ant_az),
+            ant_el=semantic_picks.get("ant_el", fallback_ant_el),
+        )
 
     def _on_link_lost(self):
         self.status_message.emit("Heartbeat timeout (link lost)", 5000)

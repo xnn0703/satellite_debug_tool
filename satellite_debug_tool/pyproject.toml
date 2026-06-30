@@ -4,15 +4,44 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satellite_debug_tool"
-version = "0.1.0"
 description = "Satellite communication debug tool"
 requires-python = ">=3.9"
+dynamic = ["version"]
 dependencies = [
     "PySide6>=6.5",
     "pyserial>=3.5",
     "pyqtgraph>=0.13",
     "numpy>=1.24",
+    "PyOpenGL>=3.1",
+    "py7zr>=0.20",
+    "psutil>=5.9",
 ]
 
-[tool.setuptools.packages.find]
-include = ["core*", "ui*", "io*"]
+[tool.setuptools]
+packages = [
+    "satellite_debug_tool",
+    "satellite_debug_tool.core",
+    "satellite_debug_tool.core.comm",
+    "satellite_debug_tool.core.data",
+    "satellite_debug_tool.core.log_parser",
+    "satellite_debug_tool.core.profile",
+    "satellite_debug_tool.core.protocol",
+    "satellite_debug_tool.core.simulation",
+    "satellite_debug_tool.io",
+    "satellite_debug_tool.ui",
+    "satellite_debug_tool.updater",
+]
+
+[tool.setuptools.package-dir]
+satellite_debug_tool = "."
+
+[tool.setuptools.package-data]
+"satellite_debug_tool.ui" = [
+    "assets/map.html",
+    "assets/leaflet/*",
+    "assets/leaflet/images/*",
+    "assets/fonts/*",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "satellite_debug_tool.__version__"}

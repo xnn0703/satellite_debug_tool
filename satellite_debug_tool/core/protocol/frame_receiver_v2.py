@@ -30,6 +30,7 @@ from .codec_v2 import (
     decode_heartbeat,
     decode_meta_info,
     decode_para_table_report,
+    decode_profile_semantics,
     decode_state_define,
     decode_state_report,
 )
@@ -71,6 +72,7 @@ _DECODERS = {
     int(CmdType.EVENT_REPORT): decode_event_report,
     int(CmdType.HEARTBEAT): decode_heartbeat,
     int(CmdType.PARA_TABLE_REPORT): decode_para_table_report,
+    int(CmdType.PROFILE_SEMANTICS): decode_profile_semantics,
 }
 
 

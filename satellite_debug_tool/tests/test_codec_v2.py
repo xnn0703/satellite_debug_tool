@@ -20,6 +20,7 @@ from satellite_debug_tool.core.protocol import (
     build_request_channel_define,
     build_request_event_define,
     build_request_meta_info,
+    build_request_profile_semantics,
     build_request_state_define,
     build_set_sample_rate,
     build_set_trace_mode,
@@ -33,6 +34,7 @@ from satellite_debug_tool.core.protocol.codec_v2 import (
     decode_event_report,
     decode_heartbeat,
     decode_meta_info,
+    decode_profile_semantics,
     decode_state_define,
     decode_state_report,
 )
@@ -93,6 +95,9 @@ class TestControlBuilders:
         assert self._data_of(build_request_channel_define()) == bytes([SubCmd.REQUEST_CHANNEL_DEFINE])
         assert self._data_of(build_request_state_define()) == bytes([SubCmd.REQUEST_STATE_DEFINE])
         assert self._data_of(build_request_event_define()) == bytes([SubCmd.REQUEST_EVENT_DEFINE])
+        assert self._data_of(build_request_profile_semantics()) == bytes([
+            SubCmd.REQUEST_PROFILE_SEMANTICS
+        ])
 
     def test_user_mark(self):
         frame = build_user_mark(0x1234, "pt A")
@@ -361,6 +366,41 @@ class TestDecodeOthers:
     def test_command_response_trailing_null(self):
         resp = decode_command_response(bytes([0]) + b"OK\x00\x00")
         assert resp.msg == "OK"
+
+
+# -----------------------------------------------------------------------------
+# PROFILE_SEMANTICS decoding
+# -----------------------------------------------------------------------------
+
+class TestDecodeProfileSemantics:
+    def _s(self, text: str) -> bytes:
+        raw = text.encode("utf-8")
+        return bytes([len(raw)]) + raw
+
+    def test_decode_roles_states_capabilities(self):
+        payload = bytearray()
+        payload += bytes([7, 1])              # table_ver, channel_count
+        payload += bytes([22, 1])             # channel_id, role_count
+        payload += self._s("gps_lat")
+        payload += bytes([1])                 # state_count
+        payload += bytes([5])
+        payload += self._s("trace_mode")
+        payload += bytes([SubCmd.SET_TRACE_MODE, 0])
+        payload += bytes([2])                 # capability_count
+        payload += self._s("parameters") + bytes([1])
+        payload += self._s("channel_enable_mask") + bytes([0])
+
+        report = decode_profile_semantics(bytes(payload))
+
+        assert report.table_ver == 7
+        assert report.channels[0].channel_id == 22
+        assert report.channels[0].roles == ["gps_lat"]
+        assert report.states[0].state_id == 5
+        assert report.states[0].role == "trace_mode"
+        assert report.states[0].control_subcmd == SubCmd.SET_TRACE_MODE
+        assert report.capabilities[0].name == "parameters"
+        assert report.capabilities[0].supported is True
+        assert report.capabilities[1].supported is False
 
 
 # -----------------------------------------------------------------------------

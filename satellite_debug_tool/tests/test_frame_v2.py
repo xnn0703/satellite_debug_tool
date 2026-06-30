@@ -28,14 +28,14 @@ class TestProtocolConstants:
         assert EVENT_ID_USER_MARK == 0xFFFF
 
     def test_cmd_values_match_spec(self):
-        # 规范 §4 + M9 扩展：命令码范围 0x01–0x0B
+        # 规范 §4 + M13 扩展：命令码范围 0x01–0x0C
         for cmd in CmdType:
-            assert 0x01 <= int(cmd) <= 0x0B
+            assert 0x01 <= int(cmd) <= 0x0C
 
     def test_subcmd_values_match_spec(self):
-        # 规范 §5.3 + M9 扩展：子命令范围 0x01–0x12
+        # 规范 §5.3 + M13 扩展：子命令范围 0x01–0x13
         for sub in SubCmd:
-            assert 0x01 <= int(sub) <= 0x12
+            assert 0x01 <= int(sub) <= 0x13
 
     def test_resp_codes(self):
         assert RespCode.SUCCESS == 0

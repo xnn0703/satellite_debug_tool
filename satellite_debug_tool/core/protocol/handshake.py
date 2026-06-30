@@ -32,6 +32,7 @@ from .frame_v2 import (
     FrameV2Record,
     Heartbeat,
     MetaInfo,
+    ProfileSemanticsReport,
     StateDefineTable,
 )
 
@@ -134,6 +135,10 @@ class Handshake(QObject):
             if hw is not None:
                 self._store.apply_event_define(hw, record.table_ver, record.events)
                 self._received_event = True
+        elif isinstance(record, ProfileSemanticsReport):
+            hw = self._store.current_hw_type()
+            if hw is not None:
+                self._store.apply_profile_semantics(hw, record)
         elif isinstance(record, Heartbeat):
             self._on_heartbeat()
 
