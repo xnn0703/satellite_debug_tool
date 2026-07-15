@@ -147,6 +147,7 @@ class StatusStripWidget(QFrame):
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
+        state_store.state_cleared.connect(self._on_state_cleared)
 
         self.set_theme("dark", "medium")
         self.set_recording(False)
@@ -220,6 +221,12 @@ class StatusStripWidget(QFrame):
         entry = self._state_entries.get(state_id)
         if chip is not None and entry is not None:
             self._apply_state(chip, entry, value)
+
+    def _on_state_cleared(self, hw_type: object) -> None:
+        if self._current_hw is None:
+            return
+        if hw_type is None or hw_type == self._current_hw:
+            self._rebuild_dynamic()
 
     # ---- 重建动态 chips ----
 

@@ -12,10 +12,11 @@ Playback / Log / Device) + 共享 statusbar。LiveView 通过 ``status_message``
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
 from satellite_debug_tool.core.comm import SerialWorker, UdpWorker
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, StateStore
+from satellite_debug_tool.core.link_trace import trace_message
 from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_ANTENNA_AZ,
     CHANNEL_ROLE_ANTENNA_EL,
@@ -54,6 +56,8 @@ from satellite_debug_tool.core.protocol import (
     EventReport,
     FrameReceiverV2,
     Heartbeat,
+    CommandResponse,
+    RespCode,
     StateReport,
     build_debug_enable_v2,
     build_reset_stats,
@@ -77,6 +81,24 @@ from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
 from satellite_debug_tool.ui.simulation_panel_widget import SimulationPanelWidget
 
 
+DEBUG_ACK_TIMEOUT_MS = 3000
+DEBUG_ACK_MAX_RETRIES = 0
+DEBUG_LATE_ACK_WINDOW_S = 3.0
+
+
+def _debug_ctrl_log(message: str) -> None:
+    trace_message("DBG_CTRL", message)
+
+
+def _parse_debug_ack_target(message: str) -> bool | None:
+    text = (message or "").strip()
+    if text == "DEBUG_ENABLE=1":
+        return True
+    if text == "DEBUG_ENABLE=0":
+        return False
+    return None
+
+
 class LiveView(QWidget):
     """实时模式主视图。"""
 
@@ -85,6 +107,8 @@ class LiveView(QWidget):
     # M9: 连接共享 — DeviceView 通过这些信号接入同一条链路
     connected_worker_changed = Signal(object)  # emit worker 或 None
     frame_received = Signal(object)            # emit 每个 parsed FrameV2Record
+    debug_request_finished = Signal(bool, bool, str)  # target, ok, detail
+    debug_state_changed = Signal(bool)
 
     def __init__(self, settings: Settings, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -105,6 +129,15 @@ class LiveView(QWidget):
         self._handshake_timer.timeout.connect(self._on_handshake_tick)
         self._is_connected = False
         self._debug_enabled = False
+        self._debug_pending_target: bool | None = None
+        self._debug_retry_count = 0
+        self._debug_data_seen_after_request = False
+        self._debug_last_requested_target: bool | None = None
+        self._debug_last_request_at = 0.0
+        self._external_control_locked = False
+        self._debug_ack_timer = QTimer(self)
+        self._debug_ack_timer.setSingleShot(True)
+        self._debug_ack_timer.timeout.connect(self._on_debug_ack_timeout)
         self._recorder = None
         self._is_recording = False
         # 仿真模式
@@ -116,6 +149,40 @@ class LiveView(QWidget):
 
         self._setup_ui()
         self._load_settings()
+
+    def profile_store(self) -> ProfileStore:
+        """供 DeviceView 复用 Live 页当前连接的 profile/capability。"""
+        return self._profile_store
+
+    def is_debug_enabled(self) -> bool:
+        return self._debug_enabled
+
+    @Slot(bool)
+    def request_debug_mode(self, target: bool) -> None:
+        """Live/Device 共用的严格 Debug 控制入口。"""
+        target = bool(target)
+        if not self._is_connected or self._worker is None:
+            self.debug_request_finished.emit(target, False, "设备未连接")
+            return
+        if self._debug_pending_target is not None:
+            self.debug_request_finished.emit(target, False, "已有 Debug 命令等待确认")
+            return
+        if self._debug_enabled == target:
+            self.debug_request_finished.emit(target, True, "already_confirmed")
+            return
+        if not self._send_debug_enable(target):
+            self.debug_request_finished.emit(target, False, "Debug 命令发送失败")
+
+    @Slot(bool)
+    def set_device_transaction_active(self, active: bool) -> None:
+        """设备事务期间锁住 Live 页 Debug 按钮。"""
+        self._external_control_locked = bool(active)
+        self._update_debug_button_enabled()
+
+    @Slot(bool)
+    def set_handshake_retries_paused(self, paused: bool) -> None:
+        if self._handshake is not None:
+            self._handshake.set_retry_paused(bool(paused))
 
     # ============================ 主题 / 字号 ============================
 
@@ -493,6 +560,7 @@ class LiveView(QWidget):
 
     def _on_connect_clicked(self):
         conn_type = self._type_combo.currentText()
+        trace_message("DBG_UI", f"CLICK CONNECT type={conn_type}")
         if conn_type == "Serial":
             port = self._port_combo.currentText()
             if port == "No ports" or not port:
@@ -535,7 +603,12 @@ class LiveView(QWidget):
             self._set_conn_state(False, dev="—", detail="Connection Failed")
 
     def _on_disconnect_clicked(self):
+        trace_message("DBG_UI", "CLICK DISCONNECT")
         self._debug_enabled = False
+        self._debug_pending_target = None
+        self._debug_last_requested_target = None
+        self._debug_last_request_at = 0.0
+        self._debug_ack_timer.stop()
         self._debug_btn.setText("Debug: OFF")
         self._debug_btn.setEnabled(False)
         if self._worker:
@@ -548,9 +621,11 @@ class LiveView(QWidget):
 
     def _on_connected(self):
         self._is_connected = True
+        # 新连接必须丢弃上一轮运行态；profile 可以复用，但 state 必须等设备重新上报。
+        self._state_store.clear()
         self._connect_btn.setEnabled(False)
         self._disconnect_btn.setEnabled(True)
-        self._debug_btn.setEnabled(True)
+        self._update_debug_button_enabled()
         self._set_conn_state(True, dev="—", detail=self._conn_status_label.text())
         self._type_combo.setEnabled(False)
         self._control_panel.set_enabled(True)
@@ -759,7 +834,12 @@ class LiveView(QWidget):
         self._disconnect_btn.setEnabled(False)
         self._debug_btn.setEnabled(False)
         self._debug_enabled = False
+        self._debug_pending_target = None
+        self._debug_last_requested_target = None
+        self._debug_last_request_at = 0.0
+        self._debug_ack_timer.stop()
         self._debug_btn.setText("Debug: OFF")
+        self.debug_state_changed.emit(False)
         self._conn_status_label.setText("Disconnected")
         self._hw_label.setText("设备: —")
         self._set_conn_state(False, dev="—", detail="Disconnected")
@@ -772,18 +852,163 @@ class LiveView(QWidget):
             self._handshake = None
 
     def _on_debug_toggled(self):
+        target = not self._debug_enabled
+        trace_message(
+            "DBG_UI",
+            f"CLICK DEBUG target={1 if target else 0} "
+            f"connected={int(self._is_connected)} "
+            f"pending={self._debug_pending_target!r}",
+        )
         if not self._worker:
+            trace_message("DBG_UI", "CLICK DEBUG ignored reason=no_worker")
             return
-        self._debug_enabled = not self._debug_enabled
-        frame = build_debug_enable_v2(self._debug_enabled)
-        if self._worker.send(frame):
-            self._debug_btn.setText(f"Debug: {'ON' if self._debug_enabled else 'OFF'}")
-            # ON 用 checked 态（accent-soft），OFF 用默认次按钮 —— 走全局 QSS
+        if self._debug_pending_target is not None:
+            trace_message("DBG_UI", "CLICK DEBUG ignored reason=request_pending")
+            return
+        self.request_debug_mode(target)
+
+    def _send_debug_enable(self, target: bool, *, retry: bool = False) -> bool:
+        if self._worker is None:
+            return False
+        if self._worker.send(build_debug_enable_v2(target)):
+            self._debug_pending_target = target
+            self._debug_last_requested_target = target
+            self._debug_last_request_at = time.monotonic()
+            self._debug_data_seen_after_request = False
+            if retry:
+                self._debug_retry_count += 1
+            else:
+                self._debug_retry_count = 0
+            label = "ON" if target else "OFF"
+            _debug_ctrl_log(
+                f"send DEBUG_ENABLE target={1 if target else 0} "
+                f"retry={self._debug_retry_count}"
+            )
+            self._debug_btn.setText(f"Debug: {label}...")
+            self._debug_btn.setEnabled(False)
             self._debug_btn.setCheckable(True)
-            self._debug_btn.setChecked(self._debug_enabled)
+            self._debug_btn.setChecked(target)
+            self._debug_ack_timer.start(DEBUG_ACK_TIMEOUT_MS)
+            return True
         else:
-            self._debug_enabled = not self._debug_enabled
+            _debug_ctrl_log(f"send DEBUG_ENABLE target={1 if target else 0} failed")
             self.status_message.emit("Failed to send debug command", 3000)
+            return False
+
+    def _on_debug_command_response(self, resp: CommandResponse) -> None:
+        target = self._debug_pending_target
+        ack_target = _parse_debug_ack_target(resp.msg or "")
+        if target is None:
+            if ack_target is not None:
+                age = time.monotonic() - self._debug_last_request_at
+                _debug_ctrl_log(
+                    f"rx late debug ack target={1 if ack_target else 0} "
+                    f"code={resp.code} msg={resp.msg!r} age={age:.3f}s"
+                )
+                if (
+                    int(resp.code) == int(RespCode.SUCCESS)
+                    and self._debug_last_requested_target == ack_target
+                    and 0.0 <= age <= DEBUG_LATE_ACK_WINDOW_S
+                ):
+                    self._apply_debug_state(ack_target, source="late_ack")
+            return
+        _debug_ctrl_log(
+            f"rx command_response while pending target={1 if target else 0}: "
+            f"code={resp.code} msg={resp.msg!r}"
+        )
+        if ack_target is None:
+            debug_related_error = (
+                "DEBUG_ENABLE" in (resp.msg or "").upper()
+                and int(resp.code) != int(RespCode.SUCCESS)
+            )
+            if debug_related_error:
+                self._finish_debug_request(False, f"Debug command failed: {resp.msg or resp.code}")
+                return
+            _debug_ctrl_log(
+                f"rx non-debug response ignored while pending target={1 if target else 0}: "
+                f"code={resp.code} msg={resp.msg!r}"
+            )
+            return
+        if ack_target != target:
+            _debug_ctrl_log(
+                f"rx stale debug ack target={1 if ack_target else 0} ignored, "
+                f"pending target={1 if target else 0}"
+            )
+            return
+        if int(resp.code) != int(RespCode.SUCCESS):
+            self._finish_debug_request(False, f"Debug command failed: {resp.msg or resp.code}")
+            return
+        self._finish_debug_request(True, source="ack")
+
+    def _on_debug_ack_timeout(self) -> None:
+        target = self._debug_pending_target
+        if target is None:
+            return
+        if self._debug_retry_count < DEBUG_ACK_MAX_RETRIES:
+            label = "ON" if target else "OFF"
+            _debug_ctrl_log(
+                f"ack timeout target={1 if target else 0}, "
+                f"retry_next={self._debug_retry_count + 1}, "
+                f"data_seen={self._debug_data_seen_after_request}"
+            )
+            self.status_message.emit(f"Debug {label} 未确认，重试", 2000)
+            self._send_debug_enable(target, retry=True)
+            return
+        _debug_ctrl_log(
+            f"ack timeout final target={1 if target else 0}, "
+            f"data_seen={self._debug_data_seen_after_request}"
+        )
+        if target and self._debug_data_seen_after_request:
+            self._finish_debug_request(True, source="data_report_timeout")
+            return
+        self._finish_debug_request(False, "Debug command not confirmed")
+
+    def _finish_debug_request(
+        self,
+        ok: bool,
+        error: str = "",
+        *,
+        source: str = "ack",
+    ) -> None:
+        target = self._debug_pending_target
+        self._debug_pending_target = None
+        self._debug_ack_timer.stop()
+        self._update_debug_button_enabled()
+        if ok and target is not None:
+            self._apply_debug_state(target, source=source)
+            self.debug_request_finished.emit(target, True, source)
+            return
+        self._render_debug_button()
+        if error:
+            _debug_ctrl_log(f"debug request failed: {error}")
+            self.status_message.emit(error, 3000)
+        if target is not None:
+            self.debug_request_finished.emit(target, False, error or "Debug command not confirmed")
+
+    def _apply_debug_state(self, target: bool, *, source: str) -> None:
+        self._debug_enabled = target
+        self._update_debug_button_enabled()
+        _debug_ctrl_log(
+            f"debug state confirmed target={1 if target else 0}, "
+            f"source={source}, data_seen={self._debug_data_seen_after_request}"
+        )
+        if self._debug_enabled:
+            hw = self._profile_store.current_hw_type()
+            self._state_store.clear(hw)
+        self._render_debug_button()
+        self.debug_state_changed.emit(target)
+
+    def _update_debug_button_enabled(self) -> None:
+        self._debug_btn.setEnabled(
+            self._is_connected
+            and not self._external_control_locked
+            and self._debug_pending_target is None
+        )
+
+    def _render_debug_button(self) -> None:
+        self._debug_btn.setText(f"Debug: {'ON' if self._debug_enabled else 'OFF'}")
+        self._debug_btn.setCheckable(True)
+        self._debug_btn.setChecked(self._debug_enabled)
 
     def _on_error(self, msg: str):
         self._error_count += 1
@@ -803,8 +1028,24 @@ class LiveView(QWidget):
                 self._handshake.feed(rec)
 
             if isinstance(rec, DataReport):
+                if self._debug_pending_target is not None and not self._debug_data_seen_after_request:
+                    pending_target = self._debug_pending_target
+                    self._debug_data_seen_after_request = True
+                    _debug_ctrl_log(
+                        f"rx first DATA_REPORT while pending target="
+                        f"{1 if pending_target else 0}, samples={len(rec.samples)}"
+                    )
+                    if pending_target:
+                        self._finish_debug_request(True, source="data_report")
+                elif self._debug_enabled and not self._debug_data_seen_after_request:
+                    self._debug_data_seen_after_request = True
+                    _debug_ctrl_log(f"rx first DATA_REPORT after debug on, samples={len(rec.samples)}")
                 self._data_store.update(rec)
                 self._frame_count += 1
+                self._frame_times.append(datetime.now().timestamp())
+                continue
+            if isinstance(rec, CommandResponse):
+                self._on_debug_command_response(rec)
                 continue
             if isinstance(rec, Heartbeat):
                 self._status_strip.pulse_heartbeat()
@@ -827,7 +1068,6 @@ class LiveView(QWidget):
 
     def _update_display(self):
         current_time = datetime.now().timestamp()
-        self._frame_times.append(current_time)
         self._frame_times = [t for t in self._frame_times if current_time - t < 1.0]
         fps = len(self._frame_times)
         self._fps_label.setText(f"FPS {fps}")

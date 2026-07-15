@@ -72,7 +72,7 @@ class MainWindow(QMainWindow):
         self._live = LiveView(settings=self._settings)
         self._playback = PlaybackView(settings=self._settings)
         self._log = LogView(settings=self._settings)
-        self._device = DeviceView(settings=self._settings)
+        self._device = DeviceView(settings=self._settings, profile_store=self._live.profile_store())
         self._tabs.addTab(self._live, "实时")
         self._tabs.addTab(self._playback, "回放")
         self._tabs.addTab(self._log, "Log")
@@ -83,6 +83,15 @@ class MainWindow(QMainWindow):
         # M9: 连接共享 — Live Tab 的 worker 和帧数据广播给 Device Tab
         self._live.connected_worker_changed.connect(self._device.set_worker)
         self._live.frame_received.connect(self._device._on_frame_received)
+        self._device.debug_mode_requested.connect(self._live.request_debug_mode)
+        self._live.debug_request_finished.connect(self._device.on_debug_request_finished)
+        self._live.debug_state_changed.connect(self._device.set_debug_state)
+        self._device.device_transaction_active_changed.connect(
+            self._live.set_device_transaction_active
+        )
+        self._device.handshake_retry_pause_changed.connect(
+            self._live.set_handshake_retries_paused
+        )
 
         for view in (self._live, self._playback, self._log, self._device):
             view.status_message.connect(self._on_status_message)

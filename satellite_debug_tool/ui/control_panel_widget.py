@@ -31,6 +31,7 @@ from satellite_debug_tool.ui import styles as S
 
 
 _SAMPLE_RATES = [5, 10, 25, 50, 100, 200]
+_DEFAULT_SAMPLE_RATE = 25
 
 
 class _ChannelEnableDialog(QDialog):
@@ -159,7 +160,7 @@ class ControlPanelWidget(QFrame):
         self._rate_combo = QComboBox()
         for hz in _SAMPLE_RATES:
             self._rate_combo.addItem(f"{hz} Hz", hz)
-        self._rate_combo.setCurrentIndex(_SAMPLE_RATES.index(100))
+        self._rate_combo.setCurrentIndex(_SAMPLE_RATES.index(_DEFAULT_SAMPLE_RATE))
         self._rate_combo.setFixedWidth(80)
         self._rate_combo.setToolTip("下发 CONTROL.SET_SAMPLE_RATE（下位机 DATA_REPORT 频率）")
         self._rate_combo.currentIndexChanged.connect(self._on_rate_changed)

@@ -12,6 +12,7 @@ from satellite_debug_tool.core.protocol import (
     EventDefineTable,
     Heartbeat,
     MetaInfo,
+    ProfileSemanticsReport,
     StateDefEntry,
     StateDefineTable,
     SubCmd,
@@ -31,7 +32,7 @@ def _subcmd(frame: bytes) -> int:
 
 
 class TestStartSendsRequests:
-    def test_start_sends_four_requests(self, sender_sink):
+    def test_start_sends_only_base_requests(self, sender_sink):
         sent, send = sender_sink
         store = ProfileStore()
         hs = Handshake(store, send)
@@ -44,6 +45,17 @@ class TestStartSendsRequests:
             SubCmd.REQUEST_STATE_DEFINE,
             SubCmd.REQUEST_EVENT_DEFINE,
         ]
+
+    def test_meta_starts_independent_semantics_request(self, sender_sink):
+        sent, send = sender_sink
+        store = ProfileStore()
+        hs = Handshake(store, send)
+        hs.start()
+        sent.clear()
+
+        hs.feed(MetaInfo(2, "fw", "esa01", "sn"))
+
+        assert [_subcmd(frame) for frame in sent] == [SubCmd.REQUEST_PROFILE_SEMANTICS]
 
     def test_stop_disables(self, sender_sink):
         sent, send = sender_sink
@@ -95,6 +107,35 @@ class TestReadyTransition:
         assert hs.is_ready
         assert ready_fires == ["afd01"]
 
+    def test_profile_semantics_is_optional_for_ready(self, sender_sink):
+        sent, send = sender_sink
+        store = ProfileStore()
+        hs = Handshake(store, send)
+        hs.start()
+        meta, ch, st, ev = self._build_records()
+
+        hs.feed(meta)
+        hs.feed(ch)
+        hs.feed(st)
+        hs.feed(ev)
+
+        assert hs.is_ready
+        assert store.has_capability("afd01", "parameters") is False
+
+    def test_profile_semantics_updates_store_when_present(self, sender_sink):
+        sent, send = sender_sink
+        store = ProfileStore()
+        hs = Handshake(store, send)
+        hs.start()
+        meta, *_ = self._build_records()
+        hs.feed(meta)
+        hs.feed(ProfileSemanticsReport(
+            table_ver=1,
+            capabilities=[],
+        ))
+
+        assert store.get_profile("afd01").semantics_table_ver == 1
+
     def test_define_before_meta_is_ignored(self, sender_sink):
         """如果设备先发 DEFINE 再发 META，握手应该先忽略 DEFINE 并等 META。"""
         sent, send = sender_sink
@@ -122,12 +163,13 @@ class TestResendOnTimeout:
         hs.feed(MetaInfo(2, "fw", "afd01", "sn"))
         # 还没收到三张 DEFINE，tick 100ms 后应重发 3 条
         hs.tick(100)
-        assert len(sent) == 3
+        assert len(sent) == 4
         sub_cmds = sorted(_subcmd(f) for f in sent)
         assert sub_cmds == sorted([
             SubCmd.REQUEST_CHANNEL_DEFINE,
             SubCmd.REQUEST_STATE_DEFINE,
             SubCmd.REQUEST_EVENT_DEFINE,
+            SubCmd.REQUEST_PROFILE_SEMANTICS,
         ])
 
     def test_no_resend_when_ready(self, sender_sink):
@@ -140,11 +182,51 @@ class TestResendOnTimeout:
         hs.feed(ChannelDefineTable(1, [ChannelDefEntry(0, 1, 0, 0, "a", "", 0, 1)]))
         hs.feed(StateDefineTable(1, [StateDefEntry(0, 0, 0, "B")]))
         hs.feed(EventDefineTable(1, [EventDefEntry(1, 1, "E")]))
+        hs.feed(ProfileSemanticsReport(table_ver=1, capabilities=[]))
         assert hs.is_ready
         sent.clear()
 
         hs.tick(1000)
         assert sent == []
+
+    def test_semantics_retries_after_ready_but_only_three_attempts(self, sender_sink):
+        sent, send = sender_sink
+        store = ProfileStore()
+        hs = Handshake(
+            store,
+            send,
+            semantics_retry_ms=100,
+            semantics_max_attempts=3,
+        )
+        hs.start()
+        sent.clear()
+        hs.feed(MetaInfo(2, "fw", "esa01", "sn"))  # attempt 1
+        hs.feed(ChannelDefineTable(1, [ChannelDefEntry(0, 1, 0, 0, "a", "", 0, 1)]))
+        hs.feed(StateDefineTable(1, [StateDefEntry(0, 0, 0, "B")]))
+        hs.feed(EventDefineTable(1, [EventDefEntry(1, 1, "E")]))
+        assert hs.is_ready
+
+        hs.tick(100)  # attempt 2
+        hs.tick(100)  # attempt 3
+        hs.tick(100)  # capped
+
+        assert [_subcmd(frame) for frame in sent].count(SubCmd.REQUEST_PROFILE_SEMANTICS) == 3
+
+    def test_semantics_retry_can_be_paused_for_ota(self, sender_sink):
+        sent, send = sender_sink
+        store = ProfileStore()
+        hs = Handshake(store, send, semantics_retry_ms=100)
+        hs.start()
+        hs.feed(MetaInfo(2, "fw", "esa01", "sn"))
+        sent.clear()
+
+        hs.set_retry_paused(True)
+        hs.tick(1000)
+        assert sent == []
+
+        hs.set_retry_paused(False)
+        hs.tick(100)
+        assert [_subcmd(frame) for frame in sent] == [SubCmd.REQUEST_PROFILE_SEMANTICS]
 
     def test_define_timeout_signal(self, sender_sink):
         sent, send = sender_sink

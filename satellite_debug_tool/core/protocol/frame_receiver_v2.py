@@ -20,6 +20,8 @@ from __future__ import annotations
 from enum import IntEnum
 from typing import List
 
+from satellite_debug_tool.core.link_trace import FrameTraceLogger, describe_frame
+
 from .codec_v2 import (
     CodecError,
     decode_channel_define,
@@ -91,6 +93,7 @@ class FrameReceiverV2:
         self._crc_errors = 0
         self._decode_errors = 0    # DATA 段解码异常
         self._frames_ok = 0
+        self._trace = FrameTraceLogger("DBG_FRAME")
 
     # ----- 公共接口 -----
 
@@ -150,12 +153,14 @@ class FrameReceiverV2:
             else:
                 # 'AA xx' 非 55 → 放弃本次 header
                 self._framing_errors += 1
+                self._trace.message(f"DECODER_INVALID reason=header2 byte=0x{byte:02X}")
                 self._state = _State.WAIT_HEADER_1
             return None
 
         if st == _State.READ_TYPE:
             if byte != DEVICE_TYPE:
                 self._framing_errors += 1
+                self._trace.message(f"DECODER_INVALID reason=device_type byte=0x{byte:02X}")
                 self.reset()
                 return None
             self._state = _State.READ_CMD
@@ -175,6 +180,10 @@ class FrameReceiverV2:
             self._data_len |= byte << 8
             if self._data_len > MAX_DATA_LENGTH:
                 self._framing_errors += 1
+                self._trace.message(
+                    f"DECODER_INVALID reason=data_len value={self._data_len} "
+                    f"max={MAX_DATA_LENGTH}"
+                )
                 self.reset()
                 return None
             self._data_buf.clear()
@@ -204,6 +213,7 @@ class FrameReceiverV2:
         if st == _State.READ_FOOTER:
             if byte != FRAME_FOOTER:
                 self._framing_errors += 1
+                self._trace.message(f"DECODER_INVALID reason=footer byte=0x{byte:02X}")
                 self.reset()
                 return None
             return self._finalize()
@@ -217,9 +227,13 @@ class FrameReceiverV2:
         # 先校验 CRC
         envelope = bytes([FRAME_HEADER_0, FRAME_HEADER_1, DEVICE_TYPE, self._cmd_type]) \
             + self._data_len.to_bytes(2, "little") + bytes(self._data_buf)
+        raw_frame = envelope + bytes(self._crc_bytes) + bytes([FRAME_FOOTER])
         expected = Crc16.from_le(bytes(self._crc_bytes))
         if not Crc16.verify(envelope, expected):
             self._crc_errors += 1
+            self._trace.message(
+                f"DECODER_INVALID {describe_frame(raw_frame)} reason=crc"
+            )
             self.reset()
             return None
 
@@ -235,7 +249,15 @@ class FrameReceiverV2:
                 self._frames_ok += 1
             except CodecError:
                 self._decode_errors += 1
+                self._trace.message(
+                    f"DECODER_INVALID {describe_frame(raw_frame)} reason=payload"
+                )
                 record = None
+
+        if record is not None:
+            self._trace.frame(
+                "DECODER_OUT", raw_frame, f"record={type(record).__name__}",
+            )
 
         self.reset()
         return record

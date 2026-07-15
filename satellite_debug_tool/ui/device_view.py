@@ -6,13 +6,12 @@ M9 新增。通过 debug 协议远程读写设备参数、上传固件。
 
 from __future__ import annotations
 
-import socket
 import time
 import zlib
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QCoreApplication, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -38,8 +37,6 @@ from satellite_debug_tool.core.protocol import (
     ParaEntry,
     ParaTableReport,
     RespCode,
-    build_debug_enable_v2,
-    build_device_reboot,
     build_ota_abort,
     build_ota_begin,
     build_ota_data,
@@ -51,6 +48,7 @@ from satellite_debug_tool.core.protocol import (
     PARA_FLAG_REQUIRES_REBOOT,
     ParaType,
 )
+from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.ui import styles as S
 
 
@@ -70,16 +68,32 @@ OTA_CHUNK_SIZE = 512
 # OTA 每块超时 (ms) 和最大重试次数
 OTA_CHUNK_TIMEOUT_MS = 2000
 OTA_CHUNK_MAX_RETRY = 3
+OTA_BEGIN_TIMEOUT_MS = 15000
+OTA_END_TIMEOUT_MS = 10000
+PARA_AUTO_FALLBACK_MS = 1500
+# 参数写入可能触发 FDB/flash 擦写，3s 容易误报超时。
+PARA_SET_TIMEOUT_MS = 10000
+PARA_RESET_TIMEOUT_MS = 15000
+PARA_READ_TIMEOUT_MS = 10000
 
 
 class DeviceView(QWidget):
     """设备 Tab：设备信息 + 参数表 + OTA。"""
 
     status_message = Signal(str, int)
+    debug_mode_requested = Signal(bool)
+    device_transaction_active_changed = Signal(bool)
+    handshake_retry_pause_changed = Signal(bool)
 
-    def __init__(self, parent: Optional[QWidget] = None, settings=None):
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        settings=None,
+        profile_store: Optional[ProfileStore] = None,
+    ):
         super().__init__(parent)
         self._worker = None
+        self._profile_store: Optional[ProfileStore] = None
         self._theme = "dark"
         self._scale = "small"
         self._settings = settings   # 可选；用于读取 paths.firmware_dir 作为打开默认目录
@@ -92,9 +106,20 @@ class DeviceView(QWidget):
 
         # 参数表
         self._params: list[ParaEntry] = []
+        self._supports_parameters = False
+        self._supports_ota = False
+        self._last_auto_read_hw: Optional[str] = None
+        self._params_loaded_hw: Optional[str] = None
+        self._para_read_pending = False
+        self._para_verify_retry_scheduled = False
+        self._pending_para_name: Optional[str] = None
+        self._pending_para_value: Optional[str] = None
+        self._pending_para_type: Optional[int] = None
+        self._para_status_by_name: dict[str, str] = {}
 
         # OTA 状态机
         self._ota_active = False
+        self._ota_state = "IDLE"
         self._ota_file: Optional[bytes] = None
         self._ota_filename = ""
         self._ota_seq = 0
@@ -102,6 +127,8 @@ class DeviceView(QWidget):
         self._ota_crc32 = 0
         self._ota_retry = 0
         self._ota_paused_debug = False
+        self._ota_restore_debug = False
+        self._known_debug_enabled = False
         self._ota_start_time = 0.0
 
         # OTA 升级后等待设备重启 + 新版本上线。设备 bootloader 流程
@@ -110,6 +137,7 @@ class DeviceView(QWidget):
         self._ota_post_reboot_fw_before: str = ""   # 升级前的 fw_ver 快照
         self._ota_post_reboot_deadline: float = 0.0  # 超时绝对时间
         self._ota_post_reboot_started_at: float = 0.0  # 开始等待时刻（用于 UI 显示已等待秒数）
+        self._ota_reboot_meta_not_before: float = 0.0  # 隔离 END ACK 前后的旧 META
         self._ota_post_reboot_timer = QTimer(self)
         self._ota_post_reboot_timer.setInterval(3000)
         self._ota_post_reboot_timer.timeout.connect(self._on_ota_post_reboot_tick)
@@ -119,8 +147,13 @@ class DeviceView(QWidget):
         self._response_timer = QTimer(self)
         self._response_timer.setSingleShot(True)
         self._response_timer.timeout.connect(self._on_response_timeout)
+        self._para_read_timer = QTimer(self)
+        self._para_read_timer.setSingleShot(True)
+        self._para_read_timer.timeout.connect(self._on_para_read_timeout)
 
         self._setup_ui()
+        if profile_store is not None:
+            self.set_profile_store(profile_store)
 
     def _setup_ui(self):
         outer = QVBoxLayout(self)
@@ -165,6 +198,9 @@ class DeviceView(QWidget):
         btn_row.addWidget(self._factory_reset_btn)
         btn_row.addStretch()
         para_layout.addLayout(btn_row)
+
+        self._para_status_label = QLabel("")
+        para_layout.addWidget(self._para_status_label)
 
         self._para_table = QTableWidget(0, 5)
         self._para_table.setHorizontalHeaderLabels(["名称", "类型", "当前值", "操作", "状态"])
@@ -230,24 +266,71 @@ class DeviceView(QWidget):
 
     # ---- 连接共享 ----
 
+    def set_profile_store(self, store: ProfileStore) -> None:
+        """注入 LiveView 的 ProfileStore，用于按设备 capability 启用功能。"""
+        if self._profile_store is store:
+            return
+        if self._profile_store is not None:
+            try:
+                self._profile_store.profile_changed.disconnect(self._on_profile_changed)
+            except (TypeError, RuntimeError):
+                pass
+        self._profile_store = store
+        self._profile_store.profile_changed.connect(self._on_profile_changed)
+        self._refresh_capabilities()
+
+    @Slot(str)
+    def _on_profile_changed(self, _hw_type: str) -> None:
+        self._refresh_capabilities()
+
     @Slot(object)
     def set_worker(self, worker):
         """由 MainWindow 桥接 LiveView.connected_worker_changed 调用。"""
         self._worker = worker
         connected = worker is not None
-        self._set_controls_enabled(connected)
         if connected:
+            self._hw_type = "—"
+            self._fw_ver = "—"
+            self._device_sn = "—"
+            self._protocol_ver = 0
+            self._update_info_labels()
             self._overlay.hide()
-            # 自动读取参数表
-            QTimer.singleShot(500, self._on_read_params)
+            self._refresh_capabilities()
         else:
+            self._hw_type = "—"
+            self._fw_ver = "—"
+            self._device_sn = "—"
+            self._protocol_ver = 0
+            self._update_info_labels()
             self._overlay.show()
             self._overlay.raise_()
+            self._last_auto_read_hw = None
+            self._params_loaded_hw = None
+            self._para_read_pending = False
+            self._para_verify_retry_scheduled = False
+            self._para_read_timer.stop()
+            self._supports_parameters = False
+            self._supports_ota = False
+            self._para_status_label.setText("")
+            self._set_controls_enabled(False)
             if self._ota_active:
                 self._ota_finish("连接断开，OTA 中止")
             # 连接断开时停掉 OTA 后等待的探测，避免对断连 worker 发包
             if self._ota_post_reboot_timer.isActive():
                 self._ota_post_reboot_timer.stop()
+
+    @Slot(bool)
+    def set_debug_state(self, enabled: bool) -> None:
+        self._known_debug_enabled = bool(enabled)
+
+    @Slot(bool, bool, str)
+    def on_debug_request_finished(self, target: bool, ok: bool, detail: str) -> None:
+        if not self._ota_active or self._ota_state != "QUIESCE" or target:
+            return
+        if not ok:
+            self._ota_finish(f"关闭实时数据失败: {detail}")
+            return
+        self._ota_send_begin()
 
     @Slot(object)
     def _on_frame_received(self, record):
@@ -258,18 +341,25 @@ class DeviceView(QWidget):
             self._device_sn = record.device_sn
             self._protocol_ver = record.protocol_ver
             self._update_info_labels()
-            # OTA 后等待新版本上线：清空过 fw_ver 之后，收到任何非空 fw_ver 都算重新上线
-            if self._ota_post_reboot_timer.isActive() and record.fw_ver:
-                self._ota_post_reboot_timer.stop()
+            self._refresh_capabilities()
+            # 同版本/降级均允许，因此 WAIT_REBOOT 收到任意有效 META 即视为重新上线。
+            if (
+                self._ota_active
+                and self._ota_state == "WAIT_REBOOT"
+                and record.fw_ver
+                and time.monotonic() >= self._ota_reboot_meta_not_before
+            ):
                 before = self._ota_post_reboot_fw_before or "?"
                 if record.fw_ver != before:
                     msg = f"✓ 升级成功，设备已上线（{before} → {record.fw_ver}）"
                 else:
                     msg = f"✓ 设备已重新上线（版本 {record.fw_ver}，与升级前相同）"
-                self._ota_status_label.setText(msg)
-                self.status_message.emit(f"OTA 完成，设备运行 {record.fw_ver}", 5000)
-                # 升级后参数表可能变化，重新读取
-                QTimer.singleShot(300, self._on_read_params)
+                self._known_debug_enabled = False
+                self._params_loaded_hw = None
+                self._last_auto_read_hw = None
+                self._ota_finish(msg, restore_debug=False)
+                if self._supports_parameters:
+                    self._maybe_auto_read_params()
         elif isinstance(record, ParaTableReport):
             self._on_para_table_received(record)
         elif isinstance(record, CommandResponse):
@@ -286,9 +376,7 @@ class DeviceView(QWidget):
         elapsed = int(now - self._ota_post_reboot_started_at)
         # 超时判断
         if now > self._ota_post_reboot_deadline:
-            self._ota_post_reboot_timer.stop()
-            self._ota_status_label.setText("设备未在 120s 内重新上线，请检查连接")
-            self.status_message.emit("OTA 后设备未自动上线，请手动重连", 8000)
+            self._ota_finish("设备未在 120s 内重新上线，请检查连接", restore_debug=False)
             return
         # UI 显示已等待时长
         self._ota_status_label.setText(
@@ -298,11 +386,89 @@ class DeviceView(QWidget):
         if self._worker is not None:
             self._send(build_request_meta_info())
 
-    def _set_controls_enabled(self, enabled: bool):
-        for w in (self._read_all_btn, self._factory_reset_btn,
-                  self._refresh_info_btn, self._ota_select_btn):
-            w.setEnabled(enabled)
-        self._ota_upload_btn.setEnabled(enabled and self._ota_file is not None)
+    def _device_hw_type(self) -> Optional[str]:
+        if self._hw_type and self._hw_type != "—":
+            return self._hw_type
+        return None
+
+    def _capability_supported(self, name: str) -> bool:
+        hw = self._device_hw_type()
+        if hw is None:
+            return False
+        default = hw == "afd01" and name in {"parameters", "ota"}
+        if self._profile_store is None:
+            return default
+        return self._profile_store.has_capability(hw, name, default=default)
+
+    def _refresh_capabilities(self) -> None:
+        connected = self._worker is not None
+        hw = self._device_hw_type()
+        self._supports_parameters = connected and self._capability_supported("parameters")
+        self._supports_ota = connected and self._capability_supported("ota")
+        self._set_controls_enabled(connected)
+
+        if not connected:
+            return
+
+        if hw is None:
+            self._para_status_label.setText("等待设备 profile/capability...")
+            if self._ota_status_label.text().startswith("当前固件未声明"):
+                self._ota_status_label.setText("等待设备 profile/capability...")
+            return
+
+        if self._supports_parameters:
+            if self._para_status_label.text().startswith("当前固件未声明") or "等待设备" in self._para_status_label.text():
+                self._para_status_label.setText("")
+            self._maybe_auto_read_params()
+        else:
+            self._params = []
+            self._para_table.setRowCount(0)
+            self._para_status_label.setText("当前固件未声明支持参数管理")
+
+        if self._supports_ota:
+            if self._ota_status_label.text().startswith("当前固件未声明") or "等待设备" in self._ota_status_label.text():
+                self._ota_status_label.setText("空闲")
+        else:
+            self._ota_status_label.setText("当前固件未声明支持 OTA")
+
+    def _maybe_auto_read_params(self) -> None:
+        hw = self._device_hw_type()
+        if hw is None or not self._supports_parameters:
+            return
+        if self._last_auto_read_hw == hw:
+            return
+        self._last_auto_read_hw = hw
+        QTimer.singleShot(PARA_AUTO_FALLBACK_MS, lambda hw=hw: self._on_auto_read_params(hw))
+
+    def _on_auto_read_params(self, hw: str) -> None:
+        if self._device_hw_type() != hw or not self._supports_parameters:
+            return
+        if self._params_loaded_hw == hw:
+            return
+        if self._para_read_pending:
+            return
+        self._request_para_table()
+
+    def _set_controls_enabled(self, connected: bool):
+        available = connected and not self._ota_active
+        self._refresh_info_btn.setEnabled(available)
+        self._read_all_btn.setEnabled(available and self._supports_parameters)
+        self._factory_reset_btn.setEnabled(available and self._supports_parameters)
+        self._ota_select_btn.setEnabled(available and self._supports_ota)
+        self._ota_upload_btn.setEnabled(
+            available and self._supports_ota and self._ota_file is not None
+        )
+        self._ota_abort_btn.setEnabled(
+            connected and self._ota_active and self._ota_state != "WAIT_REBOOT"
+        )
+        for row, para in enumerate(self._params):
+            edit = self._para_table.cellWidget(row, 2)
+            apply_btn = self._para_table.cellWidget(row, 3)
+            writable = not bool(para.flags & PARA_FLAG_READ_ONLY)
+            if edit is not None:
+                edit.setEnabled(available)
+            if apply_btn is not None:
+                apply_btn.setEnabled(available and writable)
 
     def _send(self, frame: bytes) -> bool:
         if self._worker is None:
@@ -325,9 +491,36 @@ class DeviceView(QWidget):
     # ---- 参数管理 ----
 
     def _on_read_params(self):
-        self._send(build_request_para_table())
+        self._request_para_table()
+
+    def _request_para_table(self, *, allow_during_set: bool = False):
+        if not self._supports_parameters:
+            self._para_status_label.setText("当前固件未声明支持参数管理")
+            self.status_message.emit("当前固件未声明支持参数管理", 3000)
+            return
+        if self._ota_active:
+            self._para_status_label.setText("OTA 进行中，参数操作已暂停")
+            return
+        if self._pending_request == "para_set" and not allow_during_set:
+            self._para_status_label.setText("参数写入确认中，暂缓读取")
+            self.status_message.emit("参数写入确认中，暂缓读取", 2000)
+            return
+        if self._para_read_pending:
+            self._para_status_label.setText("参数表读取中...")
+            return
+        if self._send(build_request_para_table()):
+            self._para_read_pending = True
+            self._para_read_timer.start(PARA_READ_TIMEOUT_MS)
+        else:
+            self._para_status_label.setText("参数表读取发送失败")
 
     def _on_para_table_received(self, report: ParaTableReport):
+        self._para_read_pending = False
+        self._para_read_timer.stop()
+        hw = self._device_hw_type()
+        if hw is not None:
+            self._params_loaded_hw = hw
+        self._para_status_label.setText("")
         self._params = report.params
         self._para_table.setRowCount(len(report.params))
         for row, p in enumerate(report.params):
@@ -358,13 +551,18 @@ class DeviceView(QWidget):
             self._para_table.setCellWidget(row, 3, apply_btn)
 
             # 状态
-            status_item = QTableWidgetItem("")
+            status_item = QTableWidgetItem(self._para_status_by_name.get(p.name, ""))
             status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
             self._para_table.setItem(row, 4, status_item)
 
         self.status_message.emit(f"已读取 {len(report.params)} 个参数", 2000)
+        self._verify_pending_para_set(report)
+        self._set_controls_enabled(self._worker is not None)
 
     def _on_para_apply(self, row: int):
+        if not self._supports_parameters:
+            self.status_message.emit("当前固件未声明支持参数管理", 3000)
+            return
         if row >= len(self._params):
             return
         p = self._params[row]
@@ -377,14 +575,83 @@ class DeviceView(QWidget):
             return
         self._pending_request = "para_set"
         self._pending_para_row = row
-        self._para_table.item(row, 4).setText("发送中...")
+        self._pending_para_name = p.name
+        self._pending_para_value = new_val
+        self._pending_para_type = p.para_type
+        self._para_status_by_name[p.name] = "等待写入确认..."
+        self._para_table.item(row, 4).setText("等待写入确认...")
         if self._send(build_para_set(p.name, new_val)):
-            self._response_timer.start(3000)
+            self._response_timer.start(PARA_SET_TIMEOUT_MS)
         else:
             self._para_table.item(row, 4).setText("发送失败")
-            self._pending_request = None
+            self._para_status_by_name[p.name] = "发送失败"
+            self._clear_pending_para_set()
+
+    def _clear_pending_para_set(self) -> None:
+        self._pending_request = None
+        self._pending_para_name = None
+        self._pending_para_value = None
+        self._pending_para_type = None
+        self._para_verify_retry_scheduled = False
+        self._para_read_pending = False
+        self._para_read_timer.stop()
+
+    def _values_match(self, para_type: int, actual: str, expected: str) -> bool:
+        if para_type == int(ParaType.FLOAT):
+            try:
+                return abs(float(actual) - float(expected)) < 1e-4
+            except ValueError:
+                return actual.strip() == expected.strip()
+        if para_type in {
+            int(ParaType.INT),
+            int(ParaType.UINT8),
+            int(ParaType.INT8),
+            int(ParaType.UINT16),
+            int(ParaType.INT16),
+        }:
+            try:
+                return int(actual, 0) == int(expected, 0)
+            except ValueError:
+                return actual.strip() == expected.strip()
+        return actual.strip() == expected.strip()
+
+    def _verify_pending_para_set(self, report: ParaTableReport) -> None:
+        if self._pending_request != "para_set" or not self._pending_para_name:
+            return
+
+        target = next((p for p in report.params if p.name == self._pending_para_name), None)
+        row = next((idx for idx, p in enumerate(report.params) if p.name == self._pending_para_name), -1)
+        status_item = self._para_table.item(row, 4) if 0 <= row < self._para_table.rowCount() else None
+        if target is not None and self._pending_para_value is not None:
+            para_type = self._pending_para_type if self._pending_para_type is not None else target.para_type
+            if self._values_match(para_type, target.value, self._pending_para_value):
+                self._response_timer.stop()
+                if status_item is not None:
+                    status_item.setText("✓ 成功")
+                self._para_status_by_name[self._pending_para_name] = "✓ 成功"
+                self._clear_pending_para_set()
+                return
+
+        if status_item is not None:
+            status_item.setText("等待设备回读...")
+        if self._pending_para_name:
+            self._para_status_by_name[self._pending_para_name] = "等待设备回读..."
+
+    def _schedule_para_set_verify_read(self, delay_ms: int) -> None:
+        if self._pending_request != "para_set" or self._para_verify_retry_scheduled:
+            return
+        self._para_verify_retry_scheduled = True
+        QTimer.singleShot(delay_ms, self._run_para_set_verify_read)
+
+    def _run_para_set_verify_read(self) -> None:
+        self._para_verify_retry_scheduled = False
+        if self._pending_request == "para_set":
+            self._request_para_table(allow_during_set=True)
 
     def _on_factory_reset(self):
+        if not self._supports_parameters:
+            self.status_message.emit("当前固件未声明支持参数管理", 3000)
+            return
         ret = QMessageBox.warning(
             self, "恢复出厂",
             "确定恢复所有参数为出厂默认值？\n此操作不可撤销，部分参数需重启生效。",
@@ -395,11 +662,14 @@ class DeviceView(QWidget):
             return
         self._pending_request = "para_reset"
         if self._send(build_para_reset()):
-            self._response_timer.start(5000)
+            self._response_timer.start(PARA_RESET_TIMEOUT_MS)
 
     # ---- OTA ----
 
     def _on_select_firmware(self):
+        if not self._supports_ota:
+            self.status_message.emit("当前固件未声明支持 OTA", 3000)
+            return
         last_dir = ""
         if self._settings is not None:
             last_dir = self._settings.get("paths.firmware_dir", "") or ""
@@ -414,243 +684,260 @@ class DeviceView(QWidget):
         self._ota_filename = p.name
         self._ota_crc32 = zlib.crc32(data) & 0xFFFFFFFF
         self._ota_file_label.setText(f"{p.name}  ({len(data)} 字节)")
-        self._ota_upload_btn.setEnabled(self._worker is not None)
+        self._set_controls_enabled(self._worker is not None)
 
     def _on_ota_start(self):
-        if self._ota_file is None or self._worker is None:
+        if self._ota_file is None or self._worker is None or not self._supports_ota:
+            if not self._supports_ota:
+                self.status_message.emit("当前固件未声明支持 OTA", 3000)
+            return
+        if self._ota_active:
             return
         self._ota_active = True
+        self._ota_state = "QUIESCE"
         self._ota_seq = 0
         self._ota_retry = 0
         self._ota_total_chunks = (len(self._ota_file) + OTA_CHUNK_SIZE - 1) // OTA_CHUNK_SIZE
         self._ota_start_time = time.monotonic()
-        self._ota_upload_btn.setEnabled(False)
-        self._ota_select_btn.setEnabled(False)
-        self._ota_abort_btn.setEnabled(True)
         self._ota_progress.setValue(0)
-
-        # 直接进入 OTA 传输循环（内部用独立 socket 处理所有通信）
         self._ota_paused_debug = self._ota_pause_debug_cb.isChecked()
-        self._ota_transfer_loop()
+        self._ota_restore_debug = self._ota_paused_debug and self._known_debug_enabled
+        self.device_transaction_active_changed.emit(True)
+        self.handshake_retry_pause_changed.emit(True)
+        self._set_controls_enabled(True)
+
+        if self._ota_paused_debug:
+            self._ota_status_label.setText("正在关闭实时数据...")
+            self.debug_mode_requested.emit(False)
+        else:
+            self._ota_send_begin()
 
     def _ota_send_begin(self):
-        """发送 OTA_BEGIN（在 DEBUG_ENABLE 响应确认后调用）。"""
+        if not self._ota_active or self._ota_file is None:
+            return
+        self._ota_state = "BEGIN"
         self._ota_status_label.setText("正在发送 OTA_BEGIN...")
         self._pending_request = "ota_begin"
         if self._send(build_ota_begin(len(self._ota_file), self._ota_filename)):
-            self._response_timer.start(OTA_CHUNK_TIMEOUT_MS)
+            self._response_timer.start(OTA_BEGIN_TIMEOUT_MS)
         else:
             self._ota_finish("发送 OTA_BEGIN 失败")
 
-    def _ota_transfer_loop(self):
-        """OTA 全流程 — 暂停 worker 线程，直接用 worker 的 socket 收发。
-
-        避免 OTA socket 和 worker socket 竞争 W5500 的 last_remote_port。
-        """
-        sock = getattr(self._worker, '_sock', None)
-        remote_addr = getattr(self._worker, '_remote_addr', None)
-        if sock is None or remote_addr is None:
-            self._ota_finish("无法获取 worker socket")
+    def _ota_send_current_chunk(self) -> None:
+        if not self._ota_active or self._ota_file is None:
             return
+        if self._ota_seq >= self._ota_total_chunks:
+            self._ota_send_end()
+            return
+        offset = self._ota_seq * OTA_CHUNK_SIZE
+        chunk = self._ota_file[offset:offset + OTA_CHUNK_SIZE]
+        self._ota_state = "DATA"
+        self._pending_request = "ota_data"
+        if self._send(build_ota_data(self._ota_seq, chunk)):
+            self._response_timer.start(OTA_CHUNK_TIMEOUT_MS)
+        else:
+            self._ota_finish(f"块 {self._ota_seq} 发送失败")
 
-        # 暂停 worker 线程：设 _running=False 让其 recvfrom 循环退出
-        # worker timeout 100ms，给 5x 余量等它退出再独占 socket
-        self._worker._running = False
-        time.sleep(0.5)
-
-        old_timeout = sock.gettimeout()
-        ota_sock = sock  # 复用 worker socket，独占发送/接收
-
-        def send_and_wait_ack(frame: bytes, timeout_s: float = 1.0,
-                              retries: int = 3, label: str = "") -> bool:
-            """发送帧并等待 COMMAND_RESPONSE(SUCCESS)。"""
-            ota_sock.settimeout(timeout_s)
-            for attempt in range(retries + 1):
-                t_send = time.monotonic()
-                ota_sock.sendto(frame, remote_addr)
-                try:
-                    while True:
-                        resp_data, _ = ota_sock.recvfrom(4096)
-                        idx = resp_data.find(b"\xaa\x55")
-                        if idx >= 0 and len(resp_data) >= idx + 9:
-                            cmd = resp_data[idx + 3]
-                            if cmd == 0x02:  # COMMAND_RESPONSE
-                                data_len = int.from_bytes(resp_data[idx+4:idx+6], "little")
-                                payload = resp_data[idx+6:idx+6+data_len]
-                                if len(payload) >= 1:
-                                    return payload[0] == 0  # SUCCESS=0
-                            # 非 COMMAND_RESPONSE（HEARTBEAT 等）继续收
-                except socket.timeout:
-                    pass
-            return False
-
-        try:
-            # 1. 暂停实时数据
-            if self._ota_paused_debug:
-                self._ota_status_label.setText("正在关闭实时数据...")
-                QCoreApplication.processEvents()
-                if not send_and_wait_ack(build_debug_enable_v2(False), label="DEBUG_OFF"):
-                    self._ota_finish("DEBUG_ENABLE(false) 失败")
-                    return
-
-            # 2. OTA_BEGIN
-            self._ota_status_label.setText("正在发送 OTA_BEGIN...")
-            QCoreApplication.processEvents()
-            if not send_and_wait_ack(build_ota_begin(len(self._ota_file), self._ota_filename), label="BEGIN"):
-                self._ota_finish("OTA_BEGIN 失败")
-                return
-
-            # 3. 逐块传输
-            for seq in range(self._ota_total_chunks):
-                if not self._ota_active:
-                    return
-
-                offset = seq * OTA_CHUNK_SIZE
-                chunk = self._ota_file[offset:offset + OTA_CHUNK_SIZE]
-
-                if not send_and_wait_ack(build_ota_data(seq, chunk), timeout_s=1.0,
-                                        retries=3, label=f"DATA[{seq}]"):
-                    self._ota_finish(f"块 {seq} 传输失败")
-                    return
-
-                self._ota_seq = seq + 1
-
-                # 每 20 块更新 UI
-                if self._ota_seq % 20 == 0 or self._ota_seq >= self._ota_total_chunks:
-                    pct = int(self._ota_seq * 100 / self._ota_total_chunks)
-                    self._ota_progress.setValue(pct)
-                    elapsed = time.monotonic() - self._ota_start_time
-                    transferred = self._ota_seq * OTA_CHUNK_SIZE
-                    if elapsed > 0.1 and transferred > 0:
-                        speed_kbs = transferred / elapsed / 1024
-                        eta = (len(self._ota_file) - transferred) / (transferred / elapsed)
-                        self._ota_status_label.setText(
-                            f"传输中... {self._ota_seq}/{self._ota_total_chunks} ({pct}%)  "
-                            f"{speed_kbs:.1f} KB/s  剩余 {int(eta)}s"
-                        )
-                    QCoreApplication.processEvents()
-
-            # 4. OTA_END（设备 ACK 后会立即自动 reboot，无需再发 DEVICE_REBOOT）
-            self._ota_progress.setValue(100)
-            self._ota_status_label.setText("校验中...")
-            QCoreApplication.processEvents()
-            if not send_and_wait_ack(build_ota_end(self._ota_crc32), timeout_s=5.0, label="END"):
-                self._ota_finish("OTA_END 校验失败")
-                return
-
-            # 5. 启动等待重启 + 新版本上线的探测循环
-            # 清空当前 fw_ver 让 UI 显示 "—"，下次收到任何 META 就视为设备重新上线
-            # （不要求 fw_ver 必须变化，覆盖"刷同版本固件"场景）
-            self._ota_post_reboot_fw_before = self._fw_ver
-            self._fw_ver = ""
-            self._device_sn = ""
-            self._update_info_labels()
-            self._ota_post_reboot_started_at = time.monotonic()
-            self._ota_post_reboot_deadline = self._ota_post_reboot_started_at + 120.0
-            self._ota_status_label.setText("设备重启中（bootloader 刷写约 45s），等待新版本上线...")
-            self._ota_post_reboot_timer.start()
-            self._ota_finish("固件上传完成，设备重启中")
-
-        except Exception as e:
-            self._ota_finish(f"OTA 异常: {e}")
-        finally:
-            # 恢复 socket timeout 并重启 worker 线程
-            try:
-                sock.settimeout(old_timeout)
-            except Exception:
-                pass
-            self._worker._running = True
-            self._worker.start()  # 重启 QThread
+    def _update_ota_progress(self) -> None:
+        if self._ota_total_chunks <= 0 or self._ota_file is None:
+            return
+        pct = int(self._ota_seq * 100 / self._ota_total_chunks)
+        self._ota_progress.setValue(pct)
+        elapsed = time.monotonic() - self._ota_start_time
+        transferred = min(self._ota_seq * OTA_CHUNK_SIZE, len(self._ota_file))
+        if elapsed <= 0.1 or transferred <= 0:
+            self._ota_status_label.setText(
+                f"传输中... {self._ota_seq}/{self._ota_total_chunks} ({pct}%)"
+            )
+            return
+        speed_kbs = transferred / elapsed / 1024
+        remaining = max(0, len(self._ota_file) - transferred)
+        eta = remaining / (transferred / elapsed)
+        self._ota_status_label.setText(
+            f"传输中... {self._ota_seq}/{self._ota_total_chunks} ({pct}%)  "
+            f"{speed_kbs:.1f} KB/s  剩余 {int(eta)}s"
+        )
 
     def _ota_send_end(self):
+        if not self._ota_active:
+            return
+        self._ota_state = "END"
         self._pending_request = "ota_end"
         self._ota_status_label.setText("校验中...")
         if self._send(build_ota_end(self._ota_crc32)):
-            self._response_timer.start(5000)
+            self._response_timer.start(OTA_END_TIMEOUT_MS)
         else:
             self._ota_finish("发送 OTA_END 失败")
 
+    def _ota_enter_wait_reboot(self) -> None:
+        self._ota_state = "WAIT_REBOOT"
+        self._pending_request = None
+        self._response_timer.stop()
+        self._ota_progress.setValue(100)
+        self._ota_abort_btn.setEnabled(False)
+        self.handshake_retry_pause_changed.emit(False)
+        self._ota_post_reboot_fw_before = self._fw_ver
+        self._fw_ver = ""
+        self._device_sn = ""
+        self._update_info_labels()
+        self._ota_post_reboot_started_at = time.monotonic()
+        self._ota_post_reboot_deadline = self._ota_post_reboot_started_at + 120.0
+        self._ota_reboot_meta_not_before = self._ota_post_reboot_started_at + 1.0
+        self._ota_status_label.setText("设备重启中，等待固件重新上线...")
+        self._ota_post_reboot_timer.start()
+
     def _on_ota_abort(self):
+        if not self._ota_active or self._ota_state == "WAIT_REBOOT":
+            return
         self._send(build_ota_abort())
         self._ota_finish("用户中止")
 
-    def _ota_finish(self, msg: str):
+    def _ota_finish(self, msg: str, *, restore_debug: bool = True):
+        should_restore = (
+            restore_debug
+            and self._ota_restore_debug
+            and self._worker is not None
+        )
         self._ota_active = False
+        self._ota_state = "IDLE"
         self._response_timer.stop()
+        self._ota_post_reboot_timer.stop()
         self._pending_request = None
-        self._ota_abort_btn.setEnabled(False)
-        self._ota_upload_btn.setEnabled(self._worker is not None and self._ota_file is not None)
-        self._ota_select_btn.setEnabled(self._worker is not None)
+        self.handshake_retry_pause_changed.emit(False)
+        self.device_transaction_active_changed.emit(False)
+        self._set_controls_enabled(self._worker is not None)
         self._ota_status_label.setText(msg)
-        if self._ota_paused_debug:
-            self._send(build_debug_enable_v2(True))
-            self._ota_paused_debug = False
+        self._ota_paused_debug = False
+        self._ota_restore_debug = False
+        if should_restore:
+            QTimer.singleShot(0, lambda: self.debug_mode_requested.emit(True))
         self.status_message.emit(f"OTA: {msg}", 5000)
 
     # ---- COMMAND_RESPONSE 处理 ----
 
+    def _requires_response_context(self) -> bool:
+        return self._capability_supported("command_response_context")
+
+    def _success_response_matches(self, resp: CommandResponse, expected: str) -> bool:
+        if int(resp.code) != int(RespCode.SUCCESS):
+            return False
+        if not self._requires_response_context():
+            return True
+        return (resp.msg or "").strip() == expected
+
     def _on_command_response(self, resp: CommandResponse):
         if self._pending_request is None:
             return
-        self._response_timer.stop()
         req = self._pending_request
-        self._pending_request = None
 
         if req == "para_set":
             row = getattr(self, "_pending_para_row", -1)
-            if row >= 0 and row < self._para_table.rowCount():
-                if resp.code == RespCode.SUCCESS:
-                    self._para_table.item(row, 4).setText("✓ 成功")
-                    # 重新读取参数表确认
-                    QTimer.singleShot(200, self._on_read_params)
-                else:
-                    self._para_table.item(row, 4).setText(f"✗ {resp.msg or f'错误 {resp.code}'}")
+            expected = f"PARA_SET={self._pending_para_name or ''}"
+            if int(resp.code) == int(RespCode.SUCCESS):
+                if not self._success_response_matches(resp, expected):
+                    return
+                if 0 <= row < self._para_table.rowCount():
+                    self._para_table.item(row, 4).setText("等待设备回读...")
+                if self._pending_para_name:
+                    self._para_status_by_name[self._pending_para_name] = "等待设备回读..."
+                # 新固件会主动回表；旧固件只做一次兜底读取，不再周期轮询。
+                if not self._requires_response_context():
+                    self._schedule_para_set_verify_read(300)
+            else:
+                self._response_timer.stop()
+                msg = f"✗ {resp.msg or f'错误 {resp.code}'}"
+                if 0 <= row < self._para_table.rowCount():
+                    self._para_table.item(row, 4).setText(msg)
+                if self._pending_para_name:
+                    self._para_status_by_name[self._pending_para_name] = msg
+                self._clear_pending_para_set()
+            return
 
-        elif req == "para_reset":
-            if resp.code == RespCode.SUCCESS:
+        if req == "para_reset":
+            if int(resp.code) == int(RespCode.SUCCESS) and not self._success_response_matches(
+                resp, "PARA_RESET=OK"
+            ):
+                return
+            self._response_timer.stop()
+            self._pending_request = None
+            if int(resp.code) == int(RespCode.SUCCESS):
                 self.status_message.emit("参数已恢复出厂默认，建议重启设备", 5000)
-                QTimer.singleShot(500, self._on_read_params)
+                if not self._requires_response_context():
+                    QTimer.singleShot(500, self._on_read_params)
             else:
                 self.status_message.emit(f"恢复出厂失败: {resp.msg}", 5000)
 
-        elif req == "ota_debug_off":
-            # DEBUG_ENABLE(false) 响应到了，现在安全发 OTA_BEGIN
-            self._ota_send_begin()
-            return
-
         elif req == "ota_begin":
-            if resp.code == RespCode.SUCCESS:
-                # 进入同步传输循环（不再用 timer 异步等待）
-                self._ota_transfer_loop()
+            if int(resp.code) == int(RespCode.SUCCESS):
+                if not self._success_response_matches(resp, "OTA_BEGIN=READY"):
+                    return
+                self._response_timer.stop()
+                self._pending_request = None
+                self._ota_retry = 0
+                QTimer.singleShot(0, self._ota_send_current_chunk)
             else:
                 self._ota_finish(f"OTA_BEGIN 被拒绝: {resp.msg or resp.code}")
 
         elif req == "ota_data":
-            # _ota_transfer_loop 中 processEvents 触发到这里，
-            # pending_request 已被清空，loop 的 spin 检测到后推进
-            pass
+            expected = f"OTA_DATA={self._ota_seq}"
+            if int(resp.code) == int(RespCode.SUCCESS):
+                if not self._success_response_matches(resp, expected):
+                    return
+                self._response_timer.stop()
+                self._pending_request = None
+                self._ota_seq += 1
+                self._ota_retry = 0
+                self._update_ota_progress()
+                QTimer.singleShot(0, self._ota_send_current_chunk)
+            else:
+                self._ota_finish(f"块 {self._ota_seq} 被拒绝: {resp.msg or resp.code}")
 
         elif req == "ota_end":
-            if resp.code == RespCode.SUCCESS:
-                self._ota_progress.setValue(100)
-                self._ota_status_label.setText("设备重启中...")
-                self._send(build_device_reboot())
-                self._ota_finish("固件上传完成，设备正在重启")
+            if int(resp.code) == int(RespCode.SUCCESS):
+                if not self._success_response_matches(resp, "OTA_END=VERIFIED"):
+                    return
+                self._ota_enter_wait_reboot()
             else:
                 self._ota_finish(f"OTA_END 校验失败: {resp.msg or resp.code}")
 
     def _on_response_timeout(self):
         req = self._pending_request
-        self._pending_request = None
-        if req and req.startswith("ota_"):
-            # ota_data 超时由 _ota_transfer_loop 内部处理，这里只处理 begin/end/debug_off
+        if req == "ota_data" and self._ota_active:
+            if self._ota_retry < OTA_CHUNK_MAX_RETRY:
+                self._ota_retry += 1
+                self._pending_request = None
+                self._ota_status_label.setText(
+                    f"块 {self._ota_seq} 未确认，重试 {self._ota_retry}/{OTA_CHUNK_MAX_RETRY}"
+                )
+                self._ota_send_current_chunk()
+            else:
+                self._pending_request = None
+                self._ota_finish(f"块 {self._ota_seq} 连续超时")
+        elif req and req.startswith("ota_"):
+            self._pending_request = None
             self._ota_finish(f"{req} 超时")
         elif req == "para_set":
+            self._pending_request = None
             row = getattr(self, "_pending_para_row", -1)
             if 0 <= row < self._para_table.rowCount():
-                self._para_table.item(row, 4).setText("超时")
+                self._para_table.item(row, 4).setText("未读回目标值")
+            if self._pending_para_name:
+                self._para_status_by_name[self._pending_para_name] = "未读回目标值"
+            self._clear_pending_para_set()
         elif req == "para_reset":
+            self._pending_request = None
             self.status_message.emit("恢复出厂超时，请重试", 5000)
+
+    def _on_para_read_timeout(self):
+        if not self._para_read_pending:
+            return
+        self._para_read_pending = False
+        if self._pending_request == "para_set":
+            if self._pending_para_name:
+                self._para_status_by_name[self._pending_para_name] = "等待设备回读..."
+            return
+        self._para_status_label.setText("读取参数表超时")
+        self.status_message.emit("读取参数表超时，请重试", 3000)
 
     # ---- 主题 ----
 

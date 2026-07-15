@@ -428,6 +428,7 @@ class DashboardWidget(QWidget):
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
+        state_store.state_cleared.connect(self._on_state_cleared)
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -522,6 +523,12 @@ class DashboardWidget(QWidget):
         if chip is not None:
             chip.update_value(value)
 
+    def _on_state_cleared(self, hw_type: object) -> None:
+        if self._current_hw is None:
+            return
+        if hw_type is None or hw_type == self._current_hw:
+            self._rebuild()
+
     # ---- 重建 ----
 
     def _clear(self) -> None:
@@ -577,9 +584,11 @@ class DashboardWidget(QWidget):
                 group.mode_requested.connect(self.mode_requested)
                 self._modes_row.addWidget(group)
                 self._mode_groups[state.state_id] = group
+                group.update_value(self._states.get_value(self._current_hw, state.state_id))
             else:
                 chip = EnumStatusChip(state)
                 chip.set_theme(self._theme, self._scale)
                 self._modes_row.addWidget(chip)
                 self._status_chips[state.state_id] = chip
+                chip.update_value(self._states.get_value(self._current_hw, state.state_id))
         self._modes_row.addStretch(1)

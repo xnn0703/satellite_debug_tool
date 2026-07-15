@@ -18,9 +18,17 @@ import numpy as np
 import pytest
 
 from satellite_debug_tool.ui.attitude_widget import (
+    AttitudeWidget,
     P_NED_NWU,
     _ant_to_world_nwu,
 )
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    return app
 
 
 def _R_body2geo(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
@@ -57,6 +65,21 @@ class TestReturnType:
                             assert abs(n - 1.0) < 1e-5, (
                                 f"yaw={yaw} az={az} el={el} |v|={n}"
                             )
+
+
+class TestBindingAccessors:
+    def test_current_binding_accessors_match_legacy_getters(self, qapp):
+        widget = AttitudeWidget()
+        widget.set_auto_bindings(
+            roll="ch_00",
+            pitch="ch_01",
+            yaw="ch_02",
+            ant_az="ch_03",
+            ant_el="ch_04",
+        )
+
+        assert widget.current_attitude_bindings() == ("ch_00", "ch_01", "ch_02")
+        assert widget.current_pointing_bindings() == ("", "", "ch_03", "ch_04")
 
 
 class TestZeroAttitudeCases:

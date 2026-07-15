@@ -54,6 +54,28 @@ class TestSubsystemClassify:
         assert "general" in _SUBSYSTEM_ORDER
 
 
+class TestStateItemRowLifecycle:
+    def test_highlight_timer_is_owned_by_row(self, qapp):
+        from satellite_debug_tool.core.protocol import StateDefEntry, StateType
+        from satellite_debug_tool.ui.state_panel_widget import StateItemRow
+
+        row = StateItemRow(
+            StateDefEntry(
+                state_id=1,
+                state_type=int(StateType.BOOL),
+                flags=0,
+                name="LOCK_FLAG",
+                enums=[],
+            )
+        )
+
+        row.flash_highlight()
+
+        assert row._highlight_timer.parent() is row
+        assert row._highlight_timer.isSingleShot()
+        assert row._highlight_timer.isActive()
+
+
 # --------- A1/A2: Chart jump_to_timestamp ---------
 #
 # 需要 Qt 环境；若 Qt 不可用就 skip（CI 友好）

@@ -119,6 +119,9 @@ class StateItemRow(QFrame):
         self._is_dark = True
         self._theme = "dark"
         self._scale = "medium"
+        self._highlight_timer = QTimer(self)
+        self._highlight_timer.setSingleShot(True)
+        self._highlight_timer.timeout.connect(self._clear_highlight)
         layout = QGridLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setHorizontalSpacing(8)
@@ -186,11 +189,11 @@ class StateItemRow(QFrame):
     def flash_highlight(self) -> None:
         """值变化时，外框高亮 2 秒后恢复。"""
         self.setStyleSheet(self._make_style(_HIGHLIGHT_BORDER))
-        QTimer.singleShot(
-            _HIGHLIGHT_MS,
-            lambda: self.setStyleSheet(
-                self._make_style(getattr(self, "_normal_border", "transparent"))
-            ),
+        self._highlight_timer.start(_HIGHLIGHT_MS)
+
+    def _clear_highlight(self) -> None:
+        self.setStyleSheet(
+            self._make_style(getattr(self, "_normal_border", "transparent"))
         )
 
     # ----- 更新 -----
@@ -422,6 +425,7 @@ class StatePanelWidget(QScrollArea):
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
+        state_store.state_cleared.connect(self._on_state_cleared)
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -489,6 +493,12 @@ class StatePanelWidget(QScrollArea):
             row.set_value(value)
             # A3: 最近变化项短暂高亮
             row.flash_highlight()
+
+    def _on_state_cleared(self, hw_type: object) -> None:
+        if self._current_hw is None:
+            return
+        if hw_type is None or hw_type == self._current_hw:
+            self._rebuild()
 
     # ----- 构建 -----
 

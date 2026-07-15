@@ -5,7 +5,7 @@ ASCII STL：`facet normal ... outer loop vertex×3 endloop endfacet`。
 
 公开 API：
     load_stl(path) -> (verts: (N,3) f4, faces: (M,3) u4)
-    normalize_mesh(verts, target_size, up_axis, nose_axis) -> verts'
+    normalize_mesh(verts, target_size, up_axis, nose_axis, nose_sign, left_sign) -> verts'
 """
 from __future__ import annotations
 
@@ -66,6 +66,7 @@ def normalize_mesh(
     up_axis: int = 2,
     nose_axis: int = 0,
     nose_sign: float = 1.0,
+    left_sign: float = 1.0,
 ) -> np.ndarray:
     """把任意 STL 顶点居中 + 缩放 + 轴向重排，对齐 widget 的 FLU 视觉系。
 
@@ -77,6 +78,7 @@ def normalize_mesh(
         up_axis:     STL 中"厚度/朝天"对应的轴 index（0=X 1=Y 2=Z）→ 映射到 widget +Z
         nose_axis:   STL 中"机头方向"对应的轴 index → 映射到 widget +X
         nose_sign:   机头方向正负（+1/-1）
+        left_sign:   剩余轴映射到 widget +Y（左侧）时的方向正负（+1/-1）
     """
     v = verts.astype(np.float64)
     # 居中
@@ -92,6 +94,6 @@ def normalize_mesh(
     left_axis = third[0] if third else 1
     out = np.empty_like(v)
     out[:, 0] = nose_sign * v[:, nose_axis]   # widget +X = 机头
-    out[:, 1] = v[:, left_axis]               # widget +Y = 左翼
+    out[:, 1] = left_sign * v[:, left_axis]   # widget +Y = 左翼
     out[:, 2] = v[:, up_axis]                  # widget +Z = 天顶
     return out.astype(np.float32)

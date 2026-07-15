@@ -75,3 +75,13 @@
   - 结果：通过。
 - `git diff --check`（下位机仓库）
   - 结果：通过。
+
+### 现场回归修复
+
+- 现象：上位机打开 debug 后收到 profile 变化，`LiveView._on_profile_changed_sync()` 调用 `AttitudeWidget.current_attitude_bindings()`，但 widget 只有旧接口 `get_channel_selections()`，导致 GUI 直接抛 `AttributeError` 并退出。
+- 修复：`AttitudeWidget` 增加 `current_attitude_bindings()` / `current_pointing_bindings()` 兼容 getter，返回当前自动绑定结果；`test_attitude_pointing.py` 增加回归用例。
+- 验证：
+  - `PYTHONPATH=. pytest satellite_debug_tool/tests/test_attitude_pointing.py -q`：41 passed。
+  - `PYTHONPATH=. pytest satellite_debug_tool/tests/test_profile_semantics.py satellite_debug_tool/tests/test_dashboard_control_binding.py satellite_debug_tool/tests/test_fake_device_loopback.py satellite_debug_tool/tests/test_attitude_pointing.py -q`：53 passed。
+  - `PYTHONPATH=. pytest satellite_debug_tool/tests`：499 passed, 4 warnings。
+  - `git diff --check`：通过。

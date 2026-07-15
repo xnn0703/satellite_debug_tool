@@ -49,3 +49,13 @@ class TestStateStore:
         assert s.get_value("ufd45", 0) == 1
         s.clear()
         assert s.get_value("ufd45", 0) is None
+
+    def test_clear_emits_scope(self):
+        s = StateStore()
+        fires = []
+        s.state_cleared.connect(fires.append)
+
+        s.clear("afd01")
+        s.clear()
+
+        assert fires == ["afd01", None]

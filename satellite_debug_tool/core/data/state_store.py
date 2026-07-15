@@ -32,6 +32,8 @@ class StateStore(QObject):
 
     # (hw_type, state_id, new_value, old_value_or_-1)
     state_changed = Signal(str, int, int, int)
+    # hw_type or None；用于通知 UI 把已显示的状态恢复为未知态
+    state_cleared = Signal(object)
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -77,3 +79,4 @@ class StateStore(QObject):
             self._buckets.clear()
         else:
             self._buckets.pop(hw_type, None)
+        self.state_cleared.emit(hw_type)

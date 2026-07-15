@@ -94,3 +94,30 @@ def test_normalize_nose_sign_flips(tmp_path):
     neg = normalize_mesh(verts, nose_axis=0, nose_sign=-1.0)
     # X 轴整体取反
     np.testing.assert_allclose(pos[:, 0], -neg[:, 0], atol=1e-5)
+
+
+def test_normalize_y_nose_rotates_without_mirroring():
+    """AFD01/ESA01 的原始 +Y 机头映射到 +X，原始 +X 映射到右侧 -Y。"""
+    probes = np.asarray([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
+    out = normalize_mesh(
+        probes,
+        up_axis=2,
+        nose_axis=1,
+        nose_sign=1.0,
+        left_sign=-1.0,
+    )
+
+    raw_x = out[1] - out[0]
+    raw_y = out[2] - out[0]
+    raw_z = out[3] - out[0]
+    assert raw_y[0] > 0.0
+    assert raw_x[1] < 0.0
+    assert raw_z[2] > 0.0
+
+    transform = np.column_stack((raw_x, raw_y, raw_z))
+    assert np.linalg.det(transform) > 0.0
