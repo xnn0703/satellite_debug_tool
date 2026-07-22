@@ -252,7 +252,7 @@ class EnumStatusChip(QFrame):
             self._dot.setStyleSheet(
                 "background-color: #555555; border-radius: 6px;"
             )
-            self._value_label.setText("—")
+            self._value_label.setText("UNKNOWN")
             self._value_label.setStyleSheet(
                 f"color: {p['text_faint']}; background: transparent;"
             )

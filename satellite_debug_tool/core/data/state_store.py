@@ -24,7 +24,8 @@ class StateSnapshot:
 
     value: int
     last_change_ms: int       # device timestamp (ms since boot)
-    last_change_wallclock: float = field(default_factory=time.time)  # PC 端 time.time()
+    last_received_wallclock: float = field(default_factory=time.time)
+    last_changed_wallclock: float = field(default_factory=time.time)
 
 
 class StateStore(QObject):
@@ -38,6 +39,7 @@ class StateStore(QObject):
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._buckets: Dict[str, Dict[int, StateSnapshot]] = {}
+        self._last_report_wallclock: Dict[str, float] = {}
 
     # ---- 写入 ----
 
@@ -45,17 +47,19 @@ class StateStore(QObject):
         """消费一条 StateReport；对真正变化的 state 发射信号。"""
         bucket = self._buckets.setdefault(hw_type, {})
         now_wall = time.time()
+        self._last_report_wallclock[hw_type] = now_wall
         for sample in report.states:
             prev = bucket.get(sample.state_id)
             if prev is not None and prev.value == sample.value:
-                # 无变化：刷新时间戳，但不发信号
-                prev.last_change_ms = report.timestamp
+                # 无变化：仅刷新接收时间；变化时间和设备变化 timestamp 均保持。
+                prev.last_received_wallclock = now_wall
                 continue
             old = -1 if prev is None else prev.value
             bucket[sample.state_id] = StateSnapshot(
                 value=sample.value,
                 last_change_ms=report.timestamp,
-                last_change_wallclock=now_wall,
+                last_received_wallclock=now_wall,
+                last_changed_wallclock=now_wall,
             )
             self.state_changed.emit(hw_type, sample.state_id, sample.value, old)
 
@@ -72,11 +76,27 @@ class StateStore(QObject):
     def get_all(self, hw_type: str) -> Dict[int, StateSnapshot]:
         return dict(self._buckets.get(hw_type, {}))
 
+    def expire_stale(self, hw_type: str, threshold_s: float = 3.5, *, now: Optional[float] = None) -> bool:
+        """连续未收到任何 STATE_REPORT 时清空该设备运行态。"""
+        bucket = self._buckets.get(hw_type)
+        last_report = self._last_report_wallclock.get(hw_type)
+        if not bucket or last_report is None:
+            return False
+        wallclock = time.time() if now is None else now
+        if wallclock - last_report <= threshold_s:
+            return False
+        self._buckets.pop(hw_type, None)
+        self._last_report_wallclock.pop(hw_type, None)
+        self.state_cleared.emit(hw_type)
+        return True
+
     # ---- 其它 ----
 
     def clear(self, hw_type: Optional[str] = None) -> None:
         if hw_type is None:
             self._buckets.clear()
+            self._last_report_wallclock.clear()
         else:
             self._buckets.pop(hw_type, None)
+            self._last_report_wallclock.pop(hw_type, None)
         self.state_cleared.emit(hw_type)

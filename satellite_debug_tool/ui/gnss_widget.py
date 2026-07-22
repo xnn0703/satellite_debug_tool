@@ -31,13 +31,15 @@ from satellite_debug_tool.core.data.gnss_store import (
     LOCK_PRIMARY,
     LOCK_PRN,
     SYSTEM_NAMES,
+    SOURCE_NAMES,
     infer_sky_system,
     observation_locked,
     satellite_label,
     signal_band,
     signal_name,
+    signal_record_used,
 )
-from satellite_debug_tool.core.protocol import GnssCnrObservation
+from satellite_debug_tool.core.protocol import GnssCnrObservation, GnssSignalRecord
 from satellite_debug_tool.ui import styles as S
 
 
@@ -72,7 +74,8 @@ class FrequencyBar:
     prn: int
     band: str
     cn0_dbhz: int
-    details: Tuple[GnssCnrObservation, ...]
+    details: Tuple[object, ...]
+    namespace: str = "UG016"
 
     @property
     def satellite(self) -> str:
@@ -84,26 +87,40 @@ def build_frequency_bars(
     enabled_systems: Optional[Set[int]] = None,
 ) -> List[FrequencyBar]:
     """按 system+PRN+物理频段聚合；柱高取已锁定观测最大 C/N₀。"""
-    if snapshot.cnr is None:
-        return []
-    grouped: Dict[Tuple[int, int, str], List[GnssCnrObservation]] = {}
-    for observation in snapshot.cnr.observations:
-        if enabled_systems is not None and observation.system not in enabled_systems:
+    grouped: Dict[Tuple[int, int, str], List[object]] = {}
+    entries: List[Tuple[object, bool, int, int, int]] = []
+    if snapshot.cnr is not None:
+        entries.extend(
+            (item, observation_locked(item), item.system, item.prn, item.signal_type)
+            for item in snapshot.cnr.observations
+        )
+    if snapshot.signal is not None:
+        entries.extend(
+            (item, signal_record_used(item), item.system, item.sv_id, item.raw_signal_id)
+            for item in snapshot.signal.records
+        )
+    for observation, _used, system, prn, signal_id in entries:
+        if enabled_systems is not None and system not in enabled_systems:
             continue
-        key = (observation.system, observation.prn, signal_band(observation.system, observation.signal_type))
+        key = (system, prn, signal_band(system, signal_id, snapshot.signal_namespace))
         grouped.setdefault(key, []).append(observation)
 
     bars: List[FrequencyBar] = []
     for (system, prn, band), details in grouped.items():
-        locked = [observation for observation in details if observation_locked(observation)]
+        locked = [
+            observation for observation in details
+            if (observation_locked(observation) if isinstance(observation, GnssCnrObservation)
+                else signal_record_used(observation))
+        ]
         if not locked:
             continue
         bars.append(FrequencyBar(
             system=system,
             prn=prn,
             band=band,
-            cn0_dbhz=max(observation.cn0_dbhz for observation in locked),
+            cn0_dbhz=max(getattr(observation, "cn0_dbhz") for observation in locked),
             details=tuple(details),
+            namespace=snapshot.signal_namespace,
         ))
     bars.sort(key=lambda bar: (bar.system, bar.prn, _BAND_ORDER.get(bar.band, 99), bar.band))
     return bars
@@ -125,11 +142,13 @@ class SkyPlotWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(360, 360)
+        self.setMouseTracking(True)
         self._snapshot = GnssSnapshot(timestamp=0)
         self._systems: Set[int] = set(SYSTEM_NAMES)
         self._cn0_coloring = False
         self._stale = False
         self._dark = True
+        self._hit_points: List[Tuple[QPointF, str]] = []
 
     def set_data(self, snapshot: GnssSnapshot, systems: Set[int], cn0_coloring: bool, stale: bool) -> None:
         self._snapshot = snapshot
@@ -173,26 +192,53 @@ class SkyPlotWidget(QWidget):
                     key = (observation.system, observation.prn)
                     cn0_by_satellite[key] = max(cn0_by_satellite.get(key, 0), observation.cn0_dbhz)
 
+        sky_rows: List[Tuple[int, int, int, int, Optional[int], str]] = []
         for talker, report in self._snapshot.sky_by_talker.items():
             for satellite in report.satellites:
                 if (satellite.valid_flags & 0x03) != 0x03:
                     continue
                 system = infer_sky_system(talker, satellite.prn)
-                if system not in self._systems:
-                    continue
-                point = sky_point(center, radius, satellite.elevation_deg, satellite.azimuth_deg)
-                cn0 = cn0_by_satellite.get((system, satellite.prn))
-                if cn0 is None and satellite.valid_flags & 0x04:
-                    cn0 = satellite.snr
-                if self._cn0_coloring:
-                    color = _cn0_color(cn0) if cn0 is not None else QColor("#94A3B8")
-                else:
-                    color = QColor(SYSTEM_COLORS.get(system, "#94A3B8"))
-                painter.setPen(QPen(bg, 1.0))
-                painter.setBrush(color)
-                painter.drawEllipse(point, 10.0, 10.0)
-                painter.setPen(QColor("#FFFFFF"))
-                painter.drawText(QRectF(point.x() - 13, point.y() - 8, 26, 16), Qt.AlignCenter, str(satellite.prn))
+                cn0 = satellite.snr if satellite.valid_flags & 0x04 else None
+                sky_rows.append((
+                    system, satellite.prn, satellite.elevation_deg, satellite.azimuth_deg, cn0,
+                    f"BYNAV/GSV valid=0x{satellite.valid_flags:02X}",
+                ))
+        if self._snapshot.sat is not None:
+            for satellite in self._snapshot.sat.records:
+                sky_rows.append((
+                    satellite.system, satellite.sv_id, satellite.elevation_deg,
+                    satellite.azimuth_deg, satellite.cn0_dbhz,
+                    f"MG902/NAV-SAT flags=0x{satellite.raw_sat_flags:08X}",
+                ))
+
+        self._hit_points.clear()
+        for system, sv_id, elevation, azimuth, native_cn0, raw_detail in sky_rows:
+            if system not in self._systems:
+                continue
+            point = sky_point(center, radius, elevation, azimuth)
+            cn0 = cn0_by_satellite.get((system, sv_id), native_cn0)
+            if self._cn0_coloring:
+                color = _cn0_color(cn0) if cn0 is not None else QColor("#94A3B8")
+            else:
+                color = QColor(SYSTEM_COLORS.get(system, "#94A3B8"))
+            painter.setPen(QPen(bg, 1.0))
+            painter.setBrush(color)
+            painter.drawEllipse(point, 10.0, 10.0)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(QRectF(point.x() - 13, point.y() - 8, 26, 16), Qt.AlignCenter, str(sv_id))
+            self._hit_points.append((
+                point,
+                f"{satellite_label(system, sv_id)} · elev={elevation}° · az={azimuth}° · "
+                f"C/N₀={native_cn0 if native_cn0 is not None else '—'} dB-Hz\n{raw_detail}",
+            ))
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        point = event.position()
+        for center, detail in self._hit_points:
+            if abs(point.x() - center.x()) <= 12 and abs(point.y() - center.y()) <= 12:
+                self.setToolTip(detail)
+                return
+        self.setToolTip("")
 
 
 class CnrBarWidget(QWidget):
@@ -241,7 +287,7 @@ class CnrBarWidget(QWidget):
         self._hit_rects.clear()
         if not grouped:
             painter.setPen(fg)
-            painter.drawText(chart, Qt.AlignCenter, "等待已锁定的 RANGECMPB C/N₀ 数据")
+            painter.drawText(chart, Qt.AlignCenter, "等待接收机逐信号 C/N₀ 数据")
             return
         group_width = chart.width() / len(grouped)
         for group_index, ((system, prn), bars) in enumerate(grouped.items()):
@@ -265,7 +311,8 @@ class CnrBarWidget(QWidget):
         for rect, bar in self._hit_rects:
             if rect.contains(point):
                 detail = ", ".join(
-                    f"{signal_name(item.system, item.signal_type)}={item.cn0_dbhz} dB-Hz"
+                    f"{signal_name(item.system, getattr(item, 'signal_type', getattr(item, 'raw_signal_id', 0)), bar.namespace)}"
+                    f"={item.cn0_dbhz} dB-Hz"
                     for item in bar.details
                 )
                 self.setToolTip(f"{bar.satellite} {bar.band}: {bar.cn0_dbhz} dB-Hz\n{detail}")
@@ -286,10 +333,16 @@ class GnssWidget(QWidget):
         self._system_checks: Dict[int, QCheckBox] = {}
         self._setup_ui()
         self._store.changed.connect(self.refresh)
+        self._store.cleared.connect(self._on_store_cleared)
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
+        self.refresh()
+
+    def _on_store_cleared(self) -> None:
+        self._selected_history = None
+        self._follow_latest = True
         self.refresh()
 
     def _setup_ui(self) -> None:
@@ -307,6 +360,8 @@ class GnssWidget(QWidget):
         self._cn0_color.toggled.connect(self.refresh)
         controls.addWidget(self._cn0_color)
         controls.addStretch(1)
+        self._source_badge = QLabel("SOURCE: —")
+        controls.addWidget(self._source_badge)
         self._stats = QLabel("等待 GNSS 数据")
         controls.addWidget(self._stats)
         root.addLayout(controls)
@@ -351,9 +406,10 @@ class GnssWidget(QWidget):
         self._details_toggle.setArrowType(Qt.RightArrow)
         self._details_toggle.toggled.connect(self._toggle_details)
         root.addWidget(self._details_toggle)
-        self._table = QTableWidget(0, 11)
+        self._table = QTableWidget(0, 13)
         self._table.setHorizontalHeaderLabels([
-            "系统", "卫星", "频段", "Signal", "C/N₀", "Tracking", "Phase", "Code", "PRN", "Primary", "GLO Ch",
+            "来源", "系统", "卫星", "频段", "Signal", "Raw ID", "C/N₀", "Quality/Tracking",
+            "Used/Lock", "Freq/GLO", "Corr", "Residual", "Raw Flags",
         ])
         self._table.setVisible(False)
         root.addWidget(self._table)
@@ -382,6 +438,8 @@ class GnssWidget(QWidget):
         self._history_slider.setValue(self._history_slider.value() + delta)
 
     def refresh(self) -> None:
+        if not self._playback:
+            self._store.expire_incomplete()
         history = self._store.history()
         if self._playback:
             maximum = max(0, len(history) - 1)
@@ -404,28 +462,44 @@ class GnssWidget(QWidget):
 
         snapshot = self._current_snapshot()
         systems = self._enabled_systems()
-        stale = not self._playback and self._store.is_stale(3.0)
+        sky_stale = not self._playback and self._store.sky_is_stale(3.0)
+        signal_stale = not self._playback and self._store.signal_is_stale(3.0)
         bars = build_frequency_bars(snapshot, systems)
-        self._sky.set_data(snapshot, systems, self._cn0_color.isChecked(), stale)
-        self._bars.set_data(bars, stale)
+        self._sky.set_data(snapshot, systems, self._cn0_color.isChecked(), sky_stale)
+        self._bars.set_data(bars, signal_stale)
         visible = sum(
             1
             for talker, report in snapshot.sky_by_talker.items()
             for satellite in report.satellites
             if infer_sky_system(talker, satellite.prn) in systems
         )
+        if snapshot.sat is not None:
+            visible += sum(1 for item in snapshot.sat.records if item.system in systems)
         locked = [] if snapshot.cnr is None else [
             observation.cn0_dbhz
             for observation in snapshot.cnr.observations
             if observation.system in systems and observation_locked(observation)
         ]
-        age = self._store.data_age_s()
-        age_text = "—" if age is None or self._playback else f"{age:.1f}s"
+        if snapshot.signal is not None:
+            locked.extend(
+                item.cn0_dbhz for item in snapshot.signal.records
+                if item.system in systems and signal_record_used(item)
+            )
+        sky_age = self._store.sky_age_s()
+        signal_age = self._store.signal_age_s()
+        sky_age_text = "—" if sky_age is None or self._playback else f"{sky_age:.1f}s"
+        signal_age_text = "—" if signal_age is None or self._playback else f"{signal_age:.1f}s"
+        sky_state = f"Sky {sky_age_text}{' STALE' if sky_stale else ''}{' PENDING' if self._store.sky_pending() else ''}"
+        signal_state = (
+            f"Signal {signal_age_text}{' STALE' if signal_stale else ''}"
+            f"{' PENDING' if self._store.signal_pending() else ''}"
+        )
+        self._source_badge.setText(f"SOURCE: {SOURCE_NAMES.get(snapshot.source, snapshot.source)}")
         self._stats.setText(
             f"可见星 {visible} · 有效 CNR {len(locked)} · "
             f"平均 {sum(locked) / len(locked):.1f} / 最大 {max(locked):.0f} dB-Hz · "
-            f"年龄 {age_text}{' · STALE' if stale else ''}"
-            if locked else f"可见星 {visible} · 有效 CNR 0 · 年龄 {age_text}{' · STALE' if stale else ''}"
+            f"{sky_state} · {signal_state}"
+            if locked else f"可见星 {visible} · 有效 CNR 0 · {sky_state} · {signal_state}"
         )
         bands = sorted({bar.band for bar in bars}, key=lambda band: (_BAND_ORDER.get(band, 99), band))
         legend_items = [
@@ -436,26 +510,45 @@ class GnssWidget(QWidget):
         self._refresh_table(snapshot, systems)
 
     def _refresh_table(self, snapshot: GnssSnapshot, systems: Set[int]) -> None:
-        observations = [] if snapshot.cnr is None else [
+        observations: List[object] = [] if snapshot.cnr is None else [
             observation for observation in snapshot.cnr.observations if observation.system in systems
         ]
-        observations.sort(key=lambda item: (item.system, item.prn, signal_band(item.system, item.signal_type), item.signal_type))
+        if snapshot.signal is not None:
+            observations.extend(item for item in snapshot.signal.records if item.system in systems)
+        observations.sort(key=lambda item: (
+            item.system,
+            getattr(item, "prn", getattr(item, "sv_id", 0)),
+            getattr(item, "signal_type", getattr(item, "raw_signal_id", 0)),
+        ))
         self._table.setRowCount(len(observations))
         for row, observation in enumerate(observations):
-            flags = observation.lock_flags
-            values = [
-                SYSTEM_NAMES.get(observation.system, "Other"),
-                satellite_label(observation.system, observation.prn),
-                signal_band(observation.system, observation.signal_type),
-                signal_name(observation.system, observation.signal_type),
-                str(observation.cn0_dbhz),
-                str(observation.tracking_state),
-                "✓" if flags & LOCK_PHASE else "",
-                "✓" if flags & LOCK_CODE else "",
-                "✓" if flags & LOCK_PRN else "",
-                "✓" if flags & LOCK_PRIMARY else "",
-                str(observation.glo_freq_channel) if observation.system == 1 else "—",
-            ]
+            signal_id = getattr(observation, "signal_type", getattr(observation, "raw_signal_id", 0))
+            prn = getattr(observation, "prn", getattr(observation, "sv_id", 0))
+            if isinstance(observation, GnssCnrObservation):
+                flags = observation.lock_flags
+                values = [
+                    "BYNAV/UG016", SYSTEM_NAMES.get(observation.system, "Other"),
+                    satellite_label(observation.system, prn),
+                    signal_band(observation.system, signal_id, snapshot.signal_namespace),
+                    signal_name(observation.system, signal_id, snapshot.signal_namespace), str(signal_id),
+                    str(observation.cn0_dbhz), str(observation.tracking_state), f"0x{flags:02X}",
+                    str(observation.glo_freq_channel) if observation.system == 1 else "—",
+                    "—", "—", f"lock=0x{flags:02X}",
+                ]
+            else:
+                flags = observation.raw_sig_flags
+                values = [
+                    f"{SOURCE_NAMES.get(snapshot.source, snapshot.source)}/{snapshot.signal_namespace}",
+                    SYSTEM_NAMES.get(observation.system, "Other"),
+                    satellite_label(observation.system, prn),
+                    signal_band(observation.system, signal_id, snapshot.signal_namespace),
+                    signal_name(observation.system, signal_id, snapshot.signal_namespace), str(signal_id),
+                    str(observation.cn0_dbhz), str(observation.quality_ind),
+                    "USED" if signal_record_used(observation) else "",
+                    str(observation.freq_id) if observation.system == 1 and observation.freq_id != -128 else "—",
+                    str(observation.corr_source), f"{observation.pr_res_0p1m / 10.0:.1f} m",
+                    f"0x{flags:04X} iono={observation.iono_model}",
+                ]
             for column, value in enumerate(values):
                 self._table.setItem(row, column, QTableWidgetItem(value))
 

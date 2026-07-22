@@ -344,3 +344,43 @@ def test_dashboard_state_cleared_resets_previous_lock(qapp):
 
     assert not widget._mode_groups[0]._buttons[3].isChecked()
     assert widget._mode_groups[0]._current_value is None
+
+
+def test_gps_fix_unknown_is_consistent_in_status_strip_and_dashboard(qapp):
+    from satellite_debug_tool.core.data import StateStore
+    from satellite_debug_tool.core.profile import ProfileStore
+    from satellite_debug_tool.core.protocol import (
+        StateDefEntry,
+        StateEnumItem,
+        StateReport,
+        StateSample,
+    )
+    from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
+    from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
+
+    profiles = ProfileStore(cache=None)
+    states = StateStore()
+    status_strip = StatusStripWidget(profiles, states)
+    dashboard = DashboardWidget(profiles, states)
+    status_strip.set_hw_type("afd01")
+    dashboard.set_hw_type("afd01")
+    profiles.apply_state_define("afd01", 1, [
+        StateDefEntry(
+            state_id=2,
+            state_type=1,
+            flags=1,
+            name="GPS_FIX",
+            enums=[StateEnumItem(0, 2, "NO_FIX"), StateEnumItem(2, 0, "3D")],
+        )
+    ])
+
+    assert status_strip._state_chips[2]._text.text() == "GPS_FIX: UNKNOWN"
+    assert dashboard._status_chips[2]._value_label.text() == "UNKNOWN"
+
+    states.update("afd01", StateReport(timestamp=100, states=[StateSample(2, 2)]))
+    assert status_strip._state_chips[2]._text.text() == "GPS_FIX: 3D"
+    assert dashboard._status_chips[2]._value_label.text() == "3D"
+
+    states.clear("afd01")
+    assert status_strip._state_chips[2]._text.text() == "GPS_FIX: UNKNOWN"
+    assert dashboard._status_chips[2]._value_label.text() == "UNKNOWN"

@@ -61,6 +61,8 @@ class CmdType(IntEnum):
     PROFILE_SEMANTICS = 0x0C
     GNSS_SKY_REPORT = 0x0D
     GNSS_CNR_REPORT = 0x0E
+    GNSS_SAT_REPORT = 0x0F
+    GNSS_SIGNAL_REPORT = 0x10
 
 
 class SubCmd(IntEnum):
@@ -412,6 +414,64 @@ class GnssCnrReport:
     observations: List[GnssCnrObservation] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class GnssSatRecord:
+    """MG902 UBX-NAV-SAT 中的一颗卫星。"""
+
+    system: int
+    sv_id: int
+    cn0_dbhz: int
+    elevation_deg: int
+    azimuth_deg: int
+    raw_sat_flags: int
+
+
+@dataclass
+class GnssSatReport:
+    """0x0F GNSS_SAT_REPORT 的一个分片。"""
+
+    version: int
+    source: int
+    timestamp: int
+    report_id: int
+    chunk_index: int
+    chunk_count: int
+    total_records: int
+    flags: int
+    records: List[GnssSatRecord] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GnssSignalRecord:
+    """MG902 UBX-NAV-SIG 中的一条原始信号记录。"""
+
+    system: int
+    sv_id: int
+    raw_signal_id: int
+    freq_id: int
+    cn0_dbhz: int
+    quality_ind: int
+    corr_source: int
+    iono_model: int
+    pr_res_0p1m: int
+    raw_sig_flags: int
+
+
+@dataclass
+class GnssSignalReport:
+    """0x10 GNSS_SIGNAL_REPORT 的一个分片。"""
+
+    version: int
+    source: int
+    timestamp: int
+    report_id: int
+    chunk_index: int
+    chunk_count: int
+    total_records: int
+    flags: int
+    records: List[GnssSignalRecord] = field(default_factory=list)
+
+
 # 解析后返回的 union 类型
 FrameV2Record = Union[
     DataReport,
@@ -427,6 +487,8 @@ FrameV2Record = Union[
     ProfileSemanticsReport,
     GnssSkyReport,
     GnssCnrReport,
+    GnssSatReport,
+    GnssSignalReport,
     # 未识别/未解码的控制帧等，保留原始 cmd+data
     "RawFrame",
 ]
@@ -466,5 +528,7 @@ __all__ = [
     "ProfileSemanticCapabilityEntry", "ProfileSemanticsReport",
     "GnssSkySatellite", "GnssSkyReport",
     "GnssCnrObservation", "GnssCnrReport",
+    "GnssSatRecord", "GnssSatReport",
+    "GnssSignalRecord", "GnssSignalReport",
     "RawFrame", "FrameV2Record",
 ]

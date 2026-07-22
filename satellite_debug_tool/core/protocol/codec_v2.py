@@ -51,6 +51,10 @@ from .frame_v2 import (
     GnssSkyReport,
     GnssCnrObservation,
     GnssCnrReport,
+    GnssSatRecord,
+    GnssSatReport,
+    GnssSignalRecord,
+    GnssSignalReport,
 )
 
 
@@ -508,6 +512,70 @@ def decode_gnss_cnr_report(data: bytes) -> GnssCnrReport:
     )
 
 
+def _decode_gnss_fragment_header(data: bytes, name: str) -> Tuple[int, int, int, int, int, int, int, int, int]:
+    """解码 0x0F/0x10 共用的 14 字节分片头。"""
+    if len(data) < 14:
+        raise CodecError(f"{name} too short")
+    version, source, timestamp, report_id, chunk_index, chunk_count, total, count, flags = struct.unpack_from(
+        "<BBIHBBHBB", data, 0,
+    )
+    if version != 1:
+        raise CodecError(f"{name} unsupported version {version}")
+    if source > 4:
+        raise CodecError(f"{name} unsupported source {source}")
+    if total > 92:
+        raise CodecError(f"{name} record limit exceeded")
+
+    # 固件固定按 64 条切片：0..64 条只能是一片，65..92 条必须是两片；
+    # 除最后一片外均恰好 64 条。只检查“上限”会让缺片、空尾片或重叠片
+    # 进入 Store，无法再可靠判定报告边界。
+    expected_chunk_count = max(1, (total + 63) // 64)
+    if chunk_count != expected_chunk_count or chunk_index >= chunk_count:
+        raise CodecError(f"{name} non-canonical chunk metadata")
+    expected_count = min(64, total - chunk_index * 64)
+    if count != expected_count:
+        raise CodecError(
+            f"{name} non-canonical record_count {count}, expected {expected_count}"
+        )
+    return version, source, timestamp, report_id, chunk_index, chunk_count, total, count, flags
+
+
+def decode_gnss_sat_report(data: bytes) -> GnssSatReport:
+    """解码 0x0F MG902 NAV-SAT 分片。"""
+    header = _decode_gnss_fragment_header(data, "GNSS_SAT_REPORT")
+    version, source, timestamp, report_id, chunk_index, chunk_count, total, count, flags = header
+    expected = 14 + count * 10
+    if len(data) != expected:
+        raise CodecError(f"GNSS_SAT_REPORT expects {expected}B got {len(data)}B")
+    records: List[GnssSatRecord] = []
+    offset = 14
+    for _ in range(count):
+        system, sv_id, cn0, elevation, azimuth, raw_flags = struct.unpack_from("<BBBbHI", data, offset)
+        records.append(GnssSatRecord(system, sv_id, cn0, elevation, azimuth, raw_flags))
+        offset += 10
+    return GnssSatReport(
+        version, source, timestamp, report_id, chunk_index, chunk_count, total, flags, records,
+    )
+
+
+def decode_gnss_signal_report(data: bytes) -> GnssSignalReport:
+    """解码 0x10 MG902 NAV-SIG 分片。"""
+    header = _decode_gnss_fragment_header(data, "GNSS_SIGNAL_REPORT")
+    version, source, timestamp, report_id, chunk_index, chunk_count, total, count, flags = header
+    expected = 14 + count * 12
+    if len(data) != expected:
+        raise CodecError(f"GNSS_SIGNAL_REPORT expects {expected}B got {len(data)}B")
+    records: List[GnssSignalRecord] = []
+    offset = 14
+    for _ in range(count):
+        values = struct.unpack_from("<BBBbBBBBhH", data, offset)
+        records.append(GnssSignalRecord(*values))
+        offset += 12
+    return GnssSignalReport(
+        version, source, timestamp, report_id, chunk_index, chunk_count, total, flags, records,
+    )
+
+
 def decode_para_table_report(data: bytes) -> ParaTableReport:
     """PARA_TABLE_REPORT(0x0B): table_ver(u8) + count(u8) + N * 参数条目。"""
     if len(data) < 2:
@@ -608,4 +676,5 @@ __all__ = [
     "decode_event_report", "decode_heartbeat", "decode_command_response",
     "decode_para_table_report", "decode_profile_semantics",
     "decode_gnss_sky_report", "decode_gnss_cnr_report",
+    "decode_gnss_sat_report", "decode_gnss_signal_report",
 ]

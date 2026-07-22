@@ -58,6 +58,8 @@ from satellite_debug_tool.core.protocol import (
     FrameReceiverV2,
     Heartbeat,
     GnssCnrReport,
+    GnssSatReport,
+    GnssSignalReport,
     GnssSkyReport,
     CommandResponse,
     RespCode,
@@ -135,6 +137,7 @@ class LiveView(QWidget):
         self._handshake_timer.setInterval(100)
         self._handshake_timer.timeout.connect(self._on_handshake_tick)
         self._is_connected = False
+        self._active_hw_type: Optional[str] = None
         self._debug_enabled = False
         self._debug_pending_target: bool | None = None
         self._debug_retry_count = 0
@@ -637,6 +640,7 @@ class LiveView(QWidget):
         self._is_connected = True
         # 新连接必须丢弃上一轮运行态；profile 可以复用，但 state 必须等设备重新上报。
         self._state_store.clear()
+        self._gnss_store.clear()
         self._connect_btn.setEnabled(False)
         self._disconnect_btn.setEnabled(True)
         self._update_debug_button_enabled()
@@ -665,6 +669,10 @@ class LiveView(QWidget):
             self.status_message.emit(f"通道使能 mask → 0x{mask:016X}", 3000)
 
     def _on_handshake_ready(self, hw_type: str):
+        if self._active_hw_type != hw_type:
+            self._state_store.clear()
+            self._gnss_store.clear()
+            self._active_hw_type = hw_type
         self.status_message.emit(f"Profile ready: {hw_type}", 3000)
         self._hw_label.setText(f"设备: {hw_type}")
         self._set_conn_state(True, dev=hw_type, detail=self._conn_status_label.text())
@@ -870,6 +878,8 @@ class LiveView(QWidget):
             self._handshake.stop()
             self._handshake = None
         self._gnss_store.clear()
+        self._state_store.clear()
+        self._active_hw_type = None
         self._gnss_btn.setEnabled(False)
 
     def _on_debug_toggled(self):
@@ -1016,6 +1026,9 @@ class LiveView(QWidget):
         if self._debug_enabled:
             hw = self._profile_store.current_hw_type()
             self._state_store.clear(hw)
+        else:
+            self._state_store.clear()
+            self._gnss_store.clear()
         self._render_debug_button()
         self.debug_state_changed.emit(target)
 
@@ -1071,7 +1084,7 @@ class LiveView(QWidget):
             if isinstance(rec, Heartbeat):
                 self._status_strip.pulse_heartbeat()
                 continue
-            if isinstance(rec, (GnssSkyReport, GnssCnrReport)):
+            if isinstance(rec, (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)):
                 self._gnss_store.update(rec)
                 continue
 
@@ -1101,6 +1114,8 @@ class LiveView(QWidget):
         self._frame_count_label.setText(f"FRM {self._frame_count}")
 
         hw = self._profile_store.current_hw_type()
+        if hw is not None and self._is_connected and self._debug_enabled:
+            self._state_store.expire_stale(hw, 3.5)
         if hw is not None:
             attitude_options = [
                 f"ch_{c.channel_id:02d}"
@@ -1243,6 +1258,7 @@ class LiveView(QWidget):
                     self._control_panel.set_hw_type(hw_type)
 
             self._data_store.clear()
+            self._state_store.clear()
             self._gnss_store.clear()
             hw = self._profile_store.current_hw_type()
             data_count = 0
@@ -1254,7 +1270,7 @@ class LiveView(QWidget):
                     self._state_store.update(hw, rec)
                 elif hw is not None and isinstance(rec, EventReport):
                     self._event_log.add(hw, rec, self._profile_store)
-                elif isinstance(rec, (GnssSkyReport, GnssCnrReport)):
+                elif isinstance(rec, (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)):
                     self._gnss_store.update(rec)
             self._frame_count += data_count
             self._chart.set_auto_range(True)
@@ -1268,6 +1284,7 @@ class LiveView(QWidget):
     def _on_clear_clicked(self):
         self._data_store.clear()
         self._event_log.clear()
+        self._state_store.clear()
         self._gnss_store.clear()
         self._frame_count = 0
         self._error_count = 0

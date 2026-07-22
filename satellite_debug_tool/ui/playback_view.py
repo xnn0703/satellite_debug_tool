@@ -33,7 +33,15 @@ from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_GPS_LON,
     ProfileStore,
 )
-from satellite_debug_tool.core.protocol import DataReport, EventReport, GnssCnrReport, GnssSkyReport, StateReport
+from satellite_debug_tool.core.protocol import (
+    DataReport,
+    EventReport,
+    GnssCnrReport,
+    GnssSatReport,
+    GnssSignalReport,
+    GnssSkyReport,
+    StateReport,
+)
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
@@ -222,13 +230,11 @@ class PlaybackView(QWidget):
         # 1) 清空所有现有数据 + profile
         self._data_store.clear()
         self._event_log.clear()
+        self._state_store.clear()
         self._gnss_store.clear()
         self._first_ts_ms = None
         self._last_ts_ms = None
         self._loaded_count = 0
-        # StateStore 没有 clear_all，按 hw_type 清；下面 import_dict 之后重置
-        # （这里不主动清，新 profile 重建时 state_panel 会自己刷新）
-
         # 2) 恢复 profile（如有）
         hw = self._profile_store.current_hw_type()
         if sdb.profile is not None:
@@ -252,7 +258,7 @@ class PlaybackView(QWidget):
                 self._state_store.update(hw, rec)
             elif hw is not None and isinstance(rec, EventReport):
                 self._event_log.add(hw, rec, self._profile_store)
-            elif isinstance(rec, (GnssSkyReport, GnssCnrReport)):
+            elif isinstance(rec, (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)):
                 self._gnss_store.update(rec)
                 ts = float(rec.timestamp)
                 if self._first_ts_ms is None or ts < self._first_ts_ms:
@@ -339,8 +345,8 @@ class PlaybackView(QWidget):
         # 1) 数据三件套
         self._data_store.clear()
         self._event_log.clear()
+        self._state_store.clear()
         self._gnss_store.clear()
-        # state_store 没有 clear_all 接口，留 profile 不动；新加载会重置
         # 2) 元信息
         self._current_file = None
         self._first_ts_ms = None

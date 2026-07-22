@@ -138,10 +138,34 @@ class TestErrors:
 class TestUnknownCmd:
     def test_unknown_cmd_returns_raw_frame(self):
         r = FrameReceiverV2()
-        # 0x0F 未定义，预期 receiver 返回 RawFrame
-        frame = build_frame(0x0F, b"\x11\x22\x33")
+        # 0x11 未定义，预期 receiver 返回 RawFrame
+        frame = build_frame(0x11, b"\x11\x22\x33")
         records = r.feed(frame)
         assert len(records) == 1
         assert isinstance(records[0], RawFrame)
-        assert records[0].cmd_type == 0x0F
+        assert records[0].cmd_type == 0x11
         assert records[0].data == b"\x11\x22\x33"
+
+    def test_gnss_extensions_are_raw_frames_without_new_decoders(self, monkeypatch):
+        """模拟旧 receiver：未注册 0x0F/0x10 时应安全忽略且不记解码错误。"""
+        import satellite_debug_tool.core.protocol.frame_receiver_v2 as receiver_module
+
+        sat_cmd = int(CmdType.GNSS_SAT_REPORT)
+        signal_cmd = int(CmdType.GNSS_SIGNAL_REPORT)
+        monkeypatch.delitem(receiver_module._DECODERS, sat_cmd)
+        monkeypatch.delitem(receiver_module._DECODERS, signal_cmd)
+
+        r = FrameReceiverV2()
+        records = r.feed(
+            build_frame(sat_cmd, b"\x11\x22")
+            + build_frame(signal_cmd, b"\x33\x44\x55")
+        )
+
+        assert [(record.cmd_type, record.data) for record in records] == [
+            (sat_cmd, b"\x11\x22"),
+            (signal_cmd, b"\x33\x44\x55"),
+        ]
+        assert all(isinstance(record, RawFrame) for record in records)
+        assert r.frames_ok == 2
+        assert r.decode_errors == 0
+        assert r.error_count == 0

@@ -174,3 +174,52 @@ class TestStatusMessage:
         )
         pv._on_open_clicked()
         assert captured == []
+
+
+class TestLegacyProfilePlayback:
+    def test_embedded_legacy_gps_fix_value_three_stays_rtk(self, qapp, tmp_path):
+        """旧 SDB 必须按其内嵌旧枚举解释，不能套用当前 GPS_FIX 表。"""
+        from satellite_debug_tool.core.protocol import CmdType, build_frame
+        from satellite_debug_tool.io.data_recorder import DataRecorder
+        from satellite_debug_tool.ui.playback_view import PlaybackView
+
+        legacy_profile = {
+            "schema_version": 1,
+            "hw_type": "afd01",
+            "channel_table_ver": 1,
+            "state_table_ver": 1,
+            "event_table_ver": 1,
+            "channels": [],
+            "states": [
+                {
+                    "state_id": 2,
+                    "state_type": 1,
+                    "flags": 1,
+                    "name": "GPS_FIX",
+                    "enums": [
+                        {"value": 0, "level": 2, "name": "NO_FIX"},
+                        {"value": 1, "level": 0, "name": "2D"},
+                        {"value": 2, "level": 0, "name": "3D"},
+                        {"value": 3, "level": 0, "name": "RTK"},
+                    ],
+                }
+            ],
+            "events": [],
+            "meta": None,
+        }
+        state_payload = (100).to_bytes(4, "little") + bytes([1, 2, 3])
+        path = tmp_path / "legacy-gps-fix.sdb"
+        recorder = DataRecorder(path, profile_dict=legacy_profile)
+        assert recorder.start()
+        assert recorder.write_frame(build_frame(CmdType.STATE_REPORT, state_payload))
+        assert recorder.stop()
+
+        view = PlaybackView()
+        view._load_file(path)
+
+        state = view._profile_store.get_state("afd01", 2)
+        assert state is not None
+        assert next(item.name for item in state.enums if item.value == 3) == "RTK"
+        assert view._state_store.get_value("afd01", 2) == 3
+        assert view._dashboard._status_chips[2]._value_label.text() == "RTK"
+        view.close()

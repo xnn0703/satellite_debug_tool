@@ -28,9 +28,9 @@ class TestProtocolConstants:
         assert EVENT_ID_USER_MARK == 0xFFFF
 
     def test_cmd_values_match_spec(self):
-        # 规范 §4 + GNSS 扩展：命令码范围 0x01–0x0E
+        # 规范 §4 + GNSS 扩展：命令码范围 0x01–0x10
         for cmd in CmdType:
-            assert 0x01 <= int(cmd) <= 0x0E
+            assert 0x01 <= int(cmd) <= 0x10
 
     def test_subcmd_values_match_spec(self):
         # 规范 §5.3 + M13 扩展：子命令范围 0x01–0x13

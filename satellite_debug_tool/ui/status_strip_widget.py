@@ -268,6 +268,9 @@ class StatusStripWidget(QFrame):
             current = self._states.get_value(self._current_hw, entry.state_id)
             if current is not None:
                 self._apply_state(chip, entry, current)
+            elif entry.state_type == int(StateType.ENUM):
+                chip.set_dot(_BOOL_OFF)
+                chip.set_text(f"{entry.name}: UNKNOWN")
         self.updateGeometry()
 
     def _apply_state(self, chip: _Chip, entry: StateDefEntry, value: int) -> None:

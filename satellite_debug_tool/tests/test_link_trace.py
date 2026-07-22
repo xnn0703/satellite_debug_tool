@@ -103,7 +103,7 @@ def test_receiver_trace_reports_record_type(monkeypatch, capsys):
     monkeypatch.setenv(TRACE_ENV, "on")
     receiver = FrameReceiverV2()
 
-    records = receiver.feed(build_frame(0x0F, b"\x01"))
+    records = receiver.feed(build_frame(0x11, b"\x01"))
 
     assert len(records) == 1
     output = capsys.readouterr().out

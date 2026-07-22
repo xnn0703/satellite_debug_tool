@@ -35,6 +35,8 @@ from .codec_v2 import (
     decode_profile_semantics,
     decode_gnss_sky_report,
     decode_gnss_cnr_report,
+    decode_gnss_sat_report,
+    decode_gnss_signal_report,
     decode_state_define,
     decode_state_report,
 )
@@ -79,6 +81,8 @@ _DECODERS = {
     int(CmdType.PROFILE_SEMANTICS): decode_profile_semantics,
     int(CmdType.GNSS_SKY_REPORT): decode_gnss_sky_report,
     int(CmdType.GNSS_CNR_REPORT): decode_gnss_cnr_report,
+    int(CmdType.GNSS_SAT_REPORT): decode_gnss_sat_report,
+    int(CmdType.GNSS_SIGNAL_REPORT): decode_gnss_signal_report,
 }
 
 
