@@ -84,6 +84,8 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x0C | `PROFILE_SEMANTICS`| D→H | 启动 + 周期 / 请求 | 0.2 Hz |
 | 0x0D | `GNSS_SKY_REPORT`   | D→H | GSV 完整 talker 快照 | 约 1 Hz |
 | 0x0E | `GNSS_CNR_REPORT`   | D→H | RANGECMPB 逐信号 C/N₀ 分片 | 约 1 Hz |
+| 0x0F | `GNSS_SAT_REPORT`   | D→H | MG902 NAV-SAT 分片 | 约 1 Hz |
+| 0x10 | `GNSS_SIGNAL_REPORT`| D→H | MG902 NAV-SIG 分片 | 约 1 Hz |
 
 **定义帧（0x04/0x05/0x06/0x07/0x0C）**：下位机启动后立刻全量发送，之后每 5 秒重发一次（处理 UDP 丢包 / 上位机后接入）。上位机也可主动 `CONTROL` 请求重发。`PROFILE_SEMANTICS` 是 M13 扩展帧，不参与握手 ready 判定；旧上位机可忽略，旧下位机缺失时上位机按名称 fallback。
 
@@ -376,6 +378,55 @@ observation[N]:
 - 协议版本仍为 `0x02`。旧上位机把 0x0D/0x0E 当 RawFrame 忽略；它们与 CONTROL 内同值子命令互不冲突。
 - 本帧不参与握手 ready 条件，丢失或旧固件不发送时不影响基本调试。
 
+### 5.14 `GNSS_SAT_REPORT` (0x0F) — MG902 NAV-SAT
+
+本帧与 0x10 使用相同的 14 字节分片头。`source` 固定定义为
+`0=UNKNOWN, 1=MG902, 2=BYNAV, 3=MANUAL, 4=MS6222`。
+
+```text
+version        u8 = 1
+source         u8
+timestamp_ms   u32 LE
+report_id      u16 LE
+chunk_index    u8
+chunk_count    u8
+total_records  u16 LE
+record_count   u8
+flags          u8
+satellite[N]:
+    system         u8
+    sv_id          u8
+    cn0_dbhz       u8
+    elevation_deg  i8
+    azimuth_deg    u16 LE
+    raw_sat_flags  u32 LE
+```
+
+### 5.15 `GNSS_SIGNAL_REPORT` (0x10) — MG902 NAV-SIG
+
+```text
+common_header  14B，同 0x0F
+signal[N]:
+    system          u8
+    sv_id           u8
+    raw_signal_id   u8
+    freq_id         i8      GLONASS 归一化频槽 -7..+6；非 GLONASS 固定 -128
+    cn0_dbhz        u8
+    quality_ind     u8
+    corr_source     u8
+    iono_model      u8
+    pr_res_0p1m     i16 LE
+    raw_sig_flags   u16 LE
+```
+
+- 0x0F/0x10 每片最多 64 条、完整 report 最多 92 条，因此 `chunk_count` 最大为 2。
+- `freq_id` 不保留 UBX 的原始 `freqId=slot+7`：GLONASS 上报前减 7，线上值为
+  `-7..+6`；非 GLONASS 信号统一写 `-128`，不得解读为频槽。
+- 上位机按 `(source, timestamp_ms, report_id)` 重组；source 变化时清除上一接收机的当前快照和未完成分片。
+- Bynav 0x0D/0x0E 的 `signal_type` 属于 `UG016` namespace；MG902 的 `raw_signal_id` 属于 `UBX_M9` namespace，禁止交叉解释。
+- NAV-SAT 只驱动天空图。只有 NAV-SIG 才能生成逐信号/逐频段柱图。
+- 旧上位机把 0x0F/0x10 当 RawFrame 忽略；新上位机继续兼容 0x0D/0x0E 和旧 SDB。
+
 ---
 
 ## 6. 响应码（扩展）
@@ -487,8 +538,10 @@ Device -> COMMAND_RESPONSE(code=0, msg="OK")
 | HEARTBEAT             | 1 Hz   | 21 B  | 0.02 KB/s |
 | GNSS_SKY_REPORT       | 约 1 Hz | 最大 274 B | 约 0.27 KB/s |
 | GNSS_CNR_REPORT       | 约 1 Hz | 最大 921 B/片，最多 2 片 | 最大约 1.8 KB/s |
+| GNSS_SAT_REPORT       | 约 1 Hz | 最大 663 B/片，最多 2 片 | 最大约 1.3 KB/s |
+| GNSS_SIGNAL_REPORT    | 约 1 Hz | 最大 791 B/片，最多 2 片 | 最大约 1.6 KB/s |
 | CHANNEL/STATE/EVENT_DEFINE | 0.2 Hz | ~500 B | 0.1 KB/s |
-| **合计** | | | **~10.2 KB/s** |
+| **合计（同时上报两类接收机数据的理论上界）** | | | **~13.1 KB/s** |
 
 W5500 UDP 实测吞吐 ≥ 1 MB/s，**余量充足**（利用率 ~1%）。
 
@@ -680,7 +733,7 @@ ufd45 同理实现 `ufd45_debug_profile_register()`，两套互不影响。
 |----|------|------|----------|------|
 | 0 | TRACE_MODE       | ENUM | ✓ | STANDBY/SCAN_GLOBAL/SCAN_WIDE/LOCK/MANUAL |
 | 1 | LOCK_FLAG        | BOOL | ✓ | 锁星标志 |
-| 2 | GPS_FIX          | ENUM | ✓ | NO_FIX/2D/3D/RTK |
+| 2 | GPS_FIX          | ENUM | ✓ | NO_FIX/2D/3D/RTK_FIXED/DGNSS/RTK_FLOAT/STALE |
 | 3 | INS_READY        | BOOL | ✓ | INS 对准完成 |
 | 4 | PLL_LOCKED       | BOOL | ✓ | PLL 锁定（adf4002/lmx2594） |
 | 5 | PA_ENABLED       | BOOL |   | 功放使能 |
@@ -689,6 +742,7 @@ ufd45 同理实现 `ufd45_debug_profile_register()`，两套互不影响。
 | 8 | MODEM_CONNECTED  | BOOL | ✓ | 调制解调器就绪 |
 | 9 | TLE_LOADED       | BOOL |   | TLE 已配置 |
 | 10 | OTA_ACTIVE      | BOOL |   | OTA 升级中 |
+| 11 | GNSS_SOURCE     | ENUM |   | UNKNOWN/MG902/BYNAV/MANUAL/MS6222 |
 
 ### C.3 事件（afd01 示例）
 
