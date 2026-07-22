@@ -47,6 +47,10 @@ from .frame_v2 import (
     ProfileSemanticChannelEntry,
     ProfileSemanticStateEntry,
     ProfileSemanticsReport,
+    GnssSkySatellite,
+    GnssSkyReport,
+    GnssCnrObservation,
+    GnssCnrReport,
 )
 
 
@@ -418,6 +422,92 @@ def decode_command_response(data: bytes) -> CommandResponse:
     return CommandResponse(code=code, msg=msg)
 
 
+def decode_gnss_sky_report(data: bytes) -> GnssSkyReport:
+    """解码 0x0D GSV 完整快照。"""
+    if len(data) < 10:
+        raise CodecError("GNSS_SKY_REPORT too short")
+    version = data[0]
+    if version != 1:
+        raise CodecError(f"GNSS_SKY_REPORT unsupported version {version}")
+    timestamp = int.from_bytes(data[1:5], "little")
+    try:
+        talker = data[5:7].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise CodecError("GNSS_SKY_REPORT invalid talker") from exc
+    total_visible = data[7]
+    count = data[8]
+    flags = data[9]
+    if count > 36:
+        raise CodecError(f"GNSS_SKY_REPORT satellite_count {count} exceeds 36")
+    expected = 10 + count * 7
+    if len(data) != expected:
+        raise CodecError(f"GNSS_SKY_REPORT expects {expected}B got {len(data)}B")
+    satellites: List[GnssSkySatellite] = []
+    off = 10
+    for _ in range(count):
+        prn, elevation, azimuth, snr, valid_flags = struct.unpack_from("<HbHBB", data, off)
+        satellites.append(GnssSkySatellite(
+            prn=prn,
+            elevation_deg=elevation,
+            azimuth_deg=azimuth,
+            snr=snr,
+            valid_flags=valid_flags,
+        ))
+        off += 7
+    return GnssSkyReport(
+        version=version,
+        timestamp=timestamp,
+        talker=talker,
+        total_visible=total_visible,
+        flags=flags,
+        satellites=satellites,
+    )
+
+
+def decode_gnss_cnr_report(data: bytes) -> GnssCnrReport:
+    """解码 0x0E RANGECMPB C/N₀ 分片。"""
+    if len(data) < 13:
+        raise CodecError("GNSS_CNR_REPORT too short")
+    version, timestamp, report_id, chunk_index, chunk_count, total, count, flags = struct.unpack_from(
+        "<BIHBBHBB", data, 0,
+    )
+    if version != 1:
+        raise CodecError(f"GNSS_CNR_REPORT unsupported version {version}")
+    if chunk_count == 0 or chunk_count > 2 or chunk_index >= chunk_count:
+        raise CodecError("GNSS_CNR_REPORT invalid chunk metadata")
+    if total > 256 or count > 128:
+        raise CodecError("GNSS_CNR_REPORT observation limit exceeded")
+    expected = 13 + count * 7
+    if len(data) != expected:
+        raise CodecError(f"GNSS_CNR_REPORT expects {expected}B got {len(data)}B")
+    observations: List[GnssCnrObservation] = []
+    off = 13
+    for _ in range(count):
+        system, prn, signal_type, cn0, tracking, lock_flags, glo_channel = struct.unpack_from(
+            "<BBBBBBB", data, off,
+        )
+        observations.append(GnssCnrObservation(
+            system=system,
+            prn=prn,
+            signal_type=signal_type,
+            cn0_dbhz=cn0,
+            tracking_state=tracking,
+            lock_flags=lock_flags,
+            glo_freq_channel=glo_channel,
+        ))
+        off += 7
+    return GnssCnrReport(
+        version=version,
+        timestamp=timestamp,
+        report_id=report_id,
+        chunk_index=chunk_index,
+        chunk_count=chunk_count,
+        total_observations=total,
+        flags=flags,
+        observations=observations,
+    )
+
+
 def decode_para_table_report(data: bytes) -> ParaTableReport:
     """PARA_TABLE_REPORT(0x0B): table_ver(u8) + count(u8) + N * 参数条目。"""
     if len(data) < 2:
@@ -517,4 +607,5 @@ __all__ = [
     "decode_event_define", "decode_data_report", "decode_state_report",
     "decode_event_report", "decode_heartbeat", "decode_command_response",
     "decode_para_table_report", "decode_profile_semantics",
+    "decode_gnss_sky_report", "decode_gnss_cnr_report",
 ]

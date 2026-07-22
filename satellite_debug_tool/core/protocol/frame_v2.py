@@ -59,6 +59,8 @@ class CmdType(IntEnum):
     HEARTBEAT = 0x0A
     PARA_TABLE_REPORT = 0x0B
     PROFILE_SEMANTICS = 0x0C
+    GNSS_SKY_REPORT = 0x0D
+    GNSS_CNR_REPORT = 0x0E
 
 
 class SubCmd(IntEnum):
@@ -360,6 +362,56 @@ class ProfileSemanticsReport:
     capabilities: List[ProfileSemanticCapabilityEntry] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class GnssSkySatellite:
+    """GSV 天空图中的单颗卫星。"""
+
+    prn: int
+    elevation_deg: int
+    azimuth_deg: int
+    snr: int
+    valid_flags: int
+
+
+@dataclass
+class GnssSkyReport:
+    """0x0D GNSS_SKY_REPORT 完整 talker 快照。"""
+
+    version: int
+    timestamp: int
+    talker: str
+    total_visible: int
+    flags: int
+    satellites: List[GnssSkySatellite] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GnssCnrObservation:
+    """RANGECMPB 中一条精确信号观测。"""
+
+    system: int
+    prn: int
+    signal_type: int
+    cn0_dbhz: int
+    tracking_state: int
+    lock_flags: int
+    glo_freq_channel: int
+
+
+@dataclass
+class GnssCnrReport:
+    """0x0E GNSS_CNR_REPORT 的一个分片。"""
+
+    version: int
+    timestamp: int
+    report_id: int
+    chunk_index: int
+    chunk_count: int
+    total_observations: int
+    flags: int
+    observations: List[GnssCnrObservation] = field(default_factory=list)
+
+
 # 解析后返回的 union 类型
 FrameV2Record = Union[
     DataReport,
@@ -373,6 +425,8 @@ FrameV2Record = Union[
     Heartbeat,
     ParaTableReport,
     ProfileSemanticsReport,
+    GnssSkyReport,
+    GnssCnrReport,
     # 未识别/未解码的控制帧等，保留原始 cmd+data
     "RawFrame",
 ]
@@ -410,5 +464,7 @@ __all__ = [
     "ParaEntry", "ParaTableReport",
     "ProfileSemanticChannelEntry", "ProfileSemanticStateEntry",
     "ProfileSemanticCapabilityEntry", "ProfileSemanticsReport",
+    "GnssSkySatellite", "GnssSkyReport",
+    "GnssCnrObservation", "GnssCnrReport",
     "RawFrame", "FrameV2Record",
 ]

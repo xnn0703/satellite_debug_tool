@@ -33,6 +33,8 @@ from .codec_v2 import (
     decode_meta_info,
     decode_para_table_report,
     decode_profile_semantics,
+    decode_gnss_sky_report,
+    decode_gnss_cnr_report,
     decode_state_define,
     decode_state_report,
 )
@@ -75,6 +77,8 @@ _DECODERS = {
     int(CmdType.HEARTBEAT): decode_heartbeat,
     int(CmdType.PARA_TABLE_REPORT): decode_para_table_report,
     int(CmdType.PROFILE_SEMANTICS): decode_profile_semantics,
+    int(CmdType.GNSS_SKY_REPORT): decode_gnss_sky_report,
+    int(CmdType.GNSS_CNR_REPORT): decode_gnss_cnr_report,
 }
 
 

@@ -27,13 +27,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from satellite_debug_tool.core.data import DataStore, EventLog, StateStore
+from satellite_debug_tool.core.data import DataStore, EventLog, GnssStore, StateStore
 from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_GPS_LAT,
     CHANNEL_ROLE_GPS_LON,
     ProfileStore,
 )
-from satellite_debug_tool.core.protocol import DataReport, EventReport, StateReport
+from satellite_debug_tool.core.protocol import DataReport, EventReport, GnssCnrReport, GnssSkyReport, StateReport
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
@@ -57,6 +57,7 @@ class PlaybackView(QWidget):
         self._profile_store = ProfileStore(cache=None)        # 不写磁盘
         self._state_store = StateStore()
         self._event_log = EventLog()
+        self._gnss_store = GnssStore(keep_history=True, parent=self)
         self._event_log.event_added.connect(self._on_event_added_for_chart)
         self._event_log.event_added.connect(self._on_event_added_for_map)
 
@@ -70,6 +71,8 @@ class PlaybackView(QWidget):
         # ---------- M8: 地图浮窗（懒加载） ----------
         self._map_widget = None
         self._map_dock: Optional[QDockWidget] = None
+        self._gnss_widget = None
+        self._gnss_dock: Optional[QDockWidget] = None
         self._gps_lat_id: Optional[int] = None
         self._gps_lon_id: Optional[int] = None
 
@@ -123,6 +126,13 @@ class PlaybackView(QWidget):
         self._map_btn.clicked.connect(self._toggle_map)
         top_layout.addWidget(self._map_btn)
 
+        self._gnss_btn = QPushButton("GNSS")
+        self._gnss_btn.setFixedSize(64, 28)
+        self._gnss_btn.setEnabled(False)
+        self._gnss_btn.setToolTip("打开天空图与逐频点 C/N₀ 快照回放")
+        self._gnss_btn.clicked.connect(self._toggle_gnss)
+        top_layout.addWidget(self._gnss_btn)
+
         root.addWidget(topbar)
 
         # ---------- 主区：chart | (dashboard + event_timeline) ----------
@@ -161,6 +171,8 @@ class PlaybackView(QWidget):
         widgets = [self._chart, self._dashboard, self._event_timeline, self._range_ctl]
         if self._map_widget is not None:
             widgets.append(self._map_widget)
+        if self._gnss_widget is not None:
+            widgets.append(self._gnss_widget)
         for w in widgets:
             if hasattr(w, "set_theme"):
                 w.set_theme(theme, scale)
@@ -210,6 +222,7 @@ class PlaybackView(QWidget):
         # 1) 清空所有现有数据 + profile
         self._data_store.clear()
         self._event_log.clear()
+        self._gnss_store.clear()
         self._first_ts_ms = None
         self._last_ts_ms = None
         self._loaded_count = 0
@@ -239,6 +252,13 @@ class PlaybackView(QWidget):
                 self._state_store.update(hw, rec)
             elif hw is not None and isinstance(rec, EventReport):
                 self._event_log.add(hw, rec, self._profile_store)
+            elif isinstance(rec, (GnssSkyReport, GnssCnrReport)):
+                self._gnss_store.update(rec)
+                ts = float(rec.timestamp)
+                if self._first_ts_ms is None or ts < self._first_ts_ms:
+                    self._first_ts_ms = ts
+                if self._last_ts_ms is None or ts > self._last_ts_ms:
+                    self._last_ts_ms = ts
 
         # 4) 计算总时长 + 推到 TimeRangeControl
         if self._first_ts_ms is not None and self._last_ts_ms is not None:
@@ -271,6 +291,7 @@ class PlaybackView(QWidget):
         # 所以必须传 hw 进来；hw 是本方法上面解析到的 hw_type
         gps_ok = self._detect_gps_channels(hw)
         self._map_btn.setEnabled(gps_ok)
+        self._gnss_btn.setEnabled(self._gnss_store.has_data())
         if self._map_widget is not None:
             self._refresh_map_track()
             self._refresh_map_events()
@@ -318,6 +339,7 @@ class PlaybackView(QWidget):
         # 1) 数据三件套
         self._data_store.clear()
         self._event_log.clear()
+        self._gnss_store.clear()
         # state_store 没有 clear_all 接口，留 profile 不动；新加载会重置
         # 2) 元信息
         self._current_file = None
@@ -339,6 +361,7 @@ class PlaybackView(QWidget):
         if self._map_widget is not None:
             self._map_widget.clear()
         self._map_btn.setEnabled(False)
+        self._gnss_btn.setEnabled(False)
         # 6) UI 标签
         self._file_label.setText("（未加载文件）")
         self._total_label.setText("时长: —")
@@ -346,6 +369,18 @@ class PlaybackView(QWidget):
         # 7) 自身按钮
         self._clear_btn.setEnabled(False)
         self.status_message.emit("回放数据已清除", 2000)
+
+    def _toggle_gnss(self) -> None:
+        if self._gnss_dock is None:
+            from satellite_debug_tool.ui.gnss_widget import GnssWidget
+            self._gnss_widget = GnssWidget(self._gnss_store, playback=True)
+            self._gnss_widget.set_theme(self._theme)
+            self._gnss_dock = QDockWidget("GNSS 天空图与逐频点 C/N₀ — Playback", self)
+            self._gnss_dock.setAllowedAreas(Qt.NoDockWidgetArea)
+            self._gnss_dock.setFloating(True)
+            self._gnss_dock.setWidget(self._gnss_widget)
+            self._gnss_dock.resize(1180, 730)
+        self._gnss_dock.setVisible(not self._gnss_dock.isVisible())
 
     # ====================== M8: 地图集成 ======================
 

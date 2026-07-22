@@ -82,6 +82,8 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x0A | `HEARTBEAT`        | D→H | 周期 | 1 Hz |
 | 0x0B | `PARA_TABLE_REPORT`| D→H | 参数表请求响应 | 按需 |
 | 0x0C | `PROFILE_SEMANTICS`| D→H | 启动 + 周期 / 请求 | 0.2 Hz |
+| 0x0D | `GNSS_SKY_REPORT`   | D→H | GSV 完整 talker 快照 | 约 1 Hz |
+| 0x0E | `GNSS_CNR_REPORT`   | D→H | RANGECMPB 逐信号 C/N₀ 分片 | 约 1 Hz |
 
 **定义帧（0x04/0x05/0x06/0x07/0x0C）**：下位机启动后立刻全量发送，之后每 5 秒重发一次（处理 UDP 丢包 / 上位机后接入）。上位机也可主动 `CONTROL` 请求重发。`PROFILE_SEMANTICS` 是 M13 扩展帧，不参与握手 ready 判定；旧上位机可忽略，旧下位机缺失时上位机按名称 fallback。
 
@@ -294,8 +296,6 @@ reserved        uint32
 
 - 新上位机收到本帧后写入 profile JSON schema v2 / SDB header。
 - 旧上位机遇到未知 `cmd=0x0C` 应忽略为 RawFrame。
-- 本帧不参与握手 ready 条件，丢失或旧固件不发送时不影响基本调试。
-- 下位机只有在实际支持某控制子命令时，才应声明对应 `control_subcmd`；例如当前 debug core 尚未实现 `SET_TRACE_MODE` 时，应只声明 `trace_mode` role，不声明 control binding。
 
 **DATA 段格式**：
 
@@ -326,7 +326,55 @@ capability[N]:
 |------|------|
 | channel | `gps_lat`, `gps_lon`, `gps_alt`, `gps_num_sv`, `gps_speed`, `gps_cog`, `gps_vel_n`, `gps_vel_e`, `gps_vel_d`, `gps_cog_std`, `roll`, `pitch`, `yaw`, `antenna_az`, `antenna_el`, `target_az`, `target_el`, `snr`, `pointing_error` |
 | state | `trace_mode`, `lock_flag`, `gps_fix`, `ins_status`, `ins_ready`, `pll_locked`, `modem_connected` |
-| capability | `parameters`, `ota`, `sample_rate`, `user_mark`, `channel_enable_mask` |
+| capability | `parameters`, `ota`, `sample_rate`, `user_mark`, `channel_enable_mask`, `gnss_sky_report`, `gnss_cnr_report` |
+
+下位机只有在实际支持某控制子命令时，才应声明对应 `control_subcmd`；例如当前 debug core 尚未实现 `SET_TRACE_MODE` 时，应只声明 `trace_mode` role，不声明 control binding。
+
+### 5.12 `GNSS_SKY_REPORT` (0x0D) — GSV 天空快照
+
+```text
+version          u8 = 1
+timestamp_ms     u32 LE
+talker           char[2]
+total_visible    u8
+satellite_count  u8
+flags            u8          bit0=truncated
+satellite[N]:
+    prn             u16 LE
+    elevation_deg   i8
+    azimuth_deg     u16 LE
+    snr             u8
+    valid_flags     u8       bit0=elevation, bit1=azimuth, bit2=snr
+```
+
+该帧只承载 GSV 的天空位置与单值 SNR。它不得用于生成多个频点的伪 C/N₀。
+
+### 5.13 `GNSS_CNR_REPORT` (0x0E) — RANGECMPB 逐信号 C/N₀
+
+```text
+version             u8 = 1
+timestamp_ms        u32 LE
+report_id           u16 LE
+chunk_index         u8
+chunk_count         u8
+total_observations  u16 LE
+observation_count   u8
+flags               u8       bit0=source_truncated
+observation[N]:
+    system             u8
+    prn                u8
+    signal_type        u8
+    cn0_dbhz           u8
+    tracking_state     u8
+    lock_flags         u8    bit0=phase, bit1=code, bit2=prn, bit3=primary
+    glo_freq_channel   u8    非 GLONASS 为 0xFF
+```
+
+- 每片最多 128 条，完整 report 最多 256 条，因此当前 `chunk_count` 最大为 2。
+- 上位机必须按 `(timestamp_ms, report_id)` 隔离分片；新 report 到达时丢弃未完成旧 report，晚到的旧时间戳分片不得反向覆盖新 report。
+- C/N₀ 是设备从 RANGECMPB 恢复后的整数 dB-Hz，不再缩放，也不从 GSV SNR 换算。
+- 协议版本仍为 `0x02`。旧上位机把 0x0D/0x0E 当 RawFrame 忽略；它们与 CONTROL 内同值子命令互不冲突。
+- 本帧不参与握手 ready 条件，丢失或旧固件不发送时不影响基本调试。
 
 ---
 
@@ -437,6 +485,8 @@ Device -> COMMAND_RESPONSE(code=0, msg="OK")
 | STATE_REPORT (12)     | 5 Hz   | 37 B  | 0.2 KB/s |
 | EVENT_REPORT          | ~5 Hz  | ~30 B | 0.15 KB/s |
 | HEARTBEAT             | 1 Hz   | 21 B  | 0.02 KB/s |
+| GNSS_SKY_REPORT       | 约 1 Hz | 最大 274 B | 约 0.27 KB/s |
+| GNSS_CNR_REPORT       | 约 1 Hz | 最大 921 B/片，最多 2 片 | 最大约 1.8 KB/s |
 | CHANNEL/STATE/EVENT_DEFINE | 0.2 Hz | ~500 B | 0.1 KB/s |
 | **合计** | | | **~10.2 KB/s** |
 

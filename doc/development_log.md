@@ -810,4 +810,13 @@ pytest 仍 160/160。
 
 ## 遗留问题 / 待决策
 
-*暂无*
+### 2026-07-17 — Bynav 天空图与逐频点 C/N₀
+
+- debug v2 增加顶层 `0x0D GNSS_SKY_REPORT` 与 `0x0E GNSS_CNR_REPORT`，协议版本和 SDB 文件版本均不变。
+- 新增 `GnssStore`：GSV 与 RANGECMPB 独立保存，CNR 按 `(timestamp, report_id)` 完整重组；重复片幂等，冲突片和未完成旧轮丢弃。
+- 新增 Live/Playback 共用 `GnssWidget`：左侧北向天空图，右侧按系统+PRN 分组的真实频段 C/N₀ 柱图，下方保留全部 signal type 明细。
+- 柱图默认只使用 phase/code lock 观测，同物理频段柱高取锁定观测最大值；不从 GSV SNR 推算多频信号。
+- 频段映射按 UG016 固化为 GPS L1/L2/L5、GLONASS G1/G2、Galileo E1/E5a/E5b/E6/E5 AltBOC、BDS B1/B2/B3、QZSS L1/L2/L5、SBAS L1/L5、NavIC L5。
+- SDB v2 继续录制原始 debug 帧；Playback 增加 GNSS 快照滑块与前后帧，旧文件无 GNSS 时入口禁用。
+- 自动化结果：GNSS 专项 16 项、完整测试 `549 passed, 4 warnings`；固件/上位机共用的 SKY/CNR
+  golden payload 已完成字节级测试。Qt 离屏渲染复核了天空图/柱状图/明细布局；真机逐项一致性仍需串口与厂商工具验收。

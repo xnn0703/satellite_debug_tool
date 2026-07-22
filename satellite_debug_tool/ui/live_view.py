@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDockWidget,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -38,7 +39,7 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.comm import SerialWorker, UdpWorker
 from satellite_debug_tool.core.config import Settings
-from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, StateStore
+from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, GnssStore, StateStore
 from satellite_debug_tool.core.link_trace import trace_message
 from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_ANTENNA_AZ,
@@ -56,6 +57,8 @@ from satellite_debug_tool.core.protocol import (
     EventReport,
     FrameReceiverV2,
     Heartbeat,
+    GnssCnrReport,
+    GnssSkyReport,
     CommandResponse,
     RespCode,
     StateReport,
@@ -121,6 +124,10 @@ class LiveView(QWidget):
         self._profile_store = ProfileStore(cache=ProfileCache())
         self._state_store = StateStore()
         self._event_log = EventLog()
+        self._gnss_store = GnssStore(parent=self)
+        self._gnss_store.changed.connect(self._on_gnss_store_changed)
+        self._gnss_widget = None
+        self._gnss_dock: Optional[QDockWidget] = None
         self._event_log.event_added.connect(self._on_event_added_for_chart)
         self._profile_store.profile_changed.connect(self._on_profile_changed_sync)
         self._handshake: Handshake | None = None
@@ -353,6 +360,13 @@ class LiveView(QWidget):
         )
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         self._toolbar.addWidget(self._clear_btn)
+
+        self._gnss_btn = QPushButton("GNSS")
+        self._gnss_btn.setMinimumSize(72, 29)
+        self._gnss_btn.setEnabled(False)
+        self._gnss_btn.setToolTip("打开天空图与逐频点 C/N₀ 浮窗")
+        self._gnss_btn.clicked.connect(self._toggle_gnss)
+        self._toolbar.addWidget(self._gnss_btn)
 
         self._toolbar.addSeparator()
 
@@ -781,6 +795,11 @@ class LiveView(QWidget):
         hw = self._profile_store.current_hw_type()
         if hw is None:
             return
+        self._gnss_btn.setEnabled(
+            self._gnss_store.has_data()
+            or self._profile_store.has_capability(hw, "gnss_sky_report")
+            or self._profile_store.has_capability(hw, "gnss_cnr_report")
+        )
         name_to_key: dict[str, str] = {}
         for ch in self._profile_store.get_channels(hw):
             name_to_key[ch.name.lower()] = f"ch_{ch.channel_id:02d}"
@@ -850,6 +869,8 @@ class LiveView(QWidget):
         if self._handshake is not None:
             self._handshake.stop()
             self._handshake = None
+        self._gnss_store.clear()
+        self._gnss_btn.setEnabled(False)
 
     def _on_debug_toggled(self):
         target = not self._debug_enabled
@@ -1050,6 +1071,9 @@ class LiveView(QWidget):
             if isinstance(rec, Heartbeat):
                 self._status_strip.pulse_heartbeat()
                 continue
+            if isinstance(rec, (GnssSkyReport, GnssCnrReport)):
+                self._gnss_store.update(rec)
+                continue
 
             hw = self._profile_store.current_hw_type()
             if hw is None:
@@ -1219,6 +1243,7 @@ class LiveView(QWidget):
                     self._control_panel.set_hw_type(hw_type)
 
             self._data_store.clear()
+            self._gnss_store.clear()
             hw = self._profile_store.current_hw_type()
             data_count = 0
             for rec in sdb.iter_records():
@@ -1229,6 +1254,8 @@ class LiveView(QWidget):
                     self._state_store.update(hw, rec)
                 elif hw is not None and isinstance(rec, EventReport):
                     self._event_log.add(hw, rec, self._profile_store)
+                elif isinstance(rec, (GnssSkyReport, GnssCnrReport)):
+                    self._gnss_store.update(rec)
             self._frame_count += data_count
             self._chart.set_auto_range(True)
             self.status_message.emit(
@@ -1241,6 +1268,7 @@ class LiveView(QWidget):
     def _on_clear_clicked(self):
         self._data_store.clear()
         self._event_log.clear()
+        self._gnss_store.clear()
         self._frame_count = 0
         self._error_count = 0
         self._frame_times.clear()
@@ -1261,6 +1289,22 @@ class LiveView(QWidget):
         self._frame_count_label.setText("FRM 0")
         self._error_count_label.setText("ERR 0")
         self.status_message.emit("Display cleared", 2000)
+
+    def _on_gnss_store_changed(self) -> None:
+        if self._gnss_store.has_data():
+            self._gnss_btn.setEnabled(True)
+
+    def _toggle_gnss(self) -> None:
+        if self._gnss_dock is None:
+            from satellite_debug_tool.ui.gnss_widget import GnssWidget
+            self._gnss_widget = GnssWidget(self._gnss_store, playback=False)
+            self._gnss_widget.set_theme(self._theme)
+            self._gnss_dock = QDockWidget("GNSS 天空图与逐频点 C/N₀ — Live", self)
+            self._gnss_dock.setAllowedAreas(Qt.NoDockWidgetArea)
+            self._gnss_dock.setFloating(True)
+            self._gnss_dock.setWidget(self._gnss_widget)
+            self._gnss_dock.resize(1180, 700)
+        self._gnss_dock.setVisible(not self._gnss_dock.isVisible())
 
     # ============================ 仿真模式 ============================
 
@@ -1370,6 +1414,8 @@ class LiveView(QWidget):
             self._control_panel,
         ):
             dispatch(w)
+        if self._gnss_widget is not None:
+            dispatch(self._gnss_widget)
 
         # 工具栏（用 QToolBar 选择器，避免 bare 声明 cascade 到子按钮）
         self._toolbar.setStyleSheet(

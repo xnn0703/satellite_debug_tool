@@ -27,6 +27,8 @@ from .codec_v2 import (
     build_device_reboot,
     decode_para_table_report,
     decode_profile_semantics,
+    decode_gnss_sky_report,
+    decode_gnss_cnr_report,
 )
 from .frame_receiver_v2 import FrameReceiverV2
 from .frame_v2 import (
@@ -50,6 +52,8 @@ from .frame_v2 import (
     ParaEntry, ParaTableReport,
     ProfileSemanticChannelEntry, ProfileSemanticStateEntry,
     ProfileSemanticCapabilityEntry, ProfileSemanticsReport,
+    GnssSkySatellite, GnssSkyReport,
+    GnssCnrObservation, GnssCnrReport,
     RawFrame, FrameV2Record,
 )
 
@@ -70,6 +74,7 @@ __all__ = [
     "build_ota_begin", "build_ota_data", "build_ota_end",
     "build_ota_abort", "build_device_reboot",
     "decode_para_table_report", "decode_profile_semantics",
+    "decode_gnss_sky_report", "decode_gnss_cnr_report",
     # receiver
     "FrameReceiverV2",
     # constants
@@ -95,5 +100,7 @@ __all__ = [
     "ParaEntry", "ParaTableReport",
     "ProfileSemanticChannelEntry", "ProfileSemanticStateEntry",
     "ProfileSemanticCapabilityEntry", "ProfileSemanticsReport",
+    "GnssSkySatellite", "GnssSkyReport",
+    "GnssCnrObservation", "GnssCnrReport",
     "RawFrame", "FrameV2Record",
 ]
