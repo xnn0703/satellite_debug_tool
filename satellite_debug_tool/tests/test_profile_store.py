@@ -112,6 +112,46 @@ class TestProfileStoreBasic:
         store.apply_channel_define("afd01", 1, sample_channels)
         assert signal_fires == []
 
+    def test_same_state_version_but_changed_content_refreshes(self, sample_states):
+        store = ProfileStore()
+        store.apply_state_define("afd01", 1, sample_states)
+        changed = [
+            StateDefEntry(
+                state_id=0, state_type=1, flags=0x01, name="GPS_FIX",
+                enums=[StateEnumItem(value=2, level=0, name="3D")],
+            )
+        ]
+        signal_fires = []
+        store.profile_changed.connect(signal_fires.append)
+        store.apply_state_define("afd01", 1, changed)
+        assert signal_fires == ["afd01"]
+        assert store.get_state("afd01", 0).name == "GPS_FIX"
+
+    def test_same_channel_version_but_changed_content_refreshes(self, sample_channels):
+        store = ProfileStore()
+        store.apply_channel_define("afd01", 1, sample_channels)
+        changed = [
+            ChannelDefEntry(
+                channel_id=0, data_type=1, group_id=0, flags=0x03,
+                name="roll_deg", unit="deg", display_min=-180.0, display_max=180.0,
+            )
+        ]
+        signal_fires = []
+        store.profile_changed.connect(signal_fires.append)
+        store.apply_channel_define("afd01", 1, changed)
+        assert signal_fires == ["afd01"]
+        assert store.get_channel("afd01", 0).name == "roll_deg"
+
+    def test_same_event_version_but_changed_content_refreshes(self, sample_events):
+        store = ProfileStore()
+        store.apply_event_define("afd01", 1, sample_events)
+        changed = [EventDefEntry(event_id=0x0003, level=2, name="LOCK_LOST")]
+        signal_fires = []
+        store.profile_changed.connect(signal_fires.append)
+        store.apply_event_define("afd01", 1, changed)
+        assert signal_fires == ["afd01"]
+        assert store.get_event("afd01", 0x0003).name == "LOCK_LOST"
+
     def test_apply_meta_idempotent(self):
         """下位机每 5s 重发 META，内容不变时不能触发 profile_changed。
         否则 UI 会周期性整体重建（曲线闪烁）。"""

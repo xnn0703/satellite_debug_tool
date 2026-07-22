@@ -215,11 +215,11 @@ class ProfileStore(QObject):
         self, hw_type: str, table_ver: int, entries: Iterable[ChannelDefEntry]
     ) -> None:
         p = self._get_or_create(hw_type)
-        if p.channel_table_ver == table_ver and p.channels:
-            # 版本未变：跳过（幂等）
+        channels = {e.channel_id: e for e in entries}
+        if p.channel_table_ver == table_ver and p.channels == channels:
             return
         p.channel_table_ver = int(table_ver)
-        p.channels = {e.channel_id: e for e in entries}
+        p.channels = channels
         self._persist(hw_type)
         self.profile_changed.emit(hw_type)
 
@@ -227,10 +227,11 @@ class ProfileStore(QObject):
         self, hw_type: str, table_ver: int, entries: Iterable[StateDefEntry]
     ) -> None:
         p = self._get_or_create(hw_type)
-        if p.state_table_ver == table_ver and p.states:
+        states = {e.state_id: e for e in entries}
+        if p.state_table_ver == table_ver and p.states == states:
             return
         p.state_table_ver = int(table_ver)
-        p.states = {e.state_id: e for e in entries}
+        p.states = states
         self._persist(hw_type)
         self.profile_changed.emit(hw_type)
 
@@ -238,10 +239,11 @@ class ProfileStore(QObject):
         self, hw_type: str, table_ver: int, entries: Iterable[EventDefEntry]
     ) -> None:
         p = self._get_or_create(hw_type)
-        if p.event_table_ver == table_ver and p.events:
+        events = {e.event_id: e for e in entries}
+        if p.event_table_ver == table_ver and p.events == events:
             return
         p.event_table_ver = int(table_ver)
-        p.events = {e.event_id: e for e in entries}
+        p.events = events
         self._persist(hw_type)
         self.profile_changed.emit(hw_type)
 
