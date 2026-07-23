@@ -141,6 +141,8 @@ quality_ind, corr_source, iono_model, pr_res, raw_sig_flags
 - `source` 和 `signal_namespace`；
 - `raw_signal_id` 与规范化的 band/name；
 - receiver-specific raw quality/flags；
+- MG902 `quality_ind=4..7` 单独表示 `LOCK`；在此基础上 `cn0_dbhz>0` 才表示 C/N0 可用于柱图和
+  有效值统计；`raw_sig_flags` 的 `prUsed/crUsed/doUsed` 只表示是否参与当前解算，三者不得合并；
 - Sky、Signal 各自独立的 `last_update_wallclock`、age 和 stale；
 - pending 分片也属于特定 source，切源时整体丢弃。
 
@@ -152,11 +154,28 @@ Bynav 柱图和新 MG902 天空图混在同一快照中。
 - 标题/空态从 Bynav 专用的 `GSV/RANGECMPB` 改为来源无关的“天空图/逐信号 C/N0”。
 - 显示 source badge（Bynav、MG902、Legacy/Unknown）。
 - 天空图可使用 NAV-SAT 的卫星级 C/N0 着色，但该值只代表卫星视图。
+- 开启“天空图按 C/N₀ 着色”时，由 `SkyPlotWidget` 在天空图画布左上角直接 overlay 一块紧凑的
+  竖向连续色带：`>=51 dB-Hz` 绿色强端在上、`<=20 dB-Hz` 红色弱端在下，灰色代表没有
+  C/N₀ 数据。图例不是 layout 子控件，不得占用 splitter 宽度；关闭着色时只停止绘制 overlay。
+- C/N₀ overlay 根据真实字体度量选择紧凑字号，并放在天空外圆及卫星标记保护区之外；不能覆盖
+  N/E/S/W、网格或地平线卫星。开启/关闭前后天空图 widget geometry、圆心和半径必须完全相同。
+- NAV-SAT 仅在 `0<=elevation<=90` 且 `0<=azimuth<=360` 时绘制；统计分别显示接收的卫星记录数和
+  实际可绘星数，不能把未知方位记录计作已绘制卫星。
 - 逐频点柱和明细只有收到 RANGECMPB 或 NAV-SIG 时才显示，不从天空图复制数据。
+- MG902 柱图和“有效 CNR”要求 `quality_ind=4..7` 且 C/N0 大于 0，不要求信号已参与导航解算；
+  明细中的 `LOCK` 只由 quality 判断，`USED` 只由 raw flags 判断。
+- 空态区分三种情况：未收到 NAV-SIG、已收到但没有 quality lock、已有 lock 但没有正值 C/N0。
 - Signal 映射按 source namespace 分发；未知 signal ID 显示 `Signal <raw id>`，不能猜名称。
 - 明细表保留原始 system/SV/signal/freq/quality/flags，供厂商工具逐项对照。
 - Sky stale 不影响 Signal age，Signal stale 也不能被新的 Sky 帧“刷新”。
 - Live/Playback 继续共用同一个 widget 和 store 模型。
+- 顶部信息区拆为两层：第一层仅放星座筛选和天空图着色开关，使用基于真实 `sizeHint()` 的
+  FlowLayout；第二层单独放 source badge 和统计摘要，避免长统计文本反向压缩复选框。
+- 星座复选框始终使用完整 `sizeHint()`，宽度不足时优先换行，不能裁切 indicator 或文字。FlowLayout 宿主必须
+  正确声明 HeightForWidth，让换行后增加的高度参与父布局计算。
+- 统计摘要允许换行；字体仅在完整显示仍受限时按 `12→11→10 px` 降档，不能低于 10 px，窗口恢复
+  足够宽度后必须恢复 12 px。字体适配按 Qt 逻辑像素和实际文本宽度计算，不能依赖 Retina 物理像素。
+- Live/Playback 复用同一响应式顶部实现；Playback 快照控制行保持独立，不参与筛选区换行。
 
 ## 7. 实施顺序
 
@@ -180,8 +199,20 @@ Bynav 柱图和新 MG902 天空图混在同一快照中。
 
 - [x] GNSS widget 来源中立化并增加 source badge。
 - [x] 明细表显示 MG902 raw quality/flags。
+- [x] MG902 `LOCK`、有效 C/N0 与 `USED` 分离，柱图只使用 lock 且 C/N0 大于 0 的记录。
+- [x] NAV-SAT 无效天空坐标不投影，卫星记录数和可绘星数分别显示。
+- [x] 已收信号但尚未锁定与未收到信号使用不同空态。
 - [x] Live 接入新报告并录制原始帧。
 - [x] Playback 重建新报告，同时保持旧文件行为。
+- [x] 顶部筛选区使用 HeightForWidth FlowLayout，复选框不受 source/统计文本挤压。
+- [x] source/统计区独立排版，统计文本支持 12/11/10 px 兜底与换行、宽屏字号恢复。
+- [x] 真实 QSS 下覆盖 1024/800/520 逻辑像素宽度，并验证 Live/Playback 共用行为。
+- [x] macOS Cocoa 原生平台完成响应式与完整 GNSS 专项验证；普通 CI 继续使用 offscreen，不依赖显示环境。
+- [x] 天空图 C/N₀ 着色开启时在画布左上角 overlay 竖向连续色带、20/30/40/51+ 刻度和灰色无数据
+  标识，关闭时只停止绘制；
+  图例与 `_cn0_color()` 使用同一范围和端点色。
+- [x] C/N₀ overlay 在 1024/800/520 逻辑像素宽度下不改变天空圆几何、不覆盖保护区，
+  Live/Playback 行为一致。
 
 ### M15-D：验证和文档
 

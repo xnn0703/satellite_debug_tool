@@ -41,8 +41,36 @@
 - [x] Sky/Signal 分别计算 age/stale，一侧更新不能刷新另一侧。
 - [x] 只有 NAV-SAT 时显示天空图但不显示虚假逐频点柱。
 - [x] NAV-SIG 明细保留 source/system/SV/raw signal/freq/CN0/quality/correction/flags。
+- [x] MG902 `quality_ind=4..7` 单独显示 `LOCK`；C/N0 为 0 时仍保留锁定状态，但不计入有效 CNR
+  或柱图。
+- [x] MG902 已锁定且 C/N0 大于 0 时，即使 `prUsed/crUsed/doUsed` 均为 0，仍计入有效 CNR 并显示柱图。
+- [x] 明细 `Lock / Used` 分别显示质量锁定与参与导航解算，不再将两者混为同一状态。
+- [x] NAV-SAT 只绘制 `0<=elevation<=90`、`0<=azimuth<=360` 的记录；越界记录保留在记录数中，
+  但不投影到天空图。
+- [x] 卫星记录数与可绘星数分别统计；有卫星记录但没有有效方位时显示明确空态。
+- [x] 有 NAV-SIG 但没有 quality lock 时显示“暂无锁定信号”；已有 lock 但 C/N0 无效时显示
+  “已有锁定信号，但暂无有效 C/N0”，两者都不显示“等待数据”。
+- [x] MG902 Playback 恢复 q4/q7 未 USED 信号柱图、无效天空坐标、Lock/Used 明细和统计。
 - [x] Live 与 Playback 使用同一渲染组件并产生一致快照。
 - [x] GNSS 窗口文案不再把所有来源都写成 GSV/RANGECMPB。
+- [x] 顶部星座筛选和着色开关使用 HeightForWidth FlowLayout；在 1024、800、520 逻辑像素宽度下，
+  每个复选框宽度均不小于自身 `sizeHint()`，同行控件互不相交。
+- [x] 宽度不足时筛选项优先换行且宿主高度同步增加；source badge 与统计摘要位于独立信息行，
+  两区不重叠，统计摘要允许换行。
+- [x] 顶部统计字体只按 12、11、10 px 三档兜底，任何宽度下不低于 10 px，窗口重新拉宽后恢复
+  12 px。
+- [x] Live 与 Playback 共用响应式顶部；Playback 快照控制行的显示、滑块和前后按钮不受影响。
+- [x] 响应式测试应用真实 light/small QSS，并在结束后恢复 QApplication 原样式，避免测试间污染。
+- [x] macOS Cocoa 下 QSS 应用和 scale 切换后，复选框 geometry 仍覆盖最终 `sizeHint()` 且互不重叠；
+  开发机完整 GNSS 专项通过。测试代码不强制 Cocoa，普通 CI 保持 offscreen 可运行。
+- [x] “天空图按 C/N₀ 着色”开启时，由天空图画布在左上角直接 overlay 竖向连续色带；明确标出顶部强端
+  `>=51 dB-Hz`、中间刻度 `40/30 dB-Hz`、底部弱端 `<=20 dB-Hz`，并用灰色样例说明“无 C/N₀ 数据”。
+- [x] 图例颜色与天空图 `_cn0_color()` 共用同一 `20..51 dB-Hz` 映射，范围外颜色按端点钳位，
+  不允许只用近似文案描述另一套离散阈值。
+- [x] 图例不是 layout 子控件；开启和关闭着色前后，天空图 widget geometry、size、圆心和半径完全相同。
+- [x] Overlay 卡片位于画布内且处于天空外圆加 12 px 卫星标记保护区之外，不覆盖 N/E/S/W、网格和
+  `elev=0/az=315°` 的左上边缘卫星；在 light/dark、small/medium 和 1024/800/520 逻辑像素宽度下
+  无裁切、无重叠，Live/Playback 共用相同显示逻辑。
 
 ## E. 自动化与真机边界
 

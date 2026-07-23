@@ -21,6 +21,8 @@ from .gnss_store import (
     satellite_label,
     observation_locked,
     infer_sky_system,
+    signal_record_cnr_valid,
+    signal_record_locked,
     signal_record_used,
 )
 
@@ -35,5 +37,5 @@ __all__ = [
     "SIGNAL_NAMESPACE_UG016", "SIGNAL_NAMESPACE_UBX_M9",
     "SIGNAL_NAMESPACE_RAW",
     "signal_band", "signal_name", "satellite_label", "observation_locked", "infer_sky_system",
-    "signal_record_used",
+    "signal_record_cnr_valid", "signal_record_locked", "signal_record_used",
 ]

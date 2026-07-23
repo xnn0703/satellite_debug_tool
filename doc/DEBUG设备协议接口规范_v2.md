@@ -424,7 +424,16 @@ signal[N]:
   `-7..+6`；非 GLONASS 信号统一写 `-128`，不得解读为频槽。
 - 上位机按 `(source, timestamp_ms, report_id)` 重组；source 变化时清除上一接收机的当前快照和未完成分片。
 - Bynav 0x0D/0x0E 的 `signal_type` 属于 `UG016` namespace；MG902 的 `raw_signal_id` 属于 `UBX_M9` namespace，禁止交叉解释。
-- NAV-SAT 只驱动天空图。只有 NAV-SIG 才能生成逐信号/逐频段柱图。
+- `GNSS_SAT_REPORT.azimuth_deg=0xFFFF` 是“方位未知”哨兵。固件在 NAV-SAT 原始 elevation/azimuth
+  越界时写入该值；接收端必须保留记录，但不得把它取模成有效方位。
+- NAV-SAT 只驱动天空图。上位机仅绘制 `0<=elevation_deg<=90` 且
+  `0<=azimuth_deg<=360` 的记录；越界值表示当前没有可用天空位置，仍可保留为接收机原始记录，
+  但不得投影或计入可绘星数。
+- 只有 NAV-SIG 才能生成逐信号/逐频段柱图。MG902 的 `quality_ind=4..7` 单独表示信号已锁定；
+  在已锁定基础上 `cn0_dbhz>0` 才表示 C/N0 可进入柱图和有效值统计。C/N0 为 0 不得清除
+  `LOCK`，但也不得生成零高柱。
+- `raw_sig_flags` bit3/bit4/bit5 分别为 `prUsed/crUsed/doUsed`，仅说明对应观测是否参与当前解算；
+  `LOCK` 与 `USED` 是两个独立维度，未参与解算的锁定信号仍应显示 C/N0。
 - 旧上位机把 0x0F/0x10 当 RawFrame 忽略；新上位机继续兼容 0x0D/0x0E 和旧 SDB。
 
 ---

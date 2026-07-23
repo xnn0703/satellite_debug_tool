@@ -1,5 +1,6 @@
 """GNSS debug payload、分片重组与 UG016 频段映射。"""
 
+import math
 import os
 import pytest
 
@@ -16,6 +17,9 @@ from satellite_debug_tool.core.data.gnss_store import (
     satellite_label,
     signal_band,
     signal_name,
+    signal_record_cnr_valid,
+    signal_record_locked,
+    signal_record_used,
 )
 from satellite_debug_tool.core.protocol import (
     CmdType,
@@ -24,6 +28,7 @@ from satellite_debug_tool.core.protocol import (
     GnssCnrReport,
     GnssSkyReport,
     GnssSkySatellite,
+    GnssSatRecord,
     GnssSatReport,
     GnssSignalRecord,
     GnssSignalReport,
@@ -35,10 +40,23 @@ from satellite_debug_tool.core.protocol import (
     decode_gnss_sat_report,
     decode_gnss_signal_report,
 )
-from satellite_debug_tool.ui.gnss_widget import GnssWidget, build_frequency_bars, sky_point
-from PySide6.QtCore import QPointF
+from satellite_debug_tool.ui.gnss_widget import (
+    CN0_COLOR_MAX_DBHZ,
+    CN0_COLOR_MIN_DBHZ,
+    CN0_LEGEND_TICKS,
+    GnssWidget,
+    _cn0_color,
+    build_frequency_bars,
+    nav_sat_position_valid,
+    satellite_record_counts,
+    sky_geometry_valid,
+    sky_point,
+)
+from PySide6.QtCore import QPointF, QRectF
+from PySide6.QtGui import QFontMetrics
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.io.data_recorder import DataRecorder
+from satellite_debug_tool.ui import qss
 from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.playback_view import PlaybackView
 
@@ -49,6 +67,19 @@ def qapp():
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture
+def real_light_qss(qapp):
+    """响应式几何测试使用与主程序一致的 QSS，并在结束后恢复全局状态。"""
+    original = qapp.styleSheet()
+    qapp.setStyleSheet(qss.build("light", "small"))
+    qapp.processEvents()
+    try:
+        yield
+    finally:
+        qapp.setStyleSheet(original)
+        qapp.processEvents()
 
 
 SKY_GOLDEN = bytes([
@@ -105,6 +136,29 @@ def _observation(index: int, *, lock_flags: int = 3) -> GnssCnrObservation:
         tracking_state=index % 8,
         lock_flags=lock_flags,
         glo_freq_channel=9 if index % 7 == 1 else 0xFF,
+    )
+
+
+def _signal_record(
+    sv_id: int,
+    *,
+    system: int = 0,
+    raw_signal_id: int = 0,
+    quality_ind: int = 7,
+    cn0_dbhz: int = 35,
+    raw_sig_flags: int = 0,
+) -> GnssSignalRecord:
+    return GnssSignalRecord(
+        system=system,
+        sv_id=sv_id,
+        raw_signal_id=raw_signal_id,
+        freq_id=-128,
+        cn0_dbhz=cn0_dbhz,
+        quality_ind=quality_ind,
+        corr_source=0,
+        iono_model=0,
+        pr_res_0p1m=0,
+        raw_sig_flags=raw_sig_flags,
     )
 
 
@@ -496,6 +550,41 @@ def test_lock_filter() -> None:
     assert not observation_locked(_observation(0, lock_flags=4))
 
 
+@pytest.mark.parametrize(
+    "quality_ind,cn0_dbhz,raw_sig_flags,expected_locked,expected_cnr_valid,expected_used",
+    [
+        (7, 28, 0, True, True, False),
+        (4, 25, 0, True, True, False),
+        (7, 36, 1 << 3, True, True, True),
+        (1, 28, 1 << 3, False, False, True),
+        (7, 0, 0, True, False, False),
+    ],
+)
+def test_mg902_signal_lock_is_independent_from_navigation_use(
+    quality_ind: int,
+    cn0_dbhz: int,
+    raw_sig_flags: int,
+    expected_locked: bool,
+    expected_cnr_valid: bool,
+    expected_used: bool,
+) -> None:
+    record = _signal_record(
+        12,
+        quality_ind=quality_ind,
+        cn0_dbhz=cn0_dbhz,
+        raw_sig_flags=raw_sig_flags,
+    )
+    assert signal_record_locked(record) is expected_locked
+    assert signal_record_cnr_valid(record) is expected_cnr_valid
+    assert signal_record_used(record) is expected_used
+
+    store = GnssStore()
+    assert store.update_signal_chunk(GnssSignalReport(
+        1, GNSS_SOURCE_MG902, 5000, 9, 0, 1, 1, 0, [record],
+    ))
+    assert bool(build_frequency_bars(store.snapshot(), {0})) is expected_cnr_valid
+
+
 def test_bar_grouping_uses_locked_max_and_keeps_all_details() -> None:
     store = GnssStore()
     details = [
@@ -519,6 +608,282 @@ def test_sky_projection_cardinal_directions() -> None:
     assert (round(north.x()), round(north.y())) == (100, 10)
     assert (round(east.x()), round(east.y())) == (190, 100)
     assert (round(zenith.x()), round(zenith.y())) == (100, 100)
+    assert sky_geometry_valid(0, 0)
+    assert sky_geometry_valid(90, 360)
+    assert not sky_geometry_valid(-1, 100)
+    assert not sky_geometry_valid(30, 361)
+
+
+def test_gsv_drawable_count_uses_same_geometry_range_as_projection() -> None:
+    store = GnssStore()
+    store.update_sky(GnssSkyReport(
+        version=1,
+        timestamp=100,
+        talker="GP",
+        total_visible=2,
+        flags=0,
+        satellites=[
+            GnssSkySatellite(11, 40, 83, 38, 7),
+            GnssSkySatellite(12, -5, 120, 30, 7),
+        ],
+    ))
+    assert satellite_record_counts(store.snapshot(), {0}) == (2, 1)
+
+
+@pytest.mark.parametrize(
+    "record,expected",
+    [
+        (GnssSatRecord(0, 1, 30, 0, 0, 0), True),
+        (GnssSatRecord(0, 1, 30, 90, 360, 0), True),
+        (GnssSatRecord(0, 1, 30, -1, 100, 0), False),
+        (GnssSatRecord(0, 1, 30, 91, 100, 0), False),
+        (GnssSatRecord(0, 1, 30, 30, 361, 0), False),
+        (GnssSatRecord(0, 1, 30, 30, 0xFFFF, 0), False),
+    ],
+)
+def test_mg902_nav_sat_requires_valid_sky_geometry(record: GnssSatRecord, expected: bool) -> None:
+    assert nav_sat_position_valid(record) is expected
+
+
+def test_mg902_widget_separates_record_drawable_lock_and_used(qapp) -> None:
+    store = GnssStore()
+    invalid_satellites = [
+        GnssSatRecord(0, 12, 28, -91, 120, 0),
+        GnssSatRecord(0, 13, 29, 30, 0xFFFF, 0),
+        GnssSatRecord(0, 16, 0, -91, 0, 0),
+        GnssSatRecord(0, 25, 25, -91, 180, 0),
+        GnssSatRecord(4, 4, 36, -91, 240, 0),
+    ]
+    assert store.update_sat_chunk(GnssSatReport(
+        1, GNSS_SOURCE_MG902, 5000, 1, 0, 1, 5, 0, invalid_satellites,
+    ))
+    signals = [
+        _signal_record(12, quality_ind=7, cn0_dbhz=28, raw_sig_flags=0),
+        _signal_record(13, quality_ind=7, cn0_dbhz=29, raw_sig_flags=0),
+        _signal_record(16, quality_ind=1, cn0_dbhz=0, raw_sig_flags=0),
+        _signal_record(25, quality_ind=4, cn0_dbhz=25, raw_sig_flags=0),
+        _signal_record(4, system=4, raw_signal_id=1, quality_ind=7, cn0_dbhz=36, raw_sig_flags=0),
+    ]
+    assert store.update_signal_chunk(GnssSignalReport(
+        1, GNSS_SOURCE_MG902, 5001, 2, 0, 1, 5, 0, signals,
+    ))
+    assert satellite_record_counts(store.snapshot(), {0, 4}) == (5, 0)
+
+    widget = GnssWidget(store)
+    widget.resize(1200, 800)
+    widget.show()
+    widget.refresh()
+    qapp.processEvents()
+    assert "卫星记录 5 · 可绘星 0 · 有效 CNR 4" in widget._stats.text()
+    assert widget._sky._empty_text == "已收到 5 条卫星记录\n方位/仰角尚未有效"
+    assert widget._sky._hit_points == []
+    assert len(widget._bars._bars) == 4
+    assert widget._table.horizontalHeaderItem(8).text() == "Lock / Used"
+    assert widget._table.item(0, 8).text() == "LOCK"
+    assert widget._table.item(1, 8).text() == "LOCK"
+    assert widget._table.item(2, 8).text() == ""
+    assert widget._table.item(3, 8).text() == "LOCK"
+    assert widget._table.item(4, 8).text() == "LOCK"
+
+    signals[-1] = _signal_record(
+        4, system=4, raw_signal_id=1, quality_ind=7, cn0_dbhz=36, raw_sig_flags=1 << 3,
+    )
+    assert store.update_signal_chunk(GnssSignalReport(
+        1, GNSS_SOURCE_MG902, 5002, 3, 0, 1, 5, 0, signals,
+    ))
+    widget.refresh()
+    assert widget._table.item(4, 8).text() == "LOCK / USED"
+    widget.close()
+
+
+def test_mg902_widget_draws_valid_boundary_satellite(qapp) -> None:
+    store = GnssStore()
+    assert store.update_sat_chunk(GnssSatReport(
+        1, GNSS_SOURCE_MG902, 5000, 1, 0, 1, 1, 0,
+        [GnssSatRecord(0, 12, 28, 90, 360, 0)],
+    ))
+    widget = GnssWidget(store)
+    widget.resize(1200, 800)
+    widget.show()
+    widget.refresh()
+    qapp.processEvents()
+    assert "卫星记录 1 · 可绘星 1" in widget._stats.text()
+    assert widget._sky._empty_text == ""
+    assert len(widget._sky._hit_points) == 1
+    widget.close()
+
+
+@pytest.mark.parametrize(
+    "cn0,expected",
+    [
+        (-1, "#ff592e"),
+        (20, "#ff592e"),
+        (30, "#ad862e"),
+        (35, "#849d2e"),
+        (40, "#5ab42e"),
+        (51, "#00e62e"),
+        (90, "#00e62e"),
+    ],
+)
+def test_sky_cn0_color_mapping_and_clamp(cn0: int, expected: str) -> None:
+    assert _cn0_color(cn0).name() == expected
+    assert CN0_COLOR_MIN_DBHZ == 20
+    assert CN0_COLOR_MAX_DBHZ == 51
+    assert CN0_LEGEND_TICKS == ((51, "≥51 强"), (40, "40"), (30, "30"), (20, "≤20 弱"))
+
+
+@pytest.mark.parametrize("playback", [False, True])
+def test_sky_cn0_legend_is_canvas_overlay_without_layout_geometry_change(
+    qapp,
+    real_light_qss,
+    playback: bool,
+) -> None:
+    widget = GnssWidget(GnssStore(keep_history=playback), playback=playback)
+    widget.set_theme("light", "small")
+    widget.resize(1024, 700)
+    widget.show()
+    qapp.processEvents()
+    assert not hasattr(widget, "_cn0_legend")
+    assert not hasattr(widget, "_sky_panel")
+    assert not widget._sky._cn0_coloring
+
+    for width in (1024, 800, 520):
+        widget.resize(width, 700)
+        widget._cn0_color.setChecked(False)
+        qapp.processEvents()
+        geometry_without_overlay = widget._sky.geometry()
+        size_without_overlay = widget._sky.size()
+        center_without_overlay, radius_without_overlay = widget._sky.plot_geometry()
+
+        widget._cn0_color.setChecked(True)
+        qapp.processEvents()
+        center_with_overlay, radius_with_overlay = widget._sky.plot_geometry()
+        assert widget._sky.geometry() == geometry_without_overlay
+        assert widget._sky.size() == size_without_overlay
+        assert center_with_overlay == center_without_overlay
+        assert radius_with_overlay == radius_without_overlay
+        card, gradient_rect = widget._sky.cn0_legend_geometry()
+        assert widget._sky.rect().contains(card.toAlignedRect())
+        assert card.left() == 6
+        assert card.top() == 6
+        assert card.right() < center_with_overlay.x()
+        assert card.width() <= 80
+        assert math.hypot(
+            center_with_overlay.x() - card.right(),
+            center_with_overlay.y() - card.bottom(),
+        ) >= radius_with_overlay + 12
+        dangerous_point = sky_point(center_with_overlay, radius_with_overlay, 0, 315)
+        assert not card.intersects(QRectF(
+            dangerous_point.x() - 10,
+            dangerous_point.y() - 10,
+            20,
+            20,
+        ))
+
+    sky_pixmap = widget._sky.grab()
+    sky_image = sky_pixmap.toImage()
+    dpr = sky_pixmap.devicePixelRatio()
+    _, gradient_rect = widget._sky.cn0_legend_geometry()
+    gradient_x = int(gradient_rect.center().x() * dpr)
+    strong = sky_image.pixelColor(gradient_x, int((gradient_rect.top() + 4) * dpr))
+    weak = sky_image.pixelColor(gradient_x, int((gradient_rect.bottom() - 4) * dpr))
+    assert weak.red() > weak.green()
+    assert strong.green() > strong.red()
+    assert weak.saturation() > 150
+    assert strong.saturation() > 150
+
+    widget.set_theme("dark", "medium")
+    qapp.processEvents()
+    legend_font, card, gradient_rect = widget._sky.cn0_legend_layout()
+    legend_metrics = QFontMetrics(legend_font)
+    assert legend_font.pixelSize() >= 8
+    assert card.right() - gradient_rect.right() - 6 >= max(
+        legend_metrics.horizontalAdvance("≥51 强"),
+        legend_metrics.horizontalAdvance("≤20 弱"),
+    )
+    unknown_box = max(6, min(8, legend_metrics.height() - 3))
+    assert card.width() >= (
+        legend_metrics.horizontalAdvance("C/N₀")
+        + unknown_box
+        + legend_metrics.horizontalAdvance("无")
+        + 8
+    )
+    geometry_with_overlay = widget._sky.geometry()
+    widget._cn0_color.setChecked(False)
+    qapp.processEvents()
+    assert not widget._sky._cn0_coloring
+    assert widget._sky.geometry() == geometry_with_overlay
+    off_image = widget._sky.grab().toImage()
+    dpr = widget._sky.devicePixelRatioF()
+    off_color = off_image.pixelColor(
+        int(gradient_rect.center().x() * dpr),
+        int(gradient_rect.center().y() * dpr),
+    )
+    assert off_color != _cn0_color(35)
+    widget.close()
+
+
+def test_sky_tooltip_reports_actual_cn0_coloring_value(qapp) -> None:
+    store = GnssStore()
+    store.update_sky(GnssSkyReport(
+        version=1,
+        timestamp=100,
+        talker="GP",
+        total_visible=1,
+        flags=0,
+        satellites=[GnssSkySatellite(11, 40, 83, 25, 7)],
+    ))
+    assert store.update_cnr_chunk(GnssCnrReport(
+        1,
+        101,
+        1,
+        0,
+        1,
+        1,
+        0,
+        [GnssCnrObservation(0, 11, 0, 45, 7, 3, 0xFF)],
+    ))
+    widget = GnssWidget(store)
+    widget.resize(1024, 700)
+    widget.show()
+    widget._cn0_color.setChecked(True)
+    qapp.processEvents()
+    widget._sky.grab()
+    assert len(widget._sky._hit_points) == 1
+    detail = widget._sky._hit_points[0][1]
+    assert "着色 C/N₀=45 dB-Hz" in detail
+    assert "卫星记录 C/N₀=25 dB-Hz" in detail
+    widget.close()
+
+
+def test_mg902_widget_distinguishes_unlocked_signal_from_no_data(qapp) -> None:
+    store = GnssStore()
+    assert store.update_signal_chunk(GnssSignalReport(
+        1, GNSS_SOURCE_MG902, 5000, 1, 0, 1, 1, 0,
+        [_signal_record(12, quality_ind=1, cn0_dbhz=28, raw_sig_flags=1 << 3)],
+    ))
+    widget = GnssWidget(store)
+    widget.refresh()
+    assert widget._bars._bars == []
+    assert widget._bars._empty_text == "已收到逐信号数据，暂无锁定信号"
+    assert "有效 CNR 0" in widget._stats.text()
+    assert widget._table.item(0, 8).text() == "USED"
+    widget.close()
+
+
+def test_mg902_widget_keeps_lock_when_cn0_is_not_valid(qapp) -> None:
+    store = GnssStore()
+    assert store.update_signal_chunk(GnssSignalReport(
+        1, GNSS_SOURCE_MG902, 5000, 1, 0, 1, 1, 0,
+        [_signal_record(12, quality_ind=7, cn0_dbhz=0)],
+    ))
+    widget = GnssWidget(store)
+    widget.refresh()
+    assert widget._bars._bars == []
+    assert widget._bars._empty_text == "已有锁定信号，但暂无有效 C/N₀"
+    assert "有效 CNR 0" in widget._stats.text()
+    assert widget._table.item(0, 8).text() == "LOCK"
+    widget.close()
 
 
 def test_gnss_widget_live_and_playback(qapp) -> None:
@@ -537,6 +902,137 @@ def test_gnss_widget_live_and_playback(qapp) -> None:
     assert widget._history_slider.maximum() == 1
     assert widget._bars._bars
     widget.set_theme("light")
+    widget.close()
+
+
+def test_mg902_playback_widget_preserves_lock_bars_and_invalid_sky_geometry(qapp) -> None:
+    store = GnssStore(keep_history=True)
+    assert store.update_sat_chunk(GnssSatReport(
+        1, GNSS_SOURCE_MG902, 5000, 1, 0, 1, 1, 0,
+        [GnssSatRecord(0, 12, 28, 30, 0xFFFF, 0)],
+    ))
+    signals = [
+        _signal_record(12, quality_ind=4, cn0_dbhz=25, raw_sig_flags=0),
+        _signal_record(13, quality_ind=7, cn0_dbhz=29, raw_sig_flags=0),
+    ]
+    assert store.update_signal_chunk(GnssSignalReport(
+        1, GNSS_SOURCE_MG902, 5001, 2, 0, 1, 2, 0, signals,
+    ))
+
+    widget = GnssWidget(store, playback=True)
+    widget.resize(1200, 800)
+    widget.show()
+    widget.refresh()
+    qapp.processEvents()
+    assert widget._history_slider.maximum() == 1
+    assert "卫星记录 1 · 可绘星 0 · 有效 CNR 2" in widget._stats.text()
+    assert len(widget._bars._bars) == 2
+    assert widget._sky._hit_points == []
+    assert widget._sky._empty_text == "已收到 1 条卫星记录\n方位/仰角尚未有效"
+    assert widget._table.item(0, 8).text() == "LOCK"
+    assert widget._table.item(1, 8).text() == "LOCK"
+    widget.close()
+
+
+def _set_long_gnss_header(widget: GnssWidget) -> None:
+    """使用真机截图同量级的状态摘要触发响应式排版。"""
+    widget._timer.stop()
+    widget._source_badge.setText("SOURCE: MG902")
+    widget._stats.setText(
+        "卫星记录 25 · 可绘星 20 · 有效 CNR 8 · 平均 30.2 / 最大 37 dB-Hz · "
+        "Sky 0.8s · Signal 0.8s"
+    )
+    widget._fit_info_font()
+
+
+def _assert_filter_geometry(widget: GnssWidget) -> None:
+    checkboxes = [*widget._system_checks.values(), widget._cn0_color]
+    host_rect = widget._filters_host.rect()
+    for checkbox in checkboxes:
+        assert checkbox.geometry().width() >= checkbox.sizeHint().width()
+        assert host_rect.contains(checkbox.geometry())
+    for index, checkbox in enumerate(checkboxes):
+        for other in checkboxes[index + 1:]:
+            assert not checkbox.geometry().intersects(other.geometry())
+
+
+def test_gnss_header_reflows_without_clipping_under_real_qss(qapp, real_light_qss) -> None:
+    widget = GnssWidget(GnssStore())
+    widget.set_theme("light", "small")
+    _set_long_gnss_header(widget)
+    widget.show()
+
+    row_counts = {}
+    font_sizes = {}
+    for width in (1024, 800, 520):
+        widget.resize(width, 700)
+        qapp.processEvents()
+        widget._fit_info_font()
+        qapp.processEvents()
+        assert widget.width() == width
+        _assert_filter_geometry(widget)
+        assert not widget._filters_host.geometry().intersects(widget._info_row.geometry())
+        assert not widget._source_badge.geometry().intersects(widget._stats.geometry())
+        assert widget._stats.wordWrap()
+        assert widget._stats.font().pixelSize() >= 10
+        row_counts[width] = len({
+            checkbox.geometry().y()
+            for checkbox in (*widget._system_checks.values(), widget._cn0_color)
+        })
+        font_sizes[width] = widget._stats.font().pixelSize()
+
+    assert row_counts[1024] == 1
+    assert row_counts[800] == 1
+    assert row_counts[520] > 1
+    assert widget._filters_host.height() == widget._filters_host.heightForWidth(
+        widget._filters_host.width()
+    )
+    assert font_sizes[1024] == 12
+    assert 10 <= font_sizes[520] <= font_sizes[800] <= font_sizes[1024]
+    assert widget._stats.height() > widget._stats.fontMetrics().height()
+
+    widget.resize(1024, 700)
+    qapp.processEvents()
+    assert widget._stats.font().pixelSize() == 12
+    widget.set_theme("light", "medium")
+    qapp.processEvents()
+    assert widget._system_checks[0].font().pixelSize() == 14
+    assert widget._stats.font().pixelSize() == 14
+    _assert_filter_geometry(widget)
+    widget.set_theme("light", "small")
+    qapp.processEvents()
+    assert widget._system_checks[0].font().pixelSize() == 12
+    assert widget._stats.font().pixelSize() == 12
+    _assert_filter_geometry(widget)
+    widget.close()
+
+
+def test_gnss_playback_keeps_history_row_with_responsive_header(qapp, real_light_qss) -> None:
+    store = GnssStore(keep_history=True)
+    store.update_sky(GnssSkyReport(
+        version=1,
+        timestamp=100,
+        talker="GP",
+        total_visible=1,
+        flags=0,
+        satellites=[GnssSkySatellite(11, 40, 83, 38, 7)],
+    ))
+    store.update_cnr_chunk(GnssCnrReport(1, 101, 1, 0, 1, 1, 0, [_observation(0)]))
+    widget = GnssWidget(store, playback=True)
+    widget.set_theme("light", "small")
+    _set_long_gnss_header(widget)
+    widget.resize(520, 700)
+    widget.show()
+    qapp.processEvents()
+
+    _assert_filter_geometry(widget)
+    assert widget._history_row.isVisible()
+    assert widget._history_row.geometry().height() > 0
+    assert widget._history_row.geometry().top() > widget._info_row.geometry().bottom()
+    assert widget._history_slider.isVisible()
+    assert widget._history_slider.maximum() == 1
+    assert widget._prev.isVisible()
+    assert widget._next.isVisible()
     widget.close()
 
 

@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QTableWidget,
@@ -37,10 +38,13 @@ from satellite_debug_tool.core.data.gnss_store import (
     satellite_label,
     signal_band,
     signal_name,
+    signal_record_cnr_valid,
+    signal_record_locked,
     signal_record_used,
 )
-from satellite_debug_tool.core.protocol import GnssCnrObservation, GnssSignalRecord
+from satellite_debug_tool.core.protocol import GnssCnrObservation, GnssSatRecord, GnssSignalRecord
 from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.ui.flow_layout import FlowLayout
 
 
 SYSTEM_COLORS = {
@@ -66,6 +70,15 @@ _BAND_ORDER = {
     "L5": 2, "E5b": 2, "B3": 2,
     "E6": 3, "E5 AltBOC": 4,
 }
+CN0_COLOR_MIN_DBHZ = 20
+CN0_COLOR_MAX_DBHZ = 51
+CN0_UNKNOWN_COLOR = "#94A3B8"
+CN0_LEGEND_TICKS = (
+    (CN0_COLOR_MAX_DBHZ, "≥51 强"),
+    (40, "40"),
+    (30, "30"),
+    (CN0_COLOR_MIN_DBHZ, "≤20 弱"),
+)
 
 
 @dataclass(frozen=True)
@@ -96,10 +109,10 @@ def build_frequency_bars(
         )
     if snapshot.signal is not None:
         entries.extend(
-            (item, signal_record_used(item), item.system, item.sv_id, item.raw_signal_id)
+            (item, signal_record_cnr_valid(item), item.system, item.sv_id, item.raw_signal_id)
             for item in snapshot.signal.records
         )
-    for observation, _used, system, prn, signal_id in entries:
+    for observation, _locked, system, prn, signal_id in entries:
         if enabled_systems is not None and system not in enabled_systems:
             continue
         key = (system, prn, signal_band(system, signal_id, snapshot.signal_namespace))
@@ -110,7 +123,7 @@ def build_frequency_bars(
         locked = [
             observation for observation in details
             if (observation_locked(observation) if isinstance(observation, GnssCnrObservation)
-                else signal_record_used(observation))
+                else signal_record_cnr_valid(observation))
         ]
         if not locked:
             continue
@@ -133,8 +146,45 @@ def sky_point(center: QPointF, radius: float, elevation_deg: float, azimuth_deg:
     return QPointF(center.x() + radial * math.sin(azimuth), center.y() - radial * math.cos(azimuth))
 
 
+def sky_geometry_valid(elevation_deg: int, azimuth_deg: int) -> bool:
+    """只有地平线及以上、方位角有效的卫星位置才能投影到天空图。"""
+    return 0 <= elevation_deg <= 90 and 0 <= azimuth_deg <= 360
+
+
+def nav_sat_position_valid(record: GnssSatRecord) -> bool:
+    """判断一条 NAV-SAT 记录是否具备可绘制的天空位置。"""
+    return sky_geometry_valid(record.elevation_deg, record.azimuth_deg)
+
+
+def satellite_record_counts(snapshot: GnssSnapshot, systems: Set[int]) -> Tuple[int, int]:
+    """返回当前筛选下的（卫星记录数，可绘制天空位置数）。"""
+    record_count = 0
+    drawable_count = 0
+    for talker, report in snapshot.sky_by_talker.items():
+        for satellite in report.satellites:
+            if infer_sky_system(talker, satellite.prn) not in systems:
+                continue
+            record_count += 1
+            if (
+                (satellite.valid_flags & 0x03) == 0x03
+                and sky_geometry_valid(satellite.elevation_deg, satellite.azimuth_deg)
+            ):
+                drawable_count += 1
+    if snapshot.sat is not None:
+        for record in snapshot.sat.records:
+            if record.system not in systems:
+                continue
+            record_count += 1
+            if nav_sat_position_valid(record):
+                drawable_count += 1
+    return record_count, drawable_count
+
+
 def _cn0_color(cn0: int) -> QColor:
-    ratio = max(0.0, min(1.0, (cn0 - 20.0) / 31.0))
+    ratio = max(
+        0.0,
+        min(1.0, (cn0 - CN0_COLOR_MIN_DBHZ) / (CN0_COLOR_MAX_DBHZ - CN0_COLOR_MIN_DBHZ)),
+    )
     return QColor.fromRgbF(1.0 - ratio, 0.35 + 0.55 * ratio, 0.18)
 
 
@@ -148,18 +198,148 @@ class SkyPlotWidget(QWidget):
         self._cn0_coloring = False
         self._stale = False
         self._dark = True
+        self._scale = "small"
+        self._legend_font_px = 10
         self._hit_points: List[Tuple[QPointF, str]] = []
+        self._record_count = 0
+        self._drawable_count = 0
+        self._empty_text = ""
+        self.set_theme(True, "small")
 
     def set_data(self, snapshot: GnssSnapshot, systems: Set[int], cn0_coloring: bool, stale: bool) -> None:
         self._snapshot = snapshot
         self._systems = set(systems)
         self._cn0_coloring = cn0_coloring
         self._stale = stale
+        self._record_count, self._drawable_count = satellite_record_counts(snapshot, self._systems)
+        self._empty_text = (
+            f"已收到 {self._record_count} 条卫星记录\n方位/仰角尚未有效"
+            if self._record_count > 0 and self._drawable_count == 0
+            else ""
+        )
+        self.update()
+
+    def set_theme(self, dark: bool, scale: str) -> None:
+        self._dark = dark
+        self._scale = scale
+        self._legend_font_px = max(9, S.font_px(10, scale))
         self.update()
 
     def set_dark_theme(self, dark: bool) -> None:
-        self._dark = dark
-        self.update()
+        self.set_theme(dark, self._scale)
+
+    def plot_geometry(self) -> Tuple[QPointF, float]:
+        """返回天空圆的中心和半径；C/N₀ overlay 不得改变这两个值。"""
+        margin = 34.0
+        radius = max(10.0, min(self.width(), self.height()) / 2.0 - margin)
+        return QPointF(self.width() / 2.0, self.height() / 2.0), radius
+
+    def cn0_legend_layout(self) -> Tuple[QFont, QRectF, QRectF]:
+        """选择不碰天空圆保护区的最大字号，并返回 font/card/gradient。"""
+        center, radius = self.plot_geometry()
+        fallback = None
+        for pixel_size in range(self._legend_font_px, 7, -1):
+            font = self.font()
+            font.setPixelSize(pixel_size)
+            metrics = QFontMetrics(font)
+            line_height = float(metrics.height())
+            unknown_box = max(6.0, min(8.0, line_height - 3.0))
+            tick_width = max(metrics.horizontalAdvance(label) for _, label in CN0_LEGEND_TICKS)
+            title_row_width = (
+                metrics.horizontalAdvance("C/N₀")
+                + 2.0
+                + unknown_box
+                + 2.0
+                + metrics.horizontalAdvance("无")
+            )
+            card_width = max(46.0, title_row_width + 6.0, 18.0 + tick_width)
+            gradient_height = max(44.0, line_height * 4.0)
+            card_height = line_height + gradient_height + 9.0
+            card = QRectF(6.0, 6.0, card_width, card_height)
+            gradient = QRectF(
+                card.left() + 5.0,
+                card.top() + line_height + 3.0,
+                7.0,
+                gradient_height,
+            )
+            fallback = (font, card, gradient)
+            if (
+                card.right() < center.x()
+                and card.bottom() < center.y()
+                and math.hypot(center.x() - card.right(), center.y() - card.bottom()) >= radius + 12.0
+            ):
+                return fallback
+        assert fallback is not None
+        return fallback
+
+    def cn0_legend_geometry(self) -> Tuple[QRectF, QRectF]:
+        """返回画布内 overlay 卡片和色带区域，不参与任何 Qt layout。"""
+        _, card, gradient = self.cn0_legend_layout()
+        return card, gradient
+
+    def _paint_cn0_legend(self, painter: QPainter) -> None:
+        legend_font, card, gradient_rect = self.cn0_legend_layout()
+        palette = S.palette("dark" if self._dark else "light")
+        card_bg = QColor("#0B1220" if self._dark else "#FFFFFF")
+        card_bg.setAlpha(218)
+        fg = QColor(palette["text"])
+        border = QColor(palette["border_2"])
+        painter.save()
+        # 图例是固定比例尺，即使卫星数据 stale 也保持原始色彩，不继承数据层的淡化透明度。
+        painter.setOpacity(1.0)
+        painter.setPen(QPen(border, 1.0))
+        painter.setBrush(card_bg)
+        painter.drawRoundedRect(card, 4.0, 4.0)
+        painter.setBrush(Qt.NoBrush)
+        painter.setFont(legend_font)
+        metrics = QFontMetrics(legend_font)
+        line_height = float(metrics.height())
+
+        painter.setPen(fg)
+        title_width = metrics.horizontalAdvance("C/N₀")
+        painter.drawText(
+            QRectF(card.left() + 3.0, card.top(), title_width, line_height),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            "C/N₀",
+        )
+        unknown_box = max(6.0, min(8.0, line_height - 3.0))
+        unknown_x = card.left() + 5.0 + title_width
+        unknown_y = card.top() + (line_height - unknown_box) / 2.0
+        painter.fillRect(QRectF(unknown_x, unknown_y, unknown_box, unknown_box), QColor(CN0_UNKNOWN_COLOR))
+        painter.drawText(
+            QRectF(unknown_x + unknown_box + 2.0, card.top(), card.right() - unknown_x - unknown_box - 3.0, line_height),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            "无",
+        )
+
+        gradient = QLinearGradient(0.0, gradient_rect.top(), 0.0, gradient_rect.bottom())
+        gradient.setColorAt(0.0, _cn0_color(CN0_COLOR_MAX_DBHZ))
+        gradient.setColorAt(1.0, _cn0_color(CN0_COLOR_MIN_DBHZ))
+        painter.fillRect(gradient_rect, QBrush(gradient))
+        painter.setPen(QPen(border, 1.0))
+        painter.drawRect(gradient_rect)
+
+        painter.setPen(fg)
+        for value, label in CN0_LEGEND_TICKS:
+            ratio = (CN0_COLOR_MAX_DBHZ - value) / (CN0_COLOR_MAX_DBHZ - CN0_COLOR_MIN_DBHZ)
+            y = gradient_rect.top() + gradient_rect.height() * ratio
+            label_rect = QRectF(
+                gradient_rect.right() + 4.0,
+                y - line_height / 2.0,
+                max(1.0, card.right() - gradient_rect.right() - 6.0),
+                line_height,
+            )
+            if value == CN0_COLOR_MAX_DBHZ:
+                label_rect.moveTop(gradient_rect.top())
+                alignment = Qt.AlignLeft | Qt.AlignTop
+            elif value == CN0_COLOR_MIN_DBHZ:
+                label_rect.moveBottom(gradient_rect.bottom())
+                alignment = Qt.AlignLeft | Qt.AlignBottom
+            else:
+                alignment = Qt.AlignLeft | Qt.AlignVCenter
+            painter.drawText(label_rect, alignment, label)
+
+        painter.restore()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -170,9 +350,7 @@ class SkyPlotWidget(QWidget):
         if self._stale:
             painter.setOpacity(0.38)
         painter.fillRect(self.rect(), bg)
-        margin = 34.0
-        radius = max(10.0, min(self.width(), self.height()) / 2.0 - margin)
-        center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        center, radius = self.plot_geometry()
         painter.setPen(QPen(grid, 1.0))
         for elevation in (0, 30, 60):
             ring = radius * (90 - elevation) / 90.0
@@ -184,6 +362,8 @@ class SkyPlotWidget(QWidget):
         painter.drawText(QRectF(center.x() + radius + 5, center.y() - 9, 20, 18), Qt.AlignCenter, "E")
         painter.drawText(QRectF(center.x() - 10, center.y() + radius + 5, 20, 18), Qt.AlignCenter, "S")
         painter.drawText(QRectF(center.x() - radius - 25, center.y() - 9, 20, 18), Qt.AlignCenter, "W")
+        if self._cn0_coloring:
+            self._paint_cn0_legend(painter)
 
         cn0_by_satellite: Dict[Tuple[int, int], int] = {}
         if self._snapshot.cnr is not None:
@@ -195,7 +375,10 @@ class SkyPlotWidget(QWidget):
         sky_rows: List[Tuple[int, int, int, int, Optional[int], str]] = []
         for talker, report in self._snapshot.sky_by_talker.items():
             for satellite in report.satellites:
-                if (satellite.valid_flags & 0x03) != 0x03:
+                if (
+                    (satellite.valid_flags & 0x03) != 0x03
+                    or not sky_geometry_valid(satellite.elevation_deg, satellite.azimuth_deg)
+                ):
                     continue
                 system = infer_sky_system(talker, satellite.prn)
                 cn0 = satellite.snr if satellite.valid_flags & 0x04 else None
@@ -205,6 +388,8 @@ class SkyPlotWidget(QWidget):
                 ))
         if self._snapshot.sat is not None:
             for satellite in self._snapshot.sat.records:
+                if not nav_sat_position_valid(satellite):
+                    continue
                 sky_rows.append((
                     satellite.system, satellite.sv_id, satellite.elevation_deg,
                     satellite.azimuth_deg, satellite.cn0_dbhz,
@@ -218,19 +403,30 @@ class SkyPlotWidget(QWidget):
             point = sky_point(center, radius, elevation, azimuth)
             cn0 = cn0_by_satellite.get((system, sv_id), native_cn0)
             if self._cn0_coloring:
-                color = _cn0_color(cn0) if cn0 is not None else QColor("#94A3B8")
+                color = _cn0_color(cn0) if cn0 is not None else QColor(CN0_UNKNOWN_COLOR)
             else:
-                color = QColor(SYSTEM_COLORS.get(system, "#94A3B8"))
+                color = QColor(SYSTEM_COLORS.get(system, CN0_UNKNOWN_COLOR))
             painter.setPen(QPen(bg, 1.0))
             painter.setBrush(color)
             painter.drawEllipse(point, 10.0, 10.0)
             painter.setPen(QColor("#FFFFFF"))
             painter.drawText(QRectF(point.x() - 13, point.y() - 8, 26, 16), Qt.AlignCenter, str(sv_id))
+            cn0_label = "着色 C/N₀" if self._cn0_coloring else "C/N₀"
+            cn0_detail = f"{cn0_label}={cn0 if cn0 is not None else '—'} dB-Hz"
+            if native_cn0 is not None and cn0 != native_cn0:
+                cn0_detail += f" · 卫星记录 C/N₀={native_cn0} dB-Hz"
             self._hit_points.append((
                 point,
                 f"{satellite_label(system, sv_id)} · elev={elevation}° · az={azimuth}° · "
-                f"C/N₀={native_cn0 if native_cn0 is not None else '—'} dB-Hz\n{raw_detail}",
+                f"{cn0_detail}\n{raw_detail}",
             ))
+        if self._empty_text:
+            painter.setPen(fg)
+            painter.drawText(
+                QRectF(center.x() - radius, center.y() - 30, radius * 2, 60),
+                Qt.AlignCenter,
+                self._empty_text,
+            )
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         point = event.position()
@@ -238,6 +434,11 @@ class SkyPlotWidget(QWidget):
             if abs(point.x() - center.x()) <= 12 and abs(point.y() - center.y()) <= 12:
                 self.setToolTip(detail)
                 return
+        if self._cn0_coloring and self.cn0_legend_geometry()[0].contains(point):
+            self.setToolTip(
+                "天空图连续 C/N₀ 色带：≤20 dB-Hz 为弱端，≥51 dB-Hz 为强端；灰色表示无 C/N₀ 数据。"
+            )
+            return
         self.setToolTip("")
 
 
@@ -250,12 +451,31 @@ class CnrBarWidget(QWidget):
         self._hit_rects: List[Tuple[QRectF, FrequencyBar]] = []
         self._stale = False
         self._dark = True
+        self._signal_record_count = 0
+        self._locked_signal_count = 0
+        self._empty_text = "等待接收机逐信号 C/N₀ 数据"
 
-    def set_data(self, bars: Sequence[FrequencyBar], stale: bool) -> None:
+    def set_data(
+        self,
+        bars: Sequence[FrequencyBar],
+        stale: bool,
+        signal_record_count: int = 0,
+        locked_signal_count: int = 0,
+    ) -> None:
         self._bars = list(bars)
         groups = len({(bar.system, bar.prn) for bar in bars})
         self.setMinimumWidth(max(420, groups * 92))
         self._stale = stale
+        self._signal_record_count = signal_record_count
+        self._locked_signal_count = locked_signal_count
+        if self._bars:
+            self._empty_text = ""
+        elif self._locked_signal_count > 0:
+            self._empty_text = "已有锁定信号，但暂无有效 C/N₀"
+        elif self._signal_record_count > 0:
+            self._empty_text = "已收到逐信号数据，暂无锁定信号"
+        else:
+            self._empty_text = "等待接收机逐信号 C/N₀ 数据"
         self.update()
 
     def set_dark_theme(self, dark: bool) -> None:
@@ -287,7 +507,7 @@ class CnrBarWidget(QWidget):
         self._hit_rects.clear()
         if not grouped:
             painter.setPen(fg)
-            painter.drawText(chart, Qt.AlignCenter, "等待接收机逐信号 C/N₀ 数据")
+            painter.drawText(chart, Qt.AlignCenter, self._empty_text)
             return
         group_width = chart.width() / len(grouped)
         for group_index, ((system, prn), bars) in enumerate(grouped.items()):
@@ -320,6 +540,24 @@ class CnrBarWidget(QWidget):
         self.setToolTip("")
 
 
+class _FilterFlowHost(QWidget):
+    """GNSS 筛选项的 HeightForWidth 宿主，确保换行高度反馈给父布局。"""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.flow = FlowLayout(self, margin=0, h_spacing=6, v_spacing=4)
+        size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        size_policy.setHeightForWidth(True)
+        self.setSizePolicy(size_policy)
+        self.setMinimumWidth(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 (Qt API)
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self.flow.heightForWidth(width)
+
+
 class GnssWidget(QWidget):
     """共享 GNSS 浮窗组件；Playback 模式额外显示历史快照控制。"""
 
@@ -328,10 +566,14 @@ class GnssWidget(QWidget):
         self._store = store
         self._playback = playback
         self._theme = "dark"
+        self._scale = "small"
         self._selected_history: Optional[int] = None
         self._follow_latest = True
         self._system_checks: Dict[int, QCheckBox] = {}
+        self._info_font_px: Optional[int] = None
+        self._info_font_candidates: Tuple[int, ...] = (12, 11, 10)
         self._setup_ui()
+        self._apply_filter_font()
         self._store.changed.connect(self.refresh)
         self._store.cleared.connect(self._on_store_cleared)
         self._timer = QTimer(self)
@@ -349,22 +591,39 @@ class GnssWidget(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(5)
-        controls = QHBoxLayout()
+
+        self._filters_host = _FilterFlowHost()
         for system, name in SYSTEM_NAMES.items():
             checkbox = QCheckBox(name)
             checkbox.setChecked(system != 7)
+            checkbox.setAttribute(Qt.WA_LayoutUsesWidgetRect, True)
             checkbox.toggled.connect(self.refresh)
             self._system_checks[system] = checkbox
-            controls.addWidget(checkbox)
+            self._filters_host.flow.addWidget(checkbox)
         self._cn0_color = QCheckBox("天空图按 C/N₀ 着色")
+        self._cn0_color.setAttribute(Qt.WA_LayoutUsesWidgetRect, True)
         self._cn0_color.toggled.connect(self.refresh)
-        controls.addWidget(self._cn0_color)
-        controls.addStretch(1)
+        self._filters_host.flow.addWidget(self._cn0_color)
+        root.addWidget(self._filters_host)
+
+        self._info_row = QWidget()
+        self._info_layout = QHBoxLayout(self._info_row)
+        self._info_layout.setContentsMargins(0, 0, 0, 0)
+        self._info_layout.setSpacing(8)
         self._source_badge = QLabel("SOURCE: —")
-        controls.addWidget(self._source_badge)
+        self._source_badge.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self._source_badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self._info_layout.addWidget(self._source_badge)
         self._stats = QLabel("等待 GNSS 数据")
-        controls.addWidget(self._stats)
-        root.addLayout(controls)
+        self._stats.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self._stats.setWordWrap(True)
+        self._stats.setMinimumWidth(0)
+        self._stats.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._info_layout.addWidget(self._stats, 1)
+        info_size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        info_size_policy.setHeightForWidth(True)
+        self._info_row.setSizePolicy(info_size_policy)
+        root.addWidget(self._info_row)
 
         self._history_row = QWidget()
         history_layout = QHBoxLayout(self._history_row)
@@ -409,7 +668,7 @@ class GnssWidget(QWidget):
         self._table = QTableWidget(0, 13)
         self._table.setHorizontalHeaderLabels([
             "来源", "系统", "卫星", "频段", "Signal", "Raw ID", "C/N₀", "Quality/Tracking",
-            "Used/Lock", "Freq/GLO", "Corr", "Residual", "Raw Flags",
+            "Lock / Used", "Freq/GLO", "Corr", "Residual", "Raw Flags",
         ])
         self._table.setVisible(False)
         root.addWidget(self._table)
@@ -420,6 +679,47 @@ class GnssWidget(QWidget):
 
     def _enabled_systems(self) -> Set[int]:
         return {system for system, checkbox in self._system_checks.items() if checkbox.isChecked()}
+
+    def _apply_filter_font(self) -> None:
+        """筛选项保持主题字号，不参与窄屏降档，空间不足时交给 FlowLayout 换行。"""
+        pixel_size = S.font_px(12, self._scale)
+        for checkbox in (*self._system_checks.values(), self._cn0_color):
+            checkbox.setStyleSheet(f"QCheckBox {{ font-size: {pixel_size}px; }}")
+            checkbox.updateGeometry()
+        self._filters_host.flow.invalidate()
+        self._filters_host.updateGeometry()
+
+    def _available_header_width(self) -> int:
+        margins = self.layout().contentsMargins()
+        return max(0, self.width() - margins.left() - margins.right())
+
+    def _fit_info_font(self) -> None:
+        """信息行按完整文本宽度选择字号；最小档仍放不下时由 QLabel 自动换行。"""
+        available = self._available_header_width()
+        if available <= 0:
+            return
+        selected = self._info_font_candidates[-1]
+        spacing = self._info_layout.spacing()
+        for candidate in self._info_font_candidates:
+            source_font = self._source_badge.font()
+            source_font.setPixelSize(candidate)
+            stats_font = self._stats.font()
+            stats_font.setPixelSize(candidate)
+            required = (
+                QFontMetrics(source_font).horizontalAdvance(self._source_badge.text())
+                + QFontMetrics(stats_font).horizontalAdvance(self._stats.text())
+                + spacing
+            )
+            if required <= available:
+                selected = candidate
+                break
+        if selected == self._info_font_px:
+            return
+        self._info_font_px = selected
+        for label in (self._source_badge, self._stats):
+            label.setStyleSheet(f"font-size: {selected}px; background: transparent;")
+            label.updateGeometry()
+        self._info_row.updateGeometry()
 
     def _current_snapshot(self) -> GnssSnapshot:
         history = self._store.history()
@@ -465,16 +765,27 @@ class GnssWidget(QWidget):
         sky_stale = not self._playback and self._store.sky_is_stale(3.0)
         signal_stale = not self._playback and self._store.signal_is_stale(3.0)
         bars = build_frequency_bars(snapshot, systems)
-        self._sky.set_data(snapshot, systems, self._cn0_color.isChecked(), sky_stale)
-        self._bars.set_data(bars, signal_stale)
-        visible = sum(
-            1
-            for talker, report in snapshot.sky_by_talker.items()
-            for satellite in report.satellites
-            if infer_sky_system(talker, satellite.prn) in systems
+        signal_record_count = (
+            sum(1 for item in snapshot.cnr.observations if item.system in systems)
+            if snapshot.cnr is not None else 0
         )
-        if snapshot.sat is not None:
-            visible += sum(1 for item in snapshot.sat.records if item.system in systems)
+        if snapshot.signal is not None:
+            signal_record_count += sum(1 for item in snapshot.signal.records if item.system in systems)
+        locked_signal_count = (
+            sum(
+                1 for item in snapshot.cnr.observations
+                if item.system in systems and observation_locked(item)
+            )
+            if snapshot.cnr is not None else 0
+        )
+        if snapshot.signal is not None:
+            locked_signal_count += sum(
+                1 for item in snapshot.signal.records
+                if item.system in systems and signal_record_locked(item)
+            )
+        self._sky.set_data(snapshot, systems, self._cn0_color.isChecked(), sky_stale)
+        self._bars.set_data(bars, signal_stale, signal_record_count, locked_signal_count)
+        satellite_records, drawable_satellites = satellite_record_counts(snapshot, systems)
         locked = [] if snapshot.cnr is None else [
             observation.cn0_dbhz
             for observation in snapshot.cnr.observations
@@ -483,7 +794,7 @@ class GnssWidget(QWidget):
         if snapshot.signal is not None:
             locked.extend(
                 item.cn0_dbhz for item in snapshot.signal.records
-                if item.system in systems and signal_record_used(item)
+                if item.system in systems and signal_record_cnr_valid(item)
             )
         sky_age = self._store.sky_age_s()
         signal_age = self._store.signal_age_s()
@@ -496,11 +807,15 @@ class GnssWidget(QWidget):
         )
         self._source_badge.setText(f"SOURCE: {SOURCE_NAMES.get(snapshot.source, snapshot.source)}")
         self._stats.setText(
-            f"可见星 {visible} · 有效 CNR {len(locked)} · "
+            f"卫星记录 {satellite_records} · 可绘星 {drawable_satellites} · 有效 CNR {len(locked)} · "
             f"平均 {sum(locked) / len(locked):.1f} / 最大 {max(locked):.0f} dB-Hz · "
             f"{sky_state} · {signal_state}"
-            if locked else f"可见星 {visible} · 有效 CNR 0 · {sky_state} · {signal_state}"
+            if locked else (
+                f"卫星记录 {satellite_records} · 可绘星 {drawable_satellites} · "
+                f"有效 CNR 0 · {sky_state} · {signal_state}"
+            )
         )
+        self._fit_info_font()
         bands = sorted({bar.band for bar in bars}, key=lambda band: (_BAND_ORDER.get(band, 99), band))
         legend_items = [
             f'<span style="color:{BAND_COLORS.get(band, "#94A3B8")}">■</span> {band}'
@@ -531,12 +846,18 @@ class GnssWidget(QWidget):
                     satellite_label(observation.system, prn),
                     signal_band(observation.system, signal_id, snapshot.signal_namespace),
                     signal_name(observation.system, signal_id, snapshot.signal_namespace), str(signal_id),
-                    str(observation.cn0_dbhz), str(observation.tracking_state), f"0x{flags:02X}",
+                    str(observation.cn0_dbhz), str(observation.tracking_state),
+                    "LOCK" if observation_locked(observation) else "",
                     str(observation.glo_freq_channel) if observation.system == 1 else "—",
                     "—", "—", f"lock=0x{flags:02X}",
                 ]
             else:
                 flags = observation.raw_sig_flags
+                lock_used = []
+                if signal_record_locked(observation):
+                    lock_used.append("LOCK")
+                if signal_record_used(observation):
+                    lock_used.append("USED")
                 values = [
                     f"{SOURCE_NAMES.get(snapshot.source, snapshot.source)}/{snapshot.signal_namespace}",
                     SYSTEM_NAMES.get(observation.system, "Other"),
@@ -544,7 +865,7 @@ class GnssWidget(QWidget):
                     signal_band(observation.system, signal_id, snapshot.signal_namespace),
                     signal_name(observation.system, signal_id, snapshot.signal_namespace), str(signal_id),
                     str(observation.cn0_dbhz), str(observation.quality_ind),
-                    "USED" if signal_record_used(observation) else "",
+                    " / ".join(lock_used),
                     str(observation.freq_id) if observation.system == 1 and observation.freq_id != -128 else "—",
                     str(observation.corr_source), f"{observation.pr_res_0p1m / 10.0:.1f} m",
                     f"0x{flags:04X} iono={observation.iono_model}",
@@ -552,10 +873,21 @@ class GnssWidget(QWidget):
             for column, value in enumerate(values):
                 self._table.setItem(row, column, QTableWidgetItem(value))
 
-    def set_theme(self, theme: str, _scale: str = "small") -> None:
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        self._fit_info_font()
+
+    def set_theme(self, theme: str, scale: str = "small") -> None:
         self._theme = theme
+        self._scale = scale
         dark = theme != "light"
-        self._sky.set_dark_theme(dark)
+        self._sky.set_theme(dark, scale)
         self._bars.set_dark_theme(dark)
         palette = S.palette(theme)
         self.setStyleSheet(f"GnssWidget {{ background: {palette['bg']}; color: {palette['text']}; }}")
+        self._info_font_candidates = tuple(dict.fromkeys(
+            max(10, S.font_px(base, scale)) for base in (12, 11, 10)
+        ))
+        self._info_font_px = None
+        self._apply_filter_font()
+        self._fit_info_font()

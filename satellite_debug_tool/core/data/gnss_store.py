@@ -111,6 +111,16 @@ def signal_record_used(record: GnssSignalRecord) -> bool:
     return bool(record.raw_sig_flags & ((1 << 3) | (1 << 4) | (1 << 5)))
 
 
+def signal_record_locked(record: GnssSignalRecord) -> bool:
+    """MG902 qualityInd=4..7 表示信号已锁定，不等价于参与导航解算。"""
+    return 4 <= record.quality_ind <= 7
+
+
+def signal_record_cnr_valid(record: GnssSignalRecord) -> bool:
+    """MG902 信号已锁定且 C/N₀ 为正时，载噪比可用于统计和绘图。"""
+    return signal_record_locked(record) and record.cn0_dbhz > 0
+
+
 def infer_sky_system(talker: str, prn: int) -> int:
     normalized = talker.upper()
     if normalized == "GP":
