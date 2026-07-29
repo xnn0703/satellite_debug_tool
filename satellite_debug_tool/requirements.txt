@@ -8,3 +8,4 @@ PyOpenGL>=3.1   # pyqtgraph.opengl 3D 姿态显示用
 # M11 自动升级
 py7zr>=0.20    # 7z 分卷解压（updater）
 psutil>=5.9    # updater 等主进程退出
+certifi>=2024.2  # updater HTTPS CA bundle（跨平台）

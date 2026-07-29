@@ -25,6 +25,7 @@ from typing import Callable, List, Optional
 
 from satellite_debug_tool.updater.checker import Asset
 from satellite_debug_tool.updater.errors import UpdaterError
+from satellite_debug_tool.updater.network import build_https_opener
 
 
 class DownloadError(UpdaterError):
@@ -89,6 +90,7 @@ class Downloader:
         total_bytes = sum(a.size for a in assets if a.size > 0)
         done_bytes = 0
         results: List[Path] = []
+        active_opener = opener or build_https_opener()
 
         for asset in assets:
             if cancel_event is not None and cancel_event.is_set():
@@ -100,7 +102,7 @@ class Downloader:
                 total_bytes=total_bytes,
                 on_progress=on_progress,
                 cancel_event=cancel_event,
-                opener=opener,
+                opener=active_opener,
             )
             results.append(r.path)
             done_bytes += r.bytes_written
@@ -117,7 +119,7 @@ class Downloader:
         total_bytes: int,
         on_progress: Optional[ProgressCallback],
         cancel_event: Optional[Event],
-        opener: Optional[urllib.request.OpenerDirector],
+        opener: urllib.request.OpenerDirector,
     ) -> _AssetResult:
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
@@ -164,7 +166,7 @@ class Downloader:
         total_bytes: int,
         on_progress: Optional[ProgressCallback],
         cancel_event: Optional[Event],
-        opener: Optional[urllib.request.OpenerDirector],
+        opener: urllib.request.OpenerDirector,
     ) -> int:
         """一次 HTTP GET + 流式写文件，返回写入字节数（不含已存在部分）。"""
         # 断点续传：dest 已存在 → 发 Range header
@@ -174,10 +176,7 @@ class Downloader:
             headers["Range"] = f"bytes={existing}-"
 
         req = urllib.request.Request(asset.url, headers=headers)
-        if opener is not None:
-            resp = opener.open(req, timeout=self._timeout)
-        else:
-            resp = urllib.request.urlopen(req, timeout=self._timeout)
+        resp = opener.open(req, timeout=self._timeout)
 
         with resp:
             status = getattr(resp, "status", None) or resp.getcode()

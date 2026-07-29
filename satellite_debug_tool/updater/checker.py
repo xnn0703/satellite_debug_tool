@@ -28,11 +28,13 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from satellite_debug_tool.updater.errors import UpdaterError
+from satellite_debug_tool.updater.network import build_https_opener
 
 
 # ---------- 异常 ----------
@@ -183,18 +185,18 @@ class ReleaseChecker:
 
         opener 仅用于单测注入 mock。任何 HTTP / 解析错误都抛 UpdateCheckError。
         """
+        active_opener = opener or build_https_opener()
         req = urllib.request.Request(
             self.latest_url,
             headers={"Accept": "application/json", "User-Agent": "satellite_debug_tool-updater"},
         )
         try:
-            if opener is not None:
-                resp = opener.open(req, timeout=self._timeout)
-            else:
-                resp = urllib.request.urlopen(req, timeout=self._timeout)
+            resp = active_opener.open(req, timeout=self._timeout)
             with resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
+            if e.code == 403 and self._is_github_api():
+                return self._fetch_github_latest_redirect(active_opener)
             raise UpdateCheckError(
                 "check_http_error",
                 str(e.reason),
@@ -234,4 +236,54 @@ class ReleaseChecker:
             body=str(data.get("body") or ""),
             html_url=str(data.get("html_url") or ""),
             assets=assets,
+        )
+
+    def _is_github_api(self) -> bool:
+        return urllib.parse.urlsplit(self._api_base).hostname == "api.github.com"
+
+    def _fetch_github_latest_redirect(
+        self,
+        opener: urllib.request.OpenerDirector,
+    ) -> LatestRelease:
+        """Resolve the latest tag without consuming GitHub API quota."""
+        owner = urllib.parse.quote(self._owner, safe="")
+        repo = urllib.parse.quote(self._repo, safe="")
+        latest_web_url = f"https://github.com/{owner}/{repo}/releases/latest"
+        req = urllib.request.Request(
+            latest_web_url,
+            headers={"User-Agent": "satellite_debug_tool-updater"},
+        )
+        try:
+            resp = opener.open(req, timeout=self._timeout)
+            with resp:
+                final_url = resp.geturl()
+        except urllib.error.HTTPError as e:
+            raise UpdateCheckError(
+                "check_http_error",
+                str(e.reason),
+                status=e.code,
+            ) from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise UpdateCheckError("check_network_error", str(e)) from e
+
+        match = re.search(
+            r"/releases/tag/([^/?#]+)$",
+            urllib.parse.urlsplit(final_url).path,
+        )
+        if match is None:
+            raise UpdateCheckError(
+                "check_response_format_error",
+                final_url,
+            )
+
+        tag = urllib.parse.unquote(match.group(1))
+        asset_name = f"satellite_debug_tool-win-{tag}.7z"
+        asset_url = (
+            f"https://github.com/{owner}/{repo}/releases/download/"
+            f"{urllib.parse.quote(tag, safe='')}/{urllib.parse.quote(asset_name, safe='')}"
+        )
+        return LatestRelease(
+            tag_name=tag,
+            html_url=final_url,
+            assets=[Asset(name=asset_name, url=asset_url)],
         )

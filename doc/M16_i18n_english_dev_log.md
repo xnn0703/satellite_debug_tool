@@ -86,5 +86,6 @@
 - 发布目标按现场决策收敛为 GitHub Release，Gitee 仅继续同步源码和 tag，不再承载发布资产。
 - Windows Release 改为单个 `.7z`，不再生成 30 MB 分卷。
 - updater 查询源切换为 GitHub API；单个 `.7z` 优先，同时保留旧 `.7z.001...N` 兼容路径。
+- GitHub API 遇到未认证配额 `403` 时，回退到 `/releases/latest` 重定向解析 tag；HTTPS 检查和下载统一使用 `certifi` CA。
 - `v1.0.1` 及更早版本仍只查询 Gitee，迁移到 `v1.1.0` 需要手动安装一次；后续版本恢复应用内升级。
 - 最终发布完成状态仍以 GitHub Actions 成功、Release 资产非空且可查询为准。

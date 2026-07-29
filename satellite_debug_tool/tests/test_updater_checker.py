@@ -142,6 +142,28 @@ class _FakeOpener:
         return resp
 
 
+class _RedirectResponse(io.BytesIO):
+    def __init__(self, url):
+        super().__init__(b"")
+        self._url = url
+
+    def geturl(self):
+        return self._url
+
+
+class _SequenceOpener:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.urls = []
+
+    def open(self, req, timeout=None):
+        self.urls.append(req.full_url)
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 class TestReleaseChecker:
     def _checker(self):
         return ReleaseChecker(owner="test", repo="repo", api_base="https://api.github.example")
@@ -210,6 +232,37 @@ class TestReleaseChecker:
         opener = _FakeOpener(raise_exc=err)
         with pytest.raises(UpdateCheckError):
             c.fetch_latest(opener=opener)
+
+    def test_github_rate_limit_falls_back_to_latest_redirect(self):
+        c = ReleaseChecker(owner="xnn0703", repo="satellite_debug_tool")
+        rate_limit = urllib.error.HTTPError(
+            c.latest_url,
+            403,
+            "rate limit exceeded",
+            {},
+            None,
+        )
+        opener = _SequenceOpener([
+            rate_limit,
+            _RedirectResponse(
+                "https://github.com/xnn0703/satellite_debug_tool/releases/tag/v1.1.0",
+            ),
+        ])
+
+        release = c.fetch_latest(opener=opener)
+
+        assert release.tag_name == "v1.1.0"
+        assert release.html_url.endswith("/releases/tag/v1.1.0")
+        assert [a.name for a in release.assets_for_platform("win")] == [
+            "satellite_debug_tool-win-v1.1.0.7z",
+        ]
+        assert release.assets[0].url.endswith(
+            "/releases/download/v1.1.0/satellite_debug_tool-win-v1.1.0.7z",
+        )
+        assert opener.urls == [
+            c.latest_url,
+            "https://github.com/xnn0703/satellite_debug_tool/releases/latest",
+        ]
 
     def test_bad_json_raises(self):
         c = self._checker()
