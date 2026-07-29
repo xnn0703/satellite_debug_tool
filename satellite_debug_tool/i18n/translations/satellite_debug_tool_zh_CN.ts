@@ -43,7 +43,7 @@
         <translation>配置默认目录、更新和语言</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="408"/>
+        <location filename="../../ui/main_window.py" line="415"/>
         <source>New version {latest} is available (current: v{current}). Use Check for updates to install it.</source>
         <translation>发现新版本 {latest}（当前 v{current}）。请使用“检查更新”进行安装。</translation>
     </message>
@@ -1838,7 +1838,7 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/update_dialog.py" line="226"/>
-        <location filename="../../ui/update_dialog.py" line="581"/>
+        <location filename="../../ui/update_dialog.py" line="580"/>
         <source>Current version: v{version}</source>
         <translation>当前版本：v{version}</translation>
     </message>
@@ -1920,26 +1920,30 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/update_dialog.py" line="439"/>
-        <source>Downloading {count} volume(s) ({version})...</source>
-        <translation>正在下载 {count} 个分卷（{version}）...</translation>
+        <source>Downloading update package ({version})...</source>
+        <translation>正在下载升级包（{version}）...</translation>
     </message>
     <message>
-        <location filename="../../ui/update_dialog.py" line="488"/>
+        <source>Downloading {count} volume(s) ({version})...</source>
+        <translation type="vanished">正在下载 {count} 个分卷（{version}）...</translation>
+    </message>
+    <message>
+        <location filename="../../ui/update_dialog.py" line="487"/>
         <source>Cancelling...</source>
         <translation>正在取消...</translation>
     </message>
     <message>
-        <location filename="../../ui/update_dialog.py" line="534"/>
+        <location filename="../../ui/update_dialog.py" line="533"/>
         <source>✅ Updater started; the application will exit...</source>
         <translation>✅ 升级器已启动，应用即将退出...</translation>
     </message>
     <message>
-        <location filename="../../ui/update_dialog.py" line="567"/>
+        <location filename="../../ui/update_dialog.py" line="566"/>
         <source>Update check failed: {detail}</source>
         <translation>检查更新失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/update_dialog.py" line="573"/>
+        <location filename="../../ui/update_dialog.py" line="572"/>
         <source>Download failed: {detail}</source>
         <translation>下载失败：{detail}</translation>
     </message>
@@ -2156,16 +2160,24 @@ Try again later or download it in a browser: {url}</source>
         <translation>发布包缺失，请稍后重试</translation>
     </message>
     <message>
-        <location filename="../../ui/update_dialog.py" line="503"/>
+        <location filename="../../ui/update_dialog.py" line="502"/>
+        <source>The install directory or updater executable was not found.
+Use a PyInstaller package or download and extract the archive manually.
+install_dir={install_dir}, updater={updater}</source>
+        <translation>源码模式无法执行应用内自动升级。
+请使用 PyInstaller 安装包，或手动下载并解压压缩包。
+install_dir={install_dir}, updater={updater}</translation>
+    </message>
+    <message>
         <source>The install directory or updater executable was not found.
 Use a PyInstaller package or download and extract the volumes manually.
 install_dir={install_dir}, updater={updater}</source>
-        <translation>源码模式无法执行应用内自动升级。
+        <translation type="vanished">源码模式无法执行应用内自动升级。
 请使用 PyInstaller 安装包，或手动下载并解压全部分卷。
 install_dir={install_dir}, updater={updater}</translation>
     </message>
     <message>
-        <location filename="../../ui/update_dialog.py" line="530"/>
+        <location filename="../../ui/update_dialog.py" line="529"/>
         <source>Failed to start updater: {detail}</source>
         <translation>启动升级器失败：{detail}</translation>
     </message>

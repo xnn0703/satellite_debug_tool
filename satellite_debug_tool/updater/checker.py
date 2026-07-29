@@ -1,22 +1,25 @@
-"""ReleaseChecker — 查 Gitee Release API + 版本比较。
+"""ReleaseChecker — 查询 Release API + 版本比较。
 
-Gitee Release API 文档：
-    GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/latest
+当前发布源使用 GitHub Release API：
+    GET https://api.github.com/repos/{owner}/{repo}/releases/latest
 返回 JSON 形如：
     {
       "tag_name": "v1.2.0",
       "name": "...",
       "body": "release notes",
-      "html_url": "https://gitee.com/...",
+      "html_url": "https://github.com/...",
       "assets": [
-        {"name": "satellite_debug_tool-mac-v1.2.0.7z.001",
+        {"name": "satellite_debug_tool-win-v1.2.0.7z",
          "browser_download_url": "https://...",
-         "size": 31457280},
+         "size": 157286400},
         ...
       ]
     }
 
 平台资产命名约定（CI 输出）：
+    `satellite_debug_tool-{mac,win}-{tag}.7z`
+
+兼容旧分卷：
     `satellite_debug_tool-{mac,win}-{tag}.7z.{NNN}`  (NNN = 001/002/...)
 """
 from __future__ import annotations
@@ -55,14 +58,23 @@ class LatestRelease:
     assets: List[Asset] = field(default_factory=list)
 
     def assets_for_platform(self, platform: str) -> List[Asset]:
-        """按平台过滤资产并按名称排序（保证 7z 分卷顺序：001/002/...）。
+        """按平台过滤资产；优先单文件 7z，否则返回旧分卷。
 
         Args:
             platform: "mac" / "win"（current_platform() 返回值）
         """
-        pat = re.compile(rf"-{re.escape(platform)}-.*\.7z\.\d+$", re.IGNORECASE)
-        matched = [a for a in self.assets if pat.search(a.name)]
-        return sorted(matched, key=lambda a: a.name)
+        platform_token = re.escape(platform)
+        single_pat = re.compile(rf"-{platform_token}-.*\.7z$", re.IGNORECASE)
+        singles = sorted(
+            (a for a in self.assets if single_pat.search(a.name)),
+            key=lambda a: a.name,
+        )
+        if singles:
+            return [singles[0]]
+
+        split_pat = re.compile(rf"-{platform_token}-.*\.7z\.\d+$", re.IGNORECASE)
+        volumes = [a for a in self.assets if split_pat.search(a.name)]
+        return sorted(volumes, key=lambda a: a.name)
 
 
 # ---------- 平台 ----------
@@ -143,7 +155,7 @@ def compare_versions(a: str, b: str) -> int:
 # ---------- Checker ----------
 
 class ReleaseChecker:
-    """查 Gitee Release API 拿最新版本。
+    """查询兼容 GitHub/Gitee JSON 结构的 Release API。
 
     Args:
         owner / repo / api_base: 一般从 release.config.json 读
@@ -154,7 +166,7 @@ class ReleaseChecker:
         self,
         owner: str,
         repo: str,
-        api_base: str = "https://gitee.com/api/v5",
+        api_base: str = "https://api.github.com",
         timeout: float = 10.0,
     ):
         self._owner = owner

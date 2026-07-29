@@ -1,12 +1,12 @@
-"""Downloader — 分卷顺序下载 + 重试 + 断点续传 + 进度回调。
+"""Downloader — 发布资产下载 + 重试 + 断点续传 + 进度回调。
 
 公共 API：
     Downloader(timeout=30, max_retries=3, chunk_size=65536, progress_interval=262144)
         .download_all(assets, dest_dir, on_progress=None, cancel_event=None) -> List[Path]
 
 设计要点：
-- 顺序下载（不并行）：实现简单 + Gitee API 友好 + 弱网更稳
-- 单分卷失败：指数退避 1s / 2s / 4s 重试 3 次（max_retries 可配）
+- 顺序下载（不并行）：兼容单个 7z 和旧版分卷，弱网行为稳定
+- 单文件失败：指数退避 1s / 2s / 4s 重试 3 次（max_retries 可配）
 - 断点续传：dest 已存在且部分内容时发 Range header，服务器 206 接续，
   服务器 200 视为不支持 Range 重头下载
 - Content-Length 校验：响应头有 length 时与实际写入字节比，不一致视为失败重试
@@ -72,7 +72,7 @@ class Downloader:
         """顺序下载所有 assets 到 dest_dir，返回 (按顺序的)本地路径列表。
 
         Args:
-            assets: 待下载分卷列表（顺序即写入顺序）
+            assets: 待下载资产列表（顺序即后续合并顺序）
             dest_dir: 目标目录（必须已存在）
             on_progress: 进度回调，参数 (bytes_done_total, bytes_total)
             cancel_event: 用户取消事件（set 后立即中止并抛 DownloadCancelled）

@@ -6,17 +6,15 @@
 ## 一图流
 
 ```
-改版本号 → commit → 打 tag → push tag (gitee+github)
-                              ↓
-                  GitHub Actions 触发 build.yml
-                              ↓
-   prepare-release (Gitee 建空 release)
-                ↓
-   build-windows (PyInstaller → 7z 30MB 分卷 → 上传 Gitee + GH)
-                ↓
-   finalize-release (拼 markdown body + 清旧 release)
-                ↓
-   完成 ✅  https://gitee.com/soft-hertz/satellite_debug_tool_release/releases
+改版本号 → commit → 打 tag → push GitHub tag
+                            ↓
+                GitHub Actions 触发 build.yml
+                            ↓
+   prepare-release (解析 tag)
+              ↓
+   build-windows (PyInstaller → 单个 7z → GitHub Release)
+              ↓
+   完成 ✅  https://github.com/xnn0703/satellite_debug_tool/releases
                               ↓
    （可选）本机出 mac 包  ./scripts/build_macos.sh
                               ↓
@@ -25,7 +23,10 @@
 
 **注**：mac 不走 CI（PyInstaller .app 与 7z symlink 兼容性问题难修），
 本地脚本一键打包，产物 zip 分发给 mac 用户即可。
-mac 平台不走自动升级链路（updater 仍嵌入但 Gitee 上无 mac asset 可拉）。
+mac 平台不走自动升级链路（updater 仍嵌入，但 GitHub Release 暂不提供 mac asset）。
+
+> **更新源迁移提示**：`v1.0.1` 及更早版本只查询 Gitee。首次迁移到 `v1.1.0`
+> 需要手动下载 GitHub Release；从 `v1.1.0` 起，后续版本可继续通过应用内更新获取。
 
 ## 前置检查（每次发版前）
 
@@ -33,7 +34,7 @@ mac 平台不走自动升级链路（updater 仍嵌入但 Gitee 上无 mac asset
 - [ ] 本地能跑：`python3 -m satellite_debug_tool.main`
 - [ ] 本地能打包：`./scripts/build_macos.sh`（mac）或 `scripts\build_windows.bat`（win）
 - [ ] CHANGELOG 已写新版本变更（如有）
-- [ ] secrets 已配：repo settings → Secrets → Actions → `GITEE_TOKEN` 存在且有发版仓库写权限
+- [ ] GitHub Actions 的 `contents: write` 权限可用
 
 ## 标准发版流程
 
@@ -65,10 +66,12 @@ mac .app `Info.plist` 的 CFBundleVersion 会由 spec 自动读这个值，**无
 git add satellite_debug_tool/__init__.py
 git commit -m "chore: bump version to 1.1.0"
 git push origin master
+git push github master
 
 # tag 名必须 = v + __version__
 git tag v1.1.0
-git push origin v1.1.0
+git push origin v1.1.0    # 同步 Gitee 源码 tag
+git push github v1.1.0    # 触发 GitHub Release
 ```
 
 ### 4. 监控 CI
@@ -76,14 +79,13 @@ git push origin v1.1.0
 打开 https://github.com/xnn0703/satellite_debug_tool/actions 看进度：
 - prepare-release（30s）
 - build-windows（约 10min）
-- finalize-release（30s）
 
 中间任一失败 → 修问题 → 再走一遍（先删本地 + 远端 tag，改完再 push）
 
 ### 5. 验收
 
-- [ ] Gitee release 页面有完整 body + 全部分卷（mac + win）
-- [ ] GitHub Release 页面有对应分卷镜像
+- [ ] GitHub Release 页面有一个非空的 Windows `.7z` 资产
+- [ ] 下载并解压 `.7z` 后目录结构完整
 - [ ] 老版本启动后 24h 内或手动点 🔄 检查更新 → 弹"发现新版"对话框
 - [ ] 一键更新 → 下载 → 重启 → 显示新版本号
 
@@ -95,21 +97,21 @@ CI 失败需要重发：
 # 删本地 tag
 git tag -d v1.1.0
 
-# 删远程 tag（会取消已 trigger 的 workflow，但 Gitee release 可能残留）
+# 删远程 tag
 git push origin :refs/tags/v1.1.0
-
-# Gitee release 由 workflow 的 prepare-release 自动清同名 release，无需手删
+git push github :refs/tags/v1.1.0
 
 # 修问题后重新 tag + push
 git tag v1.1.0
 git push origin v1.1.0
+git push github v1.1.0
 ```
 
 ## 预发版本（rc / beta）
 
 ```bash
 git tag v1.1.0-rc.1
-git push origin v1.1.0-rc.1
+git push github v1.1.0-rc.1
 ```
 
 升级机制中 pre-release 视为旧版（compare_versions：`v1.1.0-rc.1 < v1.1.0`），
@@ -131,8 +133,9 @@ vim satellite_debug_tool/__init__.py  # → "1.0.1"
 # 3. commit + tag + push
 git commit -am "fix: 紧急修复 XXX"
 git push origin hotfix/1.0.1
+git push github hotfix/1.0.1
 git tag v1.0.1
-git push origin v1.0.1
+git push github v1.0.1
 
 # 4. CI 自动发版
 
@@ -147,16 +150,15 @@ git push origin master
 **Q: tag 推上去 CI 没触发？**
 A: 检查 `.github/workflows/build.yml` `on.push.tags` 是否包含 `v*`。tag 名必须 `v` 开头。
 
-**Q: 上传 Gitee 失败 "401 Unauthorized"？**
-A: GITEE_TOKEN 过期或权限不够。到 https://gitee.com/profile/personal_access_tokens 重新签发，
-更新到 repo settings → Secrets → Actions → GITEE_TOKEN。
+**Q: GitHub Release 上传失败 "Resource not accessible by integration"？**
+A: 检查 workflow 顶层是否保留 `permissions: contents: write`，并确认仓库 Actions 权限允许写入。
 
 **Q: PyInstaller 打包后启动崩 "ImportError"？**
 A: 通常是依赖没在 `satellite_debug_tool.spec` `hiddenimports` 里。
 本地 `pyinstaller --noconfirm satellite_debug_tool.spec && ./dist/SatelliteDebugTool/SatelliteDebugTool`
 复现，按错误信息加 hidden import。
 
-**Q: Gitee 7z 分卷下载下来后用 The Unarchiver 解压失败？**
+**Q: `.7z` 下载后无法解压？**
 A: 检查 spec 里 `-mf=off` 没有被去掉（关闭 BCJ2 滤器，保 py7zr / The Unarchiver 兼容）。
 
 **Q: 升级失败后老版本启动后报错？**

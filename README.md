@@ -10,7 +10,7 @@
 - 设备管理：设备信息、参数表读写、OTA 固件升级
 - 离线地图：Playback / Log 检测 `gps_lat` / `gps_lon` 后显示轨迹和事件 marker
 - 仿真入口：MockModem / fake-device 对星闭环仿真
-- 自动更新：Gitee/GitHub release 检查、下载、替换
+- 自动更新：GitHub Release 检查、下载、替换
 - 国际化：跟随系统 / 简体中文 / English，运行时即时切换
 - 主题：深色 / 深色高对比 / 浅色
 

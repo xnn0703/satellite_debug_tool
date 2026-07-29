@@ -168,13 +168,13 @@ vNext 应补 profile 语义层，方向是协议 v2.x 或 profile cache schema �
 
 - 版本号来自 `satellite_debug_tool.__version__`。
 - UI 提供“检查更新”和后台静默检查。
-- updater 从 Gitee/GitHub release 资产下载分卷，解压并替换。
+- updater 从 GitHub Release 下载单个 `.7z` 资产，解压并替换；仍兼容旧版分卷资产。
 - `~/.satellite_debug_tool/` 位于安装目录外，升级时保留用户配置、profile 和地图缓存。
 
 当前边界：
 
 - macOS 不签名、不公证。
-- 发布流程仍需要真实 Gitee/GitHub release 联调闭环。
+- Windows 发布流程以 GitHub Release 为唯一自动发布目标；macOS 仍由本地打包并单独分发。
 
 ### 3.5 主题与字体
 

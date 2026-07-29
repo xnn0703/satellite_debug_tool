@@ -1,7 +1,7 @@
-"""Applier — 合并分卷 → 7z 解压 → 原子替换安装目录（含 .bak rollback）。
+"""Applier — 准备 7z → 解压 → 原子替换安装目录（含 .bak rollback）。
 
 流程：
-    1. merge_volumes(volumes, output) ：把 xxx.7z.001 + .002 + ... 拼成 xxx.7z
+    1. merge_volumes(volumes, output) ：复制单个 7z，或合并旧版分卷
     2. verify_7z_magic(path)         ：头 6 字节 = 377abcaf271c，否则视为合并坏掉
     3. extract_to(archive, staging)  ：py7zr 解压到 staging dir
     4. swap_install_dir(install, ext_root) ：
@@ -43,11 +43,11 @@ class Applier:
     def __init__(self, on_progress: Optional[ProgressCallback] = None):
         self._on_progress = on_progress
 
-    # ---- 阶段 1：合并分卷 ----
+    # ---- 阶段 1：准备归档 ----
 
     def merge_volumes(self, volumes: List[Path], output: Path,
                       chunk_size: int = 1024 * 1024) -> Path:
-        """把分卷顺序拼成单文件 7z。volumes 已经按 001/002/... 排序。"""
+        """把一个或多个包文件写为单个 7z；旧分卷已按 001/002/... 排序。"""
         if not volumes:
             raise ApplyError("apply_no_volumes")
         self._progress("merge", 0.0)

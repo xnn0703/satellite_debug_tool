@@ -82,15 +82,14 @@ macOS/Windows 构建脚本都会在 PyInstaller 前执行该检查。不要只�
 
 ---
 
-## 方式二：GitHub Actions 自动构建 + Gitee 发版（M11）
+## 方式二：GitHub Actions 自动构建与发版
 
-`.github/workflows/build.yml` 5 个 job：
+`.github/workflows/build.yml` 包含以下 job：
 
 | Job | 触发条件 | 用途 |
 |------|---------|------|
-| `prepare-release` | tag `v*` / 手动 dispatch | 在 Gitee 建空 release 拿 ID |
-| `build-windows` | tag / dispatch | windows-latest 出 7z 分卷 → 上传 Gitee + GH Release |
-| `finalize-release` | tag / dispatch 全过后 | 生成 release body + 清理旧 release |
+| `prepare-release` | tag `v*` / 手动 dispatch | 解析发布 tag |
+| `build-windows` | tag / dispatch | windows-latest 生成单个 7z 并上传 GitHub Release |
 | `ci-only-build` | 推 master/main | 仅 win 本地构建验证，结果上传 GH artifact，不发版 |
 
 > **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 压缩兼容性问题，
@@ -108,15 +107,17 @@ git add satellite_debug_tool/__init__.py
 git commit -m "chore: bump version to 1.1.0"
 git tag v1.1.0
 git push origin master
-git push origin v1.1.0      # ← 推 tag 触发 release CI
+git push github master
+git push origin v1.1.0      # 同步 Gitee 源码 tag
+git push github v1.1.0      # 推 GitHub tag 触发 release CI
 
 # 3. 在 GitHub Actions 页面看进度
 #    - prepare-release   ~30s
 #    - build-windows     ~10min
-#    - finalize-release  ~30s
 
-# 4. 完成后查 Gitee 发版仓库 https://gitee.com/soft-hertz/satellite_debug_tool_release/releases
-#    应能看到 win 分卷 + release body
+# 4. 完成后查 GitHub Releases
+#    https://github.com/xnn0703/satellite_debug_tool/releases
+#    应能看到一个 Windows .7z 资产
 
 # 5. mac 包本地出（仅 win 走 CI；mac 见下一节"本地 mac 打包"）
 ./scripts/build_macos.sh
@@ -150,10 +151,9 @@ xattr -cr <解压目录>/SatelliteDebugTool.app
 
 ### 失败排查
 
-- **prepare-release 失败**：检查 `secrets.GITEE_TOKEN` 是否在 repo settings 中配好，且有发版仓库的写权限
 - **build-windows/mac 失败**：查 PyInstaller 输出；通常是新依赖没在 spec 的 `hiddenimports` 里
-- **Gitee 上传失败**：单卷重试 3-5 次仍失败时 job 直接挂；等几分钟（Gitee 偶尔抽风）后重新触发 workflow_dispatch
-- **finalize 跳过**：build-* 任一失败 finalize 不跑，release body 会停在 "Pending build..."；手动到 Gitee 修
+- **GitHub Release 上传失败**：检查 workflow 的 `permissions: contents: write` 和仓库 Actions 权限
+- **资产缺失**：确认 `Create 7z archive` 生成的文件名与 `softprops/action-gh-release` 的 `files` 完全一致
 
 ### 仅 CI 构建（不发版）
 

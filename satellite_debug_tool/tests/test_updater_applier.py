@@ -56,6 +56,13 @@ def _split_file(src: Path, dest_dir: Path, base_name: str, vol_size: int = 1024)
 # ============================ merge_volumes ============================
 
 class TestMergeVolumes:
+    def test_single_archive_is_copied_unchanged(self, tmp_path):
+        archive = tmp_path / "x.7z"
+        archive.write_bytes(b"\x37\x7a\xbc\xaf\x27\x1cPAYLOAD")
+        out = tmp_path / "prepared.7z"
+        Applier().merge_volumes([archive], out)
+        assert out.read_bytes() == archive.read_bytes()
+
     def test_merge_concatenates_in_order(self, tmp_path):
         a = tmp_path / "x.7z.001"; a.write_bytes(b"AAAA")
         b = tmp_path / "x.7z.002"; b.write_bytes(b"BBBB")

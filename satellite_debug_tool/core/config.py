@@ -47,7 +47,7 @@ class Settings:
         # M11：自动升级相关
         "update": {
             "auto_check": True,                  # 启动后台静默检查（默认开）
-            "check_interval_hours": 24,          # 距上次检查不足该时长不重复查（友好对待 Gitee API）
+            "check_interval_hours": 24,          # 距上次检查不足该时长不重复查（避免频繁请求 Release API）
             "last_check_iso": "",                # 上次检查时间（UTC ISO 字符串）
             "skip_version": "",                  # 用户跳过的 tag；同 tag 不再弹窗
         },

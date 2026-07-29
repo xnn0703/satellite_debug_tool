@@ -1,6 +1,6 @@
 """updater 独立可执行入口（M11 P6）。
 
-由主程序触发：主程序下载完所有分卷后，调 `subprocess.Popen` 把本可执行启动起来，
+由主程序触发：主程序下载完发布资产后，调 `subprocess.Popen` 把本可执行启动起来，
 然后退出自己。本可执行：
   1. 等主进程退出（psutil.wait_for_pid，无则盲等 3s）
   2. self-relocate 到 OS 临时目录（避免被替换流程删掉自身）

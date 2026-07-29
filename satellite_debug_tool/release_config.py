@@ -1,4 +1,4 @@
-"""读取 release.config.json：updater 用来知道去哪个 Gitee/GitHub 仓库拉版本。
+"""读取 release.config.json：updater 用来定位 GitHub Release。
 
 查找顺序（首次命中即返回）：
   1. PyInstaller 打包后的运行时目录：`sys._MEIPASS / release.config.json`
@@ -7,7 +7,7 @@
   4. 兜底：内置 DEFAULTS（同 release.config.json 文件内容）
 
 提供：
-- `load_release_config() -> dict`：返回 4 个 key 的 dict
+- `load_release_config() -> dict`：返回完整的 GitHub Release 配置
 - `DEFAULTS`：常量，作为最后兜底
 """
 from __future__ import annotations
@@ -19,11 +19,9 @@ from typing import Optional
 
 
 DEFAULTS = {
-    "gitee_owner": "soft-hertz",
-    "gitee_repo": "satellite_debug_tool_release",
-    "gitee_api": "https://gitee.com/api/v5",
     "github_owner": "xnn0703",
     "github_repo": "satellite_debug_tool",
+    "github_api": "https://api.github.com",
 }
 
 

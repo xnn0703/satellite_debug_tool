@@ -78,4 +78,13 @@
 - 未在 Windows 执行打包启动及 125%/150% DPI 检查。
 - 未在真机连接和 OTA 进行中执行语言切换验收；自动化只证明相关对象和状态保持不变。
 - `codesign --verify --deep --strict` 未通过。失败点为 PySide6 内嵌 `Assistant.app` 的符号链接布局；应用可启动，但正式签名与公证未完成。
-- M16 以 `v1.1.0` 为目标发布版本；Windows 构建与双站 Release 必须在 tag 推送后独立核验。
+- M16 以 `v1.1.0` 为目标发布版本；Windows 构建与 GitHub Release 必须在 tag 推送后核验。
+
+## 2026-07-29：发布链路调整
+
+- 首轮双站发布的 Windows 构建成功，但 Gitee 首个分卷上传长时间无响应，任务已取消。
+- 发布目标按现场决策收敛为 GitHub Release，Gitee 仅继续同步源码和 tag，不再承载发布资产。
+- Windows Release 改为单个 `.7z`，不再生成 30 MB 分卷。
+- updater 查询源切换为 GitHub API；单个 `.7z` 优先，同时保留旧 `.7z.001...N` 兼容路径。
+- `v1.0.1` 及更早版本仍只查询 Gitee，迁移到 `v1.1.0` 需要手动安装一次；后续版本恢复应用内升级。
+- 最终发布完成状态仍以 GitHub Actions 成功、Release 资产非空且可查询为准。

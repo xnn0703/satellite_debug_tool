@@ -1,7 +1,7 @@
 """UpdateDialog — 检查/下载/应用升级的三阶段 GUI（M11 P7）。
 
 页面（QStackedWidget）：
-  CHECKING  ：正在查 Gitee API
+  CHECKING  ：正在查 GitHub Release API
   UP_TO_DATE：已是最新版
   NEW_FOUND ：发现新版（含 release notes + 立即更新 / 跳过 / 稍后）
   DOWNLOADING：下载中（进度条 + 取消按钮）
@@ -356,9 +356,9 @@ class UpdateDialog(QDialog):
         self._stack.setCurrentIndex(_PAGE_CHECKING)
         cfg = self._release_cfg
         checker = ReleaseChecker(
-            owner=cfg["gitee_owner"],
-            repo=cfg["gitee_repo"],
-            api_base=cfg["gitee_api"],
+            owner=cfg["github_owner"],
+            repo=cfg["github_repo"],
+            api_base=cfg["github_api"],
         )
         self._check_thread = QThread(self)
         self._check_worker = _CheckWorker(checker)
@@ -436,9 +436,8 @@ class UpdateDialog(QDialog):
         total_mb = sum(a.size for a in assets) / 1024 / 1024
         self._lbl_dl_bytes.setText(f"0.00 / {total_mb:.2f} MB")
         set_translatable_text(
-            "Downloading {count} volume(s) ({version})...",
+            "Downloading update package ({version})...",
             self._lbl_dl_title,
-            count=len(assets),
             version=self._latest.tag_name,
         )
         self._stack.setCurrentIndex(_PAGE_DOWNLOADING)
@@ -501,7 +500,7 @@ class UpdateDialog(QDialog):
         if install_dir is None or updater_exe is None:
             self._show_error(
                 "The install directory or updater executable was not found.\n"
-                "Use a PyInstaller package or download and extract the volumes manually.\n"
+                "Use a PyInstaller package or download and extract the archive manually.\n"
                 "install_dir={install_dir}, updater={updater}",
                 install_dir=install_dir,
                 updater=updater_exe,
@@ -686,9 +685,9 @@ def silent_background_check(
 
     cfg = load_release_config()
     checker = ReleaseChecker(
-        owner=cfg["gitee_owner"],
-        repo=cfg["gitee_repo"],
-        api_base=cfg["gitee_api"],
+        owner=cfg["github_owner"],
+        repo=cfg["github_repo"],
+        api_base=cfg["github_api"],
         timeout=8.0,
     )
     thread = QThread(parent)

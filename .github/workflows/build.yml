@@ -1,7 +1,7 @@
 name: Build & Release
 
 # 触发：
-#   - 推 v* tag → 完整 release（prepare → 并行 build → finalize）
+#   - 推 v* tag → 完整 GitHub Release（prepare → Windows build → upload）
 #   - 手动 dispatch → 同上（input 自定 tag）
 #   - 推到 master/main → 仅构建并上传 GH artifact（不发版）
 on:
@@ -18,12 +18,6 @@ on:
         required: true
         default: 'v0.0.1-rc1'
 
-env:
-  GITEE_OWNER: soft-hertz
-  GITEE_REPO: satellite_debug_tool_release
-  GITHUB_OWNER: xnn0703
-  GITHUB_REPO: satellite_debug_tool
-
 # 给所有 job 默认权限：contents: write 是创建 / 上传 GitHub Release 所需
 permissions:
   contents: write
@@ -31,14 +25,13 @@ permissions:
 jobs:
 
   # ============================================================
-  # 1. prepare-release  仅 tag/dispatch 时跑：在 Gitee 建空 release
+  # 1. prepare-release  仅 tag/dispatch 时跑：解析发布标签
   # ============================================================
   prepare-release:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
-      gitee_release_id: ${{ steps.gitee.outputs.id }}
     steps:
       - name: Resolve tag
         id: resolve
@@ -51,49 +44,27 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Resolved tag: ${TAG}"
 
-      - name: Delete existing Gitee release (if any)
+      - name: Remove stale v1.1.0 Gitee release metadata
+        if: steps.resolve.outputs.tag == 'v1.1.0'
+        continue-on-error: true
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          TAG="${{ steps.resolve.outputs.tag }}"
-          REL_JSON=$(curl -sS \
-            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/tags/${TAG}?access_token=${GITEE_TOKEN}" || true)
-          REL_ID=$(echo "$REL_JSON" | python3 -c "import sys,json
-          try:
-            d=json.load(sys.stdin); print(d.get('id') or '')
-          except Exception:
-            print('')" 2>/dev/null || echo "")
-          if [[ -n "${REL_ID}" ]]; then
-            echo "Deleting old Gitee release id=${REL_ID}"
-            curl -sS -X DELETE \
-              "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${REL_ID}?access_token=${GITEE_TOKEN}"
-          fi
-
-      - name: Create empty Gitee release
-        id: gitee
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
-          TAG="${{ steps.resolve.outputs.tag }}"
-          RESP=$(curl -sS -X POST \
-            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases" \
-            -d "access_token=${GITEE_TOKEN}" \
-            -d "tag_name=${TAG}" \
-            -d "name=Release ${TAG}" \
-            -d "body=Pending build... (assets will be attached after build jobs finish)" \
-            -d "prerelease=false" \
-            -d "target_commitish=master")
+          RESP=$(curl -sS --connect-timeout 5 --max-time 15 \
+            "https://gitee.com/api/v5/repos/soft-hertz/satellite_debug_tool_release/releases/tags/v1.1.0" || true)
           REL_ID=$(echo "$RESP" | python3 -c "import sys,json
           try:
             d=json.load(sys.stdin); print(d.get('id') or '')
           except Exception:
             print('')")
-          if [[ -z "${REL_ID}" ]]; then
-            echo "Failed to create Gitee release. Response: $RESP"
-            exit 1
+          if [[ -n "${REL_ID}" ]]; then
+            curl --fail-with-body --show-error --silent --connect-timeout 5 --max-time 15 \
+              -X DELETE \
+              "https://gitee.com/api/v5/repos/soft-hertz/satellite_debug_tool_release/releases/${REL_ID}?access_token=${GITEE_TOKEN}"
+            echo "Removed stale Gitee release metadata id=${REL_ID}"
+          else
+            echo "No stale Gitee v1.1.0 release metadata found"
           fi
-          echo "id=${REL_ID}" >> $GITHUB_OUTPUT
-          echo "Created Gitee release id=${REL_ID}"
 
   # ============================================================
   # 2a. build-windows
@@ -102,7 +73,7 @@ jobs:
     runs-on: windows-latest
     needs: prepare-release
     # 推 master/main 时 prepare-release 跳过，所以 needs 为 null → 这里也跳过
-    if: always() && (needs.prepare-release.result == 'success' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.prepare-release.result == 'success'
     steps:
       - uses: actions/checkout@v4
 
@@ -140,13 +111,16 @@ jobs:
           }
           echo "RELEASE_NAME=${name}" >> $env:GITHUB_ENV
 
-      - name: 7z split (30 MB volumes)
+      - name: Create 7z archive
         shell: pwsh
         run: |
           $name = $env:RELEASE_NAME
-          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 -mf=off -mmt=on -v30m `
+          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 -mf=off -mmt=on `
             "release/${name}.7z" "release/${name}/" | Out-Null
-          Get-ChildItem -Path release -Filter "${name}.7z.*"
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip failed with exit code $LASTEXITCODE"
+          }
+          Get-Item "release/${name}.7z"
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -156,40 +130,21 @@ jobs:
           name: Release ${{ needs.prepare-release.outputs.tag }}
           draft: false
           prerelease: false
-          files: release/satellite_debug_tool-win-${{ needs.prepare-release.outputs.tag }}.7z.*
+          make_latest: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Windows
+
+            Download the single `.7z` archive, extract it with 7-Zip, and run `SatelliteDebugTool.exe`.
+
+            下载单个 `.7z` 压缩包，使用 7-Zip 解压后运行 `SatelliteDebugTool.exe`。
+
+            ## macOS
+
+            macOS packages are built locally and distributed separately.
+          files: release/satellite_debug_tool-win-${{ needs.prepare-release.outputs.tag }}.7z
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload to Gitee release
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          REL_ID: ${{ needs.prepare-release.outputs.gitee_release_id }}
-        shell: pwsh
-        run: |
-          $name = $env:RELEASE_NAME
-          $files = Get-ChildItem -Path release -Filter "${name}.7z.*" | Sort-Object Name
-          foreach ($f in $files) {
-            $attempt = 0
-            $ok = $false
-            while ($attempt -lt 3 -and -not $ok) {
-              $attempt++
-              Write-Host "Uploading $($f.Name) (attempt $attempt)..."
-              & curl.exe --fail-with-body --show-error --silent `
-                --connect-timeout 30 --max-time 300 --speed-limit 1024 --speed-time 60 `
-                -X POST `
-                "https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/${env:REL_ID}/attach_files" `
-                -F "access_token=${env:GITEE_TOKEN}" `
-                -F "file=@$($f.FullName)"
-              $curlExit = $LASTEXITCODE
-              if ($curlExit -eq 0) {
-                $ok = $true
-              } else {
-                Write-Host "::warning::Upload failed for $($f.Name), curl exit code $curlExit"
-                Start-Sleep -Seconds 10
-              }
-            }
-            if (-not $ok) { Write-Host "::error::Failed to upload $($f.Name)"; exit 1 }
-          }
 
   # build-macos 已移除：mac 在线打包遇到 PyInstaller .app symlink 复杂性
   # （Python.framework / Qt frameworks 1500+ symlinks + 7z 不稳定），改本地脚本：
@@ -198,86 +153,7 @@ jobs:
   # mac 用户拿到 zip 解压双击即可；mac 平台不走自动升级链路（updater 仍嵌入但触发频率为零）。
 
   # ============================================================
-  # 3. finalize-release  生成最终 release body + 清理旧 release
-  # ============================================================
-  finalize-release:
-    runs-on: ubuntu-latest
-    needs: [prepare-release, build-windows]
-    if: always() && needs.build-windows.result == 'success' && needs.prepare-release.result == 'success'
-    steps:
-      - name: Generate release body
-        id: body
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          REL_ID: ${{ needs.prepare-release.outputs.gitee_release_id }}
-          TAG: ${{ needs.prepare-release.outputs.tag }}
-        run: |
-          ASSETS_JSON=$(curl -sS "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${REL_ID}?access_token=${GITEE_TOKEN}")
-          # 用 python 拼 markdown
-          python3 <<PYEOF > /tmp/release_body.md
-          import json, os
-          d = json.loads('''$ASSETS_JSON''')
-          assets = d.get("assets") or []
-          win = sorted([a for a in assets if "-win-" in a.get("name", "")], key=lambda x: x["name"])
-          tag = os.environ["TAG"]
-          out = [f"# Satellite Debug Tool {tag}", ""]
-          if win:
-              out += ["## Windows (x86_64) — 下载分卷", ""]
-              for a in win:
-                  mb = a.get("size", 0) / 1024 / 1024
-                  out.append(f"- [{a['name']}]({a['browser_download_url']}) ({mb:.2f} MB)")
-              out.append("")
-          out += [
-              "## macOS",
-              "",
-              "macOS 不在 CI 自动出包（PyInstaller .app symlink 与 7z 兼容性问题）。",
-              "请联系维护者获取 mac 版 zip，或自己从源码 `./scripts/build_macos.sh` 本地编译。",
-              "",
-              "## 安装",
-              "",
-              "**Windows**：下载平台对应的全部分卷（`.7z.001`, `.7z.002`, ...），",
-              "用 [7-Zip](https://www.7-zip.org/) 解压第一个分卷（其余自动合并），",
-              "解压后双击 `SatelliteDebugTool.exe`；首次运行 SmartScreen 选「仍要运行」。",
-              "",
-              "## 自动升级",
-              "",
-              "**Windows** 应用内置自动升级。默认每 24h 后台检查；也可工具栏点 🔄 检查更新 手动触发。",
-              "",
-              "---",
-              "",
-              "GitHub 镜像（海外用户）：见 Release Assets 同名分卷。",
-          ]
-          print("\n".join(out))
-          PYEOF
-          BODY=$(cat /tmp/release_body.md)
-          echo "${BODY}"
-          # 用 jq 生成 json payload（防转义炸）
-          PAYLOAD=$(python3 -c "import json,os; print(json.dumps({'tag_name':os.environ['TAG'],'name':'Release '+os.environ['TAG'],'body':open('/tmp/release_body.md').read(),'prerelease':False}))")
-          curl -sS -X PATCH \
-            "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${REL_ID}?access_token=${GITEE_TOKEN}" \
-            -H "Content-Type: application/json;charset=UTF-8" \
-            -d "${PAYLOAD}" > /dev/null
-          echo "Release body updated."
-
-      - name: Cleanup old Gitee releases (keep latest 3)
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
-          ALL=$(curl -sS "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases?access_token=${GITEE_TOKEN}&per_page=100")
-          OLD=$(echo "$ALL" | python3 -c "
-          import json, sys
-          arr = json.load(sys.stdin)
-          arr.sort(key=lambda x: x.get('created_at',''), reverse=True)
-          for r in arr[3:]:
-              print(r['id'])
-          ")
-          for id in $OLD; do
-            echo "Deleting old Gitee release $id"
-            curl -sS -X DELETE "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${id}?access_token=${GITEE_TOKEN}" || true
-          done
-
-  # ============================================================
-  # 4. ci-only-build  (master/main 推送 → 仅本地构建验证 + 上传 GH artifact)
+  # 3. ci-only-build  (master/main 推送 → 仅本地构建验证 + 上传 GH artifact)
   # ============================================================
   ci-only-build:
     name: CI build (no release, win only)

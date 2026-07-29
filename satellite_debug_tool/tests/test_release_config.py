@@ -20,14 +20,14 @@ class TestReleaseConfigLoader:
         from satellite_debug_tool.release_config import load_release_config
         p = tmp_path / "release.config.json"
         p.write_text(json.dumps({
-            "gitee_owner": "myorg",
-            "gitee_repo": "myrepo",
+            "github_owner": "myorg",
+            "github_repo": "myrepo",
         }), encoding="utf-8")
         cfg = load_release_config(override_path=p)
-        assert cfg["gitee_owner"] == "myorg"
-        assert cfg["gitee_repo"] == "myrepo"
+        assert cfg["github_owner"] == "myorg"
+        assert cfg["github_repo"] == "myrepo"
         # 没覆盖的字段用 DEFAULTS
-        assert cfg["gitee_api"] == "https://gitee.com/api/v5"
+        assert cfg["github_api"] == "https://api.github.com"
 
     def test_malformed_json_falls_back(self, tmp_path):
         """坏 JSON 不应崩溃，应回退 DEFAULTS。"""
@@ -47,9 +47,7 @@ class TestReleaseConfigLoader:
         """无 override 时应能命中 repo 根的 release.config.json。"""
         from satellite_debug_tool.release_config import load_release_config
         cfg = load_release_config()
-        # 至少 5 个 key 都存在
-        for key in ("gitee_owner", "gitee_repo", "gitee_api",
-                    "github_owner", "github_repo"):
+        for key in ("github_owner", "github_repo", "github_api"):
             assert key in cfg
             assert cfg[key]   # 非空
 

@@ -96,6 +96,17 @@ class TestAssetsForPlatform:
             "x-mac-v1.0.0.7z.003",
         ]
 
+    def test_single_archive_is_supported_and_preferred(self):
+        r = self._make_release([
+            "satellite_debug_tool-win-v1.0.0.7z.001",
+            "satellite_debug_tool-win-v1.0.0.7z.002",
+            "satellite_debug_tool-win-v1.0.0.7z",
+        ])
+        win = r.assets_for_platform("win")
+        assert [a.name for a in win] == [
+            "satellite_debug_tool-win-v1.0.0.7z",
+        ]
+
     def test_no_match_returns_empty(self):
         r = self._make_release(["readme.txt", "x-linux-v1.0.0.7z.001"])
         assert r.assets_for_platform("mac") == []
@@ -133,18 +144,18 @@ class _FakeOpener:
 
 class TestReleaseChecker:
     def _checker(self):
-        return ReleaseChecker(owner="test", repo="repo", api_base="https://gitee.example/api/v5")
+        return ReleaseChecker(owner="test", repo="repo", api_base="https://api.github.example")
 
     def test_latest_url_format(self):
         c = self._checker()
-        assert c.latest_url == "https://gitee.example/api/v5/repos/test/repo/releases/latest"
+        assert c.latest_url == "https://api.github.example/repos/test/repo/releases/latest"
 
     def test_fetch_success(self):
         c = self._checker()
         opener = _FakeOpener(payload={
             "tag_name": "v1.0.0",
             "body": "release notes here",
-            "html_url": "https://gitee.example/r",
+            "html_url": "https://github.example/r",
             "assets": [
                 {"name": "x-mac-v1.0.0.7z.001",
                  "browser_download_url": "https://dl/1",
