@@ -148,6 +148,18 @@ jobs:
             "release/${name}.7z" "release/${name}/" | Out-Null
           Get-ChildItem -Path release -Filter "${name}.7z.*"
 
+      - name: Upload to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          name: Release ${{ needs.prepare-release.outputs.tag }}
+          draft: false
+          prerelease: false
+          files: release/satellite_debug_tool-win-${{ needs.prepare-release.outputs.tag }}.7z.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload to Gitee release
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -162,26 +174,22 @@ jobs:
             while ($attempt -lt 3 -and -not $ok) {
               $attempt++
               Write-Host "Uploading $($f.Name) (attempt $attempt)..."
-              $exit = & curl.exe -sS --max-time 1800 -X POST `
+              & curl.exe --fail-with-body --show-error --silent `
+                --connect-timeout 30 --max-time 300 --speed-limit 1024 --speed-time 60 `
+                -X POST `
                 "https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/${env:REL_ID}/attach_files" `
                 -F "access_token=${env:GITEE_TOKEN}" `
                 -F "file=@$($f.FullName)"
-              if ($LASTEXITCODE -eq 0) { $ok = $true } else { Start-Sleep -Seconds 10 }
+              $curlExit = $LASTEXITCODE
+              if ($curlExit -eq 0) {
+                $ok = $true
+              } else {
+                Write-Host "::warning::Upload failed for $($f.Name), curl exit code $curlExit"
+                Start-Sleep -Seconds 10
+              }
             }
             if (-not $ok) { Write-Host "::error::Failed to upload $($f.Name)"; exit 1 }
           }
-
-      - name: Upload to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare-release.outputs.tag }}
-          name: Release ${{ needs.prepare-release.outputs.tag }}
-          draft: false
-          prerelease: false
-          files: release/satellite_debug_tool-win-${{ needs.prepare-release.outputs.tag }}.7z.*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # build-macos 已移除：mac 在线打包遇到 PyInstaller .app symlink 复杂性
   # （Python.framework / Qt frameworks 1500+ symlinks + 7z 不稳定），改本地脚本：
