@@ -142,15 +142,6 @@ class _FakeOpener:
         return resp
 
 
-class _RedirectResponse(io.BytesIO):
-    def __init__(self, url):
-        super().__init__(b"")
-        self._url = url
-
-    def geturl(self):
-        return self._url
-
-
 class _SequenceOpener:
     def __init__(self, responses):
         self._responses = list(responses)
@@ -244,8 +235,17 @@ class TestReleaseChecker:
         )
         opener = _SequenceOpener([
             rate_limit,
-            _RedirectResponse(
-                "https://github.com/xnn0703/satellite_debug_tool/releases/tag/v1.1.0",
+            urllib.error.HTTPError(
+                "https://github.com/xnn0703/satellite_debug_tool/releases/latest",
+                302,
+                "Found",
+                {
+                    "Location": (
+                        "https://github.com/xnn0703/"
+                        "satellite_debug_tool/releases/tag/v1.1.0"
+                    ),
+                },
+                None,
             ),
         ])
 

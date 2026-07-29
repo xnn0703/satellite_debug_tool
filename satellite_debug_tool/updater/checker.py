@@ -196,7 +196,12 @@ class ReleaseChecker:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             if e.code == 403 and self._is_github_api():
-                return self._fetch_github_latest_redirect(active_opener)
+                redirect_opener = (
+                    opener
+                    if opener is not None
+                    else build_https_opener(follow_redirects=False)
+                )
+                return self._fetch_github_latest_redirect(redirect_opener)
             raise UpdateCheckError(
                 "check_http_error",
                 str(e.reason),
@@ -252,17 +257,28 @@ class ReleaseChecker:
         req = urllib.request.Request(
             latest_web_url,
             headers={"User-Agent": "satellite_debug_tool-updater"},
+            method="HEAD",
         )
         try:
             resp = opener.open(req, timeout=self._timeout)
             with resp:
                 final_url = resp.geturl()
         except urllib.error.HTTPError as e:
-            raise UpdateCheckError(
-                "check_http_error",
-                str(e.reason),
-                status=e.code,
-            ) from e
+            if e.code in (301, 302, 303, 307, 308):
+                location = e.headers.get("Location") if e.headers else ""
+                if location:
+                    final_url = urllib.parse.urljoin(latest_web_url, location)
+                else:
+                    raise UpdateCheckError(
+                        "check_response_format_error",
+                        "GitHub latest redirect has no Location header",
+                    ) from e
+            else:
+                raise UpdateCheckError(
+                    "check_http_error",
+                    str(e.reason),
+                    status=e.code,
+                ) from e
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise UpdateCheckError("check_network_error", str(e)) from e
 
