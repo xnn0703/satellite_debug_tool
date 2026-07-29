@@ -38,6 +38,12 @@ from satellite_debug_tool.core.profile import (
 )
 from satellite_debug_tool.core.profile.semantics import infer_channel_roles
 from satellite_debug_tool.core.protocol import ChannelSample, DataReport
+from satellite_debug_tool.i18n import (
+    register_translatable,
+    set_raw_text,
+    set_translatable_text,
+    tr,
+)
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
 from satellite_debug_tool.ui.time_range_control import TimeRangeControl
@@ -154,6 +160,7 @@ class LogView(QWidget):
 
         self._setup_ui()
         self._apply_theme()
+        register_translatable(self)
 
     # ============================ UI ============================
 
@@ -168,27 +175,32 @@ class LogView(QWidget):
         top_layout.setContentsMargins(4, 2, 4, 2)
         top_layout.setSpacing(6)
 
-        self._open_btn = QPushButton("Open .log")
+        self._open_btn = QPushButton(tr("Open .log"))
         self._open_btn.setFixedSize(100, 28)
         self._open_btn.setToolTip(
-            "导入 WindTerm 控制台 log（track_debug_print_table_header / track_table_row_bynav）"
+            tr(
+                "Import a WindTerm console log containing "
+                "track_debug_print_table_header / track_table_row_bynav"
+            )
         )
         self._open_btn.clicked.connect(self._on_open_clicked)
         top_layout.addWidget(self._open_btn)
 
         # M9：清除按钮 — 释放大文件占用的内存（log 47万行 × 65列 ≈ 370MB）
-        self._clear_btn = QPushButton("清除")
+        self._clear_btn = QPushButton(tr("Clear"))
         self._clear_btn.setFixedSize(60, 28)
         self._clear_btn.setEnabled(False)
-        self._clear_btn.setToolTip("清空当前数据 + 曲线 + 地图轨迹（释放内存）")
+        self._clear_btn.setToolTip(
+            tr("Clear current data, charts, and map track to release memory")
+        )
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         top_layout.addWidget(self._clear_btn)
 
-        self._file_label = QLabel("（未加载文件）")
+        self._file_label = QLabel(tr("(no file loaded)"))
         self._file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         top_layout.addWidget(self._file_label)
 
-        self._stats_label = QLabel("行数: — · 列数: —")
+        self._stats_label = QLabel(tr("Rows: — · columns: —"))
         self._stats_label.setFixedWidth(180)
         top_layout.addWidget(self._stats_label)
 
@@ -197,11 +209,11 @@ class LogView(QWidget):
         top_layout.addWidget(self._range_ctl)
 
         # M8: 地图按钮
-        self._map_btn = QPushButton("地图")
+        self._map_btn = QPushButton(tr("Map"))
         self._map_btn.setFixedSize(60, 28)
         self._map_btn.setEnabled(False)
         self._map_btn.setToolTip(
-            "打开/关闭离线地图浮窗（需要 log 中含 gps_lat / gps_lon 列）"
+            tr("Open or close the map window; the log must contain gps_lat and gps_lon")
         )
         self._map_btn.clicked.connect(self._toggle_map)
         top_layout.addWidget(self._map_btn)
@@ -209,7 +221,11 @@ class LogView(QWidget):
         root.addWidget(top)
 
         # 第二行：X 轴占位说明（小字）
-        hint = QLabel("X 轴时间：行号 × 100ms（占位，下位机吐 ms 时间戳后更新）")
+        hint = QLabel(
+            tr(
+                "X-axis time: row number × 100 ms (placeholder until the device logs ms timestamps)"
+            )
+        )
         hint.setStyleSheet("font-size: 10px;")
         self._hint_label = hint
         root.addWidget(hint)
@@ -265,15 +281,17 @@ class LogView(QWidget):
         if self._settings is not None:
             last_dir = self._settings.get("paths.log_dir", "") or ""
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open WindTerm Log", last_dir,
-            "Log Files (*.log *.txt);;All Files (*)",
+            self,
+            tr("Open WindTerm log"),
+            last_dir,
+            tr("Log files (*.log *.txt);;All files (*)"),
         )
         if not filepath:
             return
         self._load_file(Path(filepath))
 
     def _load_file(self, path: Path) -> None:
-        self.status_message.emit(f"Parsing {path.name}...", 0)
+        self.status_message.emit(tr("Parsing {file}...", file=path.name), 0)
         try:
             result = WindTermLogParser.parse(
                 path,
@@ -281,12 +299,12 @@ class LogView(QWidget):
                 progress_every=5000,
             )
         except Exception as exc:
-            self.status_message.emit(f"Parse failed: {exc}", 5000)
+            self.status_message.emit(tr("Parse failed: {detail}", detail=exc), 5000)
             return
 
         if not result.columns:
             self.status_message.emit(
-                "No numeric columns found in log (check 'track_debug_print_table_header')",
+                tr("No numeric columns found in the log; check track_debug_print_table_header"),
                 5000,
             )
             return
@@ -295,7 +313,7 @@ class LogView(QWidget):
         profile_dict = _build_virtual_profile_dict(result)
         hw = self._profile_store.import_dict(profile_dict)
         if hw is None:
-            self.status_message.emit("Failed to build virtual profile", 5000)
+            self.status_message.emit(tr("Failed to build the virtual Profile"), 5000)
             return
         self._chart.set_hw_type(hw)
 
@@ -329,21 +347,43 @@ class LogView(QWidget):
         self._chart.refresh(self._data_store)
         self._chart.enable_y_autorange(True)
 
-        self._file_label.setText(f"📄 {path.name}")
-        self._stats_label.setText(
-            f"行数: {self._loaded_rows} · 列数: {self._loaded_cols}"
+        set_raw_text(f"📄 {path.name}", self._file_label)
+        set_translatable_text(
+            "Rows: {rows} · columns: {columns}",
+            self._stats_label,
+            rows=self._loaded_rows,
+            columns=self._loaded_cols,
         )
-        dropped_note = ""
-        if self._dropped_cols:
-            dropped_note = f"，剔除字符串列 {len(self._dropped_cols)} 个"
-        skipped_note = ""
-        if self._skipped_rows:
-            skipped_note = f"，跳过格式异常行 {self._skipped_rows}"
-        self.status_message.emit(
-            f"Loaded {self._loaded_rows} rows × {self._loaded_cols} cols"
-            f"{dropped_note}{skipped_note}",
-            5000,
-        )
+        if self._dropped_cols and self._skipped_rows:
+            loaded_message = tr(
+                "Loaded {rows} rows × {columns} columns; dropped {dropped} text "
+                "column(s) and skipped {skipped} malformed row(s)",
+                rows=self._loaded_rows,
+                columns=self._loaded_cols,
+                dropped=len(self._dropped_cols),
+                skipped=self._skipped_rows,
+            )
+        elif self._dropped_cols:
+            loaded_message = tr(
+                "Loaded {rows} rows × {columns} columns; dropped {dropped} text column(s)",
+                rows=self._loaded_rows,
+                columns=self._loaded_cols,
+                dropped=len(self._dropped_cols),
+            )
+        elif self._skipped_rows:
+            loaded_message = tr(
+                "Loaded {rows} rows × {columns} columns; skipped {skipped} malformed row(s)",
+                rows=self._loaded_rows,
+                columns=self._loaded_cols,
+                skipped=self._skipped_rows,
+            )
+        else:
+            loaded_message = tr(
+                "Loaded {rows} rows × {columns} columns",
+                rows=self._loaded_rows,
+                columns=self._loaded_cols,
+            )
+        self.status_message.emit(loaded_message, 5000)
 
         # M8: GPS 列检测 → 启用地图按钮 + 同步已开浮窗
         gps_ok = self._detect_gps_columns(result)
@@ -355,7 +395,7 @@ class LogView(QWidget):
         self._clear_btn.setEnabled(True)
 
     def _on_parse_progress(self, line_count: int) -> None:
-        self.status_message.emit(f"Parsing... {line_count} lines", 0)
+        self.status_message.emit(tr("Parsing... {count} lines", count=line_count), 0)
 
     def _on_range_changed(self, start_sec: float, end_sec: float) -> None:
         self._chart.set_auto_range(False)
@@ -393,12 +433,12 @@ class LogView(QWidget):
             self._map_widget.clear()
         self._map_btn.setEnabled(False)
         # 5) UI 标签
-        self._file_label.setText("（未加载文件）")
-        self._stats_label.setText("行数: — · 列数: —")
+        set_translatable_text("(no file loaded)", self._file_label)
+        set_translatable_text("Rows: — · columns: —", self._stats_label)
         self._range_ctl.set_total(0.0)
         # 6) 自身按钮
         self._clear_btn.setEnabled(False)
-        self.status_message.emit("Log 数据已清除", 2000)
+        self.status_message.emit(tr("Log data cleared"), 2000)
 
     # ====================== M8: 地图集成 ======================
 
@@ -428,7 +468,7 @@ class LogView(QWidget):
             token = self._settings.get("map.tianditu_token", "") or ""
         self._map_widget = MapWidget(tianditu_token=token)
         self._map_widget.set_theme(self._theme, "small")
-        self._map_dock = QDockWidget("地图 — Log", self)
+        self._map_dock = QDockWidget(tr("Map — Log"), self)
         self._map_dock.setAllowedAreas(Qt.NoDockWidgetArea)
         self._map_dock.setFloating(True)
         self._map_dock.setWidget(self._map_widget)
@@ -454,3 +494,17 @@ class LogView(QWidget):
         # log 路径 lat/lon 同一帧灌入，时间戳一致；无需 interp
         self._map_widget.clear()
         self._map_widget.set_track(ts, lats, lon_vals)
+
+    def retranslate_ui(self) -> None:
+        if self._current_file is None:
+            set_translatable_text("(no file loaded)", self._file_label)
+            set_translatable_text("Rows: — · columns: —", self._stats_label)
+        else:
+            set_translatable_text(
+                "Rows: {rows} · columns: {columns}",
+                self._stats_label,
+                rows=self._loaded_rows,
+                columns=self._loaded_cols,
+            )
+        if self._map_dock is not None:
+            self._map_dock.setWindowTitle(tr("Map — Log"))

@@ -59,23 +59,23 @@ def wait_for_pid(pid: int, timeout: float = 30.0) -> bool:
     try:
         import psutil
     except ImportError:
-        log.warning("psutil 未安装，盲等 3s")
+        log.warning("psutil is not installed; waiting 3 seconds")
         time.sleep(3.0)
         return True
 
     try:
         p = psutil.Process(pid)
     except psutil.NoSuchProcess:
-        log.info(f"PID {pid} 已不存在，无需等待")
+        log.info("PID %s no longer exists", pid)
         return True
 
-    log.info(f"等 PID {pid} 退出，超时 {timeout}s...")
+    log.info("Waiting for PID %s to exit (timeout=%ss)", pid, timeout)
     try:
         p.wait(timeout=timeout)
-        log.info(f"PID {pid} 已退出")
+        log.info("PID %s exited", pid)
         return True
     except psutil.TimeoutExpired:
-        log.error(f"等待 PID {pid} 超时")
+        log.error("Timed out waiting for PID %s", pid)
         return False
 
 
@@ -128,7 +128,7 @@ def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
 def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> None:
     """升级完成后启动新版主程序。"""
     if restart_cmd:
-        log.info(f"重启命令（用户指定）: {restart_cmd}")
+        log.info("Using user-specified restart command: %s", restart_cmd)
         subprocess.Popen(restart_cmd, shell=True, close_fds=True)
         return
 
@@ -147,13 +147,13 @@ def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> None:
     ]
     for c in candidates:
         if c.exists():
-            log.info(f"启动: {c}")
+            log.info("Launching: %s", c)
             if sys.platform.startswith("win"):
                 subprocess.Popen([str(c)], creationflags=0x00000008, close_fds=True)
             else:
                 subprocess.Popen([str(c)], start_new_session=True, close_fds=True)
             return
-    log.warning(f"未找到可启动的可执行，install_dir={install_dir}")
+    log.warning("No launchable executable found in install_dir=%s", install_dir)
 
 
 # ---------- CLI ----------
@@ -161,21 +161,21 @@ def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="satellite_debug_tool updater")
     parser.add_argument("--pid", type=int, required=True,
-                        help="等待退出的主程序 PID")
+                        help="PID of the main application to wait for")
     parser.add_argument("--install-dir", type=Path, required=True,
-                        help="目标安装目录（mac .app 或 win onedir）")
+                        help="Target install directory (macOS .app or Windows onedir)")
     parser.add_argument("--volumes", type=Path, nargs="+", required=True,
-                        help="按顺序的 7z 分卷文件列表")
+                        help="Ordered list of 7z volume files")
     parser.add_argument("--workdir", type=Path, required=True,
-                        help="临时工作目录（合并 + 解压用）")
+                        help="Temporary work directory for merge and extraction")
     parser.add_argument("--restart-cmd", type=str, default=None,
-                        help="升级完成后的重启命令（默认按平台启动 install_dir）")
+                        help="Restart command after update (defaults to the platform install target)")
     parser.add_argument("--log", type=Path, default=None,
-                        help="日志文件路径")
+                        help="Log file path")
     parser.add_argument("--wait-timeout", type=float, default=30.0,
-                        help="等主进程退出的超时秒")
+                        help="Seconds to wait for the main process to exit")
     parser.add_argument("--no-relocate", action="store_true",
-                        help="（内部）已 self-relocate 过，跳过再次 relocate")
+                        help="Internal: updater has already self-relocated")
     args = parser.parse_args(argv)
 
     _setup_logging(args.log)
@@ -186,7 +186,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 等主进程退出
     if not wait_for_pid(args.pid, args.wait_timeout):
-        log.error("主进程未在超时内退出，放弃升级")
+        log.error("Main process did not exit before the timeout; update aborted")
         return 2
 
     # 应用更新
@@ -194,9 +194,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         applier = Applier(on_progress=lambda stage, pct: log.info(f"{stage} {pct*100:.1f}%"))
         result = applier.apply(args.volumes, args.install_dir, args.workdir)
-        log.info(f"升级成功；旧版备份: {result.backup_dir}")
+        log.info("Update completed; previous version backup: %s", result.backup_dir)
     except ApplyError as e:
-        log.error(f"升级失败: {e}")
+        log.error("Update failed: %s", e)
         return 3
 
     # 启动新版

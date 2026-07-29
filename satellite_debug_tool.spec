@@ -39,12 +39,45 @@ extra_hidden = collect_submodules(
     "satellite_debug_tool",
     filter=lambda name: "tests" not in name.split("."),
 )
+app_datas = [
+    (
+        str(ROOT / "satellite_debug_tool" / "i18n" / "translations"),
+        "satellite_debug_tool/i18n/translations",
+    ),
+    (
+        str(ROOT / "satellite_debug_tool" / "ui" / "assets"),
+        "satellite_debug_tool/ui/assets",
+    ),
+]
+if sys.platform == "darwin":
+    app_datas.extend([
+        (
+            str(
+                ROOT
+                / "satellite_debug_tool"
+                / "platform"
+                / "macos"
+                / "en.lproj"
+            ),
+            "en.lproj",
+        ),
+        (
+            str(
+                ROOT
+                / "satellite_debug_tool"
+                / "platform"
+                / "macos"
+                / "zh_CN.lproj"
+            ),
+            "zh_CN.lproj",
+        ),
+    ])
 
 a = Analysis(
     [ENTRY],
     pathex=[str(ROOT)],
     binaries=pyside6_binaries + pyqtgraph_binaries + opengl_binaries,
-    datas=pyside6_datas + pyqtgraph_datas + opengl_datas + [
+    datas=pyside6_datas + pyqtgraph_datas + opengl_datas + app_datas + [
         # M11：升级器需要知道去哪个仓库拉版本
         (str(ROOT / "release.config.json"), "."),
     ],
@@ -116,13 +149,15 @@ if sys.platform == "darwin":
         bundle_identifier="com.softhz.satellite-debug-tool",
         info_plist={
             "CFBundleName": APP_NAME,
-            "CFBundleDisplayName": "卫星调试工具",
+            "CFBundleDisplayName": "Satellite Debug Tool",
+            "CFBundleDevelopmentRegion": "en",
+            "CFBundleLocalizations": ["en", "zh_CN"],
             "CFBundleShortVersionString": APP_VERSION,
             "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
             # 允许应用读写用户目录下的 ~/.satellite_debug_tool/
-            "NSDesktopFolderUsageDescription": "保存录制文件与 profile 缓存",
-            "NSDocumentsFolderUsageDescription": "保存录制文件与 profile 缓存",
+            "NSDesktopFolderUsageDescription": "Save recordings and profile cache.",
+            "NSDocumentsFolderUsageDescription": "Save recordings and profile cache.",
         },
     )

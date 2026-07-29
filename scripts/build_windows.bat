@@ -33,6 +33,10 @@ if errorlevel 1 (
     "%PY%" -m pip install -r satellite_debug_tool\requirements.txt || goto :err
 )
 
+REM ---- validate translation catalogs and compiled QM ----
+echo [build_windows] Validating TS/QM translation resources...
+"%PY%" scripts\update_translations.py check || goto :err
+
 REM ---- clean ----
 if exist build rmdir /s /q build
 if exist dist  rmdir /s /q dist
@@ -53,6 +57,13 @@ if exist "dist\updater" if exist "dist\SatelliteDebugTool" (
     copy /Y "dist\updater\updater.exe" "dist\SatelliteDebugTool\updater.exe" >nul
     REM merge _internal (copy missing files; duplicates ok)
     xcopy /E /Y /I /Q "dist\updater\_internal" "dist\SatelliteDebugTool\_internal" >nul
+)
+
+REM ---- bilingual operator documentation ----
+if exist "dist\SatelliteDebugTool" (
+    if exist "doc\WINDOWS_QUICK_START.md" copy /Y "doc\WINDOWS_QUICK_START.md" "dist\SatelliteDebugTool\README-Windows.md" >nul
+    if exist "doc\user_manual.md" copy /Y "doc\user_manual.md" "dist\SatelliteDebugTool\user_manual.md" >nul
+    if exist "doc\user_manual_en.md" copy /Y "doc\user_manual_en.md" "dist\SatelliteDebugTool\user_manual_en.md" >nul
 )
 
 REM ---- archive ----

@@ -11,6 +11,7 @@
 - 离线地图：Playback / Log 检测 `gps_lat` / `gps_lon` 后显示轨迹和事件 marker
 - 仿真入口：MockModem / fake-device 对星闭环仿真
 - 自动更新：Gitee/GitHub release 检查、下载、替换
+- 国际化：跟随系统 / 简体中文 / English，运行时即时切换
 - 主题：深色 / 深色高对比 / 浅色
 
 ## 安装与运行
@@ -27,6 +28,13 @@ python3 -m satellite_debug_tool.main
 # 或先安装 editable 包
 pip3 install -e satellite_debug_tool
 python3 -m satellite_debug_tool.main
+```
+
+临时指定本次运行语言（不会改用户配置）：
+
+```bash
+SATELLITE_DEBUG_LOCALE=en_US python3 -m satellite_debug_tool.main
+SATELLITE_DEBUG_LOCALE=zh_CN python3 -m satellite_debug_tool.main
 ```
 
 ## 运行测试
@@ -47,6 +55,7 @@ satellite_debug_tool/
 │   ├── protocol/   # 帧解析、CRC16校验、数据结构
 │   ├── comm/       # QThread 通信工作线程
 │   └── data/       # 环形缓冲区、数据存储
+├── i18n/           # TranslationManager + TS/QM 翻译资源
 ├── ui/             # PySide6 界面组件
 └── io/             # 数据录制器、数据导入器
 ```
@@ -56,6 +65,8 @@ satellite_debug_tool/
 - `doc/upper_pc_function_definition_vnext.md` — 当前上位机功能定义与后续路线
 - `doc/DEBUG设备协议接口规范_v2.md` — DEBUG v2 协议权威规范
 - `doc/user_manual.md` — 用户手册
+- `doc/user_manual_en.md` — English user manual
+- `doc/i18n_terms.md` — 中英术语表
 - `doc/acceptance_log.md` — 验收日志
 - `doc/RELEASING.md` — 发版流程
 - `BUILDING.md` — 打包指南

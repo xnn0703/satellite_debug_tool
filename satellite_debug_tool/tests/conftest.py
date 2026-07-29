@@ -3,3 +3,6 @@ import os
 
 os.environ.setdefault("SATELLITE_NO_UPDATE_CHECK", "1")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Historical UI assertions use the Chinese product copy. M16-specific tests
+# explicitly switch to both locales and verify runtime retranslation.
+os.environ.setdefault("SATELLITE_DEBUG_LOCALE", "zh_CN")

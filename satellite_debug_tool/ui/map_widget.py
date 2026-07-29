@@ -29,6 +29,8 @@ import numpy as np
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from satellite_debug_tool.i18n import register_translatable, tr
+
 
 _LOG = logging.getLogger(__name__)
 
@@ -84,6 +86,7 @@ class MapWidget(QWidget):
         self._setup_ui()
         self._set_region_internal(region)
         self._load_html()
+        register_translatable(self)
 
     def _setup_ui(self) -> None:
         # WebEngine import 放在方法里，避免顶层 import 阻塞测试收集（headless 环境）
@@ -119,6 +122,7 @@ class MapWidget(QWidget):
             _LOG.warning("map.html load failed")
             return
         self._loaded = True
+        self._apply_locale_texts()
         # 选源：有天地图 token → 在线天地图（坐标准）；否则 → OSM 离线缓存
         self._apply_tile_source()
         # 主题
@@ -132,7 +136,7 @@ class MapWidget(QWidget):
     def _apply_tile_source(self) -> None:
         """按当前配置选择瓦片源：天地图在线优先，回落 OSM 离线，再回落 placeholder。"""
         if self._tianditu_token:
-            attribution = "© 天地图 (WGS-84)"
+            attribution = tr("© Tianditu (WGS-84)")
             self._call_js(
                 f"setTiandituOnline({json.dumps(self._tianditu_token)}, "
                 f"{json.dumps(attribution)}, 18)"
@@ -140,7 +144,10 @@ class MapWidget(QWidget):
             return
         if self._region is not None:
             url = _tiles_url_template(self._region)
-            attribution = f"© OpenStreetMap · 离线缓存 {self._region.name}"
+            attribution = tr(
+                "© OpenStreetMap · offline cache {region}",
+                region=self._region.name,
+            )
             self._call_js(f"setTileURL({json.dumps(url)}, {json.dumps(attribution)}, 19)")
         else:
             self._call_js("setTileURL(null, '', 19)")
@@ -207,7 +214,10 @@ class MapWidget(QWidget):
             return False
         if self._loaded and self._region is not None:
             url = _tiles_url_template(self._region)
-            attribution = f"© OpenStreetMap · 离线缓存 {self._region.name}"
+            attribution = tr(
+                "© OpenStreetMap · offline cache {region}",
+                region=self._region.name,
+            )
             self._call_js(f"setTileURL({json.dumps(url)}, {json.dumps(attribution)}, 19)")
         return self._region is not None
 
@@ -238,6 +248,22 @@ class MapWidget(QWidget):
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light")
+
+    def _apply_locale_texts(self) -> None:
+        texts = {
+            "offlineTitle": tr("Offline map tiles were not found."),
+            "offlineInstruction": tr("Run this command while online:"),
+            "start": tr("Start"),
+            "end": tr("End"),
+            "tiandituAttribution": tr("© Tianditu"),
+        }
+        self._call_js(f"setLocaleTexts({json.dumps(texts, ensure_ascii=False)})")
+
+    def retranslate_ui(self) -> None:
+        if not self._loaded:
+            return
+        self._apply_locale_texts()
+        self._apply_tile_source()
 
     # =============================== 内部 ===============================
 

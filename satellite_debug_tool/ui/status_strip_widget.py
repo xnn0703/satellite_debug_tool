@@ -31,6 +31,7 @@ from satellite_debug_tool.core.protocol import (
     StateDefEntry,
     StateType,
 )
+from satellite_debug_tool.i18n import mark_raw_text, register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.flow_layout import FlowLayout
 
@@ -68,6 +69,7 @@ class _Chip(QFrame):
         self._dot_label = QLabel()
         self._dot_label.setStyleSheet(_dot(_LINK_IDLE))
         self._text = QLabel(label)
+        mark_raw_text(self._text)
         row.addWidget(self._dot_label)
         row.addWidget(self._text)
         self._theme = "dark"
@@ -125,12 +127,21 @@ class StatusStripWidget(QFrame):
 
         # 固定 chips
         self._link_chip = _Chip("LINK")
-        self._link_chip.setToolTip("协议级心跳（HEARTBEAT）健康状态：OK=链路通，-- =3s 未收到心跳")
+        self._link_chip.setToolTip(
+            tr(
+                "Protocol heartbeat status: OK means the link is healthy; "
+                "-- means no heartbeat for 3 seconds"
+            )
+        )
         self._recording_chip = _Chip("REC")
-        self._recording_chip.setToolTip("本机 .sdb 录制状态：红灯闪=正在录，灰=空闲")
+        self._recording_chip.setToolTip(
+            tr("Local .sdb recording status: flashing red means recording; gray means idle")
+        )
         self._beat_chip = _Chip("BEAT")
         self._beat_chip.set_dot(_LINK_IDLE)
-        self._beat_chip.setToolTip("每收到一帧 HEARTBEAT 闪一下绿灯（可验证下位机存活）")
+        self._beat_chip.setToolTip(
+            tr("Flashes green for each HEARTBEAT frame received")
+        )
         self._flow.addWidget(self._link_chip)
         self._flow.addWidget(self._recording_chip)
         self._flow.addWidget(self._beat_chip)
@@ -152,6 +163,7 @@ class StatusStripWidget(QFrame):
         self.set_theme("dark", "medium")
         self.set_recording(False)
         self.set_link_state(connected=False)
+        register_translatable(self)
 
     # ---- 让父布局正确分配高度（FlowLayout 是高度跟随宽度的布局） ----
 
@@ -251,14 +263,14 @@ class StatusStripWidget(QFrame):
             if entry.state_type == int(StateType.BOOL):
                 tip = f"[BOOL] state_id={entry.state_id}  {entry.name}"
                 if entry.flags & STATE_FLAG_INVERSE:
-                    tip += "\n(INVERSE: 0=正常/绿，1=告警/灰)"
+                    tip += tr("\n(INVERSE: 0=normal/green, 1=alarm/gray)")
             else:
                 enum_lines = "\n".join(
                     f"  {e.value} = {e.name} [lv={e.level}]" for e in entry.enums
                 )
                 tip = (
                     f"[ENUM] state_id={entry.state_id}  {entry.name}\n"
-                    f"{enum_lines or '  (无枚举项)'}"
+                    f"{enum_lines or tr('  (no enum items)')}"
                 )
             chip.setToolTip(tip)
             self._flow.addWidget(chip)

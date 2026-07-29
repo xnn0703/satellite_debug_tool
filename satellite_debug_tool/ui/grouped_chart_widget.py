@@ -32,7 +32,12 @@ from satellite_debug_tool.core.data import DataStore
 from satellite_debug_tool.core.data.data_store import channel_key
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.protocol import ChannelDefEntry
+from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.ui.chart_group_titles import (
+    default_group_title,
+    display_group_title,
+)
 
 
 # Mission Console 信号色板（16 色高区分度，相邻通道色相拉开）。
@@ -61,13 +66,7 @@ _COMBINED_PALETTE = _DISTINCT_PALETTE
 
 
 def _group_title(group_id: int) -> str:
-    return {
-        0: "姿态（Attitude）",
-        1: "指向（Pointing）",
-        2: "信号（Signal）",
-        3: "PID / 误差",
-        4: "位置（GPS）",
-    }.get(group_id, f"Group {group_id}")
+    return default_group_title(group_id)
 
 
 def _downsample_peak(
@@ -172,36 +171,48 @@ class GroupedChartWidget(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(4, 2, 4, 2)
         toolbar.setSpacing(4)
-        self._btn_combined = QPushButton("单图")
+        self._btn_combined = QPushButton(tr("Single chart"))
         self._btn_combined.setCheckable(True)
         self._btn_combined.setChecked(True)
-        self._btn_combined.setToolTip("所有通道叠加在一张大图（适合快速扫视整体趋势）")
+        self._btn_combined.setToolTip(
+            tr("Overlay all channels in one chart for a quick overview")
+        )
         self._btn_combined.clicked.connect(lambda: self.set_mode("combined"))
-        self._btn_stacked = QPushButton("分组")
+        self._btn_stacked = QPushButton(tr("Grouped"))
         self._btn_stacked.setCheckable(True)
-        self._btn_stacked.setToolTip("按 profile.group_id 纵向分子图（适合多量纲对比，可滚动）")
+        self._btn_stacked.setToolTip(
+            tr("Stack scrollable subplots by profile.group_id")
+        )
         self._btn_stacked.clicked.connect(lambda: self.set_mode("stacked"))
         # M9：全部隐藏 / 全部显示 切换 — 通道太多时一键清空再勾选关心的
-        self._btn_hide_all = QPushButton("全部隐藏")
+        self._btn_hide_all = QPushButton(tr("Hide all"))
         self._btn_hide_all.setCheckable(True)
         self._btn_hide_all.setToolTip(
-            "一键隐藏所有曲线，再用 legend 单独勾选要看的（再点恢复全部显示）"
+            tr(
+                "Hide every curve, then use the legend to show individual "
+                "curves; click again to restore all"
+            )
         )
         self._btn_hide_all.toggled.connect(self._on_hide_all_toggled)
         # M10 F1：归一化 toggle — 各曲线按自身 min-max 缩放到 [0, 1]，
         # 解决 yaw ±180° 大波动把 roll/pitch 压平看不见的问题
-        self._btn_normalize = QPushButton("归一化")
+        self._btn_normalize = QPushButton(tr("Normalize"))
         self._btn_normalize.setCheckable(True)
         self._btn_normalize.setToolTip(
-            "Y 轴显示模式：绝对值 / 各曲线按自身 min-max 归一化到 [0,1]\n"
-            "归一化用当前可视窗口数据计算范围，legend 显示真实 [min..max]"
+            tr(
+                "Y-axis mode: absolute values or per-curve min-max normalization "
+                "to [0,1]\nThe visible window defines the normalization range; "
+                "the legend shows the real [min..max]"
+            )
         )
         self._btn_normalize.toggled.connect(self._on_normalize_toggled)
         # M10 F4：Y 自动 — 用户手动缩放 Y 后一键复位回 display_min/max
-        self._btn_y_auto = QPushButton("Y 自动")
+        self._btn_y_auto = QPushButton(tr("Auto Y"))
         self._btn_y_auto.setToolTip(
-            "复位所有子图 Y 轴到 display_min/max（或归一化的 [0,1]）。\n"
-            "用户用鼠标手动缩放 Y 后，被改动的子图 Y 轴文字变橙色提示"
+            tr(
+                "Reset every subplot Y axis to display_min/max, or [0,1] when "
+                "normalized.\nA manually adjusted Y axis is shown in orange."
+            )
         )
         self._btn_y_auto.clicked.connect(self._on_y_auto_clicked)
         for b in (self._btn_combined, self._btn_stacked, self._btn_hide_all,
@@ -227,8 +238,13 @@ class GroupedChartWidget(QWidget):
         layout.addWidget(self._scroll, 1)
         self._apply_theme()
 
-        self._empty = pg.LabelItem("等待设备握手…", color=S.palette(self._theme)["text_faint"], size="10pt")
+        self._empty = pg.LabelItem(
+            tr("Waiting for device handshake..."),
+            color=S.palette(self._theme)["text_faint"],
+            size="10pt",
+        )
         self._gl.addItem(self._empty)
+        register_translatable(self)
 
     # ---- 公共 API ----
 
@@ -244,6 +260,44 @@ class GroupedChartWidget(QWidget):
         # 已有子图的轴色也要同步；简化做法：重建
         if self._current_hw is not None and self._curves:
             self._rebuild()
+
+    def retranslate_ui(self) -> None:
+        self._btn_hide_all.setText(
+            tr("Show all") if self._btn_hide_all.isChecked() else tr("Hide all")
+        )
+        if self._current_hw is None or self._profile is None:
+            if not self._plots:
+                self._empty.setText(tr("Waiting for device handshake..."))
+            return
+
+        channels = self._profile.get_channels(self._current_hw)
+        if not channels:
+            if not self._plots:
+                self._empty.setText(
+                    tr(
+                        "[{hardware}] no channels are available",
+                        hardware=self._current_hw,
+                    )
+                )
+            return
+
+        first_plot = next(iter(self._plots.values()), None)
+        for plot_key, plot in self._plots.items():
+            base_title = (
+                tr("All channels")
+                if self._mode == "combined"
+                else self._custom_group_title(plot_key)
+            )
+            self._plot_titles[plot_key] = base_title
+            self._apply_plot_title_marker(
+                plot_key, self._is_plot_normalized(plot_key)
+            )
+            plot.setLabel("left", tr("Value"))
+            if plot is first_plot:
+                plot.setLabel("bottom", tr("Time"), units="s")
+            action = self._plot_norm_actions.get(plot_key)
+            if action is not None:
+                action.setText(tr("Normalize this chart"))
 
     def set_profile_store(self, profile: ProfileStore) -> None:
         """绑定 profile store；profile_changed 时自动重建子图。"""
@@ -274,7 +328,7 @@ class GroupedChartWidget(QWidget):
         """M9：一键隐藏 / 显示所有曲线（不影响 legend 单独切换的状态历史）。"""
         for _channel_id, (_group_id, curve, _entry) in self._curves.items():
             curve.setVisible(not checked)
-        self._btn_hide_all.setText("全部显示" if checked else "全部隐藏")
+        self._btn_hide_all.setText(tr("Show all") if checked else tr("Hide all"))
 
     def set_channel_visible(self, channel_name: str, visible: bool) -> None:
         """按 DataStore 通道 key（如 "ch_03"）控制单条曲线显隐（D6 P0 修复）。
@@ -353,7 +407,7 @@ class GroupedChartWidget(QWidget):
         if plot is None:
             return
         base = self._plot_titles.get(plot_key, "")
-        plot.setTitle(f"{base} · 归一" if on else base)
+        plot.setTitle(tr("{title} · normalized", title=base) if on else base)
 
     def _register_plot(self, plot_key: int, plot, base_title: str) -> None:
         """rebuild 时登记子图：存标题、缓存 legend、加右键「归一化此图」、套全局默认。
@@ -365,7 +419,7 @@ class GroupedChartWidget(QWidget):
         # 右键菜单加 checkable「归一化此图」
         try:
             menu = plot.getViewBox().menu
-            act = QAction("归一化此图", menu)
+            act = QAction(tr("Normalize this chart"), menu)
             act.setCheckable(True)
             act.toggled.connect(
                 lambda on, pk=plot_key: self._on_plot_normalize_toggled(pk, on)
@@ -482,7 +536,7 @@ class GroupedChartWidget(QWidget):
         if custom is not None:
             entry = custom.get(str(group_id))
             if entry and entry.get("title"):
-                return str(entry["title"])
+                return display_group_title(group_id, entry)
         return _group_title(group_id)
 
     def set_all_visible(self, visible: bool) -> None:
@@ -492,7 +546,9 @@ class GroupedChartWidget(QWidget):
         self._btn_hide_all.blockSignals(True)
         try:
             self._btn_hide_all.setChecked(not visible)
-            self._btn_hide_all.setText("全部显示" if not visible else "全部隐藏")
+            self._btn_hide_all.setText(
+                tr("Show all") if not visible else tr("Hide all")
+            )
         finally:
             self._btn_hide_all.blockSignals(False)
 
@@ -719,7 +775,7 @@ class GroupedChartWidget(QWidget):
         if is_user_mark:
             color = "#FFB347"   # 醒目琥珀
             pen = pg.mkPen(color=color, width=2, style=Qt.SolidLine)
-            label = f"⚑ {name}" if name else "⚑ USER MARK"
+            label = f"⚑ {name}" if name else tr("⚑ USER MARK")
         else:
             color = _EVENT_LEVEL_COLORS.get(level, "#CCCCCC")
             pen = pg.mkPen(color=color, width=1, style=Qt.DashLine)
@@ -813,14 +869,23 @@ class GroupedChartWidget(QWidget):
         self._clear_plots()
 
         if self._current_hw is None or self._profile is None:
-            self._empty = pg.LabelItem("等待设备握手…", color=S.palette(self._theme)["text_faint"], size="10pt")
+            self._empty = pg.LabelItem(
+                tr("Waiting for device handshake..."),
+                color=S.palette(self._theme)["text_faint"],
+                size="10pt",
+            )
             self._gl.addItem(self._empty)
             return
 
         channels = self._profile.get_channels(self._current_hw)
         if not channels:
             self._empty = pg.LabelItem(
-                f"[{self._current_hw}] 暂无通道", color=S.palette(self._theme)["text_faint"], size="10pt",
+                tr(
+                    "[{hardware}] no channels are available",
+                    hardware=self._current_hw,
+                ),
+                color=S.palette(self._theme)["text_faint"],
+                size="10pt",
             )
             self._gl.addItem(self._empty)
             return
@@ -861,9 +926,11 @@ class GroupedChartWidget(QWidget):
         # 让容器高度跟滚动区一致（combined 模式只有一张图，撑满可视区即可）
         self._gl.setMinimumHeight(0)
 
-        plot: pg.PlotItem = self._gl.addPlot(row=0, col=0, title="全部通道")
-        plot.setLabel("left", "Value")
-        plot.setLabel("bottom", "Time", units="s")
+        plot: pg.PlotItem = self._gl.addPlot(
+            row=0, col=0, title=tr("All channels")
+        )
+        plot.setLabel("left", tr("Value"))
+        plot.setLabel("bottom", tr("Time"), units="s")
         plot.showGrid(x=True, y=True, alpha=0.25)
         plot.getAxis("left").setTextPen(self._plot_axis_color())
         plot.getAxis("bottom").setTextPen(self._plot_axis_color())
@@ -898,7 +965,7 @@ class GroupedChartWidget(QWidget):
         self._x_view_max = self._time_window
         self._plots[0] = plot
         # M12：登记子图（legend 缓存 + 右键归一化菜单 + 套全局默认 Y 范围）
-        self._register_plot(0, plot, "全部通道")
+        self._register_plot(0, plot, tr("All channels"))
         # M10 F4：监听用户手动调 Y
         self._connect_user_y_override(0, plot)
 
@@ -941,7 +1008,7 @@ class GroupedChartWidget(QWidget):
                 row=row_idx, col=0, title=self._custom_group_title(group_id)
             )
             plot.setMinimumHeight(_STACKED_SUBPLOT_HEIGHT - 20)  # 留一些 layout 余量
-            plot.setLabel("left", "Value")
+            plot.setLabel("left", tr("Value"))
             plot.showGrid(x=True, y=True, alpha=0.25)
             plot.getAxis("left").setTextPen(axis_text_color)
             plot.getAxis("bottom").setTextPen(axis_text_color)
@@ -982,7 +1049,7 @@ class GroupedChartWidget(QWidget):
             self._connect_user_y_override(group_id, plot)
 
         if first_plot is not None:
-            first_plot.setLabel("bottom", "Time", units="s")
+            first_plot.setLabel("bottom", tr("Time"), units="s")
             # 初始 X 范围同 combined
             first_plot.setXRange(0.0, self._time_window, padding=0)
             self._x_view_max = self._time_window

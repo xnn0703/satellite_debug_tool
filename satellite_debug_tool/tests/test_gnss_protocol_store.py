@@ -674,7 +674,7 @@ def test_mg902_widget_separates_record_drawable_lock_and_used(qapp) -> None:
     widget.show()
     widget.refresh()
     qapp.processEvents()
-    assert "卫星记录 5 · 可绘星 0 · 有效 CNR 4" in widget._stats.text()
+    assert "卫星记录 5 · 可绘星 0 · 有效 C/N₀ 4" in widget._stats.text()
     assert widget._sky._empty_text == "已收到 5 条卫星记录\n方位/仰角尚未有效"
     assert widget._sky._hit_points == []
     assert len(widget._bars._bars) == 4
@@ -866,7 +866,7 @@ def test_mg902_widget_distinguishes_unlocked_signal_from_no_data(qapp) -> None:
     widget.refresh()
     assert widget._bars._bars == []
     assert widget._bars._empty_text == "已收到逐信号数据，暂无锁定信号"
-    assert "有效 CNR 0" in widget._stats.text()
+    assert "有效 C/N₀ 0" in widget._stats.text()
     assert widget._table.item(0, 8).text() == "USED"
     widget.close()
 
@@ -881,7 +881,7 @@ def test_mg902_widget_keeps_lock_when_cn0_is_not_valid(qapp) -> None:
     widget.refresh()
     assert widget._bars._bars == []
     assert widget._bars._empty_text == "已有锁定信号，但暂无有效 C/N₀"
-    assert "有效 CNR 0" in widget._stats.text()
+    assert "有效 C/N₀ 0" in widget._stats.text()
     assert widget._table.item(0, 8).text() == "LOCK"
     widget.close()
 
@@ -925,7 +925,7 @@ def test_mg902_playback_widget_preserves_lock_bars_and_invalid_sky_geometry(qapp
     widget.refresh()
     qapp.processEvents()
     assert widget._history_slider.maximum() == 1
-    assert "卫星记录 1 · 可绘星 0 · 有效 CNR 2" in widget._stats.text()
+    assert "卫星记录 1 · 可绘星 0 · 有效 C/N₀ 2" in widget._stats.text()
     assert len(widget._bars._bars) == 2
     assert widget._sky._hit_points == []
     assert widget._sky._empty_text == "已收到 1 条卫星记录\n方位/仰角尚未有效"
@@ -939,7 +939,7 @@ def _set_long_gnss_header(widget: GnssWidget) -> None:
     widget._timer.stop()
     widget._source_badge.setText("SOURCE: MG902")
     widget._stats.setText(
-        "卫星记录 25 · 可绘星 20 · 有效 CNR 8 · 平均 30.2 / 最大 37 dB-Hz · "
+        "卫星记录 25 · 可绘星 20 · 有效 C/N₀ 8 · 平均 30.2 / 最大 37 dB-Hz · "
         "Sky 0.8s · Signal 0.8s"
     )
     widget._fit_info_font()

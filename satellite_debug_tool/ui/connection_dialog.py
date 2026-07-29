@@ -11,14 +11,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from satellite_debug_tool.core.comm import SerialWorker
+from satellite_debug_tool.i18n import register_translatable, tr
 
 
 class ConnectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Connection Settings")
+        self.setWindowTitle(tr("Connection settings"))
         self.resize(400, 200)
         self._setup_ui()
+        register_translatable(self)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -28,7 +30,7 @@ class ConnectionDialog(QDialog):
 
         self.serial_tab = self._create_serial_tab()
         self.udp_tab = self._create_udp_tab()
-        self.tabs.addTab(self.serial_tab, "Serial")
+        self.tabs.addTab(self.serial_tab, tr("Serial"))
         self.tabs.addTab(self.udp_tab, "UDP")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -41,14 +43,14 @@ class ConnectionDialog(QDialog):
         layout = QVBoxLayout(widget)
 
         port_layout = QHBoxLayout()
-        port_layout.addWidget(QLabel("Port:"))
+        port_layout.addWidget(QLabel(tr("Port:")))
         self.serial_port_combo = QComboBox()
         self.serial_port_combo.addItems(SerialWorker.list_ports())
         port_layout.addWidget(self.serial_port_combo)
         layout.addLayout(port_layout)
 
         baud_layout = QHBoxLayout()
-        baud_layout.addWidget(QLabel("Baudrate:"))
+        baud_layout.addWidget(QLabel(tr("Baud rate:")))
         self.baudrate_combo = QComboBox()
         baudrates = [
             "9600",
@@ -73,13 +75,13 @@ class ConnectionDialog(QDialog):
         layout = QVBoxLayout(widget)
 
         remote_layout = QHBoxLayout()
-        remote_layout.addWidget(QLabel("Remote IP:"))
+        remote_layout.addWidget(QLabel(tr("Remote IP:")))
         self.udp_remote_ip = QLineEdit("192.168.1.12")
         remote_layout.addWidget(self.udp_remote_ip)
         layout.addLayout(remote_layout)
 
         remote_port_layout = QHBoxLayout()
-        remote_port_layout.addWidget(QLabel("Remote Port:"))
+        remote_port_layout.addWidget(QLabel(tr("Remote port:")))
         self.udp_remote_port = QSpinBox()
         self.udp_remote_port.setRange(1, 65535)
         self.udp_remote_port.setValue(4004)
@@ -87,7 +89,7 @@ class ConnectionDialog(QDialog):
         layout.addLayout(remote_port_layout)
 
         local_port_layout = QHBoxLayout()
-        local_port_layout.addWidget(QLabel("Local Port:"))
+        local_port_layout.addWidget(QLabel(tr("Local port:")))
         self.udp_local_port = QSpinBox()
         self.udp_local_port.setRange(1, 65535)
         self.udp_local_port.setValue(45678)

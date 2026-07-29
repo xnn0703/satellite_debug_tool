@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QCoreApplication, Qt, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.data import EventLog, EventRecord
+from satellite_debug_tool.i18n import register_translatable, set_translatable_n_text, tr
 from satellite_debug_tool.ui import styles as S
 
 
@@ -37,6 +38,12 @@ _LEVEL_COLORS = {
     3: "#F14C4C",   # ERROR 红
 }
 _LEVEL_NAMES = {0: "DBG", 1: "INF", 2: "WRN", 3: "ERR"}
+
+
+def _declare_numerus_sources() -> None:
+    """Give pyside6-lupdate literal numerus calls while runtime uses the binding helper."""
+    QCoreApplication.translate("", "%n event(s)", None, 0)
+    QCoreApplication.translate("", "%n event(s) shown of {total}", None, 0)
 
 
 class EventTimelineWidget(QWidget):
@@ -63,25 +70,31 @@ class EventTimelineWidget(QWidget):
         filter_bar.setSpacing(6)
 
         self._level_combo = QComboBox()
-        self._level_combo.addItem("All", 0)
+        self._level_combo.addItem(tr("All"), 0)
         self._level_combo.addItem("INFO+", 1)
         self._level_combo.addItem("WARN+", 2)
         self._level_combo.addItem("ERROR", 3)
         self._level_combo.setFixedWidth(80)
-        self._level_combo.setToolTip("只显示大于等于所选级别的事件（DBG<INF<WRN<ERR）")
+        self._level_combo.setToolTip(
+            tr("Show events at or above the selected level (DBG<INF<WRN<ERR)")
+        )
         self._level_combo.currentIndexChanged.connect(self._on_filter_changed)
 
         self._keyword_edit = QLineEdit()
-        self._keyword_edit.setPlaceholderText("筛选事件名…")
-        self._keyword_edit.setToolTip("按事件名（name）关键字过滤；不区分大小写")
+        self._keyword_edit.setPlaceholderText(tr("Filter event names..."))
+        self._keyword_edit.setToolTip(
+            tr("Filter by event name; matching is case-insensitive")
+        )
         self._keyword_edit.textChanged.connect(self._on_keyword_changed)
 
-        self._clear_btn = QPushButton("清空")
+        self._clear_btn = QPushButton(tr("Clear"))
         self._clear_btn.setFixedWidth(60)
-        self._clear_btn.setToolTip("清空本地事件缓冲与列表（不影响下位机继续上报）")
+        self._clear_btn.setToolTip(
+            tr("Clear the local event buffer and list without affecting device reporting")
+        )
         self._clear_btn.clicked.connect(self._on_clear_clicked)
 
-        filter_bar.addWidget(QLabel("级别:"))
+        filter_bar.addWidget(QLabel(tr("Level:")))
         filter_bar.addWidget(self._level_combo)
         filter_bar.addWidget(self._keyword_edit, 1)
         filter_bar.addWidget(self._clear_btn)
@@ -98,10 +111,12 @@ class EventTimelineWidget(QWidget):
         outer.addWidget(self._list, 1)
 
         # ---- 底部计数 ----
-        self._count_label = QLabel("0 events")
+        self._count_label = QLabel()
         outer.addWidget(self._count_label)
 
         self.set_theme("dark", "medium")
+        self._update_count()
+        register_translatable(self)
 
         # 订阅
         log.event_added.connect(self._on_event_added)
@@ -231,7 +246,7 @@ class EventTimelineWidget(QWidget):
         if item is None:
             return
         menu = QMenu(self._list)
-        locate = QAction("在曲线上定位", menu)
+        locate = QAction(tr("Locate on chart"), menu)
         locate.triggered.connect(lambda: self._on_item_double_clicked(item))
         menu.addAction(locate)
         menu.exec(self._list.viewport().mapToGlobal(pos))
@@ -240,6 +255,14 @@ class EventTimelineWidget(QWidget):
         total = len(self._log)
         shown = self._list.count()
         if total == shown:
-            self._count_label.setText(f"{total} events")
+            set_translatable_n_text("%n event(s)", self._count_label, total)
         else:
-            self._count_label.setText(f"{shown}/{total} events (filtered)")
+            set_translatable_n_text(
+                "%n event(s) shown of {total}",
+                self._count_label,
+                shown,
+                total=total,
+            )
+
+    def retranslate_ui(self) -> None:
+        self._update_count()

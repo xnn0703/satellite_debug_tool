@@ -29,10 +29,12 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from satellite_debug_tool.updater.errors import UpdaterError
+
 
 # ---------- 异常 ----------
 
-class UpdateCheckError(Exception):
+class UpdateCheckError(UpdaterError):
     """检查更新失败（网络/解析/HTTP 错误的统一包装）。"""
 
 
@@ -181,17 +183,24 @@ class ReleaseChecker:
             with resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
-            raise UpdateCheckError(f"Gitee API HTTP {e.code}: {e.reason}") from e
+            raise UpdateCheckError(
+                "check_http_error",
+                str(e.reason),
+                status=e.code,
+            ) from e
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise UpdateCheckError(f"网络错误: {e}") from e
+            raise UpdateCheckError("check_network_error", str(e)) from e
 
         try:
             data = json.loads(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise UpdateCheckError(f"响应解析失败: {e}") from e
+            raise UpdateCheckError("check_response_parse_error", str(e)) from e
 
         if not isinstance(data, dict) or "tag_name" not in data:
-            raise UpdateCheckError(f"响应格式异常: {str(data)[:200]}")
+            raise UpdateCheckError(
+                "check_response_format_error",
+                str(data)[:200],
+            )
 
         assets_raw = data.get("assets") or []
         assets: List[Asset] = []

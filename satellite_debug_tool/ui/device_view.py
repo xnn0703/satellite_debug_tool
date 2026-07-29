@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import time
 import zlib
+from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QCoreApplication, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -49,6 +50,13 @@ from satellite_debug_tool.core.protocol import (
     ParaType,
 )
 from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.i18n import (
+    mark_raw_text,
+    register_translatable,
+    set_translatable_text,
+    tr,
+    trc,
+)
 from satellite_debug_tool.ui import styles as S
 
 
@@ -75,6 +83,31 @@ PARA_AUTO_FALLBACK_MS = 1500
 PARA_SET_TIMEOUT_MS = 10000
 PARA_RESET_TIMEOUT_MS = 15000
 PARA_READ_TIMEOUT_MS = 10000
+
+
+if False:  # Translation extraction declarations for indirect status templates.
+    QCoreApplication.translate("DeviceView", "Unchanged")
+    QCoreApplication.translate("DeviceView", "Awaiting write confirmation...")
+    QCoreApplication.translate("DeviceView", "Send failed")
+    QCoreApplication.translate("DeviceView", "✓ Success")
+    QCoreApplication.translate("DeviceView", "Waiting for device readback...")
+    QCoreApplication.translate("DeviceView", "Target value was not read back")
+    QCoreApplication.translate("DeviceView", "✗ {detail}")
+    QCoreApplication.translate(
+        "DeviceView",
+        "✓ Update complete; device is online ({before} → {after})",
+    )
+    QCoreApplication.translate(
+        "DeviceView",
+        "✓ Device is back online (version {version}, unchanged)",
+    )
+
+
+class CapabilityUiState(Enum):
+    DISCONNECTED = "disconnected"
+    WAITING_PROFILE = "waiting_profile"
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
 
 
 class DeviceView(QWidget):
@@ -115,7 +148,9 @@ class DeviceView(QWidget):
         self._pending_para_name: Optional[str] = None
         self._pending_para_value: Optional[str] = None
         self._pending_para_type: Optional[int] = None
-        self._para_status_by_name: dict[str, str] = {}
+        self._para_status_by_name: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._para_capability_state = CapabilityUiState.DISCONNECTED
+        self._ota_capability_state = CapabilityUiState.DISCONNECTED
 
         # OTA 状态机
         self._ota_active = False
@@ -130,6 +165,8 @@ class DeviceView(QWidget):
         self._ota_restore_debug = False
         self._known_debug_enabled = False
         self._ota_start_time = 0.0
+        self._ota_status_source = "Idle"
+        self._ota_status_values: dict[str, Any] = {}
 
         # OTA 升级后等待设备重启 + 新版本上线。设备 bootloader 流程
         # （Store Firmware → Load Firmware → jump → app 启动 → 发 META）
@@ -154,6 +191,7 @@ class DeviceView(QWidget):
         self._setup_ui()
         if profile_store is not None:
             self.set_profile_store(profile_store)
+        register_translatable(self)
 
     def _setup_ui(self):
         outer = QVBoxLayout(self)
@@ -161,24 +199,25 @@ class DeviceView(QWidget):
         outer.setSpacing(8)
 
         # ---- 设备信息卡片 ----
-        info_group = QGroupBox("设备信息")
+        info_group = QGroupBox(tr("Device information"))
         info_layout = QGridLayout(info_group)
         info_layout.setSpacing(6)
 
         self._info_labels = {}
         for row, (key, label) in enumerate([
-            ("hw_type", "设备类型:"),
-            ("fw_ver", "固件版本:"),
-            ("device_sn", "序列号:"),
-            ("protocol_ver", "协议版本:"),
+            ("hw_type", tr("Device type:")),
+            ("fw_ver", tr("Firmware version:")),
+            ("device_sn", tr("Serial number:")),
+            ("protocol_ver", tr("Protocol version:")),
         ]):
             info_layout.addWidget(QLabel(label), row, 0)
             val = QLabel("—")
+            mark_raw_text(val)
             val.setTextInteractionFlags(Qt.TextSelectableByMouse)
             info_layout.addWidget(val, row, 1)
             self._info_labels[key] = val
 
-        self._refresh_info_btn = QPushButton("刷新")
+        self._refresh_info_btn = QPushButton(tr("Refresh"))
         self._refresh_info_btn.setFixedWidth(80)
         self._refresh_info_btn.clicked.connect(self._on_refresh_info)
         info_layout.addWidget(self._refresh_info_btn, 0, 2, 2, 1)
@@ -186,13 +225,13 @@ class DeviceView(QWidget):
         outer.addWidget(info_group)
 
         # ---- 参数表 ----
-        para_group = QGroupBox("参数管理")
+        para_group = QGroupBox(tr("Parameter management"))
         para_layout = QVBoxLayout(para_group)
 
         btn_row = QHBoxLayout()
-        self._read_all_btn = QPushButton("读取全部")
+        self._read_all_btn = QPushButton(tr("Read all"))
         self._read_all_btn.clicked.connect(self._on_read_params)
-        self._factory_reset_btn = QPushButton("恢复出厂")
+        self._factory_reset_btn = QPushButton(tr("Factory reset"))
         self._factory_reset_btn.clicked.connect(self._on_factory_reset)
         btn_row.addWidget(self._read_all_btn)
         btn_row.addWidget(self._factory_reset_btn)
@@ -203,7 +242,13 @@ class DeviceView(QWidget):
         para_layout.addWidget(self._para_status_label)
 
         self._para_table = QTableWidget(0, 5)
-        self._para_table.setHorizontalHeaderLabels(["名称", "类型", "当前值", "操作", "状态"])
+        self._para_table.setHorizontalHeaderLabels([
+            tr("Name"),
+            tr("Type"),
+            tr("Current value"),
+            tr("Action"),
+            tr("Status"),
+        ])
         self._para_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self._para_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self._para_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -217,24 +262,24 @@ class DeviceView(QWidget):
         outer.addWidget(para_group, stretch=1)
 
         # ---- OTA ----
-        ota_group = QGroupBox("固件升级 (OTA)")
+        ota_group = QGroupBox(tr("Firmware update (OTA)"))
         ota_layout = QVBoxLayout(ota_group)
 
         file_row = QHBoxLayout()
-        self._ota_file_label = QLabel("未选择文件")
-        self._ota_select_btn = QPushButton("选择固件...")
+        self._ota_file_label = QLabel(tr("No file selected"))
+        self._ota_select_btn = QPushButton(tr("Select firmware..."))
         self._ota_select_btn.clicked.connect(self._on_select_firmware)
         file_row.addWidget(self._ota_file_label, 1)
         file_row.addWidget(self._ota_select_btn)
         ota_layout.addLayout(file_row)
 
         ctrl_row = QHBoxLayout()
-        self._ota_pause_debug_cb = QCheckBox("暂停实时数据（全力传输）")
+        self._ota_pause_debug_cb = QCheckBox(tr("Pause live data for full-speed transfer"))
         self._ota_pause_debug_cb.setChecked(True)
-        self._ota_upload_btn = QPushButton("上传并升级")
+        self._ota_upload_btn = QPushButton(tr("Upload and update"))
         self._ota_upload_btn.setEnabled(False)
         self._ota_upload_btn.clicked.connect(self._on_ota_start)
-        self._ota_abort_btn = QPushButton("中止")
+        self._ota_abort_btn = QPushButton(tr("Abort"))
         self._ota_abort_btn.setEnabled(False)
         self._ota_abort_btn.clicked.connect(self._on_ota_abort)
         ctrl_row.addWidget(self._ota_pause_debug_cb)
@@ -248,13 +293,13 @@ class DeviceView(QWidget):
         self._ota_progress.setValue(0)
         ota_layout.addWidget(self._ota_progress)
 
-        self._ota_status_label = QLabel("空闲")
+        self._ota_status_label = QLabel(tr("Idle"))
         ota_layout.addWidget(self._ota_status_label)
 
         outer.addWidget(ota_group)
 
         # ---- 未连接遮罩 ----
-        self._overlay = QLabel("请先在实时页面连接设备")
+        self._overlay = QLabel(tr("Connect a device on the Live tab first"))
         self._overlay.setAlignment(Qt.AlignCenter)
         self._overlay.setStyleSheet(
             "background-color: rgba(30,30,30,200); color: #888; font-size: 16px;"
@@ -263,6 +308,54 @@ class DeviceView(QWidget):
         self._overlay.raise_()
 
         self._set_controls_enabled(False)
+
+    def _set_para_status(self, source: str, **values: Any) -> None:
+        set_translatable_text(
+            source,
+            self._para_status_label,
+            context="DeviceView",
+            **values,
+        )
+
+    def _clear_para_status(self) -> None:
+        self._para_status_label.clear()
+        if hasattr(self._para_status_label, "_i18n_state_text"):
+            delattr(self._para_status_label, "_i18n_state_text")
+
+    def _set_ota_status(self, source: str, **values: Any) -> None:
+        self._ota_status_source = source
+        self._ota_status_values = dict(values)
+        set_translatable_text(
+            source,
+            self._ota_status_label,
+            context="DeviceView",
+            **values,
+        )
+
+    def _set_para_row_status(
+        self,
+        name: str,
+        row: int,
+        source: str,
+        **values: Any,
+    ) -> None:
+        self._para_status_by_name[name] = (source, dict(values))
+        if 0 <= row < self._para_table.rowCount():
+            item = self._para_table.item(row, 4)
+            if item is not None:
+                item.setText(trc("DeviceView", source, **values))
+
+    def _render_para_row_statuses(self) -> None:
+        for row, para in enumerate(self._params):
+            status = self._para_status_by_name.get(para.name)
+            item = self._para_table.item(row, 4)
+            if item is None:
+                continue
+            if status is None:
+                item.setText("")
+            else:
+                source, values = status
+                item.setText(trc("DeviceView", source, **values))
 
     # ---- 连接共享 ----
 
@@ -295,6 +388,8 @@ class DeviceView(QWidget):
             self._protocol_ver = 0
             self._update_info_labels()
             self._overlay.hide()
+            self._para_capability_state = CapabilityUiState.WAITING_PROFILE
+            self._ota_capability_state = CapabilityUiState.WAITING_PROFILE
             self._refresh_capabilities()
         else:
             self._hw_type = "—"
@@ -311,10 +406,14 @@ class DeviceView(QWidget):
             self._para_read_timer.stop()
             self._supports_parameters = False
             self._supports_ota = False
-            self._para_status_label.setText("")
+            self._para_capability_state = CapabilityUiState.DISCONNECTED
+            self._ota_capability_state = CapabilityUiState.DISCONNECTED
+            self._clear_para_status()
+            if not self._ota_active:
+                self._set_ota_status("Idle")
             self._set_controls_enabled(False)
             if self._ota_active:
-                self._ota_finish("连接断开，OTA 中止")
+                self._ota_finish("Connection lost; OTA aborted")
             # 连接断开时停掉 OTA 后等待的探测，避免对断连 worker 发包
             if self._ota_post_reboot_timer.isActive():
                 self._ota_post_reboot_timer.stop()
@@ -328,7 +427,7 @@ class DeviceView(QWidget):
         if not self._ota_active or self._ota_state != "QUIESCE" or target:
             return
         if not ok:
-            self._ota_finish(f"关闭实时数据失败: {detail}")
+            self._ota_finish("Failed to stop live data: {detail}", detail=detail)
             return
         self._ota_send_begin()
 
@@ -351,13 +450,15 @@ class DeviceView(QWidget):
             ):
                 before = self._ota_post_reboot_fw_before or "?"
                 if record.fw_ver != before:
-                    msg = f"✓ 升级成功，设备已上线（{before} → {record.fw_ver}）"
+                    source = "✓ Update complete; device is online ({before} → {after})"
+                    values = {"before": before, "after": record.fw_ver}
                 else:
-                    msg = f"✓ 设备已重新上线（版本 {record.fw_ver}，与升级前相同）"
+                    source = "✓ Device is back online (version {version}, unchanged)"
+                    values = {"version": record.fw_ver}
                 self._known_debug_enabled = False
                 self._params_loaded_hw = None
                 self._last_auto_read_hw = None
-                self._ota_finish(msg, restore_debug=False)
+                self._ota_finish(source, restore_debug=False, **values)
                 if self._supports_parameters:
                     self._maybe_auto_read_params()
         elif isinstance(record, ParaTableReport):
@@ -376,11 +477,15 @@ class DeviceView(QWidget):
         elapsed = int(now - self._ota_post_reboot_started_at)
         # 超时判断
         if now > self._ota_post_reboot_deadline:
-            self._ota_finish("设备未在 120s 内重新上线，请检查连接", restore_debug=False)
+            self._ota_finish(
+                "Device did not return within 120 s; check the connection",
+                restore_debug=False,
+            )
             return
         # UI 显示已等待时长
-        self._ota_status_label.setText(
-            f"设备重启中（已等 {elapsed}s，bootloader 刷写通常约 45s）..."
+        self._set_ota_status(
+            "Device is rebooting ({elapsed}s elapsed; bootloader flashing usually takes about 45s)...",
+            elapsed=elapsed,
         )
         # 主动请求 META，触发设备重新发送版本信息（设备未启动期间会丢弃，无副作用）
         if self._worker is not None:
@@ -403,33 +508,53 @@ class DeviceView(QWidget):
     def _refresh_capabilities(self) -> None:
         connected = self._worker is not None
         hw = self._device_hw_type()
+        previous_para_state = self._para_capability_state
+        previous_ota_state = self._ota_capability_state
         self._supports_parameters = connected and self._capability_supported("parameters")
         self._supports_ota = connected and self._capability_supported("ota")
         self._set_controls_enabled(connected)
 
         if not connected:
+            self._para_capability_state = CapabilityUiState.DISCONNECTED
+            self._ota_capability_state = CapabilityUiState.DISCONNECTED
             return
 
         if hw is None:
-            self._para_status_label.setText("等待设备 profile/capability...")
-            if self._ota_status_label.text().startswith("当前固件未声明"):
-                self._ota_status_label.setText("等待设备 profile/capability...")
+            self._para_capability_state = CapabilityUiState.WAITING_PROFILE
+            self._ota_capability_state = CapabilityUiState.WAITING_PROFILE
+            self._set_para_status("Waiting for device Profile and capabilities...")
+            if not self._ota_active:
+                self._set_ota_status("Waiting for device Profile and capabilities...")
             return
 
         if self._supports_parameters:
-            if self._para_status_label.text().startswith("当前固件未声明") or "等待设备" in self._para_status_label.text():
-                self._para_status_label.setText("")
+            self._para_capability_state = CapabilityUiState.SUPPORTED
+            if previous_para_state in {
+                CapabilityUiState.WAITING_PROFILE,
+                CapabilityUiState.UNSUPPORTED,
+            }:
+                self._clear_para_status()
             self._maybe_auto_read_params()
         else:
+            self._para_capability_state = CapabilityUiState.UNSUPPORTED
             self._params = []
             self._para_table.setRowCount(0)
-            self._para_status_label.setText("当前固件未声明支持参数管理")
+            self._set_para_status("This firmware does not declare parameter-management support")
 
         if self._supports_ota:
-            if self._ota_status_label.text().startswith("当前固件未声明") or "等待设备" in self._ota_status_label.text():
-                self._ota_status_label.setText("空闲")
+            self._ota_capability_state = CapabilityUiState.SUPPORTED
+            if (
+                not self._ota_active
+                and previous_ota_state in {
+                    CapabilityUiState.WAITING_PROFILE,
+                    CapabilityUiState.UNSUPPORTED,
+                }
+            ):
+                self._set_ota_status("Idle")
         else:
-            self._ota_status_label.setText("当前固件未声明支持 OTA")
+            self._ota_capability_state = CapabilityUiState.UNSUPPORTED
+            if not self._ota_active:
+                self._set_ota_status("This firmware does not declare OTA support")
 
     def _maybe_auto_read_params(self) -> None:
         hw = self._device_hw_type()
@@ -472,7 +597,7 @@ class DeviceView(QWidget):
 
     def _send(self, frame: bytes) -> bool:
         if self._worker is None:
-            self.status_message.emit("未连接，命令未发送", 3000)
+            self.status_message.emit(tr("Not connected; command was not sent"), 3000)
             return False
         return bool(self._worker.send(frame))
 
@@ -495,24 +620,31 @@ class DeviceView(QWidget):
 
     def _request_para_table(self, *, allow_during_set: bool = False):
         if not self._supports_parameters:
-            self._para_status_label.setText("当前固件未声明支持参数管理")
-            self.status_message.emit("当前固件未声明支持参数管理", 3000)
+            message = tr("This firmware does not declare parameter-management support")
+            self._set_para_status(
+                "This firmware does not declare parameter-management support"
+            )
+            self.status_message.emit(message, 3000)
             return
         if self._ota_active:
-            self._para_status_label.setText("OTA 进行中，参数操作已暂停")
+            self._set_para_status("OTA is active; parameter operations are paused")
             return
         if self._pending_request == "para_set" and not allow_during_set:
-            self._para_status_label.setText("参数写入确认中，暂缓读取")
-            self.status_message.emit("参数写入确认中，暂缓读取", 2000)
+            message = tr("Parameter write is awaiting confirmation; read is deferred")
+            self._set_para_status(
+                "Parameter write is awaiting confirmation; read is deferred"
+            )
+            self.status_message.emit(message, 2000)
             return
         if self._para_read_pending:
-            self._para_status_label.setText("参数表读取中...")
+            self._set_para_status("Reading parameter table...")
             return
         if self._send(build_request_para_table()):
             self._para_read_pending = True
+            self._set_para_status("Reading parameter table...")
             self._para_read_timer.start(PARA_READ_TIMEOUT_MS)
         else:
-            self._para_status_label.setText("参数表读取发送失败")
+            self._set_para_status("Failed to send parameter-table request")
 
     def _on_para_table_received(self, report: ParaTableReport):
         self._para_read_pending = False
@@ -520,7 +652,7 @@ class DeviceView(QWidget):
         hw = self._device_hw_type()
         if hw is not None:
             self._params_loaded_hw = hw
-        self._para_status_label.setText("")
+        self._clear_para_status()
         self._params = report.params
         self._para_table.setRowCount(len(report.params))
         for row, p in enumerate(report.params):
@@ -528,7 +660,7 @@ class DeviceView(QWidget):
             name_item = QTableWidgetItem(p.name)
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             if p.flags & PARA_FLAG_REQUIRES_REBOOT:
-                name_item.setToolTip("修改后需要重启设备才能生效")
+                name_item.setToolTip(tr("Restart the device for this change to take effect"))
                 name_item.setText(f"⚠ {p.name}")
             self._para_table.setItem(row, 0, name_item)
 
@@ -544,24 +676,35 @@ class DeviceView(QWidget):
             self._para_table.setCellWidget(row, 2, edit)
 
             # 操作按钮
-            apply_btn = QPushButton("应用")
+            apply_btn = QPushButton(tr("Apply"))
             if p.flags & PARA_FLAG_READ_ONLY:
                 apply_btn.setEnabled(False)
             apply_btn.clicked.connect(lambda _checked=False, r=row: self._on_para_apply(r))
             self._para_table.setCellWidget(row, 3, apply_btn)
 
             # 状态
-            status_item = QTableWidgetItem(self._para_status_by_name.get(p.name, ""))
+            status = self._para_status_by_name.get(p.name)
+            status_item = QTableWidgetItem(
+                trc("DeviceView", status[0], **status[1])
+                if status is not None
+                else ""
+            )
             status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
             self._para_table.setItem(row, 4, status_item)
 
-        self.status_message.emit(f"已读取 {len(report.params)} 个参数", 2000)
+        self.status_message.emit(
+            tr("Read {count} parameter(s)", count=len(report.params)),
+            2000,
+        )
         self._verify_pending_para_set(report)
         self._set_controls_enabled(self._worker is not None)
 
     def _on_para_apply(self, row: int):
         if not self._supports_parameters:
-            self.status_message.emit("当前固件未声明支持参数管理", 3000)
+            self.status_message.emit(
+                tr("This firmware does not declare parameter-management support"),
+                3000,
+            )
             return
         if row >= len(self._params):
             return
@@ -571,20 +714,18 @@ class DeviceView(QWidget):
             return
         new_val = edit.text().strip()
         if new_val == p.value:
-            self._para_table.item(row, 4).setText("未修改")
+            self._set_para_row_status(p.name, row, "Unchanged")
             return
         self._pending_request = "para_set"
         self._pending_para_row = row
         self._pending_para_name = p.name
         self._pending_para_value = new_val
         self._pending_para_type = p.para_type
-        self._para_status_by_name[p.name] = "等待写入确认..."
-        self._para_table.item(row, 4).setText("等待写入确认...")
+        self._set_para_row_status(p.name, row, "Awaiting write confirmation...")
         if self._send(build_para_set(p.name, new_val)):
             self._response_timer.start(PARA_SET_TIMEOUT_MS)
         else:
-            self._para_table.item(row, 4).setText("发送失败")
-            self._para_status_by_name[p.name] = "发送失败"
+            self._set_para_row_status(p.name, row, "Send failed")
             self._clear_pending_para_set()
 
     def _clear_pending_para_set(self) -> None:
@@ -626,16 +767,20 @@ class DeviceView(QWidget):
             para_type = self._pending_para_type if self._pending_para_type is not None else target.para_type
             if self._values_match(para_type, target.value, self._pending_para_value):
                 self._response_timer.stop()
-                if status_item is not None:
-                    status_item.setText("✓ 成功")
-                self._para_status_by_name[self._pending_para_name] = "✓ 成功"
+                self._set_para_row_status(
+                    self._pending_para_name,
+                    row,
+                    "✓ Success",
+                )
                 self._clear_pending_para_set()
                 return
 
-        if status_item is not None:
-            status_item.setText("等待设备回读...")
         if self._pending_para_name:
-            self._para_status_by_name[self._pending_para_name] = "等待设备回读..."
+            self._set_para_row_status(
+                self._pending_para_name,
+                row,
+                "Waiting for device readback...",
+            )
 
     def _schedule_para_set_verify_read(self, delay_ms: int) -> None:
         if self._pending_request != "para_set" or self._para_verify_retry_scheduled:
@@ -650,11 +795,18 @@ class DeviceView(QWidget):
 
     def _on_factory_reset(self):
         if not self._supports_parameters:
-            self.status_message.emit("当前固件未声明支持参数管理", 3000)
+            self.status_message.emit(
+                tr("This firmware does not declare parameter-management support"),
+                3000,
+            )
             return
         ret = QMessageBox.warning(
-            self, "恢复出厂",
-            "确定恢复所有参数为出厂默认值？\n此操作不可撤销，部分参数需重启生效。",
+            self,
+            tr("Factory reset"),
+            tr(
+                "Restore all parameters to factory defaults?\n"
+                "This cannot be undone, and some parameters require a restart."
+            ),
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )
@@ -668,13 +820,19 @@ class DeviceView(QWidget):
 
     def _on_select_firmware(self):
         if not self._supports_ota:
-            self.status_message.emit("当前固件未声明支持 OTA", 3000)
+            self.status_message.emit(
+                tr("This firmware does not declare OTA support"),
+                3000,
+            )
             return
         last_dir = ""
         if self._settings is not None:
             last_dir = self._settings.get("paths.firmware_dir", "") or ""
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择固件文件", last_dir, "Firmware (*.bin);;All Files (*)"
+            self,
+            tr("Select firmware file"),
+            last_dir,
+            tr("Firmware (*.bin);;All files (*)"),
         )
         if not path:
             return
@@ -683,13 +841,21 @@ class DeviceView(QWidget):
         self._ota_file = data
         self._ota_filename = p.name
         self._ota_crc32 = zlib.crc32(data) & 0xFFFFFFFF
-        self._ota_file_label.setText(f"{p.name}  ({len(data)} 字节)")
+        set_translatable_text(
+            "{file}  ({size} bytes)",
+            self._ota_file_label,
+            file=p.name,
+            size=len(data),
+        )
         self._set_controls_enabled(self._worker is not None)
 
     def _on_ota_start(self):
         if self._ota_file is None or self._worker is None or not self._supports_ota:
             if not self._supports_ota:
-                self.status_message.emit("当前固件未声明支持 OTA", 3000)
+                self.status_message.emit(
+                    tr("This firmware does not declare OTA support"),
+                    3000,
+                )
             return
         if self._ota_active:
             return
@@ -707,7 +873,7 @@ class DeviceView(QWidget):
         self._set_controls_enabled(True)
 
         if self._ota_paused_debug:
-            self._ota_status_label.setText("正在关闭实时数据...")
+            self._set_ota_status("Stopping live data...")
             self.debug_mode_requested.emit(False)
         else:
             self._ota_send_begin()
@@ -716,12 +882,12 @@ class DeviceView(QWidget):
         if not self._ota_active or self._ota_file is None:
             return
         self._ota_state = "BEGIN"
-        self._ota_status_label.setText("正在发送 OTA_BEGIN...")
+        self._set_ota_status("Sending OTA_BEGIN...")
         self._pending_request = "ota_begin"
         if self._send(build_ota_begin(len(self._ota_file), self._ota_filename)):
             self._response_timer.start(OTA_BEGIN_TIMEOUT_MS)
         else:
-            self._ota_finish("发送 OTA_BEGIN 失败")
+            self._ota_finish("Failed to send OTA_BEGIN")
 
     def _ota_send_current_chunk(self) -> None:
         if not self._ota_active or self._ota_file is None:
@@ -736,7 +902,7 @@ class DeviceView(QWidget):
         if self._send(build_ota_data(self._ota_seq, chunk)):
             self._response_timer.start(OTA_CHUNK_TIMEOUT_MS)
         else:
-            self._ota_finish(f"块 {self._ota_seq} 发送失败")
+            self._ota_finish("Failed to send chunk {sequence}", sequence=self._ota_seq)
 
     def _update_ota_progress(self) -> None:
         if self._ota_total_chunks <= 0 or self._ota_file is None:
@@ -746,16 +912,24 @@ class DeviceView(QWidget):
         elapsed = time.monotonic() - self._ota_start_time
         transferred = min(self._ota_seq * OTA_CHUNK_SIZE, len(self._ota_file))
         if elapsed <= 0.1 or transferred <= 0:
-            self._ota_status_label.setText(
-                f"传输中... {self._ota_seq}/{self._ota_total_chunks} ({pct}%)"
+            self._set_ota_status(
+                "Transferring... {sequence}/{total} ({percent}%)",
+                sequence=self._ota_seq,
+                total=self._ota_total_chunks,
+                percent=pct,
             )
             return
         speed_kbs = transferred / elapsed / 1024
         remaining = max(0, len(self._ota_file) - transferred)
         eta = remaining / (transferred / elapsed)
-        self._ota_status_label.setText(
-            f"传输中... {self._ota_seq}/{self._ota_total_chunks} ({pct}%)  "
-            f"{speed_kbs:.1f} KB/s  剩余 {int(eta)}s"
+        self._set_ota_status(
+            "Transferring... {sequence}/{total} ({percent}%)  "
+            "{speed:.1f} KB/s  {remaining}s remaining",
+            sequence=self._ota_seq,
+            total=self._ota_total_chunks,
+            percent=pct,
+            speed=speed_kbs,
+            remaining=int(eta),
         )
 
     def _ota_send_end(self):
@@ -763,11 +937,11 @@ class DeviceView(QWidget):
             return
         self._ota_state = "END"
         self._pending_request = "ota_end"
-        self._ota_status_label.setText("校验中...")
+        self._set_ota_status("Verifying...")
         if self._send(build_ota_end(self._ota_crc32)):
             self._response_timer.start(OTA_END_TIMEOUT_MS)
         else:
-            self._ota_finish("发送 OTA_END 失败")
+            self._ota_finish("Failed to send OTA_END")
 
     def _ota_enter_wait_reboot(self) -> None:
         self._ota_state = "WAIT_REBOOT"
@@ -783,16 +957,22 @@ class DeviceView(QWidget):
         self._ota_post_reboot_started_at = time.monotonic()
         self._ota_post_reboot_deadline = self._ota_post_reboot_started_at + 120.0
         self._ota_reboot_meta_not_before = self._ota_post_reboot_started_at + 1.0
-        self._ota_status_label.setText("设备重启中，等待固件重新上线...")
+        self._set_ota_status("Device is rebooting; waiting for firmware to return...")
         self._ota_post_reboot_timer.start()
 
     def _on_ota_abort(self):
         if not self._ota_active or self._ota_state == "WAIT_REBOOT":
             return
         self._send(build_ota_abort())
-        self._ota_finish("用户中止")
+        self._ota_finish("Aborted by user")
 
-    def _ota_finish(self, msg: str, *, restore_debug: bool = True):
+    def _ota_finish(
+        self,
+        source: str,
+        *,
+        restore_debug: bool = True,
+        **values: Any,
+    ):
         should_restore = (
             restore_debug
             and self._ota_restore_debug
@@ -806,12 +986,15 @@ class DeviceView(QWidget):
         self.handshake_retry_pause_changed.emit(False)
         self.device_transaction_active_changed.emit(False)
         self._set_controls_enabled(self._worker is not None)
-        self._ota_status_label.setText(msg)
+        self._set_ota_status(source, **values)
         self._ota_paused_debug = False
         self._ota_restore_debug = False
         if should_restore:
             QTimer.singleShot(0, lambda: self.debug_mode_requested.emit(True))
-        self.status_message.emit(f"OTA: {msg}", 5000)
+        self.status_message.emit(
+            tr("OTA: {message}", message=tr(source, **values)),
+            5000,
+        )
 
     # ---- COMMAND_RESPONSE 处理 ----
 
@@ -837,19 +1020,30 @@ class DeviceView(QWidget):
                 if not self._success_response_matches(resp, expected):
                     return
                 if 0 <= row < self._para_table.rowCount():
-                    self._para_table.item(row, 4).setText("等待设备回读...")
+                    self._set_para_row_status(
+                        self._pending_para_name or "",
+                        row,
+                        "Waiting for device readback...",
+                    )
                 if self._pending_para_name:
-                    self._para_status_by_name[self._pending_para_name] = "等待设备回读..."
+                    self._para_status_by_name[self._pending_para_name] = (
+                        "Waiting for device readback...",
+                        {},
+                    )
                 # 新固件会主动回表；旧固件只做一次兜底读取，不再周期轮询。
                 if not self._requires_response_context():
                     self._schedule_para_set_verify_read(300)
             else:
                 self._response_timer.stop()
-                msg = f"✗ {resp.msg or f'错误 {resp.code}'}"
+                detail = resp.msg or tr("Error {code}", code=resp.code)
+                msg = tr("✗ {detail}", detail=detail)
                 if 0 <= row < self._para_table.rowCount():
                     self._para_table.item(row, 4).setText(msg)
                 if self._pending_para_name:
-                    self._para_status_by_name[self._pending_para_name] = msg
+                    self._para_status_by_name[self._pending_para_name] = (
+                        "✗ {detail}",
+                        {"detail": detail},
+                    )
                 self._clear_pending_para_set()
             return
 
@@ -861,11 +1055,17 @@ class DeviceView(QWidget):
             self._response_timer.stop()
             self._pending_request = None
             if int(resp.code) == int(RespCode.SUCCESS):
-                self.status_message.emit("参数已恢复出厂默认，建议重启设备", 5000)
+                self.status_message.emit(
+                    tr("Parameters restored to factory defaults; restart is recommended"),
+                    5000,
+                )
                 if not self._requires_response_context():
                     QTimer.singleShot(500, self._on_read_params)
             else:
-                self.status_message.emit(f"恢复出厂失败: {resp.msg}", 5000)
+                self.status_message.emit(
+                    tr("Factory reset failed: {detail}", detail=resp.msg),
+                    5000,
+                )
 
         elif req == "ota_begin":
             if int(resp.code) == int(RespCode.SUCCESS):
@@ -876,7 +1076,10 @@ class DeviceView(QWidget):
                 self._ota_retry = 0
                 QTimer.singleShot(0, self._ota_send_current_chunk)
             else:
-                self._ota_finish(f"OTA_BEGIN 被拒绝: {resp.msg or resp.code}")
+                self._ota_finish(
+                    "OTA_BEGIN rejected: {detail}",
+                    detail=resp.msg or resp.code,
+                )
 
         elif req == "ota_data":
             expected = f"OTA_DATA={self._ota_seq}"
@@ -890,7 +1093,11 @@ class DeviceView(QWidget):
                 self._update_ota_progress()
                 QTimer.singleShot(0, self._ota_send_current_chunk)
             else:
-                self._ota_finish(f"块 {self._ota_seq} 被拒绝: {resp.msg or resp.code}")
+                self._ota_finish(
+                    "Chunk {sequence} rejected: {detail}",
+                    sequence=self._ota_seq,
+                    detail=resp.msg or resp.code,
+                )
 
         elif req == "ota_end":
             if int(resp.code) == int(RespCode.SUCCESS):
@@ -898,7 +1105,10 @@ class DeviceView(QWidget):
                     return
                 self._ota_enter_wait_reboot()
             else:
-                self._ota_finish(f"OTA_END 校验失败: {resp.msg or resp.code}")
+                self._ota_finish(
+                    "OTA_END verification failed: {detail}",
+                    detail=resp.msg or resp.code,
+                )
 
     def _on_response_timeout(self):
         req = self._pending_request
@@ -906,27 +1116,35 @@ class DeviceView(QWidget):
             if self._ota_retry < OTA_CHUNK_MAX_RETRY:
                 self._ota_retry += 1
                 self._pending_request = None
-                self._ota_status_label.setText(
-                    f"块 {self._ota_seq} 未确认，重试 {self._ota_retry}/{OTA_CHUNK_MAX_RETRY}"
+                self._set_ota_status(
+                    "Chunk {sequence} was not confirmed; retry {retry}/{maximum}",
+                    sequence=self._ota_seq,
+                    retry=self._ota_retry,
+                    maximum=OTA_CHUNK_MAX_RETRY,
                 )
                 self._ota_send_current_chunk()
             else:
                 self._pending_request = None
-                self._ota_finish(f"块 {self._ota_seq} 连续超时")
+                self._ota_finish(
+                    "Chunk {sequence} timed out repeatedly",
+                    sequence=self._ota_seq,
+                )
         elif req and req.startswith("ota_"):
             self._pending_request = None
-            self._ota_finish(f"{req} 超时")
+            self._ota_finish("{request} timed out", request=req)
         elif req == "para_set":
             self._pending_request = None
             row = getattr(self, "_pending_para_row", -1)
-            if 0 <= row < self._para_table.rowCount():
-                self._para_table.item(row, 4).setText("未读回目标值")
             if self._pending_para_name:
-                self._para_status_by_name[self._pending_para_name] = "未读回目标值"
+                self._set_para_row_status(
+                    self._pending_para_name,
+                    row,
+                    "Target value was not read back",
+                )
             self._clear_pending_para_set()
         elif req == "para_reset":
             self._pending_request = None
-            self.status_message.emit("恢复出厂超时，请重试", 5000)
+            self.status_message.emit(tr("Factory reset timed out; try again"), 5000)
 
     def _on_para_read_timeout(self):
         if not self._para_read_pending:
@@ -934,12 +1152,34 @@ class DeviceView(QWidget):
         self._para_read_pending = False
         if self._pending_request == "para_set":
             if self._pending_para_name:
-                self._para_status_by_name[self._pending_para_name] = "等待设备回读..."
+                self._para_status_by_name[self._pending_para_name] = (
+                    "Waiting for device readback...",
+                    {},
+                )
             return
-        self._para_status_label.setText("读取参数表超时")
-        self.status_message.emit("读取参数表超时，请重试", 3000)
+        self._set_para_status("Parameter-table read timed out")
+        self.status_message.emit(tr("Parameter-table read timed out; try again"), 3000)
 
     # ---- 主题 ----
+
+    def retranslate_ui(self) -> None:
+        self._render_para_row_statuses()
+        for row, para in enumerate(self._params):
+            name_item = self._para_table.item(row, 0)
+            if name_item is not None and para.flags & PARA_FLAG_REQUIRES_REBOOT:
+                name_item.setToolTip(
+                    tr("Restart the device for this change to take effect")
+                )
+        if self._ota_file is None:
+            set_translatable_text("No file selected", self._ota_file_label)
+        else:
+            set_translatable_text(
+                "{file}  ({size} bytes)",
+                self._ota_file_label,
+                file=self._ota_filename,
+                size=len(self._ota_file),
+            )
+        self._set_ota_status(self._ota_status_source, **self._ota_status_values)
 
     def set_theme(self, theme: str, scale: str = "small") -> None:
         self._theme = S._normalize_theme(theme)

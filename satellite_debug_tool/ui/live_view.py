@@ -73,6 +73,12 @@ from satellite_debug_tool.core.protocol import (
 from satellite_debug_tool.core.protocol.handshake import Handshake
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.io.data_recorder import DataRecorder
+from satellite_debug_tool.i18n import (
+    register_translatable,
+    set_raw_text,
+    set_translatable_text,
+    tr,
+)
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
 from satellite_debug_tool.ui.channel_panel import ChannelPanel
@@ -159,6 +165,7 @@ class LiveView(QWidget):
 
         self._setup_ui()
         self._load_settings()
+        register_translatable(self)
 
     def profile_store(self) -> ProfileStore:
         """供 DeviceView 复用 Live 页当前连接的 profile/capability。"""
@@ -172,16 +179,20 @@ class LiveView(QWidget):
         """Live/Device 共用的严格 Debug 控制入口。"""
         target = bool(target)
         if not self._is_connected or self._worker is None:
-            self.debug_request_finished.emit(target, False, "设备未连接")
+            self.debug_request_finished.emit(target, False, tr("Device is not connected"))
             return
         if self._debug_pending_target is not None:
-            self.debug_request_finished.emit(target, False, "已有 Debug 命令等待确认")
+            self.debug_request_finished.emit(
+                target,
+                False,
+                tr("Another Debug command is awaiting confirmation"),
+            )
             return
         if self._debug_enabled == target:
             self.debug_request_finished.emit(target, True, "already_confirmed")
             return
         if not self._send_debug_enable(target):
-            self.debug_request_finished.emit(target, False, "Debug 命令发送失败")
+            self.debug_request_finished.emit(target, False, tr("Failed to send Debug command"))
 
     @Slot(bool)
     def set_device_transaction_active(self, active: bool) -> None:
@@ -209,7 +220,8 @@ class LiveView(QWidget):
 
     def _load_settings(self):
         conn_type = self._settings.get("general.connection_type", "Serial")
-        self._type_combo.setCurrentText(conn_type)
+        index = self._type_combo.findData(conn_type)
+        self._type_combo.setCurrentIndex(index if index >= 0 else 0)
         self._on_type_changed(conn_type)
         self._baudrate_combo.setCurrentText(
             self._settings.get("serial.default_baudrate", "115200")
@@ -265,10 +277,11 @@ class LiveView(QWidget):
         self._toolbar.addSeparator()
 
         self._type_combo = QComboBox()
-        self._type_combo.addItems(["Serial", "UDP"])
-        self._type_combo.setFixedWidth(70)
-        self._type_combo.currentTextChanged.connect(self._on_type_changed)
-        self._toolbar.addWidget(QLabel("Type:"))
+        self._type_combo.addItem(tr("Serial"), "Serial")
+        self._type_combo.addItem("UDP", "UDP")
+        self._type_combo.setFixedWidth(80)
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        self._toolbar.addWidget(QLabel(tr("Type:")))
         self._toolbar.addWidget(self._type_combo)
 
         self._config_stack = QStackedWidget()
@@ -281,7 +294,7 @@ class LiveView(QWidget):
         self._port_combo = QComboBox()
         self._port_combo.setMinimumWidth(80)
         self._refresh_ports()
-        serial_layout.addWidget(QLabel("Port:"))
+        serial_layout.addWidget(QLabel(tr("Port:")))
         serial_layout.addWidget(self._port_combo)
 
         self._baudrate_combo = QComboBox()
@@ -289,7 +302,7 @@ class LiveView(QWidget):
             ["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"]
         )
         self._baudrate_combo.setCurrentText("115200")
-        serial_layout.addWidget(QLabel("Baud:"))
+        serial_layout.addWidget(QLabel(tr("Baud rate:")))
         serial_layout.addWidget(self._baudrate_combo)
         self._config_stack.addWidget(self._serial_widget)
 
@@ -300,21 +313,21 @@ class LiveView(QWidget):
 
         self._remote_ip = QLineEdit("192.168.1.12")
         self._remote_ip.setMinimumWidth(124)   # 容下完整 IP（等宽字体）
-        udp_layout.addWidget(QLabel("Remote IP:"))
+        udp_layout.addWidget(QLabel(tr("Remote IP:")))
         udp_layout.addWidget(self._remote_ip)
 
         self._remote_port = QSpinBox()
         self._remote_port.setRange(1, 65535)
         self._remote_port.setValue(4004)
         self._remote_port.setMinimumWidth(78)
-        udp_layout.addWidget(QLabel("Remote Port:"))
+        udp_layout.addWidget(QLabel(tr("Remote port:")))
         udp_layout.addWidget(self._remote_port)
 
         self._local_port = QSpinBox()
         self._local_port.setRange(1, 65535)
         self._local_port.setValue(45678)
         self._local_port.setMinimumWidth(82)
-        udp_layout.addWidget(QLabel("Local Port:"))
+        udp_layout.addWidget(QLabel(tr("Local port:")))
         udp_layout.addWidget(self._local_port)
         self._config_stack.addWidget(self._udp_widget)
 
@@ -322,44 +335,57 @@ class LiveView(QWidget):
         self._toolbar.addSeparator()
 
         # Connect = 主按钮(accent + plug)；Disconnect = 危险图标按钮(连接后才有意义)
-        self._connect_btn = QPushButton("Connect")
+        self._connect_btn = QPushButton(tr("Connect"))
         self._connect_btn.setMinimumSize(92, 29)
-        self._connect_btn.setToolTip("打开串口 / 绑定 UDP 端口并启动握手")
+        self._connect_btn.setToolTip(
+            tr("Open the serial port or bind UDP, then start the handshake")
+        )
         self._connect_btn.clicked.connect(self._on_connect_clicked)
         self._toolbar.addWidget(self._connect_btn)
 
         self._disconnect_btn = QPushButton("")   # icon-only（设计）
         self._disconnect_btn.setFixedSize(30, 29)
         self._disconnect_btn.setEnabled(False)
-        self._disconnect_btn.setToolTip("断开连接（不清空已接收的数据/Profile）")
+        self._disconnect_btn.setToolTip(
+            tr("Disconnect without clearing received data or the Profile")
+        )
         self._disconnect_btn.clicked.connect(self._on_disconnect_clicked)
         self._toolbar.addWidget(self._disconnect_btn)
 
         self._toolbar.addSeparator()
 
-        self._debug_btn = QPushButton("Debug: OFF")
+        self._debug_btn = QPushButton(tr("Debug: OFF"))
         self._debug_btn.setMinimumSize(100, 29)
         self._debug_btn.setEnabled(False)
-        self._debug_btn.setToolTip("下发 CONTROL.DEBUG_ENABLE，开启/关闭下位机数据上报")
+        self._debug_btn.setToolTip(
+            tr("Send CONTROL.DEBUG_ENABLE to start or stop device data reports")
+        )
         self._debug_btn.clicked.connect(self._on_debug_toggled)
         self._toolbar.addWidget(self._debug_btn)
 
         self._record_btn = QPushButton("REC")
         self._record_btn.setMinimumSize(74, 29)
-        self._record_btn.setToolTip("开始/停止录制 .sdb v2（含 profile 快照）")
+        self._record_btn.setToolTip(
+            tr("Start or stop recording .sdb v2 with a Profile snapshot")
+        )
         self._record_btn.clicked.connect(self._on_record_clicked)
         self._toolbar.addWidget(self._record_btn)
 
-        self._import_btn = QPushButton("Import")
+        self._import_btn = QPushButton(tr("Import"))
         self._import_btn.setMinimumSize(84, 29)
-        self._import_btn.setToolTip("（M7：建议改用回放 Tab）离线导入 .sdb v2 到 Live 视图")
+        self._import_btn.setToolTip(
+            tr("Import an .sdb v2 file into Live; Playback is recommended")
+        )
         self._import_btn.clicked.connect(self._on_import_clicked)
         self._toolbar.addWidget(self._import_btn)
 
         self._clear_btn = QPushButton("")   # icon-only ghost（设计）
         self._clear_btn.setFixedSize(30, 29)
         self._clear_btn.setToolTip(
-            "清空曲线/Dashboard/事件/计数（保留 Profile 与 StatePanel 当前状态）"
+            tr(
+                "Clear charts, dashboard, events, and counters while retaining "
+                "the Profile and current state panel"
+            )
         )
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         self._toolbar.addWidget(self._clear_btn)
@@ -367,16 +393,18 @@ class LiveView(QWidget):
         self._gnss_btn = QPushButton("GNSS")
         self._gnss_btn.setMinimumSize(72, 29)
         self._gnss_btn.setEnabled(False)
-        self._gnss_btn.setToolTip("打开天空图与逐频点 C/N₀ 浮窗")
+        self._gnss_btn.setToolTip(tr("Open the sky plot and signal-level C/N₀ window"))
         self._gnss_btn.clicked.connect(self._toggle_gnss)
         self._toolbar.addWidget(self._gnss_btn)
 
         self._toolbar.addSeparator()
 
-        self._sim_btn = QPushButton("仿真")
+        self._sim_btn = QPushButton(tr("Simulation"))
         self._sim_btn.setMinimumSize(74, 29)
         self._sim_btn.setCheckable(True)
-        self._sim_btn.setToolTip("切换仿真模式（模拟对星，无需真实设备）")
+        self._sim_btn.setToolTip(
+            tr("Toggle simulated satellite acquisition without a physical device")
+        )
         self._sim_btn.clicked.connect(self._on_sim_toggled)
         self._toolbar.addWidget(self._sim_btn)
 
@@ -385,7 +413,7 @@ class LiveView(QWidget):
         self._toolbar.addWidget(spacer)
 
         # 隐藏的兼容 label（旧逻辑仍引用 _hw_label / _conn_status_label）
-        self._hw_label = QLabel("设备: —")
+        self._hw_label = QLabel(tr("Device: {hardware}", hardware="—"))
         self._hw_label.hide()
         self._conn_status_label = QLabel("Disconnected")
         self._conn_status_label.hide()
@@ -445,19 +473,24 @@ class LiveView(QWidget):
 
         # 右栏 rpanel：姿态 3D（上）+ 状态面板（中）+ 事件时间线（下），合为一列
         right_panel = QSplitter(Qt.Vertical)
+        self._right_panel = right_panel
         right_panel.setObjectName("rpanel")
         right_panel.setMinimumWidth(300)
 
         self._attitude = AttitudeWidget()
-        self._attitude.setMinimumHeight(300)
+        # 1024x600 leaves about 390 px for this complete column. A 300 px
+        # attitude minimum forced QSplitter children to paint over one another.
+        self._attitude.setMinimumHeight(180)
         self._attitude.set_dark_theme(True)
         right_panel.addWidget(self._attitude)
 
         self._state_panel = StatePanelWidget(
             self._profile_store, self._state_store, data_store=self._data_store
         )
+        self._state_panel.setMinimumHeight(56)
         right_panel.addWidget(self._state_panel)
         self._event_timeline = EventTimelineWidget(self._event_log)
+        self._event_timeline.setMinimumHeight(115)
         self._event_timeline.jump_requested.connect(self._chart.jump_to_timestamp)
         right_panel.addWidget(self._event_timeline)
         right_panel.setStretchFactor(0, 1)   # 姿态可随窗口增高（波束不被裁）
@@ -559,34 +592,42 @@ class LiveView(QWidget):
 
     # ============================ 连接 / 工作流 ============================
 
-    def _on_type_changed(self, text):
-        if text == "Serial":
+    def _on_type_changed(self, value):
+        if isinstance(value, int):
+            conn_type = self._type_combo.itemData(value)
+        else:
+            conn_type = value
+            if conn_type not in ("Serial", "UDP"):
+                index = self._type_combo.findText(str(value))
+                conn_type = self._type_combo.itemData(index) if index >= 0 else "Serial"
+        if conn_type == "Serial":
             self._config_stack.setCurrentIndex(0)
         else:
             self._config_stack.setCurrentIndex(1)
-        self._settings.set("general.connection_type", text)
+        self._settings.set("general.connection_type", conn_type)
         self._settings.save()
 
     def _refresh_ports(self):
         ports = SerialWorker.list_ports()
         self._port_combo.clear()
         if ports:
-            self._port_combo.addItems(ports)
+            for port in ports:
+                self._port_combo.addItem(port, port)
         else:
-            self._port_combo.addItem("No ports")
+            self._port_combo.addItem(tr("No ports"), None)
 
     def _on_connect_clicked(self):
-        conn_type = self._type_combo.currentText()
+        conn_type = self._type_combo.currentData() or "Serial"
         trace_message("DBG_UI", f"CLICK CONNECT type={conn_type}")
         if conn_type == "Serial":
-            port = self._port_combo.currentText()
-            if port == "No ports" or not port:
-                self.status_message.emit("No serial port available", 3000)
+            port = self._port_combo.currentData()
+            if not port:
+                self.status_message.emit(tr("No serial port is available"), 3000)
                 return
             baudrate = int(self._baudrate_combo.currentText())
             config = {"type": "serial", "port": port, "baudrate": baudrate}
             self._worker = SerialWorker()
-            self._conn_status_label.setText(f"{port} @ {baudrate}")
+            set_raw_text(f"{port} @ {baudrate}", self._conn_status_label)
             self._settings.set(
                 "serial.default_baudrate", self._baudrate_combo.currentText()
             )
@@ -600,8 +641,9 @@ class LiveView(QWidget):
                 "local_port": self._local_port.value(),
             }
             self._worker = UdpWorker()
-            self._conn_status_label.setText(
-                f"UDP {config['remote_ip']}:{config['remote_port']}"
+            set_raw_text(
+                f"UDP {config['remote_ip']}:{config['remote_port']}",
+                self._conn_status_label,
             )
             self._settings.set("udp.remote_ip", self._remote_ip.text())
             self._settings.set("udp.remote_port", self._remote_port.value())
@@ -616,8 +658,12 @@ class LiveView(QWidget):
         if self._worker.connect(config):
             self._is_connected = True
         else:
-            self._conn_status_label.setText("Connection Failed")
-            self._set_conn_state(False, dev="—", detail="Connection Failed")
+            set_translatable_text("Connection failed", self._conn_status_label)
+            self._set_conn_state(
+                False,
+                dev="—",
+                detail_source="Connection failed",
+            )
 
     def _on_disconnect_clicked(self):
         trace_message("DBG_UI", "CLICK DISCONNECT")
@@ -626,7 +672,7 @@ class LiveView(QWidget):
         self._debug_last_requested_target = None
         self._debug_last_request_at = 0.0
         self._debug_ack_timer.stop()
-        self._debug_btn.setText("Debug: OFF")
+        set_translatable_text("Debug: OFF", self._debug_btn)
         self._debug_btn.setEnabled(False)
         if self._worker:
             self._worker.disconnect()
@@ -666,15 +712,18 @@ class LiveView(QWidget):
     def _on_channel_enable_changed(self, mask: int):
         from satellite_debug_tool.core.protocol import build_channel_enable_mask
         if self._send_control_frame(build_channel_enable_mask(mask)):
-            self.status_message.emit(f"通道使能 mask → 0x{mask:016X}", 3000)
+            self.status_message.emit(
+                tr("Channel enable mask → 0x{mask:016X}", mask=mask),
+                3000,
+            )
 
     def _on_handshake_ready(self, hw_type: str):
         if self._active_hw_type != hw_type:
             self._state_store.clear()
             self._gnss_store.clear()
             self._active_hw_type = hw_type
-        self.status_message.emit(f"Profile ready: {hw_type}", 3000)
-        self._hw_label.setText(f"设备: {hw_type}")
+        self.status_message.emit(tr("Profile ready: {hardware}", hardware=hw_type), 3000)
+        set_translatable_text("Device: {hardware}", self._hw_label, hardware=hw_type)
         self._set_conn_state(True, dev=hw_type, detail=self._conn_status_label.text())
         self._state_panel.set_hw_type(hw_type)
         self._dashboard.set_hw_type(hw_type)
@@ -704,31 +753,38 @@ class LiveView(QWidget):
 
     def _send_control_frame(self, frame: bytes) -> bool:
         if self._worker is None or not self._is_connected:
-            self.status_message.emit("未连接，命令未发送", 3000)
+            self.status_message.emit(tr("Not connected; command was not sent"), 3000)
             return False
         return bool(self._worker.send(frame))
 
     def _on_sample_rate_changed(self, hz: int) -> None:
         if self._send_control_frame(build_set_sample_rate(hz)):
-            self.status_message.emit(f"已请求采样率 {hz} Hz", 2000)
+            self.status_message.emit(tr("Requested sample rate: {rate} Hz", rate=hz), 2000)
 
     def _on_user_mark_requested(self, mark_id: int, text: str) -> None:
         if self._send_control_frame(build_user_mark(mark_id, text)):
-            self.status_message.emit(f"Mark #{mark_id} 已发送", 2000)
+            self.status_message.emit(tr("Mark #{mark_id} sent", mark_id=mark_id), 2000)
 
     def _on_reset_stats_requested(self) -> None:
         if self._send_control_frame(build_reset_stats()):
-            self.status_message.emit("已请求下位机复位统计", 2000)
+            self.status_message.emit(tr("Requested device statistics reset"), 2000)
 
     def _on_dashboard_mode_requested(self, state_id: int, target_value: int) -> None:
         hw = self._profile_store.current_hw_type()
         if hw is None:
-            self.status_message.emit("尚未完成 profile 握手，模式切换未发送", 3000)
+            self.status_message.emit(
+                tr("Profile handshake is incomplete; mode change was not sent"),
+                3000,
+            )
             return
         binding = self._profile_store.get_state_control_binding(hw, state_id)
         if binding is None:
             self.status_message.emit(
-                f"state_id={state_id} 未声明 control_binding，模式切换未发送", 3000,
+                tr(
+                    "state_id={state_id} has no control_binding; mode change was not sent",
+                    state_id=state_id,
+                ),
+                3000,
             )
             return
         if (
@@ -737,11 +793,21 @@ class LiveView(QWidget):
         ):
             if self._send_control_frame(build_set_trace_mode(target_value)):
                 self.status_message.emit(
-                    f"已请求切换模式（state_id={state_id} → {target_value}）", 2000,
+                    tr(
+                        "Requested mode change (state_id={state_id} → {target_value})",
+                        state_id=state_id,
+                        target_value=target_value,
+                    ),
+                    2000,
                 )
         else:
             self.status_message.emit(
-                f"control_binding={binding.subcmd}/{binding.value_from} 暂未支持", 3000,
+                tr(
+                    "control_binding={subcmd}/{value_from} is not supported",
+                    subcmd=binding.subcmd,
+                    value_from=binding.value_from,
+                ),
+                3000,
             )
 
     # ----- EventLog → Chart -----
@@ -774,16 +840,15 @@ class LiveView(QWidget):
         """通道 key → 分组标题（用 profile group_id；无则"其它"）。"""
         hw = self._profile_store.current_hw_type()
         if hw is None or not key.startswith("ch_"):
-            return "其它"
+            return ""
         try:
             cid = int(key.split("_", 1)[1])
         except (IndexError, ValueError):
-            return "其它"
+            return ""
         entry = self._profile_store.get_channel(hw, cid)
         if entry is None:
-            return "其它"
-        from satellite_debug_tool.ui.grouped_chart_widget import _group_title
-        return _group_title(entry.group_id)
+            return ""
+        return f"__profile_group_{entry.group_id}"
 
     def _on_channel_visibility_changed(self, name: str, checked: bool) -> None:
         """D6 P0：ChannelPanel 勾选 → 控制 chart 该曲线显隐。"""
@@ -796,7 +861,7 @@ class LiveView(QWidget):
 
     def _on_profile_changed_sync(self, hw_type: str) -> None:
         if hw_type:
-            self._hw_label.setText(f"设备: {hw_type}")
+            set_translatable_text("Device: {hardware}", self._hw_label, hardware=hw_type)
         # Profile 变化时刷新每条通道在 ChannelPanel 里显示的名字（带 unit）
         for key in self._channel_panel.channel_names():
             self._channel_panel.set_label(key, self._channel_display_label(key))
@@ -865,11 +930,11 @@ class LiveView(QWidget):
         self._debug_last_requested_target = None
         self._debug_last_request_at = 0.0
         self._debug_ack_timer.stop()
-        self._debug_btn.setText("Debug: OFF")
+        set_translatable_text("Debug: OFF", self._debug_btn)
         self.debug_state_changed.emit(False)
-        self._conn_status_label.setText("Disconnected")
-        self._hw_label.setText("设备: —")
-        self._set_conn_state(False, dev="—", detail="Disconnected")
+        set_translatable_text("Disconnected", self._conn_status_label)
+        set_translatable_text("Device: {hardware}", self._hw_label, hardware="—")
+        self._set_conn_state(False, dev="—")
         self._type_combo.setEnabled(True)
         self._control_panel.set_enabled(False)
         self._status_strip.set_link_state(connected=False)
@@ -915,7 +980,7 @@ class LiveView(QWidget):
                 f"send DEBUG_ENABLE target={1 if target else 0} "
                 f"retry={self._debug_retry_count}"
             )
-            self._debug_btn.setText(f"Debug: {label}...")
+            set_translatable_text("Debug: {state}...", self._debug_btn, state=label)
             self._debug_btn.setEnabled(False)
             self._debug_btn.setCheckable(True)
             self._debug_btn.setChecked(target)
@@ -923,7 +988,7 @@ class LiveView(QWidget):
             return True
         else:
             _debug_ctrl_log(f"send DEBUG_ENABLE target={1 if target else 0} failed")
-            self.status_message.emit("Failed to send debug command", 3000)
+            self.status_message.emit(tr("Failed to send Debug command"), 3000)
             return False
 
     def _on_debug_command_response(self, resp: CommandResponse) -> None:
@@ -982,7 +1047,10 @@ class LiveView(QWidget):
                 f"retry_next={self._debug_retry_count + 1}, "
                 f"data_seen={self._debug_data_seen_after_request}"
             )
-            self.status_message.emit(f"Debug {label} 未确认，重试", 2000)
+            self.status_message.emit(
+                tr("Debug {state} was not confirmed; retrying", state=label),
+                2000,
+            )
             self._send_debug_enable(target, retry=True)
             return
         _debug_ctrl_log(
@@ -1040,14 +1108,18 @@ class LiveView(QWidget):
         )
 
     def _render_debug_button(self) -> None:
-        self._debug_btn.setText(f"Debug: {'ON' if self._debug_enabled else 'OFF'}")
+        set_translatable_text(
+            "Debug: {state}",
+            self._debug_btn,
+            state="ON" if self._debug_enabled else "OFF",
+        )
         self._debug_btn.setCheckable(True)
         self._debug_btn.setChecked(self._debug_enabled)
 
     def _on_error(self, msg: str):
         self._error_count += 1
         self._error_count_label.setText(f"ERR {self._error_count}")
-        self.status_message.emit(f"Error: {msg}", 5000)
+        self.status_message.emit(tr("Error: {detail}", detail=msg), 5000)
 
     def _on_data_received(self, data: bytes):
         if self._is_recording and self._recorder:
@@ -1180,7 +1252,7 @@ class LiveView(QWidget):
                 self._recorder = None
             self._is_recording = False
             self._status_strip.set_recording(False)
-            self._record_btn.setText("Record")
+            set_translatable_text("Record", self._record_btn)
             # 恢复次按钮样式（红色录制图标 → 灰）
             try:
                 from satellite_debug_tool.ui import icons as _ic
@@ -1188,7 +1260,7 @@ class LiveView(QWidget):
             except Exception:
                 pass
             self._record_btn.setStyleSheet("")
-            self.status_message.emit("Recording stopped", 3000)
+            self.status_message.emit(tr("Recording stopped"), 3000)
         else:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             default_name = f"recording_{timestamp}.sdb"
@@ -1200,9 +1272,9 @@ class LiveView(QWidget):
                 initial = default_name
             filepath, _ = QFileDialog.getSaveFileName(
                 self,
-                "Save Recording",
+                tr("Save recording"),
                 initial,
-                "SDB Files (*.sdb);;All Files (*)",
+                tr("SDB files (*.sdb);;All files (*)"),
             )
             if filepath:
                 profile_dict = None
@@ -1216,7 +1288,7 @@ class LiveView(QWidget):
                 if self._recorder.start():
                     self._is_recording = True
                     self._status_strip.set_recording(True)
-                    self._record_btn.setText("Stop")
+                    set_translatable_text("Stop", self._record_btn)
                     # 录制中 = 危险态（红底）+ 红录制图标
                     pal = S.palette(self._theme)
                     try:
@@ -1229,20 +1301,26 @@ class LiveView(QWidget):
                         f"border: 1px solid {pal['err']}; border-radius: 5px; padding: 4px 11px; "
                         f"font-weight: 600; }}"
                     )
-                    suffix = " + profile" if profile_dict else ""
-                    self.status_message.emit(f"Recording to {filepath}{suffix}", 3000)
+                    self.status_message.emit(
+                        tr(
+                            "Recording to {path}{profile_suffix}",
+                            path=filepath,
+                            profile_suffix=tr(" + Profile") if profile_dict else "",
+                        ),
+                        3000,
+                    )
                 else:
                     self._recorder = None
-                    self.status_message.emit("Failed to start recording", 3000)
+                    self.status_message.emit(tr("Failed to start recording"), 3000)
 
     def _on_import_clicked(self):
         """M7：此入口保留向后兼容；新建议用回放 Tab 独立 DataStore。"""
         last_dir = self._settings.get("paths.recording_dir", "") or ""
         filepath, _ = QFileDialog.getOpenFileName(
             self,
-            "Import Data (Live)",
+            tr("Import data into Live"),
             last_dir,
-            "SDB Files (*.sdb);;All Files (*)",
+            tr("SDB files (*.sdb);;All files (*)"),
         )
         if not filepath:
             return
@@ -1275,10 +1353,15 @@ class LiveView(QWidget):
             self._frame_count += data_count
             self._chart.set_auto_range(True)
             self.status_message.emit(
-                f"Imported {data_count} DataReport(s) from {filepath}", 3000,
+                tr(
+                    "Imported {count} DataReport record(s) from {path}",
+                    count=data_count,
+                    path=filepath,
+                ),
+                3000,
             )
         except Exception as exc:
-            self.status_message.emit(f"Import failed: {exc}", 5000)
+            self.status_message.emit(tr("Import failed: {detail}", detail=exc), 5000)
             return
 
     def _on_clear_clicked(self):
@@ -1305,7 +1388,7 @@ class LiveView(QWidget):
         self._channel_count_label.setText("CH 0")
         self._frame_count_label.setText("FRM 0")
         self._error_count_label.setText("ERR 0")
-        self.status_message.emit("Display cleared", 2000)
+        self.status_message.emit(tr("Display cleared"), 2000)
 
     def _on_gnss_store_changed(self) -> None:
         if self._gnss_store.has_data():
@@ -1316,7 +1399,10 @@ class LiveView(QWidget):
             from satellite_debug_tool.ui.gnss_widget import GnssWidget
             self._gnss_widget = GnssWidget(self._gnss_store, playback=False)
             self._gnss_widget.set_theme(self._theme)
-            self._gnss_dock = QDockWidget("GNSS 天空图与逐频点 C/N₀ — Live", self)
+            self._gnss_dock = QDockWidget(
+                tr("GNSS sky plot and signal-level C/N₀ — Live"),
+                self,
+            )
             self._gnss_dock.setAllowedAreas(Qt.NoDockWidgetArea)
             self._gnss_dock.setFloating(True)
             self._gnss_dock.setWidget(self._gnss_widget)
@@ -1359,10 +1445,10 @@ class LiveView(QWidget):
             sim_w = 280
             chart_w = max(400, total - sizes[0] - sizes[2] - sim_w)
             self._top_splitter.setSizes([sizes[0], chart_w, sizes[2], sim_w])
-        self._sim_btn.setText("停止仿真")
+        set_translatable_text("Stop simulation", self._sim_btn)
         self._set_variant(self._sim_btn, "danger")
         self._control_panel.set_enabled(True)
-        self.status_message.emit("仿真模式已启动 (MockModem UDP 45679)", 3000)
+        self.status_message.emit(tr("Simulation started (MockModem UDP 45679)"), 3000)
 
     def _stop_simulation(self) -> None:
         if self._mock_modem:
@@ -1376,10 +1462,10 @@ class LiveView(QWidget):
         if len(sizes) == 4:
             sim_w = sizes[3]
             self._top_splitter.setSizes([sizes[0], sizes[1] + sim_w, sizes[2], 0])
-        self._sim_btn.setText("仿真")
+        set_translatable_text("Simulation", self._sim_btn)
         self._set_variant(self._sim_btn, "")
         self._control_panel.set_enabled(False)
-        self.status_message.emit("仿真模式已停止", 2000)
+        self.status_message.emit(tr("Simulation stopped"), 2000)
 
     def _on_sim_sat_changed(self, lon: float, freq: float) -> None:
         if self._mock_modem:
@@ -1389,7 +1475,10 @@ class LiveView(QWidget):
     def _on_sim_blockage(self, duration_s: float) -> None:
         if self._mock_modem:
             self._mock_modem.inject_blockage(duration_s)
-            self.status_message.emit(f"遮挡注入 ({duration_s}s)", 2000)
+            self.status_message.emit(
+                tr("Blockage injected ({duration:g}s)", duration=duration_s),
+                2000,
+            )
 
     def _on_sim_rain_changed(self, db: float) -> None:
         if self._mock_modem:
@@ -1496,8 +1585,42 @@ class LiveView(QWidget):
             f"font-size: {S.font_px(11, scale)}px; }}"
         )
 
-    def _set_conn_state(self, connected: bool, dev: str = "—", detail: str = "") -> None:
+    def _set_conn_state(
+        self,
+        connected: bool,
+        dev: str = "—",
+        detail: str = "",
+        *,
+        detail_source: str = "",
+    ) -> None:
         """更新设备状态卡显示（dev 名 + 状态文案）+ 重新着色。"""
-        self._cs_dev.setText(dev or "—")
-        self._cs_stat.setText(detail or ("LINK OK" if connected else "Disconnected"))
+        set_raw_text(dev or "—", self._cs_dev)
+        if detail_source:
+            set_translatable_text(detail_source, self._cs_stat)
+        elif detail:
+            set_raw_text(detail, self._cs_stat)
+        elif connected:
+            set_raw_text("LINK OK", self._cs_stat)
+        else:
+            set_translatable_text("Disconnected", self._cs_stat)
         self._style_conn_card(S.palette(self._theme), "small")
+
+    def retranslate_ui(self) -> None:
+        self._render_debug_button()
+        set_translatable_text(
+            "Stop" if self._is_recording else "REC",
+            self._record_btn,
+        )
+        set_translatable_text(
+            "Stop simulation" if self._sim_active else "Simulation",
+            self._sim_btn,
+        )
+        hardware = self._profile_store.current_hw_type() or "—"
+        set_translatable_text("Device: {hardware}", self._hw_label, hardware=hardware)
+        if not self._is_connected:
+            set_translatable_text("Disconnected", self._conn_status_label)
+            self._set_conn_state(False, dev="—")
+        if self._gnss_dock is not None:
+            self._gnss_dock.setWindowTitle(
+                tr("GNSS sky plot and signal-level C/N₀ — Live")
+            )

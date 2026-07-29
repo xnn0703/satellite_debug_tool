@@ -65,6 +65,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal
 from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLMeshItem, MeshData
 
+from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 
 
@@ -169,6 +170,7 @@ class AttitudeWidget(QWidget):
         self._device_faces = None
 
         self._setup_ui()
+        register_translatable(self)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -183,10 +185,15 @@ class AttitudeWidget(QWidget):
         topbar_layout.setContentsMargins(0, 0, 0, 0)
         topbar_layout.setSpacing(8)
         topbar_layout.addStretch(1)
-        self._reset_view_btn = QPushButton("复位视角")
+        self._reset_view_btn = QPushButton(tr("Reset view"))
         self._reset_view_btn.setToolTip(
-            f"把 3D 相机恢复到默认角度"
-            f"（distance={_CAM_DISTANCE:g} / elev={_CAM_ELEVATION:g} / azim={_CAM_AZIMUTH:g}）"
+            tr(
+                "Restore the 3D camera to its default angle "
+                "(distance={distance:g} / elevation={elevation:g} / azimuth={azimuth:g})",
+                distance=_CAM_DISTANCE,
+                elevation=_CAM_ELEVATION,
+                azimuth=_CAM_AZIMUTH,
+            )
         )
         self._reset_view_btn.clicked.connect(self._reset_view)
         topbar_layout.addWidget(self._reset_view_btn)
@@ -242,9 +249,9 @@ class AttitudeWidget(QWidget):
         values_layout = QHBoxLayout(values_widget)
         values_layout.setContentsMargins(0, 0, 0, 0)
         for label_text, attr in [
-            ("Roll:", "_roll_value"),
-            ("Pitch:", "_pitch_value"),
-            ("Yaw:", "_yaw_value"),
+            (tr("Roll:"), "_roll_value"),
+            (tr("Pitch:"), "_pitch_value"),
+            (tr("Yaw:"), "_yaw_value"),
         ]:
             lbl = QLabel(label_text)
             self._value_name_labels.append(lbl)

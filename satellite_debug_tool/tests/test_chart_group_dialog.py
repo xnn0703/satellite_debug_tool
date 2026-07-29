@@ -68,8 +68,12 @@ class TestInitialLoad:
         assert snap[0]["channels"] == ["roll", "pitch", "yaw"]
         assert snap[1]["channels"] == ["ant_az", "ant_el"]
         assert snap[2]["channels"] == ["snr"]
-        assert snap[0]["title"] == "姿态"
-        assert snap[1]["title"] == "指向"
+        assert snap[0]["title"] == ""
+        assert snap[0]["title_is_default"] is True
+        assert snap[1]["title"] == ""
+        assert snap[1]["title_is_default"] is True
+        assert dlg._group_combo.itemText(0) == "组 0：姿态"
+        assert dlg._group_combo.itemText(1) == "组 1：指向"
         dlg.deleteLater()
 
     def test_loads_custom_groups_from_settings(
@@ -202,6 +206,25 @@ class TestPersistence:
         dlg._groups[0]["title"] = "ShouldNotPersist"
         dlg.reject()
         assert tmp_settings.get("chart.custom_groups") in (None, {})
+        dlg.deleteLater()
+
+    def test_legacy_builtin_title_migrates_to_stable_default(
+        self, qapp, profile_store_with_channels, tmp_settings,
+    ):
+        tmp_settings.set("chart.custom_groups", {
+            "afd01": {
+                "0": {"title": "姿态", "channels": ["roll", "pitch", "yaw"]},
+            }
+        })
+        dlg = _open_dialog(qapp, profile_store_with_channels, tmp_settings)
+        assert dlg.current_groups_snapshot()[0]["title_is_default"] is True
+        dlg._on_accept()
+        saved = tmp_settings.get("chart.custom_groups")["afd01"]["0"]
+        assert saved == {
+            "title": "",
+            "title_is_default": True,
+            "channels": ["roll", "pitch", "yaw"],
+        }
         dlg.deleteLater()
 
 

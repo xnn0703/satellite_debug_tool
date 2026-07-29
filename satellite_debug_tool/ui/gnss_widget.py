@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QCoreApplication, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -43,6 +43,13 @@ from satellite_debug_tool.core.data.gnss_store import (
     signal_record_used,
 )
 from satellite_debug_tool.core.protocol import GnssCnrObservation, GnssSatRecord, GnssSignalRecord
+from satellite_debug_tool.i18n import (
+    register_translatable,
+    set_translatable_n_text,
+    set_translatable_text,
+    tr,
+    trn,
+)
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.flow_layout import FlowLayout
 
@@ -73,12 +80,47 @@ _BAND_ORDER = {
 CN0_COLOR_MIN_DBHZ = 20
 CN0_COLOR_MAX_DBHZ = 51
 CN0_UNKNOWN_COLOR = "#94A3B8"
+CN0_LEGEND_VALUES = (CN0_COLOR_MAX_DBHZ, 40, 30, CN0_COLOR_MIN_DBHZ)
+# Backward-compatible data export. Rendering uses _cn0_legend_ticks() so labels
+# can follow the active application language.
 CN0_LEGEND_TICKS = (
     (CN0_COLOR_MAX_DBHZ, "≥51 强"),
     (40, "40"),
     (30, "30"),
     (CN0_COLOR_MIN_DBHZ, "≤20 弱"),
 )
+
+
+if False:  # Translation extraction declarations for Qt numerus messages.
+    QCoreApplication.translate(
+        "",
+        "%n satellite record(s) received\nAzimuth/elevation is not valid yet",
+        None,
+        0,
+    )
+    QCoreApplication.translate(
+        "",
+        "%n satellite record(s) · {drawable} drawable · {valid} valid C/N₀ · "
+        "average {average:.1f} / maximum {maximum:.0f} dB-Hz · {sky_state} · {signal_state}",
+        None,
+        0,
+    )
+    QCoreApplication.translate(
+        "",
+        "%n satellite record(s) · {drawable} drawable · 0 valid C/N₀ · "
+        "{sky_state} · {signal_state}",
+        None,
+        0,
+    )
+
+
+def _cn0_legend_ticks() -> Tuple[Tuple[int, str], ...]:
+    return (
+        (CN0_COLOR_MAX_DBHZ, tr("≥51 strong")),
+        (40, "40"),
+        (30, "30"),
+        (CN0_COLOR_MIN_DBHZ, tr("≤20 weak")),
+    )
 
 
 @dataclass(frozen=True)
@@ -205,6 +247,7 @@ class SkyPlotWidget(QWidget):
         self._drawable_count = 0
         self._empty_text = ""
         self.set_theme(True, "small")
+        register_translatable(self)
 
     def set_data(self, snapshot: GnssSnapshot, systems: Set[int], cn0_coloring: bool, stale: bool) -> None:
         self._snapshot = snapshot
@@ -212,11 +255,21 @@ class SkyPlotWidget(QWidget):
         self._cn0_coloring = cn0_coloring
         self._stale = stale
         self._record_count, self._drawable_count = satellite_record_counts(snapshot, self._systems)
+        self._refresh_empty_text()
+        self.update()
+
+    def _refresh_empty_text(self) -> None:
         self._empty_text = (
-            f"已收到 {self._record_count} 条卫星记录\n方位/仰角尚未有效"
+            trn(
+                "%n satellite record(s) received\nAzimuth/elevation is not valid yet",
+                self._record_count,
+            )
             if self._record_count > 0 and self._drawable_count == 0
             else ""
         )
+
+    def retranslate_ui(self) -> None:
+        self._refresh_empty_text()
         self.update()
 
     def set_theme(self, dark: bool, scale: str) -> None:
@@ -238,19 +291,20 @@ class SkyPlotWidget(QWidget):
         """选择不碰天空圆保护区的最大字号，并返回 font/card/gradient。"""
         center, radius = self.plot_geometry()
         fallback = None
+        ticks = _cn0_legend_ticks()
         for pixel_size in range(self._legend_font_px, 7, -1):
             font = self.font()
             font.setPixelSize(pixel_size)
             metrics = QFontMetrics(font)
             line_height = float(metrics.height())
             unknown_box = max(6.0, min(8.0, line_height - 3.0))
-            tick_width = max(metrics.horizontalAdvance(label) for _, label in CN0_LEGEND_TICKS)
+            tick_width = max(metrics.horizontalAdvance(label) for _, label in ticks)
             title_row_width = (
                 metrics.horizontalAdvance("C/N₀")
                 + 2.0
                 + unknown_box
                 + 2.0
-                + metrics.horizontalAdvance("无")
+                + metrics.horizontalAdvance(tr("None"))
             )
             card_width = max(46.0, title_row_width + 6.0, 18.0 + tick_width)
             gradient_height = max(44.0, line_height * 4.0)
@@ -309,7 +363,7 @@ class SkyPlotWidget(QWidget):
         painter.drawText(
             QRectF(unknown_x + unknown_box + 2.0, card.top(), card.right() - unknown_x - unknown_box - 3.0, line_height),
             Qt.AlignLeft | Qt.AlignVCenter,
-            "无",
+            tr("None"),
         )
 
         gradient = QLinearGradient(0.0, gradient_rect.top(), 0.0, gradient_rect.bottom())
@@ -320,7 +374,7 @@ class SkyPlotWidget(QWidget):
         painter.drawRect(gradient_rect)
 
         painter.setPen(fg)
-        for value, label in CN0_LEGEND_TICKS:
+        for value, label in _cn0_legend_ticks():
             ratio = (CN0_COLOR_MAX_DBHZ - value) / (CN0_COLOR_MAX_DBHZ - CN0_COLOR_MIN_DBHZ)
             y = gradient_rect.top() + gradient_rect.height() * ratio
             label_rect = QRectF(
@@ -411,14 +465,23 @@ class SkyPlotWidget(QWidget):
             painter.drawEllipse(point, 10.0, 10.0)
             painter.setPen(QColor("#FFFFFF"))
             painter.drawText(QRectF(point.x() - 13, point.y() - 8, 26, 16), Qt.AlignCenter, str(sv_id))
-            cn0_label = "着色 C/N₀" if self._cn0_coloring else "C/N₀"
+            cn0_label = tr("Color C/N₀") if self._cn0_coloring else "C/N₀"
             cn0_detail = f"{cn0_label}={cn0 if cn0 is not None else '—'} dB-Hz"
             if native_cn0 is not None and cn0 != native_cn0:
-                cn0_detail += f" · 卫星记录 C/N₀={native_cn0} dB-Hz"
+                cn0_detail += tr(
+                    " · satellite record C/N₀={value} dB-Hz",
+                    value=native_cn0,
+                )
             self._hit_points.append((
                 point,
-                f"{satellite_label(system, sv_id)} · elev={elevation}° · az={azimuth}° · "
-                f"{cn0_detail}\n{raw_detail}",
+                tr(
+                    "{satellite} · elev={elevation}° · az={azimuth}° · {cn0_detail}\n{raw_detail}",
+                    satellite=satellite_label(system, sv_id),
+                    elevation=elevation,
+                    azimuth=azimuth,
+                    cn0_detail=cn0_detail,
+                    raw_detail=raw_detail,
+                ),
             ))
         if self._empty_text:
             painter.setPen(fg)
@@ -436,7 +499,10 @@ class SkyPlotWidget(QWidget):
                 return
         if self._cn0_coloring and self.cn0_legend_geometry()[0].contains(point):
             self.setToolTip(
-                "天空图连续 C/N₀ 色带：≤20 dB-Hz 为弱端，≥51 dB-Hz 为强端；灰色表示无 C/N₀ 数据。"
+                tr(
+                    "Continuous sky-plot C/N₀ scale: ≤20 dB-Hz is weak, "
+                    "≥51 dB-Hz is strong, and gray means no C/N₀ data."
+                )
             )
             return
         self.setToolTip("")
@@ -453,7 +519,8 @@ class CnrBarWidget(QWidget):
         self._dark = True
         self._signal_record_count = 0
         self._locked_signal_count = 0
-        self._empty_text = "等待接收机逐信号 C/N₀ 数据"
+        self._empty_text = tr("Waiting for receiver signal-level C/N₀ data")
+        register_translatable(self)
 
     def set_data(
         self,
@@ -468,14 +535,21 @@ class CnrBarWidget(QWidget):
         self._stale = stale
         self._signal_record_count = signal_record_count
         self._locked_signal_count = locked_signal_count
+        self._refresh_empty_text()
+        self.update()
+
+    def _refresh_empty_text(self) -> None:
         if self._bars:
             self._empty_text = ""
         elif self._locked_signal_count > 0:
-            self._empty_text = "已有锁定信号，但暂无有效 C/N₀"
+            self._empty_text = tr("Signals are locked, but no valid C/N₀ is available")
         elif self._signal_record_count > 0:
-            self._empty_text = "已收到逐信号数据，暂无锁定信号"
+            self._empty_text = tr("Signal records received; no signal is locked")
         else:
-            self._empty_text = "等待接收机逐信号 C/N₀ 数据"
+            self._empty_text = tr("Waiting for receiver signal-level C/N₀ data")
+
+    def retranslate_ui(self) -> None:
+        self._refresh_empty_text()
         self.update()
 
     def set_dark_theme(self, dark: bool) -> None:
@@ -580,6 +654,7 @@ class GnssWidget(QWidget):
         self._timer.setInterval(500)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
+        register_translatable(self)
         self.refresh()
 
     def _on_store_cleared(self) -> None:
@@ -600,7 +675,7 @@ class GnssWidget(QWidget):
             checkbox.toggled.connect(self.refresh)
             self._system_checks[system] = checkbox
             self._filters_host.flow.addWidget(checkbox)
-        self._cn0_color = QCheckBox("天空图按 C/N₀ 着色")
+        self._cn0_color = QCheckBox(tr("Color sky plot by C/N₀"))
         self._cn0_color.setAttribute(Qt.WA_LayoutUsesWidgetRect, True)
         self._cn0_color.toggled.connect(self.refresh)
         self._filters_host.flow.addWidget(self._cn0_color)
@@ -610,11 +685,11 @@ class GnssWidget(QWidget):
         self._info_layout = QHBoxLayout(self._info_row)
         self._info_layout.setContentsMargins(0, 0, 0, 0)
         self._info_layout.setSpacing(8)
-        self._source_badge = QLabel("SOURCE: —")
+        self._source_badge = QLabel(tr("SOURCE: {source}", source="—"))
         self._source_badge.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._source_badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self._info_layout.addWidget(self._source_badge)
-        self._stats = QLabel("等待 GNSS 数据")
+        self._stats = QLabel(tr("Waiting for GNSS data"))
         self._stats.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self._stats.setWordWrap(True)
         self._stats.setMinimumWidth(0)
@@ -635,7 +710,7 @@ class GnssWidget(QWidget):
         self._prev.clicked.connect(lambda: self._step_history(-1))
         self._next.clicked.connect(lambda: self._step_history(1))
         self._history_slider.valueChanged.connect(self._select_history)
-        history_layout.addWidget(QLabel("快照"))
+        history_layout.addWidget(QLabel(tr("Snapshot")))
         history_layout.addWidget(self._prev)
         history_layout.addWidget(self._history_slider, 1)
         history_layout.addWidget(self._next)
@@ -659,7 +734,7 @@ class GnssWidget(QWidget):
         self._legend = QLabel("")
         root.addWidget(self._legend)
         self._details_toggle = QToolButton()
-        self._details_toggle.setText("观测明细")
+        self._details_toggle.setText(tr("Observation details"))
         self._details_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._details_toggle.setCheckable(True)
         self._details_toggle.setArrowType(Qt.RightArrow)
@@ -667,7 +742,8 @@ class GnssWidget(QWidget):
         root.addWidget(self._details_toggle)
         self._table = QTableWidget(0, 13)
         self._table.setHorizontalHeaderLabels([
-            "来源", "系统", "卫星", "频段", "Signal", "Raw ID", "C/N₀", "Quality/Tracking",
+            tr("Source"), tr("System"), tr("Satellite"), tr("Band"),
+            "Signal", "Raw ID", "C/N₀", "Quality/Tracking",
             "Lock / Used", "Freq/GLO", "Corr", "Residual", "Raw Flags",
         ])
         self._table.setVisible(False)
@@ -737,6 +813,27 @@ class GnssWidget(QWidget):
     def _step_history(self, delta: int) -> None:
         self._history_slider.setValue(self._history_slider.value() + delta)
 
+    @staticmethod
+    def _stream_state(stream: str, age: str, *, stale: bool, pending: bool) -> str:
+        states = []
+        if stale:
+            states.append(tr("STALE"))
+        if pending:
+            states.append(tr("PENDING"))
+        if states:
+            return tr(
+                "{stream} {age} [{states}]",
+                stream=stream,
+                age=age,
+                states=", ".join(states),
+            )
+        return tr("{stream} {age}", stream=stream, age=age)
+
+    def retranslate_ui(self) -> None:
+        self._sky.retranslate_ui()
+        self._bars.retranslate_ui()
+        self.refresh()
+
     def refresh(self) -> None:
         if not self._playback:
             self._store.expire_incomplete()
@@ -800,28 +897,58 @@ class GnssWidget(QWidget):
         signal_age = self._store.signal_age_s()
         sky_age_text = "—" if sky_age is None or self._playback else f"{sky_age:.1f}s"
         signal_age_text = "—" if signal_age is None or self._playback else f"{signal_age:.1f}s"
-        sky_state = f"Sky {sky_age_text}{' STALE' if sky_stale else ''}{' PENDING' if self._store.sky_pending() else ''}"
-        signal_state = (
-            f"Signal {signal_age_text}{' STALE' if signal_stale else ''}"
-            f"{' PENDING' if self._store.signal_pending() else ''}"
+        sky_state = self._stream_state(
+            tr("Sky"),
+            sky_age_text,
+            stale=sky_stale,
+            pending=self._store.sky_pending(),
         )
-        self._source_badge.setText(f"SOURCE: {SOURCE_NAMES.get(snapshot.source, snapshot.source)}")
-        self._stats.setText(
-            f"卫星记录 {satellite_records} · 可绘星 {drawable_satellites} · 有效 CNR {len(locked)} · "
-            f"平均 {sum(locked) / len(locked):.1f} / 最大 {max(locked):.0f} dB-Hz · "
-            f"{sky_state} · {signal_state}"
-            if locked else (
-                f"卫星记录 {satellite_records} · 可绘星 {drawable_satellites} · "
-                f"有效 CNR 0 · {sky_state} · {signal_state}"
+        signal_state = self._stream_state(
+            tr("Signal"),
+            signal_age_text,
+            stale=signal_stale,
+            pending=self._store.signal_pending(),
+        )
+        set_translatable_text(
+            "SOURCE: {source}",
+            self._source_badge,
+            source=SOURCE_NAMES.get(snapshot.source, snapshot.source),
+        )
+        if locked:
+            set_translatable_n_text(
+                "%n satellite record(s) · {drawable} drawable · {valid} valid C/N₀ · "
+                "average {average:.1f} / maximum {maximum:.0f} dB-Hz · "
+                "{sky_state} · {signal_state}",
+                self._stats,
+                satellite_records,
+                drawable=drawable_satellites,
+                valid=len(locked),
+                average=sum(locked) / len(locked),
+                maximum=max(locked),
+                sky_state=sky_state,
+                signal_state=signal_state,
             )
-        )
+        else:
+            set_translatable_n_text(
+                "%n satellite record(s) · {drawable} drawable · 0 valid C/N₀ · "
+                "{sky_state} · {signal_state}",
+                self._stats,
+                satellite_records,
+                drawable=drawable_satellites,
+                sky_state=sky_state,
+                signal_state=signal_state,
+            )
         self._fit_info_font()
         bands = sorted({bar.band for bar in bars}, key=lambda band: (_BAND_ORDER.get(band, 99), band))
         legend_items = [
             f'<span style="color:{BAND_COLORS.get(band, "#94A3B8")}">■</span> {band}'
             for band in bands
         ]
-        self._legend.setText("频段图例: " + "&nbsp;&nbsp;".join(legend_items) if bands else "频段图例: —")
+        set_translatable_text(
+            "Band legend: {items}",
+            self._legend,
+            items="&nbsp;&nbsp;".join(legend_items) if bands else "—",
+        )
         self._refresh_table(snapshot, systems)
 
     def _refresh_table(self, snapshot: GnssSnapshot, systems: Set[int]) -> None:

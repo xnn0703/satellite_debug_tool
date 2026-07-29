@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool import __version__
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
@@ -39,14 +40,16 @@ from satellite_debug_tool.ui.update_dialog import (
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    _TAB_IDS = ("live", "playback", "log", "device")
+
+    def __init__(self, settings: Settings | None = None):
         super().__init__()
         self.setWindowTitle("Satellite Debug Tool")
         self.resize(1280, 800)
         self.setMinimumWidth(1024)
         self.setMinimumHeight(600)
 
-        self._settings = Settings()
+        self._settings = settings or Settings()
         # M7：一次性清掉历史遗留 settings key（attitude 已迁移到全自动；
         # ui.font_scale 已固化为 small，UI 不再暴露调节入口）
         cleaned = False
@@ -54,6 +57,23 @@ class MainWindow(QMainWindow):
             cleaned = True
         if self._settings.remove("ui.font_scale"):
             cleaned = True
+        legacy_tab = self._settings.get("ui.active_tab")
+        if legacy_tab is not None:
+            legacy_map = {
+                "实时": "live",
+                "Live": "live",
+                "回放": "playback",
+                "Playback": "playback",
+                "Log": "log",
+                "设备": "device",
+                "Device": "device",
+            }
+            self._settings.set(
+                "ui.active_tab_id",
+                legacy_map.get(str(legacy_tab), "live"),
+            )
+            if self._settings.remove("ui.active_tab"):
+                cleaned = True
         if cleaned:
             self._settings.save()
 
@@ -73,10 +93,10 @@ class MainWindow(QMainWindow):
         self._playback = PlaybackView(settings=self._settings)
         self._log = LogView(settings=self._settings)
         self._device = DeviceView(settings=self._settings, profile_store=self._live.profile_store())
-        self._tabs.addTab(self._live, "实时")
-        self._tabs.addTab(self._playback, "回放")
+        self._tabs.addTab(self._live, tr("Live"))
+        self._tabs.addTab(self._playback, tr("Playback"))
         self._tabs.addTab(self._log, "Log")
-        self._tabs.addTab(self._device, "设备")
+        self._tabs.addTab(self._device, tr("Device"))
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._tabs.currentChanged.connect(self._sync_tab_pills)
 
@@ -107,15 +127,16 @@ class MainWindow(QMainWindow):
 
         # ---------- 应用主题 + 恢复 active tab ----------
         self._apply_theme(self._theme)
-        active = self._settings.get("ui.active_tab", "实时")
-        for i in range(self._tabs.count()):
-            if self._tabs.tabText(i) == active:
-                self._tabs.setCurrentIndex(i)
-                break
+        active_tab_id = str(self._settings.get("ui.active_tab_id", "live"))
+        try:
+            self._tabs.setCurrentIndex(self._TAB_IDS.index(active_tab_id))
+        except ValueError:
+            self._tabs.setCurrentIndex(0)
 
         # M11：启动后台静默检查更新（settings.update.auto_check 控制）
         self._bg_check_thread = None
         QTimer.singleShot(2000, self._kick_silent_update_check)
+        register_translatable(self)
 
     # ============================ 全局顶栏 ============================
 
@@ -152,7 +173,12 @@ class MainWindow(QMainWindow):
         pill_row.setContentsMargins(3, 3, 3, 3)
         pill_row.setSpacing(2)
         self._tab_pills: list[QPushButton] = []
-        pill_defs = [("实时", "activity"), ("回放", "history"), ("Log", "list"), ("设备", "cpu")]
+        pill_defs = [
+            (tr("Live"), "activity"),
+            (tr("Playback"), "history"),
+            ("Log", "list"),
+            (tr("Device"), "cpu"),
+        ]
         for idx, (label, icon_name) in enumerate(pill_defs):
             b = QPushButton(label)
             b.setObjectName("tabPill")
@@ -169,16 +195,25 @@ class MainWindow(QMainWindow):
         self._theme_btn = QPushButton()
         self._theme_btn.setObjectName("iconBtn")
         self._theme_btn.setFixedSize(30, 30)
-        self._theme_btn.setToolTip("循环切换主题：深色 → 强光 → 浅色")
+        self._theme_btn.setToolTip(
+            tr("Cycle theme: dark → high contrast → light")
+        )
         self._theme_btn.clicked.connect(self._on_cycle_theme)
-        self._update_btn = QPushButton("检查更新")
+        self._update_btn = QPushButton(tr("Check for updates"))
         self._update_btn.setProperty("variant", "ghost")
-        self._update_btn.setToolTip("手动检查并下载最新版本（也可在设置中开关启动自检）")
+        self._update_btn.setToolTip(
+            tr(
+                "Check for and download the latest version "
+                "(startup checks can be configured in Settings)"
+            )
+        )
         self._update_btn.clicked.connect(self._on_check_update_clicked)
         self._settings_btn = QPushButton()
         self._settings_btn.setObjectName("iconBtn")
         self._settings_btn.setFixedSize(30, 30)
-        self._settings_btn.setToolTip("配置文件保存 / 加载的默认目录 / 更新设置")
+        self._settings_btn.setToolTip(
+            tr("Configure default folders, updates, and language")
+        )
         self._settings_btn.clicked.connect(self._on_open_settings)
         row.addWidget(self._theme_btn)
         row.addWidget(self._update_btn)
@@ -189,7 +224,7 @@ class MainWindow(QMainWindow):
         # 保留隐藏的 _theme_combo 以兼容旧代码 / 测试引用
         self._theme_combo = QComboBox()
         self._theme_combo.addItems([S.THEME_LABELS[t] for t in S.THEMES])
-        self._theme_combo.setCurrentText(S.THEME_LABELS.get(self._theme, "深色"))
+        self._theme_combo.setCurrentText(S.THEME_LABELS.get(self._theme, "Dark"))
         self._theme_combo.hide()
 
     def _on_cycle_theme(self):
@@ -330,8 +365,8 @@ class MainWindow(QMainWindow):
     # ============================ Tab / 状态 ============================
 
     def _on_tab_changed(self, index: int):
-        name = self._tabs.tabText(index)
-        self._settings.set("ui.active_tab", name)
+        tab_id = self._TAB_IDS[index] if 0 <= index < len(self._TAB_IDS) else "live"
+        self._settings.set("ui.active_tab_id", tab_id)
         self._settings.save()
         # 切 tab 时清掉 statusbar 上残留的临时消息（不同 view 之间不串扰）
         sb = self.statusBar()
@@ -342,6 +377,13 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         if sb is not None:
             sb.showMessage(msg, timeout_ms)
+
+    def retranslate_ui(self) -> None:
+        # Transient messages arrive already formatted. Clearing one on a locale
+        # change avoids leaving stale-language text without rebuilding any view.
+        sb = self.statusBar()
+        if sb is not None:
+            sb.clearMessage()
 
     # ============================ 设置 ============================
 
@@ -369,8 +411,11 @@ class MainWindow(QMainWindow):
 
     def _on_silent_check_found_new(self, latest):
         """后台检查发现新版：状态栏提示，用户点击 / 工具栏按钮可展开 UpdateDialog。"""
-        msg = (
-            f"🆕 发现新版本 {latest.tag_name}（当前 v{__version__}）— 点工具栏「检查更新」更新"
+        msg = tr(
+            "New version {latest} is available (current: v{current}). "
+            "Use Check for updates to install it.",
+            latest=latest.tag_name,
+            current=__version__,
         )
         sb = self.statusBar()
         if sb is not None:

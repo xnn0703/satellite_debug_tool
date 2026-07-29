@@ -39,20 +39,13 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.profile import ProfileStore
-
-
-# 与 grouped_chart_widget._group_title 同源（保证默认 title 一致）
-_DEFAULT_GROUP_TITLES = {
-    0: "姿态",
-    1: "指向",
-    2: "信号",
-    3: "PID/误差",
-    4: "位置",
-}
-
-
-def _default_title(gid: int) -> str:
-    return _DEFAULT_GROUP_TITLES.get(gid, f"组 {gid}")
+from satellite_debug_tool.i18n import register_translatable, tr
+from satellite_debug_tool.ui.chart_group_titles import (
+    default_group_title,
+    display_group_title,
+    group_uses_default_title,
+    is_default_group_title,
+)
 
 
 class ChartGroupDialog(QDialog):
@@ -79,13 +72,19 @@ class ChartGroupDialog(QDialog):
         # 工作副本，确定时才写回 settings
         self._groups: Dict[int, dict] = {}
 
-        self.setWindowTitle(f"图表分组管理 [{hw_type or '未连接设备'}]")
+        self.setWindowTitle(
+            tr(
+                "Chart group manager [{device}]",
+                device=hw_type or tr("No device connected"),
+            )
+        )
         self.resize(640, 480)
 
         self._build_ui()
         self._load_initial_groups()
         self._refresh_group_combo()
         self._refresh_lists()
+        register_translatable(self)
 
     # ---- UI 构造 ----
 
@@ -94,15 +93,15 @@ class ChartGroupDialog(QDialog):
 
         # 顶部：当前组选择 + 新建/删除/重命名
         top = QHBoxLayout()
-        top.addWidget(QLabel("当前组:"))
+        top.addWidget(QLabel(tr("Current group:")))
         self._group_combo = QComboBox()
         self._group_combo.currentIndexChanged.connect(self._on_current_group_changed)
         top.addWidget(self._group_combo, 1)
-        self._btn_new = QPushButton("+ 新建")
+        self._btn_new = QPushButton(tr("+ New"))
         self._btn_new.clicked.connect(self._on_new_group)
-        self._btn_del = QPushButton("× 删除")
+        self._btn_del = QPushButton(tr("× Delete"))
         self._btn_del.clicked.connect(self._on_delete_group)
-        self._btn_rename = QPushButton("✎ 重命名")
+        self._btn_rename = QPushButton(tr("✎ Rename"))
         self._btn_rename.clicked.connect(self._on_rename_group)
         for b in (self._btn_new, self._btn_del, self._btn_rename):
             top.addWidget(b)
@@ -113,7 +112,7 @@ class ChartGroupDialog(QDialog):
 
         # 左：未分组
         left = QVBoxLayout()
-        left.addWidget(QLabel("未分组通道"))
+        left.addWidget(QLabel(tr("Unassigned channels")))
         self._list_unassigned = QListWidget()
         self._list_unassigned.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         left.addWidget(self._list_unassigned, 1)
@@ -123,11 +122,15 @@ class ChartGroupDialog(QDialog):
         center = QVBoxLayout()
         center.addStretch(1)
         self._btn_to_group = QPushButton("→")
-        self._btn_to_group.setToolTip("把左侧选中的通道移入当前组")
+        self._btn_to_group.setToolTip(
+            tr("Move selected channels into the current group")
+        )
         self._btn_to_group.setFixedWidth(40)
         self._btn_to_group.clicked.connect(self._on_move_to_group)
         self._btn_to_unassigned = QPushButton("←")
-        self._btn_to_unassigned.setToolTip("把右侧选中的通道从当前组移出")
+        self._btn_to_unassigned.setToolTip(
+            tr("Remove selected channels from the current group")
+        )
         self._btn_to_unassigned.setFixedWidth(40)
         self._btn_to_unassigned.clicked.connect(self._on_move_to_unassigned)
         center.addWidget(self._btn_to_group)
@@ -138,7 +141,7 @@ class ChartGroupDialog(QDialog):
 
         # 右：当前组
         right = QVBoxLayout()
-        right.addWidget(QLabel("当前组通道"))
+        right.addWidget(QLabel(tr("Current group channels")))
         self._list_current = QListWidget()
         self._list_current.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         right.addWidget(self._list_current, 1)
@@ -148,13 +151,19 @@ class ChartGroupDialog(QDialog):
 
         # 底部：恢复默认 + 取消/确定
         bottom = QHBoxLayout()
-        self._btn_reset = QPushButton("恢复 profile 默认")
-        self._btn_reset.setToolTip("丢弃自定义分组，回到 profile 自带的 group_id 划分")
+        self._btn_reset = QPushButton(tr("Restore profile defaults"))
+        self._btn_reset.setToolTip(
+            tr("Discard custom groups and restore the profile group_id layout")
+        )
         self._btn_reset.clicked.connect(self._on_reset_defaults)
         bottom.addWidget(self._btn_reset)
         bottom.addStretch(1)
         self._button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self._button_box.button(QDialogButtonBox.StandardButton.Ok).setText(tr("OK"))
+        self._button_box.button(QDialogButtonBox.StandardButton.Cancel).setText(
+            tr("Cancel")
         )
         self._button_box.accepted.connect(self._on_accept)
         self._button_box.rejected.connect(self.reject)
@@ -180,7 +189,12 @@ class ChartGroupDialog(QDialog):
             # JSON key 是字符串，转回 int
             self._groups = {
                 int(gid_str): {
-                    "title": str(g.get("title", _default_title(int(gid_str)))),
+                    "title": str(g.get("title", "")),
+                    "title_is_default": is_default_group_title(
+                        int(gid_str),
+                        str(g.get("title", "")),
+                        g.get("title_is_default"),
+                    ),
                     "channels": list(g.get("channels", [])),
                 }
                 for gid_str, g in custom.items()
@@ -195,7 +209,10 @@ class ChartGroupDialog(QDialog):
             return result
         for ch in self._profile.get_channels(self._hw_type):
             gid = int(ch.group_id)
-            entry = result.setdefault(gid, {"title": _default_title(gid), "channels": []})
+            entry = result.setdefault(
+                gid,
+                {"title": "", "title_is_default": True, "channels": []},
+            )
             entry["channels"].append(ch.name)
         return result
 
@@ -216,7 +233,12 @@ class ChartGroupDialog(QDialog):
         self._group_combo.blockSignals(True)
         self._group_combo.clear()
         for gid in sorted(self._groups.keys()):
-            self._group_combo.addItem(f"组 {gid}: {self._groups[gid]['title']}", gid)
+            group = self._groups[gid]
+            title = display_group_title(gid, group)
+            self._group_combo.addItem(
+                tr("Group {group_id}: {title}", group_id=gid, title=title),
+                gid,
+            )
         self._group_combo.blockSignals(False)
 
     def _current_gid(self) -> Optional[int]:
@@ -248,11 +270,22 @@ class ChartGroupDialog(QDialog):
         new_gid = 0
         while new_gid in self._groups:
             new_gid += 1
-        title, ok = QInputDialog.getText(self, "新建组", f"组 {new_gid} 标题:", text=f"组 {new_gid}")
+        default_title = default_group_title(new_gid)
+        title, ok = QInputDialog.getText(
+            self,
+            tr("New group"),
+            tr("Group {group_id} title:", group_id=new_gid),
+            text=default_title,
+        )
         if not ok:
             return
-        title = title.strip() or f"组 {new_gid}"
-        self._groups[new_gid] = {"title": title, "channels": []}
+        title = title.strip()
+        use_default = not title or title == default_title
+        self._groups[new_gid] = {
+            "title": "" if use_default else title,
+            "title_is_default": use_default,
+            "channels": [],
+        }
         self._refresh_group_combo()
         # 选中新建的
         for i in range(self._group_combo.count()):
@@ -266,12 +299,21 @@ class ChartGroupDialog(QDialog):
         if gid is None:
             return
         if len(self._groups) <= 1:
-            QMessageBox.warning(self, "无法删除", "至少要保留一个组。")
+            QMessageBox.warning(
+                self, tr("Cannot delete"), tr("At least one group must remain.")
+            )
             return
-        title = self._groups[gid]["title"]
+        group = self._groups[gid]
+        title = display_group_title(gid, group)
         ret = QMessageBox.question(
-            self, "删除组",
-            f"删除「组 {gid}: {title}」？\n组内通道将回到「未分组」区。",
+            self,
+            tr("Delete group"),
+            tr(
+                "Delete \"Group {group_id}: {title}\"?\n"
+                "Its channels will return to the unassigned list.",
+                group_id=gid,
+                title=title,
+            ),
         )
         if ret != QMessageBox.StandardButton.Yes:
             return
@@ -284,12 +326,19 @@ class ChartGroupDialog(QDialog):
         if gid is None:
             return
         title, ok = QInputDialog.getText(
-            self, "重命名组", f"组 {gid} 新标题:",
-            text=self._groups[gid]["title"],
+            self,
+            tr("Rename group"),
+            tr("New title for group {group_id}:", group_id=gid),
+            text=(
+                display_group_title(gid, self._groups[gid])
+            ),
         )
         if not ok:
             return
-        self._groups[gid]["title"] = title.strip() or f"组 {gid}"
+        title = title.strip()
+        use_default = is_default_group_title(gid, title)
+        self._groups[gid]["title"] = "" if use_default else title
+        self._groups[gid]["title_is_default"] = use_default
         self._refresh_group_combo()
         # 保持当前选中
         for i in range(self._group_combo.count()):
@@ -323,8 +372,9 @@ class ChartGroupDialog(QDialog):
 
     def _on_reset_defaults(self) -> None:
         ret = QMessageBox.question(
-            self, "恢复默认",
-            "丢弃当前自定义分组、回到 profile 默认 group_id 划分？",
+            self,
+            tr("Restore defaults"),
+            tr("Discard custom groups and restore the profile group_id layout?"),
         )
         if ret != QMessageBox.StandardButton.Yes:
             return
@@ -340,7 +390,15 @@ class ChartGroupDialog(QDialog):
         all_custom = copy.deepcopy(self._settings.get("chart.custom_groups", {}) or {})
         # JSON 友好：gid 转字符串
         all_custom[self._hw_type] = {
-            str(gid): {"title": g["title"], "channels": list(g["channels"])}
+            str(gid): {
+                "title": (
+                    ""
+                    if group_uses_default_title(gid, g)
+                    else str(g.get("title", "")).strip()
+                ),
+                "title_is_default": group_uses_default_title(gid, g),
+                "channels": list(g["channels"]),
+            }
             for gid, g in self._groups.items()
         }
         self._settings.set("chart.custom_groups", all_custom)
@@ -352,3 +410,17 @@ class ChartGroupDialog(QDialog):
     def current_groups_snapshot(self) -> Dict[int, dict]:
         """返回工作副本快照（测试用）。"""
         return copy.deepcopy(self._groups)
+
+    def retranslate_ui(self) -> None:
+        current_gid = self._current_gid()
+        self.setWindowTitle(
+            tr(
+                "Chart group manager [{device}]",
+                device=self._hw_type or tr("No device connected"),
+            )
+        )
+        self._refresh_group_combo()
+        if current_gid is not None:
+            index = self._group_combo.findData(current_gid)
+            if index >= 0:
+                self._group_combo.setCurrentIndex(index)

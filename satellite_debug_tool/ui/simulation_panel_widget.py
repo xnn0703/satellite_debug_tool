@@ -23,8 +23,26 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.simulation.mock_modem import RealTimeReport
-from satellite_debug_tool.core.simulation.presets import BAND_PRESETS, SATELLITE_PRESETS
+from satellite_debug_tool.core.simulation.presets import BAND_PRESETS
+from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
+
+
+_SATELLITE_CHOICES = (
+    ("apstar_6", 134.0),
+    ("chinasat_10", 110.0),
+    ("chinasat_9", 92.2),
+    ("sinosat_3", 125.0),
+)
+
+
+def _satellite_label(satellite_id: str) -> str:
+    return {
+        "apstar_6": tr("APSTAR-6 (134°E)"),
+        "chinasat_10": tr("ChinaSat-10 (110.5°E)"),
+        "chinasat_9": tr("ChinaSat-9 (92.2°E)"),
+        "sinosat_3": tr("Sinosat-3 (125°E)"),
+    }[satellite_id]
 
 
 class SimulationPanelWidget(QWidget):
@@ -46,6 +64,7 @@ class SimulationPanelWidget(QWidget):
         super().__init__(parent)
         self._setup_ui()
         self._connect_signals()
+        register_translatable(self)
 
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -53,19 +72,19 @@ class SimulationPanelWidget(QWidget):
         root.setSpacing(6)
 
         # ---- 卫星 + 频段 ----
-        sat_group = QGroupBox("卫星")
+        sat_group = QGroupBox(tr("Satellite"))
         sat_layout = QGridLayout(sat_group)
         sat_layout.setContentsMargins(6, 10, 6, 6)
         sat_layout.setSpacing(4)
 
-        sat_layout.addWidget(QLabel("预设:"), 0, 0)
+        sat_layout.addWidget(QLabel(tr("Preset:")), 0, 0)
         self._sat_combo = QComboBox()
-        for name in SATELLITE_PRESETS:
-            self._sat_combo.addItem(name)
+        for satellite_id, longitude in _SATELLITE_CHOICES:
+            self._sat_combo.addItem(_satellite_label(satellite_id), longitude)
         self._sat_combo.setCurrentIndex(0)
         sat_layout.addWidget(self._sat_combo, 0, 1, 1, 2)
 
-        sat_layout.addWidget(QLabel("经度:"), 1, 0)
+        sat_layout.addWidget(QLabel(tr("Longitude:")), 1, 0)
         self._lon_spin = QDoubleSpinBox()
         self._lon_spin.setRange(-180.0, 180.0)
         self._lon_spin.setValue(134.0)
@@ -73,12 +92,13 @@ class SimulationPanelWidget(QWidget):
         self._lon_spin.setDecimals(1)
         sat_layout.addWidget(self._lon_spin, 1, 1)
 
-        sat_layout.addWidget(QLabel("频段:"), 2, 0)
+        sat_layout.addWidget(QLabel(tr("Band:")), 2, 0)
         self._band_combo = QComboBox()
-        self._band_combo.addItems(BAND_PRESETS.keys())
+        for band in BAND_PRESETS:
+            self._band_combo.addItem(band, band)
         sat_layout.addWidget(self._band_combo, 2, 1)
 
-        sat_layout.addWidget(QLabel("SNR基准:"), 3, 0)
+        sat_layout.addWidget(QLabel(tr("SNR baseline:")), 3, 0)
         self._baseline_spin = QDoubleSpinBox()
         self._baseline_spin.setRange(0.0, 30.0)
         self._baseline_spin.setValue(16.0)
@@ -86,32 +106,37 @@ class SimulationPanelWidget(QWidget):
         self._baseline_spin.setDecimals(1)
         sat_layout.addWidget(self._baseline_spin, 3, 1)
 
-        sat_layout.addWidget(QLabel("预设航向:"), 4, 0)
+        sat_layout.addWidget(QLabel(tr("Initial heading:")), 4, 0)
         self._heading_spin = QDoubleSpinBox()
         self._heading_spin.setRange(0.0, 359.9)
         self._heading_spin.setValue(0.0)
         self._heading_spin.setSuffix(" °")
         self._heading_spin.setDecimals(1)
-        self._heading_spin.setToolTip("设备初始航向（真值），用于验证航向校准精度")
+        self._heading_spin.setToolTip(
+            tr(
+                "Ground-truth initial device heading used to verify heading "
+                "calibration accuracy"
+            )
+        )
         sat_layout.addWidget(self._heading_spin, 4, 1)
 
         root.addWidget(sat_group)
 
         # ---- 场景控制 ----
-        scene_group = QGroupBox("场景")
+        scene_group = QGroupBox(tr("Scenario"))
         scene_layout = QVBoxLayout(scene_group)
         scene_layout.setContentsMargins(6, 10, 6, 6)
         scene_layout.setSpacing(4)
 
         btn_row = QHBoxLayout()
-        self._block_btn = QPushButton("遮挡 5s")
-        self._block_btn.setToolTip("模拟 5 秒遮挡（失锁）")
+        self._block_btn = QPushButton(tr("Blockage 5 s"))
+        self._block_btn.setToolTip(tr("Simulate a 5-second blockage and loss of lock"))
         btn_row.addWidget(self._block_btn)
         scene_layout.addLayout(btn_row)
 
         # 雨衰滑块
         rain_row = QHBoxLayout()
-        rain_row.addWidget(QLabel("雨衰:"))
+        rain_row.addWidget(QLabel(tr("Rain fade:")))
         self._rain_slider = QSlider(Qt.Horizontal)
         self._rain_slider.setRange(0, 200)  # 0.0 ~ 20.0 dB
         self._rain_slider.setValue(0)
@@ -124,15 +149,21 @@ class SimulationPanelWidget(QWidget):
         root.addWidget(scene_group)
 
         # ---- 实时参数 ----
-        info_group = QGroupBox("实时参数")
+        info_group = QGroupBox(tr("Live parameters"))
         info_layout = QGridLayout(info_group)
         info_layout.setContentsMargins(6, 10, 6, 6)
         info_layout.setSpacing(2)
 
         self._snr_label = self._add_info_row(info_layout, 0, "SNR:")
-        self._rain_info_label = self._add_info_row(info_layout, 1, "雨衰:")
-        self._scan_angle_label = self._add_info_row(info_layout, 2, "扫描角θ:")
-        self._pointing_err_label = self._add_info_row(info_layout, 3, "失指误差:")
+        self._rain_info_label = self._add_info_row(
+            info_layout, 1, tr("Rain fade:")
+        )
+        self._scan_angle_label = self._add_info_row(
+            info_layout, 2, tr("Scan angle θ:")
+        )
+        self._pointing_err_label = self._add_info_row(
+            info_layout, 3, tr("Pointing error:")
+        )
         self._pitch_label = self._add_info_row(info_layout, 4, "Pitch:")
         self._roll_label = self._add_info_row(info_layout, 5, "Roll:")
         self._heading_label = self._add_info_row(info_layout, 6, "Heading:")
@@ -152,9 +183,13 @@ class SimulationPanelWidget(QWidget):
     def _connect_signals(self) -> None:
         self._sat_combo.currentIndexChanged.connect(self._on_sat_changed)
         self._lon_spin.valueChanged.connect(self._on_sat_changed)
-        self._band_combo.currentTextChanged.connect(
-            lambda b: self.satellite_changed.emit(self._lon_spin.value(),
-                BAND_PRESETS.get(b, {}).get("freq_ghz", 20.0))
+        self._band_combo.currentIndexChanged.connect(
+            lambda _index: self.satellite_changed.emit(
+                self._lon_spin.value(),
+                BAND_PRESETS.get(
+                    str(self._band_combo.currentData() or ""), {}
+                ).get("freq_ghz", 20.0),
+            )
         )
         self._block_btn.clicked.connect(lambda: self.blockage_requested.emit(5.0))
         self._rain_slider.valueChanged.connect(self._on_rain_slider)
@@ -164,12 +199,13 @@ class SimulationPanelWidget(QWidget):
     # ---- 槽函数 ----
 
     def _on_sat_changed(self) -> None:
-        name = self._sat_combo.currentText()
-        lon = SATELLITE_PRESETS.get(name, self._lon_spin.value())
+        data = self._sat_combo.currentData()
+        lon = float(data) if data is not None else self._lon_spin.value()
         self._lon_spin.blockSignals(True)
         self._lon_spin.setValue(lon)
         self._lon_spin.blockSignals(False)
-        freq_ghz = BAND_PRESETS.get(self._band_combo.currentText(), {}).get("freq_ghz", 20.0)
+        band = str(self._band_combo.currentData() or "")
+        freq_ghz = BAND_PRESETS.get(band, {}).get("freq_ghz", 20.0)
         self.satellite_changed.emit(lon, freq_ghz)
 
     def _on_rain_slider(self, value: int) -> None:

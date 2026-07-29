@@ -36,6 +36,12 @@ from satellite_debug_tool.core.protocol import (
     StateDefEntry,
     StateType,
 )
+from satellite_debug_tool.i18n import (
+    mark_raw_text,
+    register_translatable,
+    set_translatable_text,
+    tr,
+)
 from satellite_debug_tool.ui import styles as S
 
 
@@ -66,22 +72,18 @@ class KpiCard(QFrame):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
         # M6: tooltip 悬停显示通道全信息
-        self.setToolTip(
-            f"通道 #{entry.channel_id}  {entry.name}\n"
-            f"单位: {entry.unit or '(无)'}\n"
-            f"量程: [{entry.display_min:.2f}, {entry.display_max:.2f}]\n"
-            f"group_id: {entry.group_id}  flags: 0x{entry.flags:02X}\n"
-            f"来源: DEFINE 表"
-        )
+        self._render_tooltip()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(2)
 
         self._name_label = QLabel(entry.name.upper())
+        mark_raw_text(self._name_label)
         self._value_label = QLabel("—")
         self._value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._unit_label = QLabel(entry.unit or "")
+        mark_raw_text(self._unit_label)
 
         self._apply_font(self._scale)
 
@@ -97,6 +99,29 @@ class KpiCard(QFrame):
         layout.addLayout(top)
         layout.addLayout(bottom)
         self._apply_style(normal=True)
+        register_translatable(self)
+
+    def _render_tooltip(self) -> None:
+        entry = self._entry
+        self.setToolTip(
+            tr(
+                "Channel #{channel_id}  {name}\n"
+                "Unit: {unit}\n"
+                "Range: [{minimum:.2f}, {maximum:.2f}]\n"
+                "group_id: {group_id}  flags: 0x{flags:02X}\n"
+                "Source: DEFINE table",
+                channel_id=entry.channel_id,
+                name=entry.name,
+                unit=entry.unit or tr("(none)"),
+                minimum=entry.display_min,
+                maximum=entry.display_max,
+                group_id=entry.group_id,
+                flags=entry.flags,
+            )
+        )
+
+    def retranslate_ui(self) -> None:
+        self._render_tooltip()
 
     # ---------- 主题/字号 ----------
 
@@ -195,7 +220,7 @@ class EnumStatusChip(QFrame):
         )
         self.setToolTip(
             f"[ENUM] state_id={state.state_id}  {state.name}\n"
-            f"{enum_lines or '  (无枚举项)'}"
+            f"{enum_lines or tr('  (no enum items)')}"
         )
 
         layout = QVBoxLayout(self)
@@ -203,6 +228,7 @@ class EnumStatusChip(QFrame):
         layout.setSpacing(2)
 
         self._name_label = QLabel(state.name)
+        mark_raw_text(self._name_label)
         layout.addWidget(self._name_label)
 
         val_row = QHBoxLayout()
@@ -211,6 +237,7 @@ class EnumStatusChip(QFrame):
         self._dot = QLabel()
         self._dot.setFixedSize(12, 12)
         self._value_label = QLabel("—")
+        mark_raw_text(self._value_label)
         val_font = QFont(S.monospace_family(), 0, QFont.Bold)
         val_font.setStyleHint(QFont.Monospace)
         self._value_label.setFont(val_font)
@@ -219,6 +246,16 @@ class EnumStatusChip(QFrame):
         layout.addLayout(val_row)
 
         self.set_theme(self._theme, self._scale)
+        register_translatable(self)
+
+    def retranslate_ui(self) -> None:
+        enum_lines = "\n".join(
+            f"  {e.value} = {e.name} [lv={e.level}]" for e in self._state.enums
+        )
+        self.setToolTip(
+            f"[ENUM] state_id={self._state.state_id}  {self._state.name}\n"
+            f"{enum_lines or tr('  (no enum items)')}"
+        )
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -298,9 +335,13 @@ class ModeButtonGroup(QFrame):
         outer.setSpacing(2)
 
         self._title = QLabel(state.name)
+        mark_raw_text(self._title)
         self._title.setToolTip(
             f"[ENUM] state_id={state.state_id}  {state.name}\n"
-            f"点击按钮发送 profile control_binding 指定的 CONTROL 子命令"
+            + tr(
+                "Click a button to send the CONTROL subcommand defined by the "
+                "profile control_binding"
+            )
         )
         outer.addWidget(self._title)
 
@@ -309,6 +350,7 @@ class ModeButtonGroup(QFrame):
         row.setSpacing(4)
         for item in state.enums:
             btn = QPushButton(item.name)
+            mark_raw_text(btn)
             btn.setCheckable(True)
             btn.setFixedHeight(26)
             btn.setToolTip(f"→ {state.name} = {item.name} (value={item.value}, level={item.level})")
@@ -319,6 +361,16 @@ class ModeButtonGroup(QFrame):
         outer.addLayout(row)
 
         self.set_theme(self._theme, self._scale)
+        register_translatable(self)
+
+    def retranslate_ui(self) -> None:
+        self._title.setToolTip(
+            f"[ENUM] state_id={self._state.state_id}  {self._state.name}\n"
+            + tr(
+                "Click a button to send the CONTROL subcommand defined by the "
+                "profile control_binding"
+            )
+        )
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -420,7 +472,7 @@ class DashboardWidget(QWidget):
         self._main_row.addLayout(self._cards_row, 1)
         self._main_row.addLayout(self._modes_row, 0)
 
-        self._empty_label = QLabel("等待设备握手…")
+        self._empty_label = QLabel(tr("Waiting for device handshake..."))
         self._empty_label.setAlignment(Qt.AlignCenter)
         outer.addWidget(self._empty_label)
 
@@ -429,6 +481,7 @@ class DashboardWidget(QWidget):
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
         state_store.state_cleared.connect(self._on_state_cleared)
+        register_translatable(self)
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -549,7 +602,9 @@ class DashboardWidget(QWidget):
     def _rebuild(self) -> None:
         self._clear()
         if self._current_hw is None:
-            self._empty_label.setText("等待设备握手…")
+            set_translatable_text(
+                "Waiting for device handshake...", self._empty_label
+            )
             self._empty_label.show()
             return
 
@@ -560,8 +615,10 @@ class DashboardWidget(QWidget):
         ]
 
         if not channels and not enum_states:
-            self._empty_label.setText(
-                f"[{self._current_hw}] profile 无 critical channel/state"
+            set_translatable_text(
+                "[{hardware}] profile has no critical channels or states",
+                self._empty_label,
+                hardware=self._current_hw,
             )
             self._empty_label.show()
             return
@@ -592,3 +649,24 @@ class DashboardWidget(QWidget):
                 self._status_chips[state.state_id] = chip
                 chip.update_value(self._states.get_value(self._current_hw, state.state_id))
         self._modes_row.addStretch(1)
+
+    def retranslate_ui(self) -> None:
+        if self._current_hw is None:
+            set_translatable_text(
+                "Waiting for device handshake...", self._empty_label
+            )
+            return
+        channels = [
+            c for c in self._profile.get_channels(self._current_hw) if c.critical
+        ]
+        states = [
+            s
+            for s in self._profile.get_states(self._current_hw)
+            if s.critical and s.state_type == StateType.ENUM
+        ]
+        if not channels and not states:
+            set_translatable_text(
+                "[{hardware}] profile has no critical channels or states",
+                self._empty_label,
+                hardware=self._current_hw,
+            )

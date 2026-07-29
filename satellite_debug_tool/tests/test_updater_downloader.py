@@ -129,7 +129,9 @@ class TestRetry:
         dl = Downloader(max_retries=3)
         with pytest.raises(DownloadError) as exc:
             dl.download_all([a], tmp_dl, opener=op)
-        assert "重试 3 次仍失败" in str(exc.value)
+        assert exc.value.code == "download_retries_exhausted"
+        assert exc.value.context == {"asset": "x", "attempts": 3}
+        assert "e3" in exc.value.detail
 
 
 # ============================ Content-Length 校验 ============================

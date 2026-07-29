@@ -62,9 +62,9 @@ SIGNAL_PALETTE: tuple[str, ...] = (
 Theme = Literal["dark", "dark_hc", "light"]
 THEMES: tuple[str, ...] = ("dark", "dark_hc", "light")
 THEME_LABELS: Dict[str, str] = {
-    "dark": "深色",
-    "dark_hc": "深色·高对比",
-    "light": "浅色",
+    "dark": "Dark",
+    "dark_hc": "High contrast",
+    "light": "Light",
 }
 
 

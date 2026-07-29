@@ -24,14 +24,18 @@ from threading import Event
 from typing import Callable, List, Optional
 
 from satellite_debug_tool.updater.checker import Asset
+from satellite_debug_tool.updater.errors import UpdaterError
 
 
-class DownloadError(Exception):
+class DownloadError(UpdaterError):
     """下载失败（重试耗尽 / 校验失败 / 用户取消的统一包装）。"""
 
 
 class DownloadCancelled(DownloadError):
     """用户主动取消下载。"""
+
+    def __init__(self) -> None:
+        super().__init__("download_cancelled")
 
 
 ProgressCallback = Callable[[int, int], None]   # (bytes_done_total, bytes_total)
@@ -75,9 +79,12 @@ class Downloader:
             opener: 测试用 mock urllib OpenerDirector
         """
         if not assets:
-            raise DownloadError("空 asset 列表")
+            raise DownloadError("download_no_assets")
         if not dest_dir.exists() or not dest_dir.is_dir():
-            raise DownloadError(f"目标目录不存在: {dest_dir}")
+            raise DownloadError(
+                "download_destination_missing",
+                path=str(dest_dir),
+            )
 
         total_bytes = sum(a.size for a in assets if a.size > 0)
         done_bytes = 0
@@ -85,7 +92,7 @@ class Downloader:
 
         for asset in assets:
             if cancel_event is not None and cancel_event.is_set():
-                raise DownloadCancelled("用户取消")
+                raise DownloadCancelled()
             r = self._download_one(
                 asset=asset,
                 dest=dest_dir / asset.name,
@@ -115,7 +122,7 @@ class Downloader:
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
             if cancel_event is not None and cancel_event.is_set():
-                raise DownloadCancelled("用户取消")
+                raise DownloadCancelled()
             try:
                 written = self._fetch_to_file(
                     asset, dest,
@@ -128,7 +135,10 @@ class Downloader:
                 # Content-Length 校验
                 if asset.size > 0 and dest.stat().st_size != asset.size:
                     raise DownloadError(
-                        f"{asset.name}: 大小不匹配 (期望 {asset.size}, 实际 {dest.stat().st_size})"
+                        "download_size_mismatch",
+                        asset=asset.name,
+                        expected=asset.size,
+                        actual=dest.stat().st_size,
                     )
                 return _AssetResult(asset=asset, path=dest, bytes_written=written)
             except DownloadCancelled:
@@ -139,7 +149,12 @@ class Downloader:
                 if attempt < self._max_retries - 1:
                     time.sleep(2 ** attempt)
                     continue
-        raise DownloadError(f"{asset.name}: 重试 {self._max_retries} 次仍失败 ({last_exc})") from last_exc
+        raise DownloadError(
+            "download_retries_exhausted",
+            str(last_exc or ""),
+            asset=asset.name,
+            attempts=self._max_retries,
+        ) from last_exc
 
     def _fetch_to_file(
         self,
@@ -174,14 +189,18 @@ class Downloader:
             elif status in (200, 206):
                 mode = "ab" if existing > 0 else "wb"
             else:
-                raise DownloadError(f"{asset.name}: HTTP {status}")
+                raise DownloadError(
+                    "download_http_error",
+                    asset=asset.name,
+                    status=status,
+                )
 
             written_this_call = 0
             bytes_since_last_progress = 0
             with open(dest, mode) as f:
                 while True:
                     if cancel_event is not None and cancel_event.is_set():
-                        raise DownloadCancelled("用户取消")
+                        raise DownloadCancelled()
                     chunk = resp.read(self._chunk_size)
                     if not chunk:
                         break

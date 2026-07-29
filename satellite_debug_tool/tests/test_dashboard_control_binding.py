@@ -146,7 +146,8 @@ def test_liveview_debug_waits_for_specific_ack(qapp):
     assert view._debug_enabled is True
     assert view._debug_pending_target is None
     assert view._debug_btn.isEnabled() is True
-    assert view._debug_btn.text() == "Debug: ON"
+    from satellite_debug_tool.i18n import tr
+    assert view._debug_btn.text() == tr("Debug: {state}", state="ON")
 
 
 def test_liveview_debug_click_trace(qapp, monkeypatch, capsys):
@@ -190,7 +191,8 @@ def test_liveview_debug_data_report_confirms_on(qapp):
     assert view._debug_enabled is True
     assert view._debug_pending_target is None
     assert view._debug_btn.isEnabled() is True
-    assert view._debug_btn.text() == "Debug: ON"
+    from satellite_debug_tool.i18n import tr
+    assert view._debug_btn.text() == tr("Debug: {state}", state="ON")
 
 
 def test_liveview_debug_timeout_does_not_retry(qapp):
@@ -230,7 +232,8 @@ def test_liveview_debug_accepts_recent_late_matching_ack(qapp):
     assert view._debug_enabled is True
     assert view._debug_pending_target is None
     assert view._debug_btn.isEnabled() is True
-    assert view._debug_btn.text() == "Debug: ON"
+    from satellite_debug_tool.i18n import tr
+    assert view._debug_btn.text() == tr("Debug: {state}", state="ON")
 
 
 def test_liveview_debug_off_requires_exact_ack_even_when_data_arrives(qapp):

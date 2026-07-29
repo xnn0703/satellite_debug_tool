@@ -129,8 +129,14 @@ jobs:
           $name = "satellite_debug_tool-win-${tag}"
           New-Item -ItemType Directory -Path "release/${name}" -Force | Out-Null
           Copy-Item -Recurse "dist/SatelliteDebugTool/*" "release/${name}/"
-          if (Test-Path "BUILDING.md") {
-            Copy-Item "BUILDING.md" "release/${name}/使用说明.md"
+          if (Test-Path "doc/WINDOWS_QUICK_START.md") {
+            Copy-Item "doc/WINDOWS_QUICK_START.md" "release/${name}/README-Windows.md"
+          }
+          if (Test-Path "doc/user_manual.md") {
+            Copy-Item "doc/user_manual.md" "release/${name}/user_manual.md"
+          }
+          if (Test-Path "doc/user_manual_en.md") {
+            Copy-Item "doc/user_manual_en.md" "release/${name}/user_manual_en.md"
           }
           echo "RELEASE_NAME=${name}" >> $env:GITHUB_ENV
 

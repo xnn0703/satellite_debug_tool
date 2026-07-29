@@ -32,8 +32,8 @@
 <body>
 <div id="map"></div>
 <div id="placeholder">
-  <div>未检测到离线地图 tile。</div>
-  <div>请在有网络环境下运行：</div>
+  <div id="placeholder-title">Offline map tiles were not found.</div>
+  <div id="placeholder-instruction">Run this command while online:</div>
   <code>python -m tools.tile_downloader --bbox &lt;...&gt; --zoom 12-16 --label &lt;region&gt;</code>
 </div>
 <script>
@@ -51,6 +51,13 @@
   var startMarker = null;
   var endMarker = null;
   var eventMarkers = [];
+  var localeTexts = {
+    offlineTitle: 'Offline map tiles were not found.',
+    offlineInstruction: 'Run this command while online:',
+    start: 'Start',
+    end: 'End',
+    tiandituAttribution: '© Tianditu'
+  };
 
   // 跟 chart 一致的事件 level 配色
   var EVENT_LEVEL_COLORS = {
@@ -65,6 +72,17 @@
   }
 
   // ============ Python 调用入口 ============
+
+  window.setLocaleTexts = function (texts) {
+    texts = texts || {};
+    Object.keys(localeTexts).forEach(function (key) {
+      if (typeof texts[key] === 'string') localeTexts[key] = texts[key];
+    });
+    document.getElementById('placeholder-title').textContent = localeTexts.offlineTitle;
+    document.getElementById('placeholder-instruction').textContent = localeTexts.offlineInstruction;
+    if (startMarker) startMarker.setPopupContent('▶ ' + localeTexts.start);
+    if (endMarker) endMarker.setPopupContent('■ ' + localeTexts.end);
+  };
 
   var tdLabelLayer = null;   // 天地图注记层（叠在底图之上）
 
@@ -104,7 +122,7 @@
         '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=' + token;
     };
     tileLayer = L.tileLayer(wmts('vec'), {
-      subdomains: sub, attribution: attribution || '© 天地图',
+      subdomains: sub, attribution: attribution || localeTexts.tiandituAttribution,
       maxZoom: maxZoom || 18, minZoom: 1, noWrap: true, errorTileUrl: ''
     }).addTo(map);
     tdLabelLayer = L.tileLayer(wmts('cva'), {
@@ -131,14 +149,14 @@
     startMarker = L.circleMarker(first, {
       radius: 8, color: '#FFFFFF', weight: 2,
       fillColor: '#2ECC71', fillOpacity: 1
-    }).bindPopup('▶ 起点').addTo(map);
+    }).bindPopup('▶ ' + localeTexts.start).addTo(map);
 
     if (coords.length > 1) {
       var last = coords[coords.length - 1];
       endMarker = L.circleMarker(last, {
         radius: 8, color: '#FFFFFF', weight: 2,
         fillColor: '#E74C3C', fillOpacity: 1
-      }).bindPopup('■ 终点').addTo(map);
+      }).bindPopup('■ ' + localeTexts.end).addTo(map);
     }
     map.fitBounds(trackLayer.getBounds(), { padding: [20, 20] });
   };

@@ -43,6 +43,12 @@ from satellite_debug_tool.core.protocol import (
     StateReport,
 )
 from satellite_debug_tool.io.data_importer import DataImporter
+from satellite_debug_tool.i18n import (
+    register_translatable,
+    set_raw_text,
+    set_translatable_text,
+    tr,
+)
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
 from satellite_debug_tool.ui.event_timeline_widget import EventTimelineWidget
@@ -86,6 +92,7 @@ class PlaybackView(QWidget):
 
         self._setup_ui()
         self._apply_theme()
+        register_translatable(self)
 
     # ============================ UI ============================
 
@@ -100,25 +107,29 @@ class PlaybackView(QWidget):
         top_layout.setContentsMargins(4, 2, 4, 2)
         top_layout.setSpacing(6)
 
-        self._open_btn = QPushButton("Open .sdb")
+        self._open_btn = QPushButton(tr("Open .sdb"))
         self._open_btn.setFixedSize(100, 28)
-        self._open_btn.setToolTip("打开 .sdb v2 文件（含 profile 自动恢复）")
+        self._open_btn.setToolTip(
+            tr("Open an .sdb v2 file and restore its Profile automatically")
+        )
         self._open_btn.clicked.connect(self._on_open_clicked)
         top_layout.addWidget(self._open_btn)
 
         # M9：清除按钮
-        self._clear_btn = QPushButton("清除")
+        self._clear_btn = QPushButton(tr("Clear"))
         self._clear_btn.setFixedSize(60, 28)
         self._clear_btn.setEnabled(False)
-        self._clear_btn.setToolTip("清空当前回放数据 + 曲线 + 事件 + 地图轨迹（释放内存）")
+        self._clear_btn.setToolTip(
+            tr("Clear playback data, charts, events, and map track to release memory")
+        )
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         top_layout.addWidget(self._clear_btn)
 
-        self._file_label = QLabel("（未加载文件）")
+        self._file_label = QLabel(tr("(no file loaded)"))
         self._file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         top_layout.addWidget(self._file_label)
 
-        self._total_label = QLabel("时长: —")
+        self._total_label = QLabel(tr("Duration: —"))
         self._total_label.setFixedWidth(140)
         top_layout.addWidget(self._total_label)
 
@@ -127,17 +138,21 @@ class PlaybackView(QWidget):
         top_layout.addWidget(self._range_ctl)
 
         # M8: "地图"按钮 — 检测到 GPS channel 时启用
-        self._map_btn = QPushButton("地图")
+        self._map_btn = QPushButton(tr("Map"))
         self._map_btn.setFixedSize(60, 28)
         self._map_btn.setEnabled(False)
-        self._map_btn.setToolTip("打开/关闭离线地图浮窗（需要 gps_lat / gps_lon channel）")
+        self._map_btn.setToolTip(
+            tr("Open or close the map window; gps_lat and gps_lon channels are required")
+        )
         self._map_btn.clicked.connect(self._toggle_map)
         top_layout.addWidget(self._map_btn)
 
         self._gnss_btn = QPushButton("GNSS")
         self._gnss_btn.setFixedSize(64, 28)
         self._gnss_btn.setEnabled(False)
-        self._gnss_btn.setToolTip("打开天空图与逐频点 C/N₀ 快照回放")
+        self._gnss_btn.setToolTip(
+            tr("Open GNSS sky-plot and signal-level C/N₀ snapshot playback")
+        )
         self._gnss_btn.clicked.connect(self._toggle_gnss)
         top_layout.addWidget(self._gnss_btn)
 
@@ -211,8 +226,10 @@ class PlaybackView(QWidget):
         if self._settings is not None:
             last_dir = self._settings.get("paths.recording_dir", "") or ""
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open SDB v2 Recording", last_dir,
-            "SDB Files (*.sdb);;All Files (*)",
+            self,
+            tr("Open SDB v2 recording"),
+            last_dir,
+            tr("SDB files (*.sdb);;All files (*)"),
         )
         if not filepath:
             return
@@ -220,11 +237,11 @@ class PlaybackView(QWidget):
 
     def _load_file(self, path: Path) -> None:
         """阻塞解析（一次性读全文件 → SdbFile.iter_records）。"""
-        self.status_message.emit(f"Loading {path.name}...", 0)
+        self.status_message.emit(tr("Loading {file}...", file=path.name), 0)
         try:
             sdb = DataImporter.open_sdb(path)
         except Exception as exc:
-            self.status_message.emit(f"Failed to open: {exc}", 5000)
+            self.status_message.emit(tr("Failed to open: {detail}", detail=exc), 5000)
             return
 
         # 1) 清空所有现有数据 + profile
@@ -281,14 +298,21 @@ class PlaybackView(QWidget):
 
         # 6) UI 元信息
         self._current_file = path
-        self._file_label.setText(f"📄 {path.name}")
-        self._total_label.setText(
-            f"时长: {self._total_sec:.1f}s · {self._loaded_count} 帧"
+        set_raw_text(f"📄 {path.name}", self._file_label)
+        set_translatable_text(
+            "Duration: {duration:.1f}s · {count} frame(s)",
+            self._total_label,
+            duration=self._total_sec,
+            count=self._loaded_count,
         )
         mb_est = self._loaded_count * 8 * 12 / (1024 * 1024)   # 粗估 8ch × 12B/sample
         self.status_message.emit(
-            f"Loaded {self._loaded_count} DataReport(s) over {self._total_sec:.1f}s "
-            f"(~{mb_est:.1f} MB)",
+            tr(
+                "Loaded {count} DataReport record(s) over {duration:.1f}s (~{size:.1f} MB)",
+                count=self._loaded_count,
+                duration=self._total_sec,
+                size=mb_est,
+            ),
             5000,
         )
 
@@ -369,19 +393,22 @@ class PlaybackView(QWidget):
         self._map_btn.setEnabled(False)
         self._gnss_btn.setEnabled(False)
         # 6) UI 标签
-        self._file_label.setText("（未加载文件）")
-        self._total_label.setText("时长: —")
+        set_translatable_text("(no file loaded)", self._file_label)
+        set_translatable_text("Duration: —", self._total_label)
         self._range_ctl.set_total(0.0)
         # 7) 自身按钮
         self._clear_btn.setEnabled(False)
-        self.status_message.emit("回放数据已清除", 2000)
+        self.status_message.emit(tr("Playback data cleared"), 2000)
 
     def _toggle_gnss(self) -> None:
         if self._gnss_dock is None:
             from satellite_debug_tool.ui.gnss_widget import GnssWidget
             self._gnss_widget = GnssWidget(self._gnss_store, playback=True)
             self._gnss_widget.set_theme(self._theme)
-            self._gnss_dock = QDockWidget("GNSS 天空图与逐频点 C/N₀ — Playback", self)
+            self._gnss_dock = QDockWidget(
+                tr("GNSS sky plot and signal-level C/N₀ — Playback"),
+                self,
+            )
             self._gnss_dock.setAllowedAreas(Qt.NoDockWidgetArea)
             self._gnss_dock.setFloating(True)
             self._gnss_dock.setWidget(self._gnss_widget)
@@ -436,7 +463,7 @@ class PlaybackView(QWidget):
             token = self._settings.get("map.tianditu_token", "") or ""
         self._map_widget = MapWidget(tianditu_token=token)
         self._map_widget.set_theme(self._theme, "small")
-        self._map_dock = QDockWidget("地图 — 回放", self)
+        self._map_dock = QDockWidget(tr("Map — Playback"), self)
         self._map_dock.setAllowedAreas(Qt.NoDockWidgetArea)
         self._map_dock.setFloating(True)
         self._map_dock.setWidget(self._map_widget)
@@ -500,3 +527,21 @@ class PlaybackView(QWidget):
         self._map_widget.add_event(
             record.timestamp_ms, record.name, record.level, lat, lon
         )
+
+    def retranslate_ui(self) -> None:
+        if self._current_file is None:
+            set_translatable_text("(no file loaded)", self._file_label)
+            set_translatable_text("Duration: —", self._total_label)
+        else:
+            set_translatable_text(
+                "Duration: {duration:.1f}s · {count} frame(s)",
+                self._total_label,
+                duration=self._total_sec,
+                count=self._loaded_count,
+            )
+        if self._map_dock is not None:
+            self._map_dock.setWindowTitle(tr("Map — Playback"))
+        if self._gnss_dock is not None:
+            self._gnss_dock.setWindowTitle(
+                tr("GNSS sky plot and signal-level C/N₀ — Playback")
+            )

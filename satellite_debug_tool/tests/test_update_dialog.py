@@ -118,6 +118,10 @@ class TestSettingsDialogUpdateSection:
         dlg = SettingsDialog(tmp_settings)
         dlg._on_reset_skip_version()
         assert tmp_settings.get("update.skip_version") == ""
-        assert "（无）" in dlg._lbl_skipped.text()
+        from satellite_debug_tool.i18n import tr
+        assert dlg._lbl_skipped.text() == tr(
+            "Skipped version: {version}",
+            version=tr("None"),
+        )
         assert dlg._btn_reset_skip.isEnabled() is False
         dlg.deleteLater()

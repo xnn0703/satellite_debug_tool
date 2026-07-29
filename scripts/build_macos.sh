@@ -37,6 +37,10 @@ $PIP install --quiet --upgrade pip
 $PIP install --quiet -r "$HERE/satellite_debug_tool/requirements.txt"
 $PIP install --quiet pyinstaller
 
+# ---- 国际化资源完整性 ----
+echo "[build_macos] 校验 TS/QM 翻译资源..."
+$PY "$HERE/scripts/update_translations.py" check
+
 # ---- 清旧产物 ----
 rm -rf "$HERE/build" "$HERE/dist"
 

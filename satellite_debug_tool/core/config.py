@@ -6,6 +6,20 @@ from typing import Any, Optional
 
 
 class Settings:
+    _LEGACY_TAB_IDS = {
+        "实时": "live",
+        "Live": "live",
+        "live": "live",
+        "回放": "playback",
+        "Playback": "playback",
+        "playback": "playback",
+        "Log": "log",
+        "log": "log",
+        "设备": "device",
+        "Device": "device",
+        "device": "device",
+    }
+
     DEFAULT_CONFIG = {
         "general": {"connection_type": "Serial"},
         "serial": {"default_baudrate": "115200", "last_port": ""},
@@ -13,6 +27,8 @@ class Settings:
         "ui": {
             "time_window": 10.0,
             "theme": "Dark",
+            "language": "auto",
+            "active_tab_id": "live",
             "max_visible_channels": 8,
             # M10 F3b：Live Tab 主体 QSplitter 的列宽（左 ChannelPanel + chart + attitude + state/event）
             "live_top_splitter_sizes": [],
@@ -52,15 +68,29 @@ class Settings:
         # （shallow copy 会让多个 Settings 实例共享嵌套 dict 引用 → 跨实例污染）
         self._config = copy.deepcopy(self.DEFAULT_CONFIG)
 
+        migrated = False
         if self._config_file.exists():
             try:
                 with open(self._config_file, "r", encoding="utf-8") as f:
                     user_config = json.load(f)
+                    migrated = self._migrate_user_config(user_config)
                     # 合并到默认配置
                     self._merge_config(self._config, user_config)
             except (json.JSONDecodeError, IOError):
                 # 如果读取失败，使用默认配置
                 pass
+        if migrated:
+            self.save()
+
+    def _migrate_user_config(self, config: dict) -> bool:
+        """Migrate display-text settings to stable IDs before merging defaults."""
+        ui = config.get("ui")
+        if not isinstance(ui, dict) or "active_tab" not in ui:
+            return False
+        legacy = ui.pop("active_tab")
+        if "active_tab_id" not in ui:
+            ui["active_tab_id"] = self._LEGACY_TAB_IDS.get(str(legacy), "live")
+        return True
 
     def _merge_config(self, default: dict, user: dict):
         """递归合并用户配置到默认配置"""

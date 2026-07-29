@@ -23,11 +23,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from satellite_debug_tool.i18n import mark_raw_text, register_translatable, tr
 from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.ui.chart_group_titles import default_group_title
 
 
 _DOT_SIZE = 10
 _ROW_HEIGHT = 26
+_DEFAULT_GROUP_KEY = "__other__"
+_PROFILE_GROUP_PREFIX = "__profile_group_"
 
 
 class _ChannelRow(QWidget):
@@ -64,10 +68,12 @@ class _ChannelRow(QWidget):
         self._apply_dot_color()
 
         self._name_label = QLabel(display_label or name)
+        mark_raw_text(self._name_label)
         self._name_label.setSizePolicy(self._name_label.sizePolicy().horizontalPolicy(),
                                       self._name_label.sizePolicy().verticalPolicy())
 
         self._value_label = QLabel("--")
+        mark_raw_text(self._value_label)
         self._value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._value_label.setMinimumWidth(60)
 
@@ -179,7 +185,7 @@ class ChannelPanel(QWidget):
         # 标题行：通道 + 计数徽标
         head_row = QHBoxLayout()
         head_row.setSpacing(6)
-        self._title = QLabel("通道")
+        self._title = QLabel(tr("Channels"))
         self._count_label = QLabel("0 / 0")
         self._count_label.setObjectName("chCount")
         head_row.addWidget(self._title)
@@ -190,15 +196,15 @@ class ChannelPanel(QWidget):
         # 全选 / 清空 / 反选
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
-        self._btn_all = QPushButton("全选")
+        self._btn_all = QPushButton(tr("Select all"))
         self._btn_all.setProperty("variant", "ghost")
-        self._btn_none = QPushButton("清空")
+        self._btn_none = QPushButton(tr("Clear"))
         self._btn_none.setProperty("variant", "ghost")
         self._btn_invert = QPushButton("")
         self._btn_invert.setObjectName("chInvert")
         self._btn_invert.setProperty("variant", "ghost")
         self._btn_invert.setFixedSize(26, 24)
-        self._btn_invert.setToolTip("反选")
+        self._btn_invert.setToolTip(tr("Invert selection"))
         self._btn_all.clicked.connect(self._on_select_all)
         self._btn_none.clicked.connect(self._on_clear_all)
         self._btn_invert.clicked.connect(self._on_invert)
@@ -211,7 +217,7 @@ class ChannelPanel(QWidget):
         # 搜索框
         self._search = QLineEdit()
         self._search.setObjectName("chSearch")
-        self._search.setPlaceholderText("筛选通道…")
+        self._search.setPlaceholderText(tr("Filter channels..."))
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._on_search)
         root.addWidget(self._search)
@@ -231,11 +237,12 @@ class ChannelPanel(QWidget):
         root.addWidget(self._scroll, 1)
 
         self.apply_theme(self._theme, self._scale)
+        register_translatable(self)
 
     # ---- public API ----
 
     def _make_group_header(self, group: str) -> QLabel:
-        lbl = QLabel(group)
+        lbl = QLabel(self._group_display_title(group))
         lbl.setObjectName("chGroupLabel")
         p = S.palette(self._theme)
         lbl.setStyleSheet(
@@ -243,6 +250,21 @@ class ChannelPanel(QWidget):
             f"font-weight: 600; padding: 10px 6px 4px; background: transparent; }}"
         )
         return lbl
+
+    @staticmethod
+    def _group_display_title(group: str) -> str:
+        if group == _DEFAULT_GROUP_KEY:
+            return tr("Other")
+        if group.startswith(_PROFILE_GROUP_PREFIX):
+            try:
+                return default_group_title(int(group[len(_PROFILE_GROUP_PREFIX):]))
+            except ValueError:
+                return group
+        return group
+
+    def retranslate_ui(self) -> None:
+        for group, header in self._group_headers.items():
+            header.setText(self._group_display_title(group))
 
     def _group_start_index(self, group: str) -> int:
         """该 group 块起始位置（标题插这里）= 之前所有组的 (标题+行) 之和。"""
@@ -267,9 +289,9 @@ class ChannelPanel(QWidget):
                     group: str = "") -> None:
         """添加一行；name 已存在则更新颜色 + label（+ group）。
 
-        group 非空时按分组小节排列（带分组标题分隔线）；空则归到"其它"。
+        group 非空时按分组小节排列（带分组标题分隔线）；空则归到默认分组。
         """
-        group = group or "其它"
+        group = group or _DEFAULT_GROUP_KEY
         if name in self._rows:
             row = self._rows[name]
             row.set_color(color)

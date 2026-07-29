@@ -61,6 +61,25 @@ pip install -r satellite_debug_tool/requirements.txt
 pip install pyinstaller
 ```
 
+### 国际化资源
+
+代码中的英文是源文案，简体中文维护在：
+
+```text
+satellite_debug_tool/i18n/translations/satellite_debug_tool_zh_CN.ts
+satellite_debug_tool/i18n/translations/satellite_debug_tool_zh_CN.qm
+```
+
+修改第一方界面文案后先更新并校验：
+
+```bash
+python3 scripts/update_translations.py update
+python3 scripts/update_translations.py check
+```
+
+`check` 会拒绝 `unfinished`、空翻译、占位符不一致、过期词条和不同步的 QM。
+macOS/Windows 构建脚本都会在 PyInstaller 前执行该检查。不要只提交 TS 而遗漏 QM。
+
 ---
 
 ## 方式二：GitHub Actions 自动构建 + Gitee 发版（M11）
@@ -157,6 +176,18 @@ pyinstaller --noconfirm satellite_debug_tool.spec
 pyinstaller --noconfirm device_simulator.spec
 ```
 
+主程序 spec 显式包含 TS/QM、Leaflet/map 资源和 macOS `InfoPlist.strings`。
+打包后至少检查：
+
+```text
+SatelliteDebugTool/_internal/satellite_debug_tool/i18n/translations/
+SatelliteDebugTool/_internal/satellite_debug_tool/ui/assets/map.html
+```
+
+macOS `.app` 还应包含 `Contents/Resources/en.lproj` 和
+`Contents/Resources/zh_CN.lproj`。最终验收必须分别以 `en_US`、`zh_CN`
+启动产物，源码运行成功不能替代打包资源检查。
+
 ---
 
 ## 文件说明
@@ -167,7 +198,7 @@ pyinstaller --noconfirm device_simulator.spec
 | `device_simulator.spec` | 模拟器 spec，轻量（排除 PySide6/pyqtgraph） |
 | `scripts/build_macos.sh` | macOS/Linux 一键脚本 |
 | `scripts/build_windows.bat` | Windows 一键脚本 |
-| `.github/workflows/build.yml` | CI workflow（macos+windows 矩阵 + 可选 Release） |
+| `.github/workflows/build.yml` | Windows CI 构建与可选 Release |
 
 ---
 

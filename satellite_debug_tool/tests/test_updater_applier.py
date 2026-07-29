@@ -71,7 +71,8 @@ class TestMergeVolumes:
         out = tmp_path / "merged.7z"
         with pytest.raises(ApplyError) as exc:
             Applier().merge_volumes([a, ghost], out)
-        assert "分卷缺失" in str(exc.value)
+        assert exc.value.code == "apply_volume_missing"
+        assert exc.value.context["path"] == str(ghost)
 
     def test_empty_list_raises(self, tmp_path):
         with pytest.raises(ApplyError):
@@ -84,9 +85,9 @@ class TestMergeVolumes:
         captured = []
         ap = Applier(on_progress=lambda stage, pct: captured.append((stage, pct)))
         ap.merge_volumes([a, b], out, chunk_size=512)
-        # 最后一次必然是 (合并分卷, 1.0)
+        # 核心层使用稳定 stage id，显示文本由 UI 翻译。
         stages = [s for s, _ in captured]
-        assert "合并分卷" in stages
+        assert "merge" in stages
         assert captured[-1][1] == 1.0
 
 
@@ -123,7 +124,8 @@ class TestExtract:
         bad.write_bytes(b"BADDATA")
         with pytest.raises(ApplyError) as exc:
             Applier().extract_to(bad, tmp_path / "_stage")
-        assert "非合法 7z" in str(exc.value)
+        assert exc.value.code == "apply_invalid_archive"
+        assert exc.value.context["path"] == str(bad)
 
     def test_missing_archive_raises(self, tmp_path):
         with pytest.raises(ApplyError):
@@ -192,7 +194,8 @@ class TestSwap:
         bad_ext = tmp_path / "ghost"
         with pytest.raises(ApplyError) as exc:
             Applier().swap_install_dir(installed, bad_ext)
-        assert "未找到可用源" in str(exc.value)
+        assert exc.value.code == "apply_source_missing"
+        assert exc.value.context["path"] == str(bad_ext)
 
 
 # ============================ 一站式 apply ============================

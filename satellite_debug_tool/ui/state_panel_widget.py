@@ -34,6 +34,12 @@ from satellite_debug_tool.core.protocol import (
     StateDefEntry,
     StateType,
 )
+from satellite_debug_tool.i18n import (
+    mark_raw_text,
+    register_translatable,
+    set_translatable_text,
+    tr,
+)
 from satellite_debug_tool.ui import styles as S
 
 
@@ -70,14 +76,26 @@ _SUBSYSTEM_RULES = [
     (("trace", "lock"),          "trace"),
     (("ins", "imu", "gps"),      "ins"),
 ]
+_SUBSYSTEM_ORDER = ["trace", "modem", "rf", "ins", "general"]
+# Compatibility export for callers that inspect the classification table.
+# Runtime section titles come from _subsystem_label() so they can be translated.
 _SUBSYSTEM_LABELS = {
-    "trace":   "跟踪 (Trace)",
-    "modem":   "调制解调 (Modem)",
-    "ins":     "导航 (INS / GPS)",
-    "rf":      "射频 (RF)",
+    "trace": "跟踪 (Trace)",
+    "modem": "调制解调 (Modem)",
+    "ins": "导航 (INS / GPS)",
+    "rf": "射频 (RF)",
     "general": "其它 (General)",
 }
-_SUBSYSTEM_ORDER = ["trace", "modem", "rf", "ins", "general"]
+
+
+def _subsystem_label(key: str) -> str:
+    return {
+        "trace": tr("Tracking"),
+        "modem": tr("Modem"),
+        "ins": tr("Navigation (INS / GPS)"),
+        "rf": tr("RF"),
+        "general": tr("Other"),
+    }[key]
 
 
 def _classify_subsystem(name: str) -> str:
@@ -130,7 +148,9 @@ class StateItemRow(QFrame):
         self._dot = QLabel()
         self._dot.setStyleSheet(_dot_stylesheet(_BOOL_OFF_COLOR))
         self._name_label = QLabel(entry.name)
+        mark_raw_text(self._name_label)
         self._value_label = QLabel("—")
+        mark_raw_text(self._value_label)
         self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         # M6: tooltip 显示 state_id / 类型 / flags / 枚举说明
@@ -138,7 +158,11 @@ class StateItemRow(QFrame):
             tip = (
                 f"[BOOL] state_id={entry.state_id}  {entry.name}\n"
                 f"flags=0x{entry.flags:02X}"
-                + ("\n(INVERSE 反色：0=正常，1=告警)" if entry.flags & STATE_FLAG_INVERSE else "")
+                + (
+                    tr("\n(INVERSE: 0=normal, 1=alarm)")
+                    if entry.flags & STATE_FLAG_INVERSE
+                    else ""
+                )
             )
         else:
             enum_lines = "\n".join(
@@ -146,7 +170,8 @@ class StateItemRow(QFrame):
             )
             tip = (
                 f"[ENUM] state_id={entry.state_id}  {entry.name}\n"
-                f"flags=0x{entry.flags:02X}\n{enum_lines or '  (无枚举项)'}"
+                f"flags=0x{entry.flags:02X}\n"
+                f"{enum_lines or tr('  (no enum items)')}"
             )
         self.setToolTip(tip)
 
@@ -157,6 +182,30 @@ class StateItemRow(QFrame):
 
         self.set_theme(self._theme, self._scale)
         self.set_unknown()
+        register_translatable(self)
+
+    def retranslate_ui(self) -> None:
+        entry = self._entry
+        if entry.state_type == int(StateType.BOOL):
+            suffix = (
+                tr("\n(INVERSE: 0=normal, 1=alarm)")
+                if entry.flags & STATE_FLAG_INVERSE
+                else ""
+            )
+            tip = (
+                f"[BOOL] state_id={entry.state_id}  {entry.name}\n"
+                f"flags=0x{entry.flags:02X}{suffix}"
+            )
+        else:
+            enum_lines = "\n".join(
+                f"  {e.value} = {e.name}  [lv={e.level}]" for e in entry.enums
+            )
+            tip = (
+                f"[ENUM] state_id={entry.state_id}  {entry.name}\n"
+                f"flags=0x{entry.flags:02X}\n"
+                f"{enum_lines or tr('  (no enum items)')}"
+            )
+        self.setToolTip(tip)
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -256,13 +305,16 @@ class ChannelItemRow(QFrame):
         self._dot = QLabel()
         self._dot.setStyleSheet(_dot_stylesheet("#3A6E66"))  # 青色，区分 state 圆点
         self._name_label = QLabel(channel.name)
+        mark_raw_text(self._name_label)
         self._value_label = QLabel("—")
+        mark_raw_text(self._value_label)
         self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         # tooltip 显示 channel 元信息
         tip = (
             f"[CHANNEL] channel_id={channel.channel_id}  {channel.name}\n"
-            f"unit={channel.unit or '无'}  range=[{channel.display_min}, {channel.display_max}]\n"
+            f"unit={channel.unit or tr('(none)')}  "
+            f"range=[{channel.display_min}, {channel.display_max}]\n"
             f"group_id={channel.group_id}  flags=0x{channel.flags:02X}"
         )
         self.setToolTip(tip)
@@ -273,6 +325,16 @@ class ChannelItemRow(QFrame):
         layout.setColumnStretch(1, 1)
 
         self.set_theme(self._theme, self._scale)
+        register_translatable(self)
+
+    def retranslate_ui(self) -> None:
+        channel = self._channel
+        self.setToolTip(
+            f"[CHANNEL] channel_id={channel.channel_id}  {channel.name}\n"
+            f"unit={channel.unit or tr('(none)')}  "
+            f"range=[{channel.display_min}, {channel.display_max}]\n"
+            f"group_id={channel.group_id}  flags=0x{channel.flags:02X}"
+        )
 
     def set_theme(self, theme: str = "dark", scale: str = "medium") -> None:
         self._theme = S._normalize_theme(theme)
@@ -321,11 +383,11 @@ class ChannelItemRow(QFrame):
 class _SubsystemSection(QFrame):
     """A4: 一个可折叠的子系统分组。header 带 ▶/▼ 三角 + 名称 + (n 项) 计数。"""
 
-    def __init__(self, key: str, label: str, parent: Optional[QWidget] = None):
+    def __init__(self, key: str, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._key = key
-        self._label_text = label
         self._collapsed = False
+        self._count = 0
         self._theme = "dark"
         self._scale = "medium"
 
@@ -333,7 +395,7 @@ class _SubsystemSection(QFrame):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(2)
 
-        self._header_btn = QPushButton(f"▼ {label}")
+        self._header_btn = QPushButton()
         self._header_btn.setCheckable(False)
         self._header_btn.setCursor(Qt.PointingHandCursor)
         self._header_btn.clicked.connect(self._toggle)
@@ -344,6 +406,8 @@ class _SubsystemSection(QFrame):
         self._body_layout.setContentsMargins(0, 0, 0, 0)
         self._body_layout.setSpacing(3)
         outer.addWidget(self._body)
+        self.set_count(0)
+        register_translatable(self)
 
     # ----- Public -----
 
@@ -358,8 +422,12 @@ class _SubsystemSection(QFrame):
                 w.setParent(None)
 
     def set_count(self, n: int) -> None:
+        self._count = n
         arrow = "▼" if not self._collapsed else "▶"
-        self._header_btn.setText(f"{arrow} {self._label_text}  ({n})")
+        self._header_btn.setText(f"{arrow} {_subsystem_label(self._key)}  ({n})")
+
+    def retranslate_ui(self) -> None:
+        self.set_count(self._count)
 
     def _toggle(self) -> None:
         self._collapsed = not self._collapsed
@@ -417,7 +485,7 @@ class StatePanelWidget(QScrollArea):
         self._vlayout.addStretch(1)
         self.setWidget(self._container)
 
-        self._empty_label = QLabel("等待设备握手…")
+        self._empty_label = QLabel(tr("Waiting for device handshake..."))
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._vlayout.insertWidget(0, self._empty_label)
 
@@ -426,6 +494,7 @@ class StatePanelWidget(QScrollArea):
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
         state_store.state_cleared.connect(self._on_state_cleared)
+        register_translatable(self)
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
@@ -519,13 +588,19 @@ class StatePanelWidget(QScrollArea):
     def _rebuild(self) -> None:
         self._clear_rows()
         if self._current_hw is None:
-            self._empty_label.setText("等待设备握手…")
+            set_translatable_text(
+                "Waiting for device handshake...", self._empty_label
+            )
             self._empty_label.show()
             return
 
         states = self._profile.get_states(self._current_hw)
         if not states:
-            self._empty_label.setText(f"[{self._current_hw}] 尚未收到 STATE_DEFINE")
+            set_translatable_text(
+                "[{hardware}] STATE_DEFINE has not been received",
+                self._empty_label,
+                hardware=self._current_hw,
+            )
             self._empty_label.show()
             return
 
@@ -553,7 +628,7 @@ class StatePanelWidget(QScrollArea):
             channels = ch_buckets[sub_key]
             if not entries and not channels:
                 continue
-            section = _SubsystemSection(sub_key, _SUBSYSTEM_LABELS[sub_key])
+            section = _SubsystemSection(sub_key)
             section.set_theme(self._theme, self._scale)
             # 先 state（ENUM/BOOL），再 channel（数值）—— 让供应商先看状态字，再看数值细节
             for entry in entries:
@@ -575,6 +650,18 @@ class StatePanelWidget(QScrollArea):
             self._vlayout.insertWidget(insert_pos, section)
             self._sections[sub_key] = section
             insert_pos += 1
+
+    def retranslate_ui(self) -> None:
+        if self._current_hw is None:
+            set_translatable_text(
+                "Waiting for device handshake...", self._empty_label
+            )
+        elif not self._profile.get_states(self._current_hw):
+            set_translatable_text(
+                "[{hardware}] STATE_DEFINE has not been received",
+                self._empty_label,
+                hardware=self._current_hw,
+            )
 
     def _refresh_one_channel(self, row: ChannelItemRow, channel_id: int) -> None:
         """从 data_store 读 channel 最新值并更新一行 UI（保持纯函数性，不抛异常）。"""

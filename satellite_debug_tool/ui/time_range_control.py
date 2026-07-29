@@ -30,18 +30,32 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 
 
-# (label, seconds-from-end);  None = 显示全部；"custom" = 进入自定义模式
+# (stable id, seconds-from-end);
+# None = 显示全部；"custom" = 进入自定义模式。
 _PRESETS: list[tuple[str, object]] = [
-    ("全部", None),
-    ("最近 30 秒", 30.0),
-    ("最近 1 分钟", 60.0),
-    ("最近 5 分钟", 300.0),
-    ("最近 30 分钟", 1800.0),
-    ("自定义", "custom"),
+    ("all", None),
+    ("last_30_seconds", 30.0),
+    ("last_1_minute", 60.0),
+    ("last_5_minutes", 300.0),
+    ("last_30_minutes", 1800.0),
+    ("custom", "custom"),
 ]
+
+
+def _preset_label(preset_id: str) -> str:
+    """返回可被 lupdate 静态提取的预设显示文案。"""
+    return {
+        "all": tr("All"),
+        "last_30_seconds": tr("Last 30 seconds"),
+        "last_1_minute": tr("Last 1 minute"),
+        "last_5_minutes": tr("Last 5 minutes"),
+        "last_30_minutes": tr("Last 30 minutes"),
+        "custom": tr("Custom"),
+    }[preset_id]
 
 
 class TimeRangeControl(QWidget):
@@ -57,18 +71,18 @@ class TimeRangeControl(QWidget):
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(6)
 
-        self._lbl_prefix = QLabel("范围:")
+        self._lbl_prefix = QLabel(tr("Range:"))
         layout.addWidget(self._lbl_prefix)
 
         self._preset_combo = QComboBox()
-        for label, _ in _PRESETS:
-            self._preset_combo.addItem(label)
+        for preset_id, _ in _PRESETS:
+            self._preset_combo.addItem(_preset_label(preset_id), preset_id)
         self._preset_combo.setCurrentIndex(0)   # 默认"全部"
         self._preset_combo.setFixedWidth(110)
         self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         layout.addWidget(self._preset_combo)
 
-        self._lbl_start = QLabel("起")
+        self._lbl_start = QLabel(tr("Start"))
         layout.addWidget(self._lbl_start)
         self._spin_start = QDoubleSpinBox()
         self._spin_start.setDecimals(1)
@@ -79,7 +93,7 @@ class TimeRangeControl(QWidget):
         self._spin_start.setEnabled(False)
         layout.addWidget(self._spin_start)
 
-        self._lbl_end = QLabel("终")
+        self._lbl_end = QLabel(tr("End"))
         layout.addWidget(self._lbl_end)
         self._spin_end = QDoubleSpinBox()
         self._spin_end.setDecimals(1)
@@ -90,7 +104,7 @@ class TimeRangeControl(QWidget):
         self._spin_end.setEnabled(False)
         layout.addWidget(self._spin_end)
 
-        self._btn_apply = QPushButton("应用")
+        self._btn_apply = QPushButton(tr("Apply"))
         self._btn_apply.setFixedWidth(60)
         self._btn_apply.setEnabled(False)
         self._btn_apply.clicked.connect(self._on_apply_clicked)
@@ -99,6 +113,7 @@ class TimeRangeControl(QWidget):
         layout.addStretch(1)
 
         self._apply_theme()
+        register_translatable(self)
 
     # ------------------------------------------------------------------ API
 
@@ -143,7 +158,7 @@ class TimeRangeControl(QWidget):
     def _apply_preset_silently(self, idx: int, emit: bool = False) -> None:
         if idx < 0 or idx >= len(_PRESETS):
             return
-        _label, value = _PRESETS[idx]
+        _preset_id, value = _PRESETS[idx]
         custom_mode = value == "custom"
         self._spin_start.setEnabled(custom_mode)
         self._spin_end.setEnabled(custom_mode)

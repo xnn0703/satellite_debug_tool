@@ -1,7 +1,7 @@
 # 卫星通信终端调试工具 — 用户手册
 
-**适用版本**：`satellite_debug_tool` v2 (protocol v2)  
-**适用设备**：afd01 (Ka 频段)、ufd45 (Ku 频段) 及未来同协议型号
+**适用版本**：M16 源码构建（目标版本 `v1.1.0`，DEBUG protocol v2）
+**适用设备**：AFD01、ESA01、UFD45 及兼容 DEBUG v2 profile 的设备
 
 ---
 
@@ -15,7 +15,7 @@
 - [6. 3D 姿态与指向](#6-3d-姿态与指向)
 - [7. 控制下位机](#7-控制下位机)
 - [8. 录制与回放](#8-录制与回放)
-- [9. 主题与字号](#9-主题与字号)
+- [9. 语言与主题](#9-语言与主题)
 - [10. 常见问题](#10-常见问题)
 - [11. 文件位置](#11-文件位置)
 
@@ -38,6 +38,9 @@ python tools/device_simulator.py --profile afd01 -v
 ```
 
 看到状态条 `LINK OK` 绿灯 + Dashboard 卡片有数字 = 连接成功。
+
+首次启动默认跟随操作系统语言：中文系统显示简体中文，其他系统显示 English。
+可在“设置 → 语言”中随时切换，确认后立即生效，无需重启。
 
 ---
 
@@ -238,6 +241,30 @@ Dashboard 下方的**模式按钮组**（AUTO / MANUAL / STANDBY 等）：
 - **全选 / 全不选 / 反选**快捷键
 - 勾选确定 → 下发 64bit bitmask → 下位机按 mask 采样
 
+### Device Tab：参数管理
+
+Device Tab 与 Live 共用当前连接。固件通过 profile capability 声明支持参数管理后：
+
+- 连接握手完成后自动接收参数表；也可点“读取全部”手动刷新。
+- 只读参数不显示可用的“应用”操作。
+- 修改参数后点“应用”，上位机等待设备 ACK 和参数表读回值共同确认。
+- 带警告标记的参数需要重启设备后业务模块才会采用新值。
+- “恢复出厂”会调用设备端白名单恢复流程，执行前会二次确认。
+
+设备参数键、枚举值和设备原始错误详情保持固件原文，不随界面语言翻译。
+
+### Device Tab：OTA
+
+固件声明 OTA capability 后可在 Device Tab 选择 app 镜像并上传：
+
+1. 选择与目标硬件型号匹配的固件。
+2. 根据现场需要决定是否暂停实时数据。
+3. 点“上传并升级”，等待擦除、分块传输、校验和重启完成。
+4. 设备重新上线后核对固件版本和关键参数。
+
+上传期间不要关闭应用、断开网线或给设备断电。CRC、镜像完整性或硬件型号校验失败时，
+上位机会保留设备返回详情；失败不等于设备已升级。
+
 ---
 
 ## 8. 录制与回放
@@ -259,7 +286,29 @@ Dashboard 下方的**模式按钮组**（AUTO / MANUAL / STANDBY 等）：
 
 ---
 
-## 9. 主题与字号
+## 9. 语言与主题
+
+### 语言
+
+设置窗口提供：
+
+| 选项 | 行为 |
+|------|------|
+| **跟随系统** | 中文地区统一使用简体中文，其他系统使用 English |
+| **简体中文** | 固定使用 `zh_CN` |
+| **English** | 固定使用 `en_US` |
+
+点“确定”后所有第一方界面即时切换；点“取消”不会修改当前语言。切换语言不会重连设备、
+清空数据、改变当前 Tab、通道勾选、曲线模式或 OTA 状态。
+
+现场诊断可临时覆盖本次运行，环境变量不会写入配置：
+
+```bash
+SATELLITE_DEBUG_LOCALE=en_US python3 -m satellite_debug_tool.main
+SATELLITE_DEBUG_LOCALE=zh_CN python3 -m satellite_debug_tool.main
+```
+
+设备上报内容、用户标记、自定义图表标题、协议字段、单位和工程数值保持原样。
 
 全局栏右侧的主题按钮会循环切换：
 
@@ -273,11 +322,15 @@ Dashboard 下方的**模式按钮组**（AUTO / MANUAL / STANDBY 等）：
 
 当前 UI 字号固定为 small（12px 基准），不再暴露字号切换入口。`styles.py` 内部仍保留 `FONT_SCALES` API 兼容旧测试和组件调用。
 
-主题配置持久化到 `~/.satellite_debug_tool/settings.json`：
+语言和主题配置持久化到 `~/.satellite_debug_tool/settings.json`：
 
 ```json
 {
-  "ui.theme": "dark_hc"
+  "ui": {
+    "language": "auto",
+    "theme": "dark_hc",
+    "active_tab_id": "live"
+  }
 }
 ```
 
@@ -297,6 +350,13 @@ A: 当前版本按 profile 通道名自动绑定 roll/pitch/yaw/ant_az/ant_el，
 
 ### Q: 为什么没有字号下拉？
 A: M7 后 UI 字号固化为 small，避免不同字号下工具栏和图表区域反复挤压。强光场景优先使用“深色高对比”主题。
+
+### Q: 为什么切到 English 后仍能看到中文？
+A: 第一方界面应全部显示英文；设备参数、状态名、事件、用户标记和导入日志属于原始业务数据，
+会保持设备或用户提供的内容。如果按钮、标题或提示框仍有中文，请记录所在窗口和操作步骤。
+
+### Q: 如何临时验证另一种语言而不改设置？
+A: 启动前设置 `SATELLITE_DEBUG_LOCALE=en_US` 或 `zh_CN`。该值只影响当前进程。
 
 ### Q: 曲线每隔几秒整体闪一下？
 A: 已于 2026-04-18 根因修复（`ProfileStore.apply_meta` 幂等化 +
@@ -322,6 +382,7 @@ A: 两个地方：
 ├── settings.json          # UI 配置（主题 / 连接参数 / 默认路径 / 更新设置...）
 ├── profiles/
 │   ├── afd01.json         # afd01 的 channel/state/event 表缓存
+│   ├── esa01.json         # esa01 的 profile 缓存
 │   └── ufd45.json         # 同上
 └── (日志 / 录制文件默认在用户指定路径)
 ```
@@ -348,6 +409,8 @@ A: 两个地方：
 - 优化计划：[`doc/optimization_plan.md`](./optimization_plan.md)
 - 开发日志：[`doc/development_log.md`](./development_log.md)
 - 验收日志：[`doc/acceptance_log.md`](./acceptance_log.md)
+- 英文手册：[`doc/user_manual_en.md`](./user_manual_en.md)
+- 中英术语表：[`doc/i18n_terms.md`](./i18n_terms.md)
 - 下位机模拟器：`tools/device_simulator.py`（纯 UDP，可 `--profile afd01|ufd45`）
 
 ---

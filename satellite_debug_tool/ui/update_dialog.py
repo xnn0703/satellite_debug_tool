@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool import __version__ as CURRENT_VERSION
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.i18n import register_translatable, set_translatable_text, tr
 from satellite_debug_tool.release_config import load_release_config
 from satellite_debug_tool.updater.checker import (
     LatestRelease,
@@ -52,6 +53,7 @@ from satellite_debug_tool.updater.downloader import (
     DownloadError,
     Downloader,
 )
+from satellite_debug_tool.updater.errors import UpdaterError
 
 
 log = logging.getLogger(__name__)
@@ -62,7 +64,7 @@ log = logging.getLogger(__name__)
 
 class _CheckWorker(QObject):
     finished = Signal(object)   # LatestRelease
-    failed = Signal(str)        # error msg
+    failed = Signal(object)      # UpdaterError
 
     def __init__(self, checker: ReleaseChecker):
         super().__init__()
@@ -73,15 +75,15 @@ class _CheckWorker(QObject):
             result = self._checker.fetch_latest()
             self.finished.emit(result)
         except UpdateCheckError as e:
-            self.failed.emit(str(e))
+            self.failed.emit(e)
         except Exception as e:    # 保险：任何其他异常都不让 Worker 崩溃
-            self.failed.emit(f"未预期错误: {e}")
+            self.failed.emit(UpdaterError("unexpected_error", str(e)))
 
 
 class _DownloadWorker(QObject):
     progress = Signal(int, int)        # (bytes_done, bytes_total)
     finished = Signal(list)            # List[Path]
-    failed = Signal(str)
+    failed = Signal(object)
     cancelled = Signal()
 
     def __init__(self, downloader: Downloader, assets: list, dest_dir: Path):
@@ -105,9 +107,9 @@ class _DownloadWorker(QObject):
         except DownloadCancelled:
             self.cancelled.emit()
         except DownloadError as e:
-            self.failed.emit(str(e))
+            self.failed.emit(e)
         except Exception as e:
-            self.failed.emit(f"未预期错误: {e}")
+            self.failed.emit(UpdaterError("unexpected_error", str(e)))
 
 
 # ============================ 主对话框 ============================
@@ -120,6 +122,60 @@ _PAGE_NEW_FOUND = 2
 _PAGE_DOWNLOADING = 3
 _PAGE_LAUNCHING = 4
 _PAGE_ERROR = 5
+
+
+def _updater_error_text(error: UpdaterError) -> str:
+    code = error.code
+    context = error.context
+    detail = error.detail
+    if code == "check_http_error":
+        return tr(
+            "Release server returned HTTP {status}: {detail}",
+            status=context.get("status", "—"),
+            detail=detail,
+        )
+    if code == "check_network_error":
+        return tr("Network error: {detail}", detail=detail)
+    if code == "check_response_parse_error":
+        return tr("Could not parse the release-server response: {detail}", detail=detail)
+    if code == "check_response_format_error":
+        return tr("Unexpected release-server response: {detail}", detail=detail)
+    if code == "download_no_assets":
+        return tr("The release contains no downloadable assets")
+    if code == "download_destination_missing":
+        return tr(
+            "Download destination does not exist: {path}",
+            path=context.get("path", "—"),
+        )
+    if code == "download_cancelled":
+        return tr("Download cancelled")
+    if code == "download_size_mismatch":
+        return tr(
+            "{asset}: size mismatch (expected {expected}, got {actual})",
+            asset=context.get("asset", "—"),
+            expected=context.get("expected", "—"),
+            actual=context.get("actual", "—"),
+        )
+    if code == "download_http_error":
+        return tr(
+            "{asset}: HTTP {status}",
+            asset=context.get("asset", "—"),
+            status=context.get("status", "—"),
+        )
+    if code == "download_retries_exhausted":
+        return tr(
+            "{asset}: failed after {attempts} attempt(s): {detail}",
+            asset=context.get("asset", "—"),
+            attempts=context.get("attempts", "—"),
+            detail=detail,
+        )
+    if code == "unexpected_error":
+        return tr("Unexpected error: {detail}", detail=detail)
+    return tr(
+        "{code}: {detail}",
+        code=code,
+        detail=detail or tr("No additional details"),
+    )
 
 
 class UpdateDialog(QDialog):
@@ -150,10 +206,13 @@ class UpdateDialog(QDialog):
         self._download_thread: Optional[QThread] = None
         self._download_worker: Optional[_DownloadWorker] = None
         self._cancel_event = None
+        self._last_error_operation = ""
+        self._last_error: Optional[UpdaterError] = None
 
-        self.setWindowTitle("检查更新")
+        self.setWindowTitle(tr("Check for updates"))
         self.setMinimumSize(520, 360)
         self._build_ui()
+        register_translatable(self)
 
         if auto_start:
             QTimer.singleShot(0, self.start_check)
@@ -164,7 +223,7 @@ class UpdateDialog(QDialog):
         root = QVBoxLayout(self)
 
         # 顶部：当前版本号
-        self._header = QLabel(f"当前版本: v{CURRENT_VERSION}")
+        self._header = QLabel(tr("Current version: v{version}", version=CURRENT_VERSION))
         self._header.setStyleSheet("font-weight: bold;")
         root.addWidget(self._header)
 
@@ -175,7 +234,7 @@ class UpdateDialog(QDialog):
         page_checking = QWidget()
         l0 = QVBoxLayout(page_checking)
         l0.addStretch(1)
-        lbl = QLabel("正在连接发版服务器，请稍候…")
+        lbl = QLabel(tr("Connecting to the release server..."))
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         l0.addWidget(lbl)
         l0.addStretch(1)
@@ -185,14 +244,14 @@ class UpdateDialog(QDialog):
         page_uptodate = QWidget()
         l1 = QVBoxLayout(page_uptodate)
         l1.addStretch(1)
-        msg = QLabel("✅ 你已使用最新版本，无需更新。")
+        msg = QLabel(tr("✅ You are using the latest version."))
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         msg.setStyleSheet("font-size: 14px;")
         l1.addWidget(msg)
         l1.addStretch(1)
         btn_row1 = QHBoxLayout()
         btn_row1.addStretch(1)
-        b1 = QPushButton("关闭")
+        b1 = QPushButton(tr("Close"))
         b1.clicked.connect(self.accept)
         btn_row1.addWidget(b1)
         l1.addLayout(btn_row1)
@@ -204,17 +263,19 @@ class UpdateDialog(QDialog):
         self._lbl_new_version = QLabel()
         self._lbl_new_version.setStyleSheet("font-size: 14px; font-weight: bold;")
         l2.addWidget(self._lbl_new_version)
-        l2.addWidget(QLabel("更新内容："))
+        l2.addWidget(QLabel(tr("Release notes:")))
         self._txt_release_notes = QTextEdit()
         self._txt_release_notes.setReadOnly(True)
         l2.addWidget(self._txt_release_notes, 1)
         btn_row2 = QHBoxLayout()
-        self._btn_skip = QPushButton("跳过此版本")
-        self._btn_skip.setToolTip("不再提醒此版本（设置中可重置）")
+        self._btn_skip = QPushButton(tr("Skip this version"))
+        self._btn_skip.setToolTip(
+            tr("Do not remind me about this version; reset this in Settings")
+        )
         self._btn_skip.clicked.connect(self._on_skip_version)
-        self._btn_later = QPushButton("稍后")
+        self._btn_later = QPushButton(tr("Later"))
         self._btn_later.clicked.connect(self.reject)
-        self._btn_upgrade = QPushButton("立即更新")
+        self._btn_upgrade = QPushButton(tr("Update now"))
         self._btn_upgrade.setDefault(True)
         self._btn_upgrade.setStyleSheet("font-weight: bold;")
         self._btn_upgrade.clicked.connect(self._on_start_download)
@@ -228,7 +289,7 @@ class UpdateDialog(QDialog):
         # 页 3：下载中
         page_dl = QWidget()
         l3 = QVBoxLayout(page_dl)
-        self._lbl_dl_title = QLabel("下载中…")
+        self._lbl_dl_title = QLabel(tr("Downloading..."))
         l3.addWidget(self._lbl_dl_title)
         self._dl_progress = QProgressBar()
         self._dl_progress.setRange(0, 100)
@@ -238,7 +299,7 @@ class UpdateDialog(QDialog):
         l3.addStretch(1)
         btn_row3 = QHBoxLayout()
         btn_row3.addStretch(1)
-        self._btn_dl_cancel = QPushButton("取消")
+        self._btn_dl_cancel = QPushButton(tr("Cancel"))
         self._btn_dl_cancel.clicked.connect(self._on_cancel_download)
         btn_row3.addWidget(self._btn_dl_cancel)
         l3.addLayout(btn_row3)
@@ -248,11 +309,13 @@ class UpdateDialog(QDialog):
         page_launch = QWidget()
         l4 = QVBoxLayout(page_launch)
         l4.addStretch(1)
-        lbl4 = QLabel("正在启动升级器，主程序即将退出…")
+        lbl4 = QLabel(tr("Starting the updater; the application will exit..."))
         lbl4.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl4.setStyleSheet("font-size: 14px;")
         l4.addWidget(lbl4)
-        self._lbl_launch_detail = QLabel("（升级完成后会自动启动新版）")
+        self._lbl_launch_detail = QLabel(
+            tr("(the new version will start automatically after the update)")
+        )
         self._lbl_launch_detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_launch_detail.setStyleSheet("color: #888;")
         l4.addWidget(self._lbl_launch_detail)
@@ -263,7 +326,7 @@ class UpdateDialog(QDialog):
         page_err = QWidget()
         l5 = QVBoxLayout(page_err)
         l5.addStretch(1)
-        self._lbl_err_title = QLabel("❌ 升级出错")
+        self._lbl_err_title = QLabel(tr("❌ Update error"))
         self._lbl_err_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_err_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #d33;")
         l5.addWidget(self._lbl_err_title)
@@ -274,9 +337,9 @@ class UpdateDialog(QDialog):
         l5.addStretch(1)
         btn_row5 = QHBoxLayout()
         btn_row5.addStretch(1)
-        self._btn_err_retry = QPushButton("重试")
+        self._btn_err_retry = QPushButton(tr("Retry"))
         self._btn_err_retry.clicked.connect(self.start_check)
-        self._btn_err_close = QPushButton("关闭")
+        self._btn_err_close = QPushButton(tr("Close"))
         self._btn_err_close.clicked.connect(self.reject)
         btn_row5.addWidget(self._btn_err_retry)
         btn_row5.addWidget(self._btn_err_close)
@@ -323,21 +386,27 @@ class UpdateDialog(QDialog):
         assets = latest.assets_for_platform(platform)
         if not assets:
             self._show_error(
-                f"新版本 {latest.tag_name} 没有 {platform} 平台的发布包。\n"
-                f"请稍后再试或从浏览器手动下载：{latest.html_url}"
+                "Version {version} has no {platform} package.\n"
+                "Try again later or download it in a browser: {url}",
+                version=latest.tag_name,
+                platform=platform,
+                url=latest.html_url,
             )
             return
 
-        self._lbl_new_version.setText(
-            f"🆕 发现新版本 {latest.tag_name}（当前 v{CURRENT_VERSION}）"
+        set_translatable_text(
+            "🆕 Version {latest} is available (current v{current})",
+            self._lbl_new_version,
+            latest=latest.tag_name,
+            current=CURRENT_VERSION,
         )
-        notes = latest.body[:2000] if latest.body else "（无更新说明）"
+        notes = latest.body[:2000] if latest.body else tr("(no release notes)")
         self._txt_release_notes.setPlainText(notes)
         self._stack.setCurrentIndex(_PAGE_NEW_FOUND)
 
-    def _on_check_failed(self, msg: str) -> None:
+    def _on_check_failed(self, error: UpdaterError) -> None:
         self._cleanup_check_thread()
-        self._show_error(f"检查更新失败：{msg}")
+        self._show_updater_error("check", error)
 
     def _on_skip_version(self) -> None:
         if self._latest is None:
@@ -354,7 +423,7 @@ class UpdateDialog(QDialog):
             return
         assets = self._latest.assets_for_platform(current_platform())
         if not assets:
-            self._show_error("发布包丢失，请稍后再试")
+            self._show_error("Release package is missing; try again later")
             return
 
         # 下载目录：~/.satellite_debug_tool/updates/<tag>/
@@ -366,7 +435,12 @@ class UpdateDialog(QDialog):
         self._dl_progress.setValue(0)
         total_mb = sum(a.size for a in assets) / 1024 / 1024
         self._lbl_dl_bytes.setText(f"0.00 / {total_mb:.2f} MB")
-        self._lbl_dl_title.setText(f"下载 {len(assets)} 个分卷（{self._latest.tag_name}）…")
+        set_translatable_text(
+            "Downloading {count} volume(s) ({version})...",
+            self._lbl_dl_title,
+            count=len(assets),
+            version=self._latest.tag_name,
+        )
         self._stack.setCurrentIndex(_PAGE_DOWNLOADING)
 
         from threading import Event
@@ -395,9 +469,9 @@ class UpdateDialog(QDialog):
         self._cleanup_download_thread()
         self._launch_updater(paths)
 
-    def _on_dl_failed(self, msg: str) -> None:
+    def _on_dl_failed(self, error: UpdaterError) -> None:
         self._cleanup_download_thread()
-        self._show_error(f"下载失败：{msg}")
+        self._show_updater_error("download", error)
 
     def _on_dl_cancelled(self) -> None:
         self._cleanup_download_thread()
@@ -411,7 +485,7 @@ class UpdateDialog(QDialog):
         if self._cancel_event is not None:
             self._cancel_event.set()
         self._btn_dl_cancel.setEnabled(False)
-        self._lbl_dl_title.setText("正在取消…")
+        set_translatable_text("Cancelling...", self._lbl_dl_title)
 
     # ---------- 启动 updater ----------
 
@@ -426,9 +500,11 @@ class UpdateDialog(QDialog):
         updater_exe = _detect_updater_exe()
         if install_dir is None or updater_exe is None:
             self._show_error(
-                "未找到安装目录或 updater 可执行。\n"
-                "请使用 PyInstaller 打包后再升级，或手动下载分卷解压。\n"
-                f"install_dir={install_dir}, updater={updater_exe}"
+                "The install directory or updater executable was not found.\n"
+                "Use a PyInstaller package or download and extract the volumes manually.\n"
+                "install_dir={install_dir}, updater={updater}",
+                install_dir=install_dir,
+                updater=updater_exe,
             )
             return
 
@@ -443,7 +519,7 @@ class UpdateDialog(QDialog):
             "--log", str(log_path),
             "--volumes", *(str(v) for v in volumes),
         ]
-        log.info(f"启动 updater: {argv}")
+        log.info("Starting updater: %s", argv)
         try:
             if sys.platform.startswith("win"):
                 # DETACHED_PROCESS = 0x08
@@ -451,10 +527,13 @@ class UpdateDialog(QDialog):
             else:
                 subprocess.Popen(argv, start_new_session=True, close_fds=True)
         except OSError as e:
-            self._show_error(f"启动 updater 失败：{e}")
+            self._show_error("Failed to start updater: {detail}", detail=e)
             return
 
-        self._lbl_launch_detail.setText("✅ 升级器已启动。主程序将退出…")
+        set_translatable_text(
+            "✅ Updater started; the application will exit...",
+            self._lbl_launch_detail,
+        )
         # 留一点点时间显示提示，再退出
         QTimer.singleShot(500, self._exit_app)
 
@@ -468,9 +547,43 @@ class UpdateDialog(QDialog):
 
     # ---------- 错误 / 清理 ----------
 
-    def _show_error(self, msg: str) -> None:
-        self._lbl_err_detail.setText(msg)
+    def _show_error(self, source: str, **values) -> None:
+        self._last_error_operation = ""
+        self._last_error = None
+        set_translatable_text(
+            source,
+            self._lbl_err_detail,
+            context="UpdateDialog",
+            **values,
+        )
         self._stack.setCurrentIndex(_PAGE_ERROR)
+
+    def _show_updater_error(self, operation: str, error: UpdaterError) -> None:
+        self._last_error_operation = operation
+        self._last_error = error
+        detail = _updater_error_text(error)
+        if operation == "check":
+            set_translatable_text(
+                "Update check failed: {detail}",
+                self._lbl_err_detail,
+                detail=detail,
+            )
+        else:
+            set_translatable_text(
+                "Download failed: {detail}",
+                self._lbl_err_detail,
+                detail=detail,
+            )
+        self._stack.setCurrentIndex(_PAGE_ERROR)
+
+    def retranslate_ui(self) -> None:
+        set_translatable_text(
+            "Current version: v{version}",
+            self._header,
+            version=CURRENT_VERSION,
+        )
+        if self._last_error is not None:
+            self._show_updater_error(self._last_error_operation, self._last_error)
 
     def _cleanup_check_thread(self) -> None:
         if self._check_thread is not None:
@@ -588,16 +701,16 @@ def silent_background_check(
         settings.save()
         skip = settings.get("update.skip_version", "")
         if skip and skip == latest.tag_name:
-            log.info(f"用户已跳过 {skip}，不打扰")
+            log.info("Version %s was skipped by the user", skip)
             return
         if compare_versions(CURRENT_VERSION, latest.tag_name) >= 0:
-            log.info("已是最新版本")
+            log.info("The installed version is current")
             return
         if on_new_version is not None:
             on_new_version(latest)
 
-    def _on_failed(msg: str) -> None:
-        log.info(f"后台检查失败（静默）: {msg}")
+    def _on_failed(error: UpdaterError) -> None:
+        log.info("Silent background update check failed: %s", error)
 
     worker.finished.connect(_on_done)
     worker.failed.connect(_on_failed)

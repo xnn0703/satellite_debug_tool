@@ -7,6 +7,7 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -22,6 +23,15 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.i18n import (
+    LANGUAGE_AUTO,
+    LANGUAGE_EN_US,
+    LANGUAGE_ZH_CN,
+    get_translation_manager,
+    register_translatable,
+    set_translatable_text,
+    tr,
+)
 
 
 class SettingsDialog(QDialog):
@@ -42,42 +52,67 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._settings = settings
         self._profile_store = profile_store
-        self.setWindowTitle("设置")
+        self.setWindowTitle(tr("Settings"))
         self.setMinimumWidth(520)
         self._setup_ui()
+        register_translatable(self)
 
     def _setup_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setSpacing(10)
 
-        outer.addWidget(QLabel("目录配置（用于文件对话框的默认起始位置）"))
+        language_row = QHBoxLayout()
+        language_label = QLabel(tr("Language:"))
+        language_label.setMinimumWidth(120)
+        self._language_combo = QComboBox()
+        self._language_combo.addItem(tr("System default"), LANGUAGE_AUTO)
+        self._language_combo.addItem(tr("Simplified Chinese"), LANGUAGE_ZH_CN)
+        self._language_combo.addItem("English", LANGUAGE_EN_US)
+        current_language = str(self._settings.get("ui.language", LANGUAGE_AUTO))
+        current_index = self._language_combo.findData(current_language)
+        self._language_combo.setCurrentIndex(max(0, current_index))
+        language_row.addWidget(language_label)
+        language_row.addWidget(self._language_combo, 1)
+        outer.addLayout(language_row)
+
+        outer.addWidget(
+            QLabel(tr("Default folders used by file selection dialogs"))
+        )
 
         # 3 行路径配置
         self._recording_edit = self._make_row(
-            outer, "录制 / 回放目录:",
+            outer, tr("Recording / playback folder:"),
             self._settings.get("paths.recording_dir", ""),
-            "选择录制 / 回放目录"
+            "recording",
         )
         self._log_edit = self._make_row(
-            outer, "Log 导入目录:",
+            outer, tr("Log import folder:"),
             self._settings.get("paths.log_dir", ""),
-            "选择 Log 导入目录"
+            "log",
         )
         self._firmware_edit = self._make_row(
-            outer, "固件导入目录:",
+            outer, tr("Firmware folder:"),
             self._settings.get("paths.firmware_dir", ""),
-            "选择固件导入目录"
+            "firmware",
         )
 
         # 地图：天地图 token（在线地图 + GPS 轨迹，坐标准）
         td_row = QHBoxLayout()
-        td_lbl = QLabel("天地图 token:")
+        td_lbl = QLabel(tr("Tianditu token:"))
         td_lbl.setMinimumWidth(120)
         self._tianditu_edit = QLineEdit(self._settings.get("map.tianditu_token", ""))
-        self._tianditu_edit.setPlaceholderText("lbs.tianditu.gov.cn 申请的应用密钥（留空用 OSM 离线）")
+        self._tianditu_edit.setPlaceholderText(
+            tr(
+                "Application key from lbs.tianditu.gov.cn "
+                "(leave blank to use offline OSM)"
+            )
+        )
         self._tianditu_edit.setToolTip(
-            "天地图在线瓦片密钥（tk）。填入后回放/Log 地图用天地图（WGS-84 坐标，"
-            "与 GPS 一致）；留空则回落到 OSM 离线缓存瓦片。"
+            tr(
+                "Online Tianditu tile key (tk). Playback and Log maps use "
+                "Tianditu with WGS-84 coordinates when configured; otherwise "
+                "the app falls back to the offline OSM cache."
+            )
         )
         td_row.addWidget(td_lbl)
         td_row.addWidget(self._tianditu_edit, 1)
@@ -85,11 +120,14 @@ class SettingsDialog(QDialog):
 
         # M10 F2：图表分组管理入口（profile_store 提供时启用）
         chart_row = QHBoxLayout()
-        chart_row.addWidget(QLabel("图表分组:"))
+        chart_row.addWidget(QLabel(tr("Chart groups:")))
         chart_row.addStretch(1)
-        self._btn_chart_groups = QPushButton("管理图表分组...")
+        self._btn_chart_groups = QPushButton(tr("Manage chart groups..."))
         self._btn_chart_groups.setToolTip(
-            "自定义 chart 分组模式下哪些通道在同一子图（按 hw_type 隔离配置）"
+            tr(
+                "Choose which channels share each subplot in grouped mode "
+                "(saved separately for each hardware type)"
+            )
         )
         self._btn_chart_groups.clicked.connect(self._on_open_chart_groups)
         self._btn_chart_groups.setEnabled(self._profile_store is not None)
@@ -101,30 +139,33 @@ class SettingsDialog(QDialog):
         sep.setFrameShape(QFrame.HLine)
         sep.setFrameShadow(QFrame.Sunken)
         outer.addWidget(sep)
-        outer.addWidget(QLabel("自动更新"))
+        outer.addWidget(QLabel(tr("Automatic updates")))
 
-        self._cb_auto_check = QCheckBox("启动时后台检查更新")
+        self._cb_auto_check = QCheckBox(tr("Check for updates at startup"))
         self._cb_auto_check.setChecked(bool(self._settings.get("update.auto_check", True)))
-        self._cb_auto_check.setToolTip("关闭后仅手动点工具栏「检查更新」时才查")
+        self._cb_auto_check.setToolTip(
+            tr("When disabled, updates are checked only when requested manually")
+        )
         outer.addWidget(self._cb_auto_check)
 
         interval_row = QHBoxLayout()
-        interval_row.addWidget(QLabel("检查间隔（小时）:"))
+        interval_row.addWidget(QLabel(tr("Check interval (hours):")))
         self._spin_interval = QSpinBox()
         self._spin_interval.setRange(1, 168)   # 1h ~ 7d
         self._spin_interval.setValue(int(self._settings.get("update.check_interval_hours", 24)))
-        self._spin_interval.setToolTip("距上次检查不足此时长不会重复查")
+        self._spin_interval.setToolTip(
+            tr("Do not check again until this interval has elapsed")
+        )
         interval_row.addWidget(self._spin_interval)
         interval_row.addStretch(1)
         outer.addLayout(interval_row)
 
         skip_row = QHBoxLayout()
-        self._lbl_skipped = QLabel(
-            f"已跳过版本: {self._settings.get('update.skip_version', '') or '（无）'}"
-        )
+        self._lbl_skipped = QLabel()
+        self._render_skipped_version()
         skip_row.addWidget(self._lbl_skipped)
         skip_row.addStretch(1)
-        self._btn_reset_skip = QPushButton("重置跳过版本")
+        self._btn_reset_skip = QPushButton(tr("Reset skipped version"))
         self._btn_reset_skip.setEnabled(bool(self._settings.get("update.skip_version", "")))
         self._btn_reset_skip.clicked.connect(self._on_reset_skip_version)
         skip_row.addWidget(self._btn_reset_skip)
@@ -134,40 +175,55 @@ class SettingsDialog(QDialog):
 
         # 提示
         hint = QLabel(
-            "留空则使用系统默认（上次打开的位置）。\n"
-            f"配置文件: ~/.satellite_debug_tool/settings.json"
+            tr(
+                "Leave a folder blank to use the system default "
+                "(the last opened location).\n"
+                "Configuration file: ~/.satellite_debug_tool/settings.json"
+            )
         )
         hint.setStyleSheet("color: #888; font-size: 11px;")
         outer.addWidget(hint)
 
         # 按钮
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("确定")
-        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.button(QDialogButtonBox.Ok).setText(tr("OK"))
+        buttons.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
     def _make_row(self, layout: QVBoxLayout, label_text: str,
-                  initial: str, browse_title: str) -> QLineEdit:
+                  initial: str, browse_title_id: str) -> QLineEdit:
         """构造一行 [Label] [LineEdit] [浏览...] 并加到 layout，返回 LineEdit。"""
         row = QHBoxLayout()
         lbl = QLabel(label_text)
         lbl.setMinimumWidth(120)
         edit = QLineEdit(initial)
-        edit.setPlaceholderText("（未设置，使用系统默认）")
-        browse_btn = QPushButton("浏览...")
+        edit.setPlaceholderText(tr("Not set; use the system default"))
+        browse_btn = QPushButton(tr("Browse..."))
         browse_btn.setFixedWidth(80)
-        browse_btn.clicked.connect(lambda: self._on_browse(edit, browse_title))
+        browse_btn.clicked.connect(
+            lambda: self._on_browse(edit, browse_title_id)
+        )
         row.addWidget(lbl)
         row.addWidget(edit, 1)
         row.addWidget(browse_btn)
         layout.addLayout(row)
         return edit
 
-    def _on_browse(self, edit: QLineEdit, title: str) -> None:
+    @staticmethod
+    def _browse_title(title_id: str) -> str:
+        return {
+            "recording": tr("Select recording / playback folder"),
+            "log": tr("Select Log import folder"),
+            "firmware": tr("Select firmware folder"),
+        }[title_id]
+
+    def _on_browse(self, edit: QLineEdit, title_id: str) -> None:
         current = edit.text().strip() or ""
-        directory = QFileDialog.getExistingDirectory(self, title, current)
+        directory = QFileDialog.getExistingDirectory(
+            self, self._browse_title(title_id), current
+        )
         if directory:
             edit.setText(directory)
 
@@ -178,17 +234,33 @@ class SettingsDialog(QDialog):
         self._settings.set("paths.firmware_dir", self._firmware_edit.text().strip())
         # 地图 token
         self._settings.set("map.tianditu_token", self._tianditu_edit.text().strip())
+        language = str(self._language_combo.currentData() or LANGUAGE_AUTO)
+        self._settings.set("ui.language", language)
         # M11：更新设置
         self._settings.set("update.auto_check", bool(self._cb_auto_check.isChecked()))
         self._settings.set("update.check_interval_hours", int(self._spin_interval.value()))
         self._settings.save()
+        manager = get_translation_manager()
+        if manager is not None:
+            manager.set_preference(language)
         self.accept()
 
     def _on_reset_skip_version(self) -> None:
         self._settings.set("update.skip_version", "")
         self._settings.save()
-        self._lbl_skipped.setText("已跳过版本: （无）")
+        self._render_skipped_version()
         self._btn_reset_skip.setEnabled(False)
+
+    def _render_skipped_version(self) -> None:
+        skipped = self._settings.get("update.skip_version", "") or tr("None")
+        set_translatable_text(
+            "Skipped version: {version}",
+            self._lbl_skipped,
+            version=skipped,
+        )
+
+    def retranslate_ui(self) -> None:
+        self._render_skipped_version()
 
     def _on_open_chart_groups(self) -> None:
         """打开 ChartGroupDialog（modal，关闭后回到 SettingsDialog）。

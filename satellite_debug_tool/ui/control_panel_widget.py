@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 
 
@@ -49,7 +50,7 @@ class _ChannelEnableDialog(QDialog):
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("通道使能")
+        self.setWindowTitle(tr("Channel enable"))
         self.setMinimumWidth(420)
         self._checks: dict[int, QCheckBox] = {}
 
@@ -57,15 +58,20 @@ class _ChannelEnableDialog(QDialog):
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(8)
 
-        hint = QLabel("勾选后下发 CONTROL.CHANNEL_ENABLE_MASK，仅使能选中通道的 DATA_REPORT 采样。")
+        hint = QLabel(
+            tr(
+                "Only selected DATA_REPORT channels are sampled after "
+                "CONTROL.CHANNEL_ENABLE_MASK is sent."
+            )
+        )
         hint.setWordWrap(True)
         outer.addWidget(hint)
 
         # 全选 / 反选 按钮
         tool = QHBoxLayout()
-        btn_all = QPushButton("全选")
-        btn_none = QPushButton("全不选")
-        btn_invert = QPushButton("反选")
+        btn_all = QPushButton(tr("Select all"))
+        btn_none = QPushButton(tr("Select none"))
+        btn_invert = QPushButton(tr("Invert selection"))
         btn_all.clicked.connect(lambda: self._set_all(True))
         btn_none.clicked.connect(lambda: self._set_all(False))
         btn_invert.clicked.connect(self._invert)
@@ -90,7 +96,7 @@ class _ChannelEnableDialog(QDialog):
             channels = profile_store.get_channels(hw_type)
 
         if not channels:
-            grid.addWidget(QLabel("（尚未收到 CHANNEL_DEFINE）"), 0, 0)
+            grid.addWidget(QLabel(tr("(CHANNEL_DEFINE has not been received)")), 0, 0)
         else:
             cols = 2
             for i, ch in enumerate(channels):
@@ -111,11 +117,12 @@ class _ChannelEnableDialog(QDialog):
         bb = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self
         )
-        bb.button(QDialogButtonBox.Ok).setText("应用")
-        bb.button(QDialogButtonBox.Cancel).setText("取消")
+        bb.button(QDialogButtonBox.Ok).setText(tr("Apply"))
+        bb.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         outer.addWidget(bb)
+        register_translatable(self)
 
     def _set_all(self, on: bool) -> None:
         for cb in self._checks.values():
@@ -156,48 +163,61 @@ class ControlPanelWidget(QFrame):
         row.setSpacing(8)
 
         # ---- 采样率 ----
-        row.addWidget(QLabel("采样率:"))
+        row.addWidget(QLabel(tr("Sample rate:")))
         self._rate_combo = QComboBox()
         for hz in _SAMPLE_RATES:
             self._rate_combo.addItem(f"{hz} Hz", hz)
         self._rate_combo.setCurrentIndex(_SAMPLE_RATES.index(_DEFAULT_SAMPLE_RATE))
         self._rate_combo.setFixedWidth(80)
-        self._rate_combo.setToolTip("下发 CONTROL.SET_SAMPLE_RATE（下位机 DATA_REPORT 频率）")
+        self._rate_combo.setToolTip(
+            tr("Send CONTROL.SET_SAMPLE_RATE to set the device DATA_REPORT rate")
+        )
         self._rate_combo.currentIndexChanged.connect(self._on_rate_changed)
         row.addWidget(self._rate_combo)
 
         # ---- 用户标记 ----
         row.addSpacing(10)
-        row.addWidget(QLabel("标记:"))
+        row.addWidget(QLabel(tr("Marker:")))
         self._mark_edit = QLineEdit()
-        self._mark_edit.setPlaceholderText("例如：经过路口 A")
-        self._mark_edit.setToolTip("输入标记文本后回车发送；也可留空点按钮")
+        self._mark_edit.setPlaceholderText(tr("Example: passed intersection A"))
+        self._mark_edit.setToolTip(
+            tr("Enter marker text and press Enter, or leave it blank and use the button")
+        )
         self._mark_edit.returnPressed.connect(self._on_mark_clicked)
         row.addWidget(self._mark_edit, 1)
 
-        self._mark_btn = QPushButton("⚑ 打标记")
+        self._mark_btn = QPushButton(tr("⚑ Add marker"))
         self._mark_btn.setToolTip(
-            "下发 CONTROL.USER_MARK；下位机回 EVENT(0xFFFF) 后曲线上出现标记竖线"
+            tr(
+                "Send CONTROL.USER_MARK; a marker line appears after the device "
+                "returns EVENT(0xFFFF)"
+            )
         )
         self._mark_btn.clicked.connect(self._on_mark_clicked)
         row.addWidget(self._mark_btn)
 
         # ---- 通道使能 (A5) ----
-        self._ch_enable_btn = QPushButton("通道使能…")
+        self._ch_enable_btn = QPushButton(tr("Channel enable..."))
         self._ch_enable_btn.setToolTip(
-            "打开对话框选择哪些 DATA 通道由下位机采样上报（CONTROL.CHANNEL_ENABLE_MASK）"
+            tr(
+                "Choose which DATA channels the device samples and reports "
+                "(CONTROL.CHANNEL_ENABLE_MASK)"
+            )
         )
         self._ch_enable_btn.clicked.connect(self._on_channel_enable_clicked)
         row.addWidget(self._ch_enable_btn)
 
         # ---- 统计复位 ----
-        self._reset_btn = QPushButton("复位统计")
-        self._reset_btn.setToolTip("下发 CONTROL.RESET_STATS（清下位机内部计数/累计值）")
+        self._reset_btn = QPushButton(tr("Reset statistics"))
+        self._reset_btn.setToolTip(
+            tr("Send CONTROL.RESET_STATS to clear device counters and accumulators")
+        )
         self._reset_btn.clicked.connect(self.reset_stats_requested.emit)
         row.addWidget(self._reset_btn)
 
         self.set_theme("dark", "medium")
         self.set_enabled(False)
+        register_translatable(self)
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
