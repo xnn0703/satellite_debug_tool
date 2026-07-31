@@ -18,7 +18,7 @@
 
 ## B. 构建与自动化
 
-- [ ] PyInstaller Windows 产物包含两个 STL。
+- [x] PyInstaller Windows 产物包含两个 STL。
 - [x] PyInstaller macOS 产物包含两个 STL。
 - [x] Windows/macOS 构建脚本均执行模型资源检查。
 - [x] 模型资源专项测试通过。
@@ -37,5 +37,5 @@
 ## D. 隔离与边界
 
 - [x] 暂存快照不包含既有未提交 INS/姿态修改。
-- [ ] 不回退或覆盖用户工作区修改。
+- [x] 未回退或覆盖用户工作区修改。
 - [ ] 未在 Windows 原生 GPU 环境观察 3D 模型时，不宣称视觉验收完成。

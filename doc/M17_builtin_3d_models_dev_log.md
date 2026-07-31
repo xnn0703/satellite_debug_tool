@@ -67,3 +67,14 @@
   - `Contents/Resources/satellite_debug_tool/ui/assets/models/esa01.stl`
 - 两个冻结文件大小均为 8,066,184 字节，SHA-256 与源模型一致。
 - PyInstaller 输出包含既有可选数据库驱动/OpenGL 平台 warning，本次未新增模型资源相关 warning。
+
+## 2026-07-31：Windows 预发布构建
+
+- GitHub Actions `master` 构建 `30603275556` 成功，提交为 `6100991`。
+- Windows 构建脚本读取应用版本 `1.1.1`。
+- 构建阶段模型检查通过：
+  - `_internal/satellite_debug_tool/ui/assets/models/afd01.stl`
+  - `_internal/satellite_debug_tool/ui/assets/models/esa01.stl`
+- 两个 Windows 冻结文件大小均为 8,066,184 字节。
+- CI artifact 上传成功，耗时 8 分 45 秒。
+- 正式 tag 发布后仍需下载最终 `.7z`，再次核对归档路径和 SHA-256。
