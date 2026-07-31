@@ -1,6 +1,6 @@
 """stl_loader 单测：binary / ASCII 解析 + normalize_mesh 轴重排缩放。
 
-不依赖任何真实设备 STL（专有几何不入仓库）——用合成的小三角网格验证。
+解析与归一化单测使用合成小网格，避免依赖较大的内置设备 STL。
 """
 from __future__ import annotations
 

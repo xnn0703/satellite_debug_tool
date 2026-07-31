@@ -46,6 +46,7 @@ rm -rf "$HERE/build" "$HERE/dist"
 
 echo "[build_macos] 1/3 打包主程序..."
 $PY -m PyInstaller --noconfirm satellite_debug_tool.spec
+$PY "$HERE/scripts/verify_model_assets.py" "$HERE/dist/SatelliteDebugTool.app"
 
 echo "[build_macos] 2/3 打包 updater..."
 $PY -m PyInstaller --noconfirm updater.spec

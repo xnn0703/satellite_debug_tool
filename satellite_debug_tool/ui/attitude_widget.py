@@ -439,21 +439,25 @@ class AttitudeWidget(QWidget):
             pass
 
     def try_load_device_model(self, hw_type: str) -> bool:
-        """尝试加载 ~/.satellite_debug_tool/models/<hw_type>.stl 替换默认模型。
+        """按用户覆盖、包内资源顺序加载设备 STL。
 
         找到并加载成功返回 True；否则保持默认占位长方体返回 False。
-        设备 STL 不入仓库（可能是公司专有几何），放本地模型目录按需加载。
+        用户可在 ~/.satellite_debug_tool/models/<hw_type>.stl 覆盖内置模型。
         """
-        if not hw_type:
+        from satellite_debug_tool.ui.device_model_resources import (
+            load_first_device_model,
+            normalize_model_key,
+        )
+
+        model_key = normalize_model_key(hw_type)
+        if not model_key:
             return False
-        if getattr(self, "_loaded_model_hw", None) == hw_type:
+        if getattr(self, "_loaded_model_hw", None) == model_key:
             return True   # 同一设备已加载，幂等
-        from pathlib import Path
-        model_path = Path.home() / ".satellite_debug_tool" / "models" / f"{hw_type}.stl"
-        if not model_path.is_file():
-            return False
-        try:
-            from satellite_debug_tool.ui.stl_loader import load_stl, normalize_mesh
+
+        from satellite_debug_tool.ui.stl_loader import load_stl, normalize_mesh
+
+        def _load_mesh(model_path):
             verts, faces = load_stl(model_path)
             verts = normalize_mesh(
                 verts, target_size=3.6,
@@ -462,12 +466,15 @@ class AttitudeWidget(QWidget):
                 nose_sign=self._model_nose_sign,
                 left_sign=self._model_left_sign,
             )
-            md = MeshData(vertexes=verts, faces=faces)
-            self.set_body_model(md, draw_edges=False)
-            self._loaded_model_hw = hw_type
-            return True
-        except Exception:
+            return MeshData(vertexes=verts, faces=faces)
+
+        loaded = load_first_device_model(model_key, _load_mesh)
+        if loaded is None:
             return False
+        _, mesh_data = loaded
+        self.set_body_model(mesh_data, draw_edges=False)
+        self._loaded_model_hw = model_key
+        return True
 
     def set_channel_options(self, names: list[str]) -> None:
         """旧 API：曾用于刷新 combo 候选项。2026-04-21 combo 已移除，

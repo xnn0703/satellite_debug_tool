@@ -730,7 +730,7 @@ class LiveView(QWidget):
         self._status_strip.set_hw_type(hw_type)
         self._chart.set_hw_type(hw_type)
         self._control_panel.set_hw_type(hw_type)
-        # 有设备专属 STL 模型（~/.satellite_debug_tool/models/<hw_type>.stl）则替换默认占位
+        # 优先加载用户覆盖 STL，其次使用包内设备模型，均不可用时保留默认占位
         self._attitude.try_load_device_model(hw_type)
 
     # ----- 命令下发 -----

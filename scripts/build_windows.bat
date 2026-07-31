@@ -44,6 +44,9 @@ if exist dist  rmdir /s /q dist
 echo [build_windows] Building main app...
 "%PY%" -m PyInstaller --noconfirm satellite_debug_tool.spec || goto :err
 
+echo [build_windows] Verifying built-in 3D models...
+"%PY%" scripts\verify_model_assets.py "dist\SatelliteDebugTool" || goto :err
+
 echo [build_windows] Building updater (M11)...
 "%PY%" -m PyInstaller --noconfirm updater.spec || goto :err
 
