@@ -137,6 +137,7 @@ class AttitudeWidget(QWidget):
         self._roll_value = 0.0
         self._pitch_value = 0.0
         self._yaw_value = 0.0
+        self._yaw_reference = "legacy"
         self._is_dark = True
         self._theme = "dark"
         self._scale = "medium"
@@ -259,10 +260,13 @@ class AttitudeWidget(QWidget):
             values_layout.addWidget(lbl)
             values_layout.addWidget(val_lbl)
             if attr == "_roll_value":
+                self._roll_name_lbl = lbl
                 self._roll_val_lbl = val_lbl
             elif attr == "_pitch_value":
+                self._pitch_name_lbl = lbl
                 self._pitch_val_lbl = val_lbl
             else:
+                self._yaw_name_lbl = lbl
                 self._yaw_val_lbl = val_lbl
         values_layout.addStretch()
         layout.addWidget(values_widget)
@@ -553,6 +557,39 @@ class AttitudeWidget(QWidget):
         """返回当前自动绑定的 (tgt_az, tgt_el, ant_az, ant_el) DataStore key。"""
         return self.get_pointing_selections()
 
+    def set_yaw_reference(self, reference: str) -> None:
+        """标明 3D 当前 yaw 是绝对、相对、不可用，或来自旧固件。"""
+        normalized = (
+            reference
+            if reference in {"legacy", "unavailable", "relative", "absolute"}
+            else "unavailable"
+        )
+        if self._yaw_reference == normalized:
+            return
+        self._yaw_reference = normalized
+
+        base = tr("Yaw:").rstrip(":：")
+        if normalized == "legacy":
+            self._yaw_name_lbl.setText(tr("Yaw:"))
+            self._yaw_name_lbl.setToolTip("")
+            return
+
+        state_name = normalized.upper()
+        self._yaw_name_lbl.setText(f"{base} [{state_name}]:")
+        self._yaw_name_lbl.setToolTip(
+            {
+                "unavailable": "INTERNAL_INS_YAW_REFERENCE=UNAVAILABLE",
+                "relative": "INTERNAL_INS_YAW_REFERENCE=RELATIVE; not north-referenced",
+                "absolute": (
+                    "INTERNAL_INS_YAW_REFERENCE=ABSOLUTE; "
+                    "north-referenced, source may be inactive"
+                ),
+            }[normalized]
+        )
+
+    def yaw_reference(self) -> str:
+        return self._yaw_reference
+
     def update_attitude(
         self,
         roll: float,
@@ -756,6 +793,7 @@ class AttitudeWidget(QWidget):
         self._roll_val_lbl.setText("0.0°")
         self._pitch_val_lbl.setText("0.0°")
         self._yaw_val_lbl.setText("0.0°")
+        self.set_yaw_reference("legacy")
         # 清指向矢量 / 扫描轨迹
         empty2 = np.empty((0, 3), dtype=np.float32)
         self._ant_line.setData(pos=empty2)

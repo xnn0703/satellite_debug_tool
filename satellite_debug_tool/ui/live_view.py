@@ -44,6 +44,7 @@ from satellite_debug_tool.core.link_trace import trace_message
 from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_ANTENNA_AZ,
     CHANNEL_ROLE_ANTENNA_EL,
+    CHANNEL_ROLE_INTERNAL_INS_YAW,
     CHANNEL_ROLE_PITCH,
     CHANNEL_ROLE_ROLL,
     CHANNEL_ROLE_YAW,
@@ -51,7 +52,9 @@ from satellite_debug_tool.core.profile import (
     CONTROL_VALUE_FROM_ENUM_VALUE,
     ProfileCache,
     ProfileStore,
+    STATE_ROLE_INTERNAL_INS_YAW_REFERENCE,
 )
+from satellite_debug_tool.core.profile.ins_yaw_display import select_attitude_yaw_channel
 from satellite_debug_tool.core.protocol import (
     DataReport,
     EventReport,
@@ -890,9 +893,12 @@ class LiveView(QWidget):
             ch = self._profile_store.find_channel_by_role(hw, role)
             if ch is not None:
                 semantic_picks[axis] = f"ch_{ch.channel_id:02d}"
+        internal_yaw = self._profile_store.find_channel_by_role(hw, CHANNEL_ROLE_INTERNAL_INS_YAW)
+        internal_yaw_key = "" if internal_yaw is None else f"ch_{internal_yaw.channel_id:02d}"
         sig = (
             tuple(sorted(name_to_key.items())),
             tuple(sorted(semantic_picks.items())),
+            internal_yaw_key,
         )
         if getattr(self, "_attitude_bind_sig", None) == sig:
             return
@@ -900,12 +906,33 @@ class LiveView(QWidget):
         self._attitude.auto_bind_from_profile(name_to_key)
         fallback_roll, fallback_pitch, fallback_yaw = self._attitude.current_attitude_bindings()
         _, _, fallback_ant_az, fallback_ant_el = self._attitude.current_pointing_bindings()
+        self._attitude_business_yaw_ch = semantic_picks.get("yaw", fallback_yaw)
+        self._attitude_internal_yaw_ch = internal_yaw_key
         self._attitude.set_auto_bindings(
             roll=semantic_picks.get("roll", fallback_roll),
             pitch=semantic_picks.get("pitch", fallback_pitch),
-            yaw=semantic_picks.get("yaw", fallback_yaw),
+            yaw=self._attitude_business_yaw_ch,
             ant_az=semantic_picks.get("ant_az", fallback_ant_az),
             ant_el=semantic_picks.get("ant_el", fallback_ant_el),
+        )
+
+    def _attitude_yaw_input(self, hw_type: Optional[str]) -> tuple[str, str]:
+        business = getattr(self, "_attitude_business_yaw_ch", "")
+        internal = getattr(self, "_attitude_internal_yaw_ch", "")
+        if hw_type is None:
+            return business, "legacy"
+
+        reference_state = self._profile_store.find_state_by_role(
+            hw_type, STATE_ROLE_INTERNAL_INS_YAW_REFERENCE
+        )
+        reference_value = None
+        if reference_state is not None:
+            reference_value = self._state_store.get_value(hw_type, reference_state.state_id)
+        return select_attitude_yaw_channel(
+            reference_state_defined=reference_state is not None,
+            reference_value=reference_value,
+            business_yaw_channel=business,
+            internal_yaw_channel=internal,
         )
 
     def _on_link_lost(self):
@@ -1227,7 +1254,9 @@ class LiveView(QWidget):
             latest = ch.get_latest()
             return latest[1] if latest else None
 
-        roll_ch, pitch_ch, yaw_ch = self._attitude.get_channel_selections()
+        roll_ch, pitch_ch, _ = self._attitude.get_channel_selections()
+        yaw_ch, yaw_reference = self._attitude_yaw_input(hw)
+        self._attitude.set_yaw_reference(yaw_reference)
         roll_val = _latest(roll_ch) or 0.0
         pitch_val = _latest(pitch_ch) or 0.0
         yaw_val = _latest(yaw_ch) or 0.0

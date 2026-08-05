@@ -7,6 +7,7 @@ from satellite_debug_tool.core.protocol import (
     ChannelSample,
     CmdType,
     CodecError,
+    DATA_REPORT_MAX_CHANNELS,
     DEVICE_TYPE,
     FRAME_FOOTER,
     FRAME_HEADER_0,
@@ -166,8 +167,17 @@ class TestDecodeDataReport:
         with pytest.raises(CodecError):
             decode_data_report(payload)
 
+    def test_max_channels_is_accepted(self):
+        samples = [(cid, float(cid)) for cid in range(DATA_REPORT_MAX_CHANNELS)]
+        report = decode_data_report(_build_data_report_payload(0, samples))
+        assert len(report.samples) == DATA_REPORT_MAX_CHANNELS
+        assert report.samples[-1].channel_id == DATA_REPORT_MAX_CHANNELS - 1
+
     def test_exceed_max_channels_raises(self):
-        payload = (0).to_bytes(4, "little") + b"\x11"  # 17 channels
+        payload = (
+            (0).to_bytes(4, "little")
+            + bytes([DATA_REPORT_MAX_CHANNELS + 1])
+        )
         with pytest.raises(CodecError):
             decode_data_report(payload)
 

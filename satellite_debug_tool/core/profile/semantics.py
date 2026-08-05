@@ -25,6 +25,7 @@ CHANNEL_ROLE_GPS_COG_STD = "gps_cog_std"
 CHANNEL_ROLE_ROLL = "roll"
 CHANNEL_ROLE_PITCH = "pitch"
 CHANNEL_ROLE_YAW = "yaw"
+CHANNEL_ROLE_INTERNAL_INS_YAW = "internal_ins_yaw"
 CHANNEL_ROLE_ANTENNA_AZ = "antenna_az"
 CHANNEL_ROLE_ANTENNA_EL = "antenna_el"
 CHANNEL_ROLE_TARGET_AZ = "target_az"
@@ -38,6 +39,8 @@ STATE_ROLE_LOCK_FLAG = "lock_flag"
 STATE_ROLE_GPS_FIX = "gps_fix"
 STATE_ROLE_INS_READY = "ins_ready"
 STATE_ROLE_INS_STATUS = "ins_status"
+STATE_ROLE_INTERNAL_INS_STATE = "internal_ins_state"
+STATE_ROLE_INTERNAL_INS_YAW_REFERENCE = "internal_ins_yaw_reference"
 STATE_ROLE_PLL_LOCKED = "pll_locked"
 STATE_ROLE_MODEM_CONNECTED = "modem_connected"
 
@@ -127,6 +130,7 @@ _CHANNEL_EXACT_ROLE_MAP = {
     "pitch": CHANNEL_ROLE_PITCH,
     "yaw": CHANNEL_ROLE_YAW,
     "heading": CHANNEL_ROLE_YAW,
+    "internal_ins_yaw": CHANNEL_ROLE_INTERNAL_INS_YAW,
     "ant_az": CHANNEL_ROLE_ANTENNA_AZ,
     "antenna_az": CHANNEL_ROLE_ANTENNA_AZ,
     "ant_el": CHANNEL_ROLE_ANTENNA_EL,
@@ -150,11 +154,12 @@ def infer_channel_roles(name: str) -> List[str]:
         roles.append(exact)
 
     # Conservative suffix fallback for logs or vendor-specific prefixes.
-    if n.endswith("_roll") and CHANNEL_ROLE_ROLL not in roles:
+    is_scoped_ins_attitude = n.startswith(("internal_ins_", "external_ins_"))
+    if not is_scoped_ins_attitude and n.endswith("_roll") and CHANNEL_ROLE_ROLL not in roles:
         roles.append(CHANNEL_ROLE_ROLL)
-    if n.endswith("_pitch") and CHANNEL_ROLE_PITCH not in roles:
+    if not is_scoped_ins_attitude and n.endswith("_pitch") and CHANNEL_ROLE_PITCH not in roles:
         roles.append(CHANNEL_ROLE_PITCH)
-    if n.endswith("_yaw") and CHANNEL_ROLE_YAW not in roles:
+    if not is_scoped_ins_attitude and n.endswith("_yaw") and CHANNEL_ROLE_YAW not in roles:
         roles.append(CHANNEL_ROLE_YAW)
     return _unique(roles)
 
@@ -165,6 +170,8 @@ _STATE_EXACT_ROLE_MAP = {
     "gps_fix": STATE_ROLE_GPS_FIX,
     "ins_ready": STATE_ROLE_INS_READY,
     "ins_status": STATE_ROLE_INS_STATUS,
+    "internal_ins_state": STATE_ROLE_INTERNAL_INS_STATE,
+    "internal_ins_yaw_reference": STATE_ROLE_INTERNAL_INS_YAW_REFERENCE,
     "pll_locked": STATE_ROLE_PLL_LOCKED,
     "modem_connected": STATE_ROLE_MODEM_CONNECTED,
 }

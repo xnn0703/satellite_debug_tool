@@ -28,8 +28,9 @@ MAX_DATA_LENGTH = 1024
 MAX_FRAME_LENGTH = MAX_DATA_LENGTH + 12
 
 # 通道/状态/事件 ID 上界（与下位机 DEBUG_MAX_CHANNELS 等保持同步）
-# 2026-04-24：esa01 端 DEBUG_MAX_CHANNELS=32，channel id 0..31 合法
-CHANNEL_ID_MAX = 31          # 0..31
+# 2026-07-30：控制协议的 enable mask 原本已预留 64 位；AFD01 为追加内部 INS
+# 诊断通道把注册容量扩为 64，channel id 0..63 合法。
+CHANNEL_ID_MAX = 63          # 0..63
 STATE_ID_MAX = 63            # 0..63
 EVENT_ID_MIN = 0x0001        # 0x0000 保留/禁用
 EVENT_ID_MAX = 0xFFFE
@@ -37,9 +38,10 @@ EVENT_ID_USER_MARK = 0xFFFF  # 规范 §8.1：上位机 USER_MARK 保留事件
 
 # DATA_REPORT 单帧最大通道数
 # 2026-04-24：esa01 一帧上报 27 个 channel，超原 16 上限会被 codec_v2 直接丢帧，
-# 表象是"通道列表显示但数据全 0、Frames=0"。上调到 32 与下位机
-# DEBUG_MAX_CHANNELS=32 对齐；afd01/ufd45 仍 ≤ 11 channel/帧，向后兼容。
-DATA_REPORT_MAX_CHANNELS = 32
+# 表象是"通道列表显示但数据全 0、Frames=0"。
+# 2026-07-30：随固件注册表和 64-bit enable mask 扩至 64；最大 DATA 段仅 325B，
+# 仍明显低于 MAX_DATA_LENGTH=1024，旧设备的小帧保持兼容。
+DATA_REPORT_MAX_CHANNELS = 64
 # EVENT_REPORT payload 上限（§5.9）
 EVENT_PAYLOAD_MAX = 200
 

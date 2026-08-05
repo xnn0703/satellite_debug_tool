@@ -820,3 +820,14 @@ pytest 仍 160/160。
 - SDB v2 继续录制原始 debug 帧；Playback 增加 GNSS 快照滑块与前后帧，旧文件无 GNSS 时入口禁用。
 - 自动化结果：GNSS 专项 16 项、完整测试 `549 passed, 4 warnings`；固件/上位机共用的 SKY/CNR
   golden payload 已完成字节级测试。Qt 离屏渲染复核了天空图/柱状图/明细布局；真机逐项一致性仍需串口与厂商工具验收。
+
+### 2026-07-30 — 内部 INS 相对航向独立显示
+
+- 新增 `internal_ins_yaw`、`internal_ins_state` 和 `internal_ins_yaw_reference` 语义；业务 `yaw`
+  继续只表示绝对航向，`external_ins_*` 继续只表示 Bynav 等外部组合导航原始输出。
+- Live 3D 按 reference state 选择航向：`RELATIVE` 使用内部通道并显示明确标签，`ABSOLUTE`
+  使用业务通道，`UNAVAILABLE` 不绑定航向。旧 v2 固件缺少该 state 时保持历史行为。
+- 协议 channel ID 和单帧 DATA_REPORT 容量统一到 0..63 / 64 条；64 条 DATA 段为 325 字节，
+  未改变 v2 envelope、SDB 版本或旧帧解析。
+- 自动化覆盖通道 32 编解码、64 条边界、名称 fallback 隔离、reference 选择、Live 路由和标签。
+  真机仍需确认 profile/state 到达、相对航向随转动变化以及 Oracle 建立后切换为绝对标签。

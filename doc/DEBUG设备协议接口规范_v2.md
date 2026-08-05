@@ -7,6 +7,7 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
+| 最近修订 | 2026-07-30（64 通道容量与内部 INS 航向语义） |
 | 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / ufd45，后续新型号无需改协议） |
 | 适用上位机 | satellite_debug_tool ≥ v2.0 |
 
@@ -101,11 +102,11 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 
 ```
 timestamp      uint32      设备启动后毫秒数
-channel_count  uint8       本帧携带的通道数 (1~32)
+channel_count  uint8       本帧携带的通道数 (1~64)
 channel[N]     { uint8 channel_id; float32 value; }   每条 5 字节
 ```
 
-**帧长估算**：`9 + 4 + 1 + 5×N + 2 + 1 = 17 + 5N`。N=32 时 177 字节；100 Hz 时 17.7 KB/s。
+**帧长估算**：`9 + 4 + 1 + 5×N + 2 + 1 = 17 + 5N`。N=64 时 337 字节；100 Hz 时 33.7 KB/s。
 
 **下位机实现建议**：
 - 按 `channel_id` 自增顺序一次打包全部通道，避免分帧
@@ -179,7 +180,7 @@ device_sn      utf8            设备序列号
 table_ver      uint8          表版本号，固件内常量，内容变化时递增
 channel_count  uint8
 channel[N]:
-    channel_id   uint8         0..15
+    channel_id   uint8         0..63
     data_type    uint8         0x01=float32 (v2 唯一支持)
     group_id     uint8         Y 轴分组 ID（上位机分离绘制）
     flags        uint8         bit0=default_visible; bit1=critical（Dashboard 必显）
@@ -202,7 +203,9 @@ channel[N]:
 | 4 | 位置 / GPS | 自动 |
 | 5 | 其它 | 自动 |
 
-**估算**：16 通道约 400 字节。5 秒重发 = 80 B/s。
+**容量边界**：注册 ID 范围为 0..63；整张定义表仍必须放入 1024 字节 DATA 段。
+条目大小随名称和单位长度变化，设备 profile 注册后必须验证序列化结果非 0。当前 AFD01
+31 个已注册通道的定义表约 774 字节。
 
 ### 5.6 `STATE_DEFINE` (0x06) — 状态字定义表
 
@@ -326,11 +329,21 @@ capability[N]:
 
 | 类型 | role |
 |------|------|
-| channel | `gps_lat`, `gps_lon`, `gps_alt`, `gps_num_sv`, `gps_speed`, `gps_cog`, `gps_vel_n`, `gps_vel_e`, `gps_vel_d`, `gps_cog_std`, `roll`, `pitch`, `yaw`, `antenna_az`, `antenna_el`, `target_az`, `target_el`, `snr`, `pointing_error` |
-| state | `trace_mode`, `lock_flag`, `gps_fix`, `ins_status`, `ins_ready`, `pll_locked`, `modem_connected` |
+| channel | `gps_lat`, `gps_lon`, `gps_alt`, `gps_num_sv`, `gps_speed`, `gps_cog`, `gps_vel_n`, `gps_vel_e`, `gps_vel_d`, `gps_cog_std`, `roll`, `pitch`, `yaw`, `internal_ins_yaw`, `antenna_az`, `antenna_el`, `target_az`, `target_el`, `snr`, `pointing_error` |
+| state | `trace_mode`, `lock_flag`, `gps_fix`, `ins_status`, `ins_ready`, `internal_ins_state`, `internal_ins_yaw_reference`, `pll_locked`, `modem_connected` |
 | capability | `parameters`, `ota`, `sample_rate`, `user_mark`, `channel_enable_mask`, `gnss_sky_report`, `gnss_cnr_report` |
 
 下位机只有在实际支持某控制子命令时，才应声明对应 `control_subcmd`；例如当前 debug core 尚未实现 `SET_TRACE_MODE` 时，应只声明 `trace_mode` role，不声明 control binding。
+
+内部 INS 航向必须与业务绝对航向分开：
+
+- `yaw`：业务主输出；新固件仅在绝对航向有效时更新。
+- `internal_ins_yaw`：内部滤波器实时航向，允许在无外部航向观测时作为相对航向显示。
+- `internal_ins_yaw_reference`：`0=UNAVAILABLE`、`1=RELATIVE`、`2=ABSOLUTE`。上位机只有在
+  `RELATIVE` 时才用 `internal_ins_yaw` 驱动诊断 3D；`ABSOLUTE` 优先使用业务 `yaw`。
+- `ABSOLUTE` 表示滤波器已经建立过北向参考，不等同于当前仍有外部航向量测。来源失效后可继续
+  惯性保持绝对参考；是否仍被外部修正应结合来源/退化状态判断。
+- 旧 v2 固件没有该 state 时，上位机保持历史 `yaw` 绑定，不推断相对/绝对属性。
 
 ### 5.12 `GNSS_SKY_REPORT` (0x0D) — GSV 天空快照
 
@@ -506,7 +519,7 @@ Device -> COMMAND_RESPONSE(code=0, msg="OK")
 
 | 范围 | 规则 |
 |------|------|
-| `channel_id` 取值 | 0 ~ 15（一帧 DATA_REPORT 最多带 16 个）|
+| `channel_id` 取值 | 0 ~ 63（一帧 DATA_REPORT 最多带 64 个）|
 | `state_id` 取值 | 0 ~ 63 |
 | `event_id` 取值 | 0x0001 ~ 0xFFFE |
 | `event_id = 0xFFFF` | **保留给 USER_MARK**（上位机通过 CONTROL.USER_MARK 触发，下位机以 EVENT_REPORT 回灌到数据流），下位机**不得**用于其它事件 |
@@ -541,7 +554,7 @@ Device -> COMMAND_RESPONSE(code=0, msg="OK")
 
 | 帧类型 | 频率 | 单帧 | 速率 |
 |--------|------|------|------|
-| DATA_REPORT (16ch)    | 100 Hz | 97 B  | 9.7 KB/s |
+| DATA_REPORT（典型 16ch） | 100 Hz | 97 B  | 9.7 KB/s |
 | STATE_REPORT (12)     | 5 Hz   | 37 B  | 0.2 KB/s |
 | EVENT_REPORT          | ~5 Hz  | ~30 B | 0.15 KB/s |
 | HEARTBEAT             | 1 Hz   | 21 B  | 0.02 KB/s |
@@ -556,7 +569,7 @@ W5500 UDP 实测吞吐 ≥ 1 MB/s，**余量充足**（利用率 ~1%）。
 
 ### 9.2 CPU
 
-- `DATA_REPORT` 打包：O(16)，约 2~5 μs/帧 @400MHz，100Hz → 0.05% CPU
+- `DATA_REPORT` 打包：扫描固定 64 个注册槽，只序列化本周期已更新的通道；实际耗时以目标板测量为准
 - CRC16 计算：硬件加速可更快；软件实现约 8 μs/100B → 100Hz 时 0.08% CPU
 - 状态字/事件：事件驱动，几乎零开销
 - **总增量 CPU ≤ 0.3%**，相对 v1 同频率只增不超过 0.1%（主要因省去 `strncpy(32)`）
@@ -564,7 +577,8 @@ W5500 UDP 实测吞吐 ≥ 1 MB/s，**余量充足**（利用率 ~1%）。
 ### 9.3 ROM/RAM
 
 - ROM：定义表字符串常量，估算 ~1 KB
-- RAM：channel/state 表结构 ~300 B；event 去重环形缓冲 ~200 B；总增量 < 1 KB
+- RAM：channel/state/event/semantic 表均为静态容量，具体占用以目标固件 map 为准；不得用协议条目数
+  直接推算，也不得把 Host/模拟器结果当作目标板 RAM 证据
 - 帧缓冲：早期 afd01 / ufd45 的 512 字节 DATA 帧可继续使用约 540 B 缓冲；若启用 1024 字节 DATA 长帧，`DEBUG_MAX_FRAME_LENGTH` 需预留至少 1036 B。
 
 ### 9.4 实时性要求
