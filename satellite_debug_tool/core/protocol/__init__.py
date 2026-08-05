@@ -25,12 +25,23 @@ from .codec_v2 import (
     build_ota_end,
     build_ota_abort,
     build_device_reboot,
+    build_service_subscribe,
+    build_service_set_control_mode,
+    build_service_apply_rf,
+    build_service_set_tx_enable,
+    build_service_set_capture_profile,
     decode_para_table_report,
     decode_profile_semantics,
     decode_gnss_sky_report,
     decode_gnss_cnr_report,
     decode_gnss_sat_report,
     decode_gnss_signal_report,
+    decode_service_identity,
+    decode_service_fast_state,
+    decode_service_slow_state,
+    decode_service_component_health,
+    decode_service_capabilities,
+    decode_service_control_response,
 )
 from .frame_receiver_v2 import FrameReceiverV2
 from .frame_v2 import (
@@ -44,6 +55,7 @@ from .frame_v2 import (
     STATE_FLAG_CRITICAL, STATE_FLAG_INVERSE,
     PARA_FLAG_REQUIRES_REBOOT, PARA_FLAG_READ_ONLY,
     CmdType, SubCmd, RespCode, DataType, StateType, Level, ParaType,
+    ServiceControlOp, ServiceResultCode,
     MetaInfo,
     ChannelDefEntry, ChannelDefineTable,
     StateEnumItem, StateDefEntry, StateDefineTable,
@@ -58,6 +70,9 @@ from .frame_v2 import (
     GnssCnrObservation, GnssCnrReport,
     GnssSatRecord, GnssSatReport,
     GnssSignalRecord, GnssSignalReport,
+    ServiceIdentity, ServiceFastState, ServiceSlowState,
+    ServiceComponentValue, ServiceComponentHealth,
+    ServiceCapabilities, ServiceControlResponse,
     RawFrame, FrameV2Record,
 )
 
@@ -77,9 +92,15 @@ __all__ = [
     "build_request_para_table", "build_para_set", "build_para_reset",
     "build_ota_begin", "build_ota_data", "build_ota_end",
     "build_ota_abort", "build_device_reboot",
+    "build_service_subscribe", "build_service_set_control_mode",
+    "build_service_apply_rf", "build_service_set_tx_enable",
+    "build_service_set_capture_profile",
     "decode_para_table_report", "decode_profile_semantics",
     "decode_gnss_sky_report", "decode_gnss_cnr_report",
     "decode_gnss_sat_report", "decode_gnss_signal_report",
+    "decode_service_identity", "decode_service_fast_state",
+    "decode_service_slow_state", "decode_service_component_health",
+    "decode_service_capabilities", "decode_service_control_response",
     # receiver
     "FrameReceiverV2",
     # constants
@@ -94,6 +115,7 @@ __all__ = [
     "PARA_FLAG_REQUIRES_REBOOT", "PARA_FLAG_READ_ONLY",
     # enums
     "CmdType", "SubCmd", "RespCode", "DataType", "StateType", "Level", "ParaType",
+    "ServiceControlOp", "ServiceResultCode",
     # dataclasses
     "MetaInfo",
     "ChannelDefEntry", "ChannelDefineTable",
@@ -109,5 +131,8 @@ __all__ = [
     "GnssCnrObservation", "GnssCnrReport",
     "GnssSatRecord", "GnssSatReport",
     "GnssSignalRecord", "GnssSignalReport",
+    "ServiceIdentity", "ServiceFastState", "ServiceSlowState",
+    "ServiceComponentValue", "ServiceComponentHealth",
+    "ServiceCapabilities", "ServiceControlResponse",
     "RawFrame", "FrameV2Record",
 ]

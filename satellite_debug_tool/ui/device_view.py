@@ -117,6 +117,7 @@ class DeviceView(QWidget):
     debug_mode_requested = Signal(bool)
     device_transaction_active_changed = Signal(bool)
     handshake_retry_pause_changed = Signal(bool)
+    ota_status_changed = Signal(str, object, int, bool)
 
     def __init__(
         self,
@@ -331,6 +332,43 @@ class DeviceView(QWidget):
             context="DeviceView",
             **values,
         )
+        progress = self._ota_progress.value() if hasattr(self, "_ota_progress") else 0
+        self.ota_status_changed.emit(
+            source,
+            dict(values),
+            int(progress),
+            bool(self._ota_active),
+        )
+
+    def customer_ota_available(self) -> bool:
+        """Whether the shared engineering OTA transport can accept a verified image."""
+        return bool(self._worker is not None and self._supports_ota and not self._ota_active)
+
+    def load_customer_ota_image(self, data: bytes, filename: str) -> bool:
+        """Load an image already authenticated by the customer package verifier."""
+        if not self.customer_ota_available() or not data or not filename:
+            return False
+        self._ota_file = bytes(data)
+        self._ota_filename = Path(filename).name
+        self._ota_crc32 = zlib.crc32(self._ota_file) & 0xFFFFFFFF
+        set_translatable_text(
+            "{file}  ({size} bytes)",
+            self._ota_file_label,
+            file=self._ota_filename,
+            size=len(self._ota_file),
+        )
+        self._set_controls_enabled(True)
+        return True
+
+    def start_customer_ota(self) -> bool:
+        if not self.customer_ota_available() or self._ota_file is None:
+            return False
+        self._ota_pause_debug_cb.setChecked(True)
+        self._on_ota_start()
+        return bool(self._ota_active)
+
+    def abort_customer_ota(self) -> None:
+        self._on_ota_abort()
 
     def _set_para_row_status(
         self,

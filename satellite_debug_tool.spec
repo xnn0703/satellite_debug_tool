@@ -34,6 +34,28 @@ pyqtgraph_datas, pyqtgraph_binaries, pyqtgraph_hidden = collect_all("pyqtgraph")
 # M11 fix: PyOpenGL（pyqtgraph.opengl 3D 姿态显示需要），全包确保 GLU/GL 子模块齐
 opengl_datas, opengl_binaries, opengl_hidden = collect_all("OpenGL")
 
+# ``collect_all("PySide6")`` also discovers standalone Qt development tools
+# (Designer, Assistant and Linguist). They are not runtime dependencies, and
+# some contain cross-bundle symlinks that prevent strict signing of the
+# customer application. QtWebEngineProcess.app is the only nested application
+# required at runtime.
+def _is_unused_pyside_app(entry):
+    source, destination = (str(value) for value in entry)
+    combined = f"{source}/{destination}"
+    return ".app/" in combined and "QtWebEngineProcess.app/" not in combined
+
+
+pyside6_datas = [
+    entry
+    for entry in pyside6_datas
+    if not _is_unused_pyside_app(entry)
+]
+pyside6_binaries = [
+    entry
+    for entry in pyside6_binaries
+    if not _is_unused_pyside_app(entry)
+]
+
 # 本项目包本身：tests 目录不要进发行包
 extra_hidden = collect_submodules(
     "satellite_debug_tool",
@@ -47,6 +69,10 @@ app_datas = [
     (
         str(ROOT / "satellite_debug_tool" / "ui" / "assets"),
         "satellite_debug_tool/ui/assets",
+    ),
+    (
+        str(ROOT / "satellite_debug_tool" / "resources"),
+        "satellite_debug_tool/resources",
     ),
 ]
 if sys.platform == "darwin":

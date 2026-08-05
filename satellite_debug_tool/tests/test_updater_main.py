@@ -30,6 +30,52 @@ class TestWaitForPid:
         assert updater_main.wait_for_pid(2**30, timeout=0.5) is True
 
 
+class TestSelfRelocate:
+    def test_onefile_copies_only_executable(
+        self,
+        updater_main,
+        tmp_path,
+        monkeypatch,
+    ):
+        install = tmp_path / "Install"
+        install.mkdir()
+        source = install / "updater"
+        source.write_bytes(b"onefile-updater")
+        relocated_root = tmp_path / "relocated"
+        relocated_root.mkdir()
+        launched = []
+
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "executable", str(source))
+        monkeypatch.setattr(
+            updater_main.tempfile,
+            "mkdtemp",
+            lambda **_kwargs: str(relocated_root),
+        )
+        monkeypatch.setattr(
+            updater_main.subprocess,
+            "Popen",
+            lambda *args, **kwargs: launched.append((args, kwargs)) or object(),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            updater_main.self_relocate_and_relaunch(
+                install,
+                ["--pid", "42"],
+            )
+
+        target = relocated_root / "updater"
+        assert exc.value.code == 0
+        assert target.read_bytes() == b"onefile-updater"
+        assert launched[0][0][0] == [
+            str(target),
+            "--pid",
+            "42",
+            "--no-relocate",
+        ]
+        assert not (relocated_root / install.name).exists()
+
+
 class TestRestartApp:
     def test_mac_app_uses_open(self, updater_main, tmp_path, monkeypatch):
         captured = []

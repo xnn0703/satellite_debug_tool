@@ -41,6 +41,7 @@ from satellite_debug_tool.core.comm import SerialWorker, UdpWorker
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, GnssStore, StateStore
 from satellite_debug_tool.core.link_trace import trace_message
+from satellite_debug_tool.core.product import ProductServiceStore
 from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_ANTENNA_AZ,
     CHANNEL_ROLE_ANTENNA_EL,
@@ -66,16 +67,20 @@ from satellite_debug_tool.core.protocol import (
     GnssSkyReport,
     CommandResponse,
     RespCode,
+    ServiceControlOp,
+    ServiceResultCode,
     StateReport,
     build_debug_enable_v2,
     build_reset_stats,
+    build_service_set_capture_profile,
+    build_service_subscribe,
     build_set_sample_rate,
     build_set_trace_mode,
     build_user_mark,
 )
 from satellite_debug_tool.core.protocol.handshake import Handshake
 from satellite_debug_tool.io.data_importer import DataImporter
-from satellite_debug_tool.io.data_recorder import DataRecorder
+from satellite_debug_tool.io.data_recorder import DataRecorder, SDB_VERSION_V3
 from satellite_debug_tool.i18n import (
     register_translatable,
     set_raw_text,
@@ -123,6 +128,9 @@ class LiveView(QWidget):
     frame_received = Signal(object)            # emit 每个 parsed FrameV2Record
     debug_request_finished = Signal(bool, bool, str)  # target, ok, detail
     debug_state_changed = Signal(bool)
+    connection_state_changed = Signal(bool)
+    profile_ready = Signal(str)
+    recording_state_changed = Signal(bool, str)
 
     def __init__(self, settings: Settings, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -136,6 +144,13 @@ class LiveView(QWidget):
         self._state_store = StateStore()
         self._event_log = EventLog()
         self._gnss_store = GnssStore(parent=self)
+        self._product_store = ProductServiceStore(parent=self)
+        self._product_request_id = 0
+        self._product_subscribe_attempts = 0
+        self._product_subscribe_timer = QTimer(self)
+        self._product_subscribe_timer.setInterval(1000)
+        self._product_subscribe_timer.timeout.connect(self._retry_product_subscription)
+        self._product_store.updated.connect(self._on_product_store_updated)
         self._gnss_store.changed.connect(self._on_gnss_store_changed)
         self._gnss_widget = None
         self._gnss_dock: Optional[QDockWidget] = None
@@ -153,12 +168,21 @@ class LiveView(QWidget):
         self._debug_data_seen_after_request = False
         self._debug_last_requested_target: bool | None = None
         self._debug_last_request_at = 0.0
+        self._customer_auto_debug = False
         self._external_control_locked = False
         self._debug_ack_timer = QTimer(self)
         self._debug_ack_timer.setSingleShot(True)
         self._debug_ack_timer.timeout.connect(self._on_debug_ack_timeout)
         self._recorder = None
         self._is_recording = False
+        self._customer_recording = False
+        self._capture_pending_id: int | None = None
+        self._capture_pending_target: bool | None = None
+        self._capture_restore_debug = False
+        self._capture_timer = QTimer(self)
+        self._capture_timer.setSingleShot(True)
+        self._capture_timer.timeout.connect(self._on_capture_timeout)
+        self._product_store.control_response.connect(self._on_capture_response)
         # 仿真模式
         self._mock_modem: object | None = None  # MockModem 实例（延迟导入）
         self._sim_active = False
@@ -173,6 +197,84 @@ class LiveView(QWidget):
     def profile_store(self) -> ProfileStore:
         """供 DeviceView 复用 Live 页当前连接的 profile/capability。"""
         return self._profile_store
+
+    def data_store(self) -> DataStore:
+        return self._data_store
+
+    def state_store(self) -> StateStore:
+        return self._state_store
+
+    def gnss_store(self) -> GnssStore:
+        return self._gnss_store
+
+    def product_store(self) -> ProductServiceStore:
+        return self._product_store
+
+    def is_connected(self) -> bool:
+        return self._is_connected
+
+    def is_recording(self) -> bool:
+        return self._is_recording
+
+    def connect_udp(
+        self,
+        remote_ip: str,
+        remote_port: int = 4004,
+        local_port: int = 45678,
+        *,
+        auto_debug: bool = True,
+    ) -> bool:
+        """Customer workspace UDP connection entry using the shared Live session."""
+        if self._is_connected:
+            return True
+        index = self._type_combo.findData("UDP")
+        if index >= 0:
+            self._type_combo.setCurrentIndex(index)
+        self._remote_ip.setText(str(remote_ip).strip())
+        self._remote_port.setValue(int(remote_port))
+        self._local_port.setValue(int(local_port))
+        self._customer_auto_debug = bool(auto_debug)
+        self._on_connect_clicked()
+        return self._is_connected
+
+    def disconnect_device(self) -> None:
+        self._customer_auto_debug = False
+        self._on_disconnect_clicked()
+
+    def toggle_recording(self) -> None:
+        self._on_record_clicked()
+
+    def toggle_customer_recording(self) -> None:
+        if self._is_recording:
+            self._stop_recording(restore_customer_profile=self._customer_recording)
+            return
+        if self._capture_pending_id is not None:
+            return
+        capabilities = self._product_store.capabilities_record
+        if (
+            not self._is_connected
+            or capabilities is None
+            or not (capabilities.capture_profile_mask & 0x02)
+        ):
+            self.status_message.emit(
+                tr("Connected AFD01 firmware does not support full support recording"),
+                4000,
+            )
+            return
+        self._capture_restore_debug = self._debug_enabled
+        self._request_capture_profile(True)
+
+    def show_gnss_details(self) -> None:
+        self._toggle_gnss()
+
+    def next_product_request_id(self) -> int:
+        self._product_request_id = (self._product_request_id + 1) & 0xFFFFFFFF
+        if self._product_request_id == 0:
+            self._product_request_id = 1
+        return self._product_request_id
+
+    def send_product_frame(self, frame: bytes) -> bool:
+        return self._send_control_frame(frame)
 
     def is_debug_enabled(self) -> bool:
         return self._debug_enabled
@@ -698,8 +800,13 @@ class LiveView(QWidget):
         self._control_panel.set_enabled(True)
         self._status_strip.set_link_state(connected=True)
         self.connected_worker_changed.emit(self._worker)
+        self.connection_state_changed.emit(True)
 
         self._receiver.reset()
+        # Customer product telemetry is intentionally independent of the
+        # dynamic Debug profile handshake. Send its subscription as soon as the
+        # transport is usable; profile negotiation continues in parallel.
+        self._start_product_subscription()
         if self._worker is not None:
             self._handshake = Handshake(self._profile_store, self._worker.send)
             self._handshake.ready.connect(self._on_handshake_ready)
@@ -735,8 +842,44 @@ class LiveView(QWidget):
         self._control_panel.set_hw_type(hw_type)
         # 优先加载用户覆盖 STL，其次使用包内设备模型，均不可用时保留默认占位
         self._attitude.try_load_device_model(hw_type)
+        self.profile_ready.emit(hw_type)
+        if hw_type.lower() == "afd01" and not self._product_store.service_available:
+            self._start_product_subscription()
+        if self._customer_auto_debug and not self._debug_enabled and self._debug_pending_target is None:
+            QTimer.singleShot(0, lambda: self.request_debug_mode(True))
 
     # ----- 命令下发 -----
+
+    def _start_product_subscription(self) -> None:
+        self._product_subscribe_timer.stop()
+        self._product_subscribe_attempts = 0
+        self._send_product_subscription()
+        if not self._product_store.service_available:
+            self._product_subscribe_timer.start()
+
+    def _send_product_subscription(self) -> None:
+        self._product_subscribe_attempts += 1
+        request_id = self.next_product_request_id()
+        sent = self._send_control_frame(build_service_subscribe(request_id, 10))
+        trace_message(
+            "PRODUCT_SERVICE",
+            f"TX SUBSCRIBE request_id={request_id} fast_rate_hz=10 "
+            f"attempt={self._product_subscribe_attempts} result={int(sent)}",
+        )
+
+    def _retry_product_subscription(self) -> None:
+        if self._product_store.service_available or not self._is_connected:
+            self._product_subscribe_timer.stop()
+            return
+        if self._product_subscribe_attempts >= 3:
+            self._product_subscribe_timer.stop()
+            trace_message("PRODUCT_SERVICE", "SUBSCRIBE stopped after 3 attempts")
+            return
+        self._send_product_subscription()
+
+    def _on_product_store_updated(self) -> None:
+        if self._product_store.service_available:
+            self._product_subscribe_timer.stop()
 
     # ---------- splitter 状态持久化（M10 F3b） ----------
 
@@ -758,7 +901,14 @@ class LiveView(QWidget):
         if self._worker is None or not self._is_connected:
             self.status_message.emit(tr("Not connected; command was not sent"), 3000)
             return False
-        return bool(self._worker.send(frame))
+        sent = bool(self._worker.send(frame))
+        if (
+            sent
+            and self._recorder is not None
+            and self._recorder.format_version == SDB_VERSION_V3
+        ):
+            self._recorder.write_control_frame(frame)
+        return sent
 
     def _on_sample_rate_changed(self, hz: int) -> None:
         if self._send_control_frame(build_set_sample_rate(hz)):
@@ -949,6 +1099,7 @@ class LiveView(QWidget):
             self._worker.send(build_debug_enable_v2(False))
         self._is_connected = False
         self.connected_worker_changed.emit(None)
+        self.connection_state_changed.emit(False)
         self._connect_btn.setEnabled(True)
         self._disconnect_btn.setEnabled(False)
         self._debug_btn.setEnabled(False)
@@ -966,11 +1117,20 @@ class LiveView(QWidget):
         self._control_panel.set_enabled(False)
         self._status_strip.set_link_state(connected=False)
         self._handshake_timer.stop()
+        self._product_subscribe_timer.stop()
+        self._product_subscribe_attempts = 0
+        self._capture_timer.stop()
+        self._capture_pending_id = None
+        self._capture_pending_target = None
+        self._capture_restore_debug = False
+        if self._is_recording:
+            self._stop_recording(restore_customer_profile=False)
         if self._handshake is not None:
             self._handshake.stop()
             self._handshake = None
         self._gnss_store.clear()
         self._state_store.clear()
+        self._product_store.clear()
         self._active_hw_type = None
         self._gnss_btn.setEnabled(False)
 
@@ -1157,6 +1317,9 @@ class LiveView(QWidget):
             # M9: 广播给 DeviceView 等外部消费者
             self.frame_received.emit(rec)
 
+            if self._product_store.feed(rec):
+                continue
+
             if self._handshake is not None:
                 self._handshake.feed(rec)
 
@@ -1276,71 +1439,207 @@ class LiveView(QWidget):
 
     def _on_record_clicked(self):
         if self._is_recording:
-            if self._recorder:
-                self._recorder.stop()
-                self._recorder = None
-            self._is_recording = False
-            self._status_strip.set_recording(False)
-            set_translatable_text("Record", self._record_btn)
-            # 恢复次按钮样式（红色录制图标 → 灰）
-            try:
-                from satellite_debug_tool.ui import icons as _ic
-                self._record_btn.setIcon(_ic.icon("record", color=S.palette(self._theme)["text_2"], size=14))
-            except Exception:
-                pass
-            self._record_btn.setStyleSheet("")
-            self.status_message.emit(tr("Recording stopped"), 3000)
-        else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            default_name = f"recording_{timestamp}.sdb"
-            rec_dir = self._settings.get("paths.recording_dir", "") or ""
-            if rec_dir:
-                from pathlib import Path as _Path
-                initial = str(_Path(rec_dir) / default_name)
-            else:
-                initial = default_name
-            filepath, _ = QFileDialog.getSaveFileName(
-                self,
-                tr("Save recording"),
-                initial,
-                tr("SDB files (*.sdb);;All files (*)"),
+            self._stop_recording(restore_customer_profile=self._customer_recording)
+            return
+        self._start_recording(format_version=2, customer=False)
+
+    def _request_capture_profile(self, support_full: bool) -> None:
+        request_id = self.next_product_request_id()
+        frame = build_service_set_capture_profile(request_id, support_full)
+        self._capture_pending_id = request_id
+        self._capture_pending_target = bool(support_full)
+        if not self._send_control_frame(frame):
+            self._capture_pending_id = None
+            self._capture_pending_target = None
+            self._capture_restore_debug = False
+            self.status_message.emit(tr("Capture profile command could not be sent"), 3500)
+            return
+        self._capture_timer.start(3000)
+        self.status_message.emit(
+            tr("Preparing full support recording...")
+            if support_full
+            else tr("Restoring customer live stream..."),
+            0 if support_full else 2500,
+        )
+
+    def _on_capture_response(self, response) -> None:
+        if (
+            self._capture_pending_id is None
+            or response.request_id != self._capture_pending_id
+            or response.operation != int(ServiceControlOp.SET_CAPTURE_PROFILE)
+        ):
+            return
+        target = bool(self._capture_pending_target)
+        self._capture_timer.stop()
+        self._capture_pending_id = None
+        self._capture_pending_target = None
+        try:
+            result = ServiceResultCode(response.result_code)
+        except ValueError:
+            result = ServiceResultCode.INTERNAL_ERROR
+        if result != ServiceResultCode.SUCCESS:
+            self._capture_restore_debug = False
+            self.status_message.emit(
+                tr("Device rejected the capture profile ({code})", code=result.name),
+                4500,
             )
-            if filepath:
-                profile_dict = None
-                hw = self._profile_store.current_hw_type()
-                if hw is not None:
-                    p = self._profile_store.get_profile(hw)
-                    if p is not None:
-                        from satellite_debug_tool.core.profile.cache import profile_to_dict
-                        profile_dict = profile_to_dict(p)
-                self._recorder = DataRecorder(filepath, profile_dict=profile_dict)
-                if self._recorder.start():
-                    self._is_recording = True
-                    self._status_strip.set_recording(True)
-                    set_translatable_text("Stop", self._record_btn)
-                    # 录制中 = 危险态（红底）+ 红录制图标
-                    pal = S.palette(self._theme)
-                    try:
-                        from satellite_debug_tool.ui import icons as _ic
-                        self._record_btn.setIcon(_ic.icon("record", color=pal["err"], size=14))
-                    except Exception:
-                        pass
-                    self._record_btn.setStyleSheet(
-                        f"QPushButton {{ background-color: {pal['card_2']}; color: {pal['err']}; "
-                        f"border: 1px solid {pal['err']}; border-radius: 5px; padding: 4px 11px; "
-                        f"font-weight: 600; }}"
-                    )
-                    self.status_message.emit(
-                        tr(
-                            "Recording to {path}{profile_suffix}",
-                            path=filepath,
-                            profile_suffix=tr(" + Profile") if profile_dict else "",
-                        ),
-                        3000,
-                    )
-                else:
-                    self._recorder = None
-                    self.status_message.emit(tr("Failed to start recording"), 3000)
+            return
+        if target:
+            if not self._start_recording(format_version=SDB_VERSION_V3, customer=True):
+                self._request_capture_profile(False)
+        else:
+            self.status_message.emit(tr("Customer live stream restored"), 2500)
+            self._restore_debug_after_capture()
+
+    def _on_capture_timeout(self) -> None:
+        target = self._capture_pending_target
+        self._capture_pending_id = None
+        self._capture_pending_target = None
+        self.status_message.emit(
+            tr("Full support recording was not confirmed")
+            if target
+            else tr("Customer stream restore was not confirmed"),
+            4500,
+        )
+        # The device may have applied support_full even when its ACK was lost.
+        # Returning to customer_live is idempotent and bounds that uncertain state.
+        if target and self._is_connected:
+            self._request_capture_profile(False)
+        elif not target:
+            self._capture_restore_debug = False
+
+    def _restore_debug_after_capture(self) -> None:
+        restore_debug = self._capture_restore_debug
+        self._capture_restore_debug = False
+        if not restore_debug or not self._is_connected:
+            return
+
+        # A confirmed customer-live profile has set device Debug OFF. Reflect
+        # that state before using the normal strict-ACK path to restore Debug ON.
+        if self._debug_enabled:
+            self._apply_debug_state(False, source="capture_profile")
+        QTimer.singleShot(0, lambda: self.request_debug_mode(True))
+
+    def _recording_profile_dict(self):
+        hw = self._profile_store.current_hw_type()
+        if hw is None:
+            return None
+        profile = self._profile_store.get_profile(hw)
+        if profile is None:
+            return None
+        from satellite_debug_tool.core.profile.cache import profile_to_dict
+
+        return profile_to_dict(profile)
+
+    @staticmethod
+    def _product_value(value):
+        return value.value if value.value is not None else None
+
+    def _customer_recording_metadata(self) -> dict:
+        snapshot = self._product_store.snapshot()
+        return {
+            "capture_profile": "support_full",
+            "presentation": "customer",
+            "hardware_type": self._profile_store.current_hw_type(),
+            "identity": {
+                "model": self._product_value(snapshot.identity.model),
+                "serial_number": self._product_value(snapshot.identity.serial_number),
+                "main_firmware": self._product_value(snapshot.identity.main_firmware),
+                "boot_firmware": self._product_value(snapshot.identity.boot_firmware),
+                "protocol_version": self._product_value(snapshot.identity.protocol_version),
+            },
+        }
+
+    def _start_recording(self, *, format_version: int, customer: bool) -> bool:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = "support" if customer else "recording"
+        default_name = f"{prefix}_{timestamp}.sdb"
+        rec_dir = self._settings.get("paths.recording_dir", "") or ""
+        if rec_dir:
+            from pathlib import Path as _Path
+
+            initial = str(_Path(rec_dir) / default_name)
+        else:
+            initial = default_name
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("Save recording"),
+            initial,
+            tr("SDB files (*.sdb);;All files (*)"),
+        )
+        if not filepath:
+            return False
+
+        profile_dict = self._recording_profile_dict()
+        metadata = self._customer_recording_metadata() if customer else None
+        self._recorder = DataRecorder(
+            filepath,
+            profile_dict=profile_dict,
+            format_version=format_version,
+            metadata=metadata,
+        )
+        if not self._recorder.start():
+            self._recorder = None
+            self.status_message.emit(tr("Failed to start recording"), 3000)
+            return False
+
+        self._is_recording = True
+        self._customer_recording = customer
+        self._status_strip.set_recording(True)
+        set_translatable_text("Stop", self._record_btn)
+        pal = S.palette(self._theme)
+        try:
+            from satellite_debug_tool.ui import icons as _ic
+
+            self._record_btn.setIcon(_ic.icon("record", color=pal["err"], size=14))
+        except Exception:
+            pass
+        self._record_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {pal['card_2']}; color: {pal['err']}; "
+            f"border: 1px solid {pal['err']}; border-radius: 5px; padding: 4px 11px; "
+            f"font-weight: 600; }}"
+        )
+        self.status_message.emit(
+            tr(
+                "Recording to {path}{profile_suffix}",
+                path=filepath,
+                profile_suffix=tr(" + Profile") if profile_dict else "",
+            ),
+            3000,
+        )
+        self.recording_state_changed.emit(True, str(filepath))
+        return True
+
+    def _stop_recording(self, *, restore_customer_profile: bool) -> None:
+        recorder = self._recorder
+        stopped = recorder.stop() if recorder is not None else True
+        dropped = recorder.dropped_count if recorder is not None else 0
+        self._recorder = None
+        self._is_recording = False
+        self._customer_recording = False
+        self._status_strip.set_recording(False)
+        set_translatable_text("Record", self._record_btn)
+        try:
+            from satellite_debug_tool.ui import icons as _ic
+
+            self._record_btn.setIcon(
+                _ic.icon("record", color=S.palette(self._theme)["text_2"], size=14)
+            )
+        except Exception:
+            pass
+        self._record_btn.setStyleSheet("")
+        if stopped:
+            message = (
+                tr("Recording stopped with {count} dropped chunk(s)", count=dropped)
+                if dropped
+                else tr("Recording stopped")
+            )
+        else:
+            message = tr("Recording stop did not complete cleanly")
+        self.status_message.emit(message, 4000)
+        self.recording_state_changed.emit(False, "")
+        if restore_customer_profile and self._is_connected:
+            self._request_capture_profile(False)
 
     def _on_import_clicked(self):
         """M7：此入口保留向后兼容；新建议用回放 Tab 独立 DataStore。"""

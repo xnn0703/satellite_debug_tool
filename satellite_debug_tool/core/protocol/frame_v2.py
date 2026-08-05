@@ -65,6 +65,15 @@ class CmdType(IntEnum):
     GNSS_CNR_REPORT = 0x0E
     GNSS_SAT_REPORT = 0x0F
     GNSS_SIGNAL_REPORT = 0x10
+    # M18: stable AFD01 product-service records. The envelope stays compatible
+    # with Debug v2 while customer UI no longer depends on dynamic channel names.
+    SERVICE_IDENTITY = 0x20
+    SERVICE_FAST_STATE = 0x21
+    SERVICE_SLOW_STATE = 0x22
+    SERVICE_COMPONENT_HEALTH = 0x23
+    SERVICE_CAPABILITIES = 0x24
+    SERVICE_CONTROL_REQUEST = 0x25
+    SERVICE_CONTROL_RESPONSE = 0x26
 
 
 class SubCmd(IntEnum):
@@ -140,6 +149,26 @@ class ParaType(IntEnum):
     INT8 = 5
     UINT16 = 6
     INT16 = 7
+
+
+class ServiceControlOp(IntEnum):
+    """AFD01 product-service control operations."""
+
+    SUBSCRIBE = 0
+    SET_CONTROL_MODE = 1
+    APPLY_RF = 2
+    SET_TX_ENABLE = 3
+    SET_CAPTURE_PROFILE = 4
+
+
+class ServiceResultCode(IntEnum):
+    SUCCESS = 0
+    INVALID_REQUEST = 1
+    OUT_OF_RANGE = 2
+    STATE_NOT_ALLOWED = 3
+    NOT_SUPPORTED = 4
+    BUSY = 5
+    INTERNAL_ERROR = 6
 
 
 # 参数 flags
@@ -367,6 +396,99 @@ class ProfileSemanticsReport:
 
 
 @dataclass(frozen=True)
+class ServiceIdentity:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    model: str
+    serial_number: str
+    main_firmware: str
+    boot_firmware: str
+    protocol_version: int
+
+
+@dataclass(frozen=True)
+class ServiceFastState:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    control_mode: int
+    tracking_phase: int
+    locked: bool
+    navigation_state: int
+    gnss_fix: int
+    tx_enabled: bool
+    roll_deg: float
+    pitch_deg: float
+    yaw_deg: float
+    beam_az_deg: float
+    beam_el_deg: float
+    snr_db: float
+
+
+@dataclass(frozen=True)
+class ServiceSlowState:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    latitude_deg: float
+    longitude_deg: float
+    altitude_m: float
+    rx_frequency_mhz: float
+    tx_frequency_mhz: float
+    rx_polarization: int
+    tx_polarization: int
+    tx_enabled: bool
+
+
+@dataclass(frozen=True)
+class ServiceComponentValue:
+    valid_mask: int
+    online: bool
+    temperature_c: float
+    voltage_v: float
+    version: int
+
+
+@dataclass(frozen=True)
+class ServiceComponentHealth:
+    schema: int
+    timestamp: int
+    converter: ServiceComponentValue
+    tx_array: ServiceComponentValue
+    rx_array: ServiceComponentValue
+
+
+@dataclass(frozen=True)
+class ServiceCapabilities:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    rx_frequency_min_mhz: float
+    rx_frequency_max_mhz: float
+    tx_frequency_min_mhz: float
+    tx_frequency_max_mhz: float
+    polarization_mask: int
+    feature_flags: int
+    capture_profile_mask: int
+
+
+@dataclass(frozen=True)
+class ServiceControlResponse:
+    schema: int
+    request_id: int
+    operation: int
+    result_code: int
+    applied_mask: int
+    control_mode: int
+    rx_frequency_mhz: float
+    tx_frequency_mhz: float
+    rx_polarization: int
+    tx_polarization: int
+    tx_enabled: bool
+
+
+@dataclass(frozen=True)
 class GnssSkySatellite:
     """GSV 天空图中的单颗卫星。"""
 
@@ -491,6 +613,12 @@ FrameV2Record = Union[
     GnssCnrReport,
     GnssSatReport,
     GnssSignalReport,
+    ServiceIdentity,
+    ServiceFastState,
+    ServiceSlowState,
+    ServiceComponentHealth,
+    ServiceCapabilities,
+    ServiceControlResponse,
     # 未识别/未解码的控制帧等，保留原始 cmd+data
     "RawFrame",
 ]
@@ -517,6 +645,7 @@ __all__ = [
     "PARA_FLAG_REQUIRES_REBOOT", "PARA_FLAG_READ_ONLY",
     # enums
     "CmdType", "SubCmd", "RespCode", "DataType", "StateType", "Level", "ParaType",
+    "ServiceControlOp", "ServiceResultCode",
     # dataclasses
     "MetaInfo",
     "ChannelDefEntry", "ChannelDefineTable",
@@ -532,5 +661,8 @@ __all__ = [
     "GnssCnrObservation", "GnssCnrReport",
     "GnssSatRecord", "GnssSatReport",
     "GnssSignalRecord", "GnssSignalReport",
+    "ServiceIdentity", "ServiceFastState", "ServiceSlowState",
+    "ServiceComponentValue", "ServiceComponentHealth",
+    "ServiceCapabilities", "ServiceControlResponse",
     "RawFrame", "FrameV2Record",
 ]

@@ -114,6 +114,11 @@ def tr(source: str, /, **values: Any) -> str:
     return trc(_TRANSLATION_CONTEXT, source, **values)
 
 
+def tr_source(source: str) -> str:
+    """Mark a deferred English source string for translation extraction."""
+    return source
+
+
 def trn(source: str, count: int, /, **values: Any) -> str:
     """Translate a Qt numerus source string containing ``%n``."""
     translated = QCoreApplication.translate(

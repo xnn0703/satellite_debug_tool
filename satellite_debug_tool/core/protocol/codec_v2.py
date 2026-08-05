@@ -11,6 +11,7 @@ DEBUG 协议 v2 — 帧编解码。
 
 from __future__ import annotations
 
+import math
 import struct
 from typing import List, Optional, Tuple
 
@@ -55,6 +56,14 @@ from .frame_v2 import (
     GnssSatReport,
     GnssSignalRecord,
     GnssSignalReport,
+    ServiceCapabilities,
+    ServiceComponentHealth,
+    ServiceComponentValue,
+    ServiceControlOp,
+    ServiceControlResponse,
+    ServiceFastState,
+    ServiceIdentity,
+    ServiceSlowState,
 )
 
 
@@ -200,6 +209,81 @@ def build_device_reboot() -> bytes:
     return build_control(SubCmd.DEVICE_REBOOT)
 
 
+# M18: AFD01 product-service controls ----------------------------------------
+
+SERVICE_SCHEMA_VERSION = 1
+
+
+def _require_service_schema(schema: int, record_name: str) -> None:
+    if schema != SERVICE_SCHEMA_VERSION:
+        raise CodecError(
+            f"{record_name} unsupported schema {schema}; expected {SERVICE_SCHEMA_VERSION}"
+        )
+
+
+def _build_service_control(request_id: int, operation: int, payload: bytes = b"") -> bytes:
+    if not (0 <= request_id <= 0xFFFFFFFF):
+        raise CodecError("service request id out of u32 range")
+    data = struct.pack(
+        "<BIB", SERVICE_SCHEMA_VERSION, request_id, int(operation) & 0xFF
+    ) + payload
+    return build_frame(CmdType.SERVICE_CONTROL_REQUEST, data)
+
+
+def build_service_subscribe(request_id: int, fast_rate_hz: int = 10) -> bytes:
+    if not (1 <= fast_rate_hz <= 20):
+        raise CodecError("service fast rate must be 1..20 Hz")
+    return _build_service_control(
+        request_id, ServiceControlOp.SUBSCRIBE, bytes([fast_rate_hz])
+    )
+
+
+def build_service_set_control_mode(request_id: int, mode: int) -> bytes:
+    if int(mode) not in (0, 1):
+        raise CodecError("service control mode must be 0 (auto) or 1 (manual)")
+    return _build_service_control(
+        request_id, ServiceControlOp.SET_CONTROL_MODE, bytes([mode & 0xFF])
+    )
+
+
+def build_service_apply_rf(
+    request_id: int,
+    rx_frequency_mhz: float,
+    tx_frequency_mhz: float,
+    rx_polarization: int,
+    tx_polarization: int,
+) -> bytes:
+    if not math.isfinite(rx_frequency_mhz) or not math.isfinite(tx_frequency_mhz):
+        raise CodecError("service RF frequencies must be finite")
+    if int(rx_polarization) not in range(4) or int(tx_polarization) not in range(4):
+        raise CodecError("service polarization must be in range 0..3")
+    return _build_service_control(
+        request_id,
+        ServiceControlOp.APPLY_RF,
+        struct.pack(
+            "<ffBB",
+            float(rx_frequency_mhz),
+            float(tx_frequency_mhz),
+            rx_polarization & 0xFF,
+            tx_polarization & 0xFF,
+        ),
+    )
+
+
+def build_service_set_tx_enable(request_id: int, enabled: bool) -> bytes:
+    return _build_service_control(
+        request_id, ServiceControlOp.SET_TX_ENABLE, bytes([1 if enabled else 0])
+    )
+
+
+def build_service_set_capture_profile(request_id: int, support_full: bool) -> bytes:
+    return _build_service_control(
+        request_id,
+        ServiceControlOp.SET_CAPTURE_PROFILE,
+        bytes([1 if support_full else 0]),
+    )
+
+
 # -----------------------------------------------------------------------------
 # Small helpers for variable-length utf8 reads
 # -----------------------------------------------------------------------------
@@ -237,6 +321,129 @@ def decode_meta_info(data: bytes) -> MetaInfo:
     device_sn, off = _read_u8_prefixed_utf8(data, off)
     # 允许尾部有多余字节（固件 padding 容错）
     return MetaInfo(protocol_ver=protocol_ver, fw_ver=fw_ver, hw_type=hw_type, device_sn=device_sn)
+
+
+def decode_service_identity(data: bytes) -> ServiceIdentity:
+    if len(data) < 10:
+        raise CodecError("SERVICE_IDENTITY too short")
+    schema, timestamp, valid_mask = struct.unpack_from("<BII", data, 0)
+    _require_service_schema(schema, "SERVICE_IDENTITY")
+    offset = 9
+    model, offset = _read_u8_prefixed_utf8(data, offset)
+    serial_number, offset = _read_u8_prefixed_utf8(data, offset)
+    main_firmware, offset = _read_u8_prefixed_utf8(data, offset)
+    boot_firmware, offset = _read_u8_prefixed_utf8(data, offset)
+    if offset + 1 != len(data):
+        raise CodecError("SERVICE_IDENTITY invalid length")
+    return ServiceIdentity(
+        schema,
+        timestamp,
+        valid_mask,
+        model,
+        serial_number,
+        main_firmware,
+        boot_firmware,
+        data[offset],
+    )
+
+
+def decode_service_fast_state(data: bytes) -> ServiceFastState:
+    fmt = "<BII6B6f"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_FAST_STATE invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_FAST_STATE")
+    return ServiceFastState(
+        schema=values[0],
+        timestamp=values[1],
+        valid_mask=values[2],
+        control_mode=values[3],
+        tracking_phase=values[4],
+        locked=bool(values[5]),
+        navigation_state=values[6],
+        gnss_fix=values[7],
+        tx_enabled=bool(values[8]),
+        roll_deg=values[9],
+        pitch_deg=values[10],
+        yaw_deg=values[11],
+        beam_az_deg=values[12],
+        beam_el_deg=values[13],
+        snr_db=values[14],
+    )
+
+
+def decode_service_slow_state(data: bytes) -> ServiceSlowState:
+    fmt = "<BII5f3B"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_SLOW_STATE invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_SLOW_STATE")
+    return ServiceSlowState(
+        schema=values[0],
+        timestamp=values[1],
+        valid_mask=values[2],
+        latitude_deg=values[3],
+        longitude_deg=values[4],
+        altitude_m=values[5],
+        rx_frequency_mhz=values[6],
+        tx_frequency_mhz=values[7],
+        rx_polarization=values[8],
+        tx_polarization=values[9],
+        tx_enabled=bool(values[10]),
+    )
+
+
+def decode_service_component_health(data: bytes) -> ServiceComponentHealth:
+    header_fmt = "<BI"
+    item_fmt = "<BBffI"
+    expected = struct.calcsize(header_fmt) + 3 * struct.calcsize(item_fmt)
+    if len(data) != expected:
+        raise CodecError("SERVICE_COMPONENT_HEALTH invalid length")
+    schema, timestamp = struct.unpack_from(header_fmt, data, 0)
+    _require_service_schema(schema, "SERVICE_COMPONENT_HEALTH")
+    offset = struct.calcsize(header_fmt)
+    components = []
+    for _ in range(3):
+        valid_mask, online, temperature, voltage, version = struct.unpack_from(
+            item_fmt, data, offset
+        )
+        components.append(
+            ServiceComponentValue(
+                valid_mask, bool(online), temperature, voltage, version
+            )
+        )
+        offset += struct.calcsize(item_fmt)
+    return ServiceComponentHealth(schema, timestamp, *components)
+
+
+def decode_service_capabilities(data: bytes) -> ServiceCapabilities:
+    fmt = "<BII4fBBB"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_CAPABILITIES invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_CAPABILITIES")
+    return ServiceCapabilities(*values)
+
+
+def decode_service_control_response(data: bytes) -> ServiceControlResponse:
+    fmt = "<BIBBIBffBBB"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_CONTROL_RESPONSE invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_CONTROL_RESPONSE")
+    return ServiceControlResponse(
+        schema=values[0],
+        request_id=values[1],
+        operation=values[2],
+        result_code=values[3],
+        applied_mask=values[4],
+        control_mode=values[5],
+        rx_frequency_mhz=values[6],
+        tx_frequency_mhz=values[7],
+        rx_polarization=values[8],
+        tx_polarization=values[9],
+        tx_enabled=bool(values[10]),
+    )
 
 
 def decode_channel_define(data: bytes) -> ChannelDefineTable:
@@ -671,10 +878,16 @@ __all__ = [
     "build_request_para_table", "build_para_set", "build_para_reset",
     "build_ota_begin", "build_ota_data", "build_ota_end",
     "build_ota_abort", "build_device_reboot",
+    "build_service_subscribe", "build_service_set_control_mode",
+    "build_service_apply_rf", "build_service_set_tx_enable",
+    "build_service_set_capture_profile",
     "decode_meta_info", "decode_channel_define", "decode_state_define",
     "decode_event_define", "decode_data_report", "decode_state_report",
     "decode_event_report", "decode_heartbeat", "decode_command_response",
     "decode_para_table_report", "decode_profile_semantics",
     "decode_gnss_sky_report", "decode_gnss_cnr_report",
     "decode_gnss_sat_report", "decode_gnss_signal_report",
+    "decode_service_identity", "decode_service_fast_state",
+    "decode_service_slow_state", "decode_service_component_health",
+    "decode_service_capabilities", "decode_service_control_response",
 ]

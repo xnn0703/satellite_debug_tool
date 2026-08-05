@@ -21,6 +21,7 @@ from satellite_debug_tool.io.data_recorder import (
     SDB_FOOTER,
     SDB_MAGIC,
     SDB_VERSION_V2,
+    SDB_VERSION_V3,
 )
 
 
@@ -130,6 +131,35 @@ class TestRecorderRoundTrip:
         hw = new_store.import_dict(sdb.profile)
         assert hw == "afd01"
         assert new_store.get_channel("afd01", 0).name == "roll"
+
+    def test_v3_preserves_host_time_metadata_controls_and_quality(self, tmp_path: Path):
+        path = tmp_path / "support-v3.sdb"
+        frame = _build_data_report_bytes(250, [(0, 1.25)])
+        control = build_frame(CmdType.SERVICE_CONTROL_REQUEST, b"\x01\x01\x00\x00\x00\x00")
+        profile = {"schema_version": 1, "hw_type": "afd01", "channels": []}
+        recorder = DataRecorder(
+            path,
+            profile_dict=profile,
+            format_version=SDB_VERSION_V3,
+            metadata={"capture_profile": "support_full", "serial_number": "AFD01-TEST"},
+        )
+        assert recorder.start()
+        assert recorder.write_frame(frame, host_timestamp_ns=123_000_000)
+        assert recorder.write_control_frame(control, host_timestamp_ns=124_000_000)
+        _wait_recorder_flush(recorder, 1)
+        assert recorder.stop()
+
+        sdb = DataImporter.open_sdb(path)
+        assert sdb.version == SDB_VERSION_V3
+        assert sdb.profile == profile
+        assert sdb.metadata["capture_profile"] == "support_full"
+        assert sdb.raw_records[0].host_timestamp_ns == 123_000_000
+        assert sdb.control_records[0].data == control
+        assert sdb.quality["complete"] is True
+        assert sdb.quality["dropped_chunks"] == 0
+        timed = list(sdb.iter_timed_records())
+        assert timed[0][0] == 123_000_000
+        assert isinstance(timed[0][1], DataReport)
 
 
 # ============================================================

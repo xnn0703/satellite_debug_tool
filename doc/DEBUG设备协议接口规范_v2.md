@@ -7,7 +7,7 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
-| 最近修订 | 2026-07-30（64 通道容量与内部 INS 航向语义） |
+| 最近修订 | 2026-08-05（AFD01 客户产品服务扩展） |
 | 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / ufd45，后续新型号无需改协议） |
 | 适用上位机 | satellite_debug_tool ≥ v2.0 |
 
@@ -55,7 +55,7 @@
 ┌────────┬──────────┬──────────┬──────────┬────────┬────────┬────────┐
 │  帧头   │ 设备类型  │ 命令类型  │ 数据长度  │  数据  │  CRC   │  帧尾  │
 │ 2字节   │ 1字节     │ 1字节     │ 2字节    │ 可变   │ 2字节   │ 1字节  │
-│ AA 55   │ 0D       │ 01..0C   │ 小端序   │        │ 小端序  │ EE    │
+│ AA 55   │ 0D       │ 01..26   │ 小端序   │        │ 小端序  │ EE    │
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
 
@@ -87,6 +87,13 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x0E | `GNSS_CNR_REPORT`   | D→H | RANGECMPB 逐信号 C/N₀ 分片 | 约 1 Hz |
 | 0x0F | `GNSS_SAT_REPORT`   | D→H | MG902 NAV-SAT 分片 | 约 1 Hz |
 | 0x10 | `GNSS_SIGNAL_REPORT`| D→H | MG902 NAV-SIG 分片 | 约 1 Hz |
+| 0x20 | `SERVICE_IDENTITY` | D→H | AFD01 产品身份 | 接入时 + 0.2 Hz |
+| 0x21 | `SERVICE_FAST_STATE` | D→H | AFD01 客户实时状态 | 默认 10 Hz，可配 1~20 Hz |
+| 0x22 | `SERVICE_SLOW_STATE` | D→H | AFD01 位置/RF 回读 | 1 Hz |
+| 0x23 | `SERVICE_COMPONENT_HEALTH` | D→H | AFD01 部件健康 | 1 Hz |
+| 0x24 | `SERVICE_CAPABILITIES` | D→H | AFD01 控制能力 | 接入时 + 0.2 Hz |
+| 0x25 | `SERVICE_CONTROL_REQUEST` | H→D | AFD01 类型化客户控制 | 按需 |
+| 0x26 | `SERVICE_CONTROL_RESPONSE` | D→H | 带 request_id 的精确响应 | 按需 |
 
 **定义帧（0x04/0x05/0x06/0x07/0x0C）**：下位机启动后立刻全量发送，之后每 5 秒重发一次（处理 UDP 丢包 / 上位机后接入）。上位机也可主动 `CONTROL` 请求重发。`PROFILE_SEMANTICS` 是 M13 扩展帧，不参与握手 ready 判定；旧上位机可忽略，旧下位机缺失时上位机按名称 fallback。
 
@@ -448,6 +455,136 @@ signal[N]:
 - `raw_sig_flags` bit3/bit4/bit5 分别为 `prUsed/crUsed/doUsed`，仅说明对应观测是否参与当前解算；
   `LOCK` 与 `USED` 是两个独立维度，未参与解算的锁定信号仍应显示 C/N0。
 - 旧上位机把 0x0F/0x10 当 RawFrame 忽略；新上位机继续兼容 0x0D/0x0E 和旧 SDB。
+
+### 5.16 AFD01 产品服务扩展 (0x20~0x26)
+
+**用途**：为客户工作台提供稳定的产品语义。该扩展复用 v2 帧包络，但不依赖动态
+`CHANNEL_DEFINE/STATE_DEFINE` 名称；工程 Debug 与产品服务可以同时存在。M18 只规定并实现
+AFD01，其他设备收到 0x25 可返回不支持，不能靠同名 Debug 字段猜测产品能力。
+
+所有多字节整数和 `float32` 均为小端。每个产品服务 payload 首字节为 `schema`，当前固定为
+`1`；接收端必须拒绝未知 schema，不能按 schema 1 强行解析。遥测帧的 `timestamp_ms` 是设备
+启动后毫秒数。`valid_mask` 中未置位的字段必须显示为不支持/不可用，数值 0 仍是合法值。
+
+#### 5.16.1 `SERVICE_IDENTITY` (0x20)
+
+```text
+schema              u8 = 1
+timestamp_ms        u32
+valid_mask          u32       bit0=model, bit1=serial, bit2=main firmware,
+                              bit3=boot firmware, bit4=service protocol
+model               u8 len + utf8
+serial_number       u8 len + utf8
+main_firmware       u8 len + utf8
+boot_firmware       u8 len + utf8
+service_protocol    u8
+```
+
+AFD01 序列号来自 MCU 96-bit UID 的稳定派生值。当前未取得 boot 版本时 bit3=0，空字符串不得
+当成有效版本。
+
+#### 5.16.2 `SERVICE_FAST_STATE` (0x21)
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+control_mode, tracking_phase, locked   u8, u8, u8
+navigation_state, gnss_fix, tx_enabled u8, u8, u8
+roll, pitch, yaw                       float32 x3, deg
+beam_az, beam_el, snr                  float32 x3, deg/deg/dB
+```
+
+`valid_mask` bit0..11 依次对应上述 12 个业务字段。枚举约定：
+
+- `control_mode`: `0=AUTO, 1=MANUAL`，其他值为 UNKNOWN。
+- `tracking_phase`: `0=STANDBY, 1=ACQUIRING, 2=FINE_TRACKING, 3=LOCKED, 4=REACQUIRING, 5=FAULT`。
+- `navigation_state`: `0=UNAVAILABLE, 1=INITIALIZING, 2=ALIGNING, 3=READY, 4=DEGRADED, 5=FAULT`。
+- `gnss_fix`: 与 §5.11 `gps_fix` role 一致：`0=NO_FIX, 1=2D, 2=3D, 3=RTK_FIXED,
+  4=DGNSS, 5=RTK_FLOAT, 6=STALE`。
+
+#### 5.16.3 `SERVICE_SLOW_STATE` (0x22)
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+latitude, longitude, altitude          float32 x3, deg/deg/m
+rx_frequency, tx_frequency             float32 x2, MHz
+rx_polarization, tx_polarization       u8, u8
+tx_enabled                             u8
+```
+
+`valid_mask` bit0..7 依次对应纬度、经度、高度、接收频点、发射频点、接收极化、发射极化和
+发射使能。位置位只有在 `GPS_FIX=2D..RTK_FLOAT` 且最近位置更新时间不超过 3000 ms 时才可置 1；
+`NO_FIX/STALE` 时允许保留 payload 数值，但不得置有效位。
+
+产品服务极化枚举固定为 `0=VERTICAL, 1=HORIZONTAL, 2=LEFT_CIRCULAR,
+3=RIGHT_CIRCULAR`。AFD01 阵面只声明并接受 2/3；设备端负责与内部阵面枚举转换，禁止把产品
+服务值 2/3 直接写入阵面驱动。
+
+#### 5.16.4 `SERVICE_COMPONENT_HEALTH` (0x23)
+
+```text
+schema, timestamp_ms                 u8, u32
+component[3]                         converter, tx_array, rx_array
+    valid_mask                       u8    bit0=online, bit1=temperature,
+                                           bit2=voltage, bit3=version
+    online                           u8
+    temperature_c, voltage_v         float32, float32
+    version                          u32
+```
+
+各部件独立使用有效位。当前 AFD01 变频板只保证 online/temperature；无来源的电压和版本必须
+保持未置位。阵列板字段由阵面健康快照提供。
+
+#### 5.16.5 `SERVICE_CAPABILITIES` (0x24)
+
+```text
+schema, timestamp_ms, valid_mask                      u8, u32, u32
+rx_min, rx_max, tx_min, tx_max                        float32 x4, MHz
+polarization_mask, feature_flags, capture_profile_mask u8, u8, u8
+```
+
+`valid_mask` bit0..7 对应四个频率边界、极化掩码、独立极化能力、发射控制能力、全量录制能力。
+`polarization_mask` 的 bit 位置等于极化枚举值；AFD01 当前为 `0x0C`。`feature_flags.bit0` 表示
+收发极化可独立设置，bit1 表示支持发射控制。`capture_profile_mask.bit0=customer_live`，
+bit1=`support_full`。
+
+#### 5.16.6 `SERVICE_CONTROL_REQUEST/RESPONSE` (0x25/0x26)
+
+请求公共头：
+
+```text
+schema        u8 = 1
+request_id    u32
+operation     u8
+payload       bytes
+```
+
+| operation | 名称 | payload |
+|-----------|------|---------|
+| 0 | `SUBSCRIBE` | `fast_rate_hz u8`，范围 1~20 |
+| 1 | `SET_CONTROL_MODE` | `mode u8`，0=AUTO / 1=MANUAL |
+| 2 | `APPLY_RF` | `rx_freq f32 + tx_freq f32 + rx_polar u8 + tx_polar u8`，原子应用 |
+| 3 | `SET_TX_ENABLE` | `enabled u8`，0/1 |
+| 4 | `SET_CAPTURE_PROFILE` | `profile u8`，0=customer_live / 1=support_full |
+
+除 `SUBSCRIBE` 外，AFD01 射频和发射控制只允许在已确认的 MANUAL 模式执行。切换到
+`support_full` 会打开动态 Debug 数据用于全量 SDB；恢复 `customer_live` 会关闭动态 Debug。
+上位机必须记住录制前 Debug 状态，并在 customer_live 响应成功后通过严格 Debug ACK 流程恢复。
+
+响应固定为：
+
+```text
+schema, request_id, operation, result_code, applied_mask u8, u32, u8, u8, u32
+control_mode                                           u8
+rx_frequency, tx_frequency                            float32, float32
+rx_polarization, tx_polarization, tx_enabled           u8, u8, u8
+```
+
+`applied_mask` bit0..6 依次表示 mode、RX 频点、TX 频点、RX 极化、TX 极化、TX 使能、录制配置。
+响应携带发送时的设备读回快照；上位机必须同时匹配 `request_id + operation`，并等待后续遥测与
+目标值一致后才显示成功，不能接受无上下文 `OK`。
+
+产品服务结果码独立于 §6 的通用 Debug 响应码：`0=SUCCESS, 1=INVALID_REQUEST,
+2=OUT_OF_RANGE, 3=STATE_NOT_ALLOWED, 4=NOT_SUPPORTED, 5=BUSY, 6=INTERNAL_ERROR`。
 
 ---
 

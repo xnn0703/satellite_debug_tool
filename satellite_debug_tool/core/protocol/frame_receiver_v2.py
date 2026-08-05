@@ -39,6 +39,12 @@ from .codec_v2 import (
     decode_gnss_signal_report,
     decode_state_define,
     decode_state_report,
+    decode_service_capabilities,
+    decode_service_component_health,
+    decode_service_control_response,
+    decode_service_fast_state,
+    decode_service_identity,
+    decode_service_slow_state,
 )
 from .crc16 import Crc16
 from .frame_v2 import (
@@ -83,6 +89,12 @@ _DECODERS = {
     int(CmdType.GNSS_CNR_REPORT): decode_gnss_cnr_report,
     int(CmdType.GNSS_SAT_REPORT): decode_gnss_sat_report,
     int(CmdType.GNSS_SIGNAL_REPORT): decode_gnss_signal_report,
+    int(CmdType.SERVICE_IDENTITY): decode_service_identity,
+    int(CmdType.SERVICE_FAST_STATE): decode_service_fast_state,
+    int(CmdType.SERVICE_SLOW_STATE): decode_service_slow_state,
+    int(CmdType.SERVICE_COMPONENT_HEALTH): decode_service_component_health,
+    int(CmdType.SERVICE_CAPABILITIES): decode_service_capabilities,
+    int(CmdType.SERVICE_CONTROL_RESPONSE): decode_service_control_response,
 }
 
 

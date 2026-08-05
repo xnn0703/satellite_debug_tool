@@ -54,16 +54,20 @@ $PY -m PyInstaller --noconfirm updater.spec
 echo "[build_macos] 3/3 打包 device_simulator..."
 $PY -m PyInstaller --noconfirm device_simulator.spec
 
-# ---- 嵌入 updater 到 .app ----
+# ---- 嵌入单文件 updater 到 .app ----
 APP_PATH="$HERE/dist/SatelliteDebugTool.app"
-if [[ -d "$APP_PATH" && -d "$HERE/dist/updater" ]]; then
+if [[ -d "$APP_PATH" && -f "$HERE/dist/updater" ]]; then
   APP_MACOS="$APP_PATH/Contents/MacOS"
-  # ditto 保留 symlink + 资源 fork（mac native）
-  ditto "$HERE/dist/updater/_internal" "$APP_MACOS/_internal"
-  cp "$HERE/dist/updater/updater" "$APP_MACOS/updater"
+  cp "$HERE/dist/updater" "$APP_MACOS/updater"
   chmod +x "$APP_MACOS/updater"
   echo "[build_macos] ✅ updater 已嵌入 .app/Contents/MacOS/"
 fi
+
+# updater 是在 PyInstaller 完成 BUNDLE 后嵌入的，必须对最终目录重新签名。
+# 未配置 Developer ID 时使用 ad-hoc 签名，至少保证 bundle seal 完整且可验证。
+echo "[build_macos] 校验最终应用签名..."
+codesign --force --deep --sign - "$APP_PATH"
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 # ---- 清 quarantine（本机直接打开不再报"无法验证开发者"） ----
 xattr -cr "$APP_PATH" 2>/dev/null || true

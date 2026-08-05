@@ -92,7 +92,7 @@ def _is_running_from_install_dir(install_dir: Path) -> bool:
 
 
 def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
-    """把整个 updater 二进制（PyInstaller onedir）复制到 OS 临时目录并重新启动。
+    """把 updater 复制到 OS 临时目录并重新启动。
 
     若已不在 install_dir 内则 no-op。
     """
@@ -105,12 +105,18 @@ def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
     src_exe = Path(sys.executable).resolve()
     src_dir = src_exe.parent
     tmp_root = Path(tempfile.mkdtemp(prefix="satellite_updater_"))
-    log.info(f"self-relocate: {src_dir} → {tmp_root}")
-
-    # onedir：复制整个目录（含 _internal、updater 本体）
-    dst_dir = tmp_root / src_dir.name
-    shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
-    dst_exe = dst_dir / src_exe.name
+    runtime_dir = src_dir / "_internal"
+    if runtime_dir.is_dir():
+        # 兼容旧 onedir updater。
+        dst_dir = tmp_root / src_dir.name
+        log.info("self-relocate onedir: %s -> %s", src_dir, dst_dir)
+        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+        dst_exe = dst_dir / src_exe.name
+    else:
+        # 当前发行使用 onefile，避免把 Python 运行目录嵌入主 .app。
+        dst_exe = tmp_root / src_exe.name
+        log.info("self-relocate onefile: %s -> %s", src_exe, dst_exe)
+        shutil.copy2(src_exe, dst_exe)
 
     # 重启自己：保持原 argv，加 --no-relocate 防止无限递归
     new_argv = [str(dst_exe)] + argv + ["--no-relocate"]

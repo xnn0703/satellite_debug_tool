@@ -60,6 +60,8 @@ def _lupdate(output: Path) -> None:
             "tr+=tr,tr+=set_translatable_text,tr+=set_translatable_tooltip,"
             "tr+=_set_para_status,tr+=_set_ota_status,tr+=_set_para_row_status,"
             "tr+=_ota_finish,tr+=_show_error,"
+            "tr+=_set_local_status,"
+            "QT_TR_NOOP+=tr_source,"
             "QT_TR_N_NOOP+=trn,QT_TR_N_NOOP+=set_translatable_n_text"
         ),
         "-source-language",

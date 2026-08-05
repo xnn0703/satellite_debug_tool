@@ -376,6 +376,55 @@ def test_minimum_window_right_panel_children_do_not_overlap(i18n_context, qapp):
     qapp.processEvents()
 
 
+def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
+    i18n_context,
+    qapp,
+):
+    from satellite_debug_tool.i18n import LANGUAGE_EN_US, LANGUAGE_ZH_CN
+    from satellite_debug_tool.ui.main_window import MainWindow
+
+    settings, manager = i18n_context
+    manager.set_preference(LANGUAGE_ZH_CN)
+    window = MainWindow(settings=settings)
+    window.resize(1024, 600)
+    window.show()
+    qapp.processEvents()
+
+    customer = window._customer
+    overview = customer.overview
+    overview.refresh()
+    overview_scroll = customer._stack.widget(0)
+
+    assert [button.text() for button in customer._nav_buttons] == [
+        "总览",
+        "射频控制",
+        "回放",
+        "维护",
+    ]
+    assert overview._status_values["link"].text().startswith("连接状态:")
+    assert overview._metrics["beam_az"].title.text() == "波束方位角"
+    assert overview._snr_plot.getAxis("bottom").label.toPlainText() == "时间 (s)"
+    assert overview_scroll.horizontalScrollBar().maximum() == 0
+
+    customer.set_page("maintenance")
+    qapp.processEvents()
+    component_table = customer._maintenance._component_table
+    assert component_table.verticalScrollBar().maximum() == 0
+    assert component_table.visualItemRect(component_table.item(2, 0)).height() > 0
+
+    manager.set_preference(LANGUAGE_EN_US)
+    qapp.processEvents()
+    overview.refresh()
+    assert customer._nav_buttons[0].text() == "Overview"
+    assert overview._status_values["link"].text().startswith("Connection:")
+    assert overview._metrics["beam_az"].title.text() == "Beam azimuth"
+    assert overview._snr_plot.getAxis("bottom").label.toPlainText() == "Time (s)"
+
+    window.close()
+    window.deleteLater()
+    qapp.processEvents()
+
+
 def test_device_payload_text_remains_raw_in_english(i18n_context):
     from satellite_debug_tool.core.protocol import ParaEntry, ParaTableReport, ParaType
     from satellite_debug_tool.i18n import LANGUAGE_EN_US

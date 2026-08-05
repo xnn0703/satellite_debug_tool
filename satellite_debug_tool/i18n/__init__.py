@@ -21,6 +21,7 @@ from satellite_debug_tool.i18n.manager import (
     tr,
     trc,
     trn,
+    tr_source,
 )
 
 __all__ = [
@@ -44,4 +45,5 @@ __all__ = [
     "tr",
     "trc",
     "trn",
+    "tr_source",
 ]

@@ -13,11 +13,14 @@ DataStore / ProfileStore）。
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
+    QStackedWidget,
     QStatusBar,
     QTabWidget,
     QToolBar,
@@ -28,6 +31,7 @@ from satellite_debug_tool import __version__
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.ui.customer_workspace import CustomerWorkspace
 from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.log_view import LogView
@@ -84,7 +88,9 @@ class MainWindow(QMainWindow):
         # ---------- 顶部全局 gbar（品牌 + 居中 Tab 药丸 + 右侧控件，Mission Console） ----------
         self._build_global_bar()
 
-        # ---------- 中部 QTabWidget（原生 tab bar 隐藏，由药丸驱动） ----------
+        # ---------- 共享会话 ----------
+        # LiveView 始终是唯一设备连接和实时数据拥有者。客户工作台与工程页只做
+        # 不同呈现，切换工作区不会重建 worker、握手或 Store。
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.North)
         self._tabs.tabBar().hide()   # gbar 药丸接管 tab 切换
@@ -98,7 +104,6 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._log, "Log")
         self._tabs.addTab(self._device, tr("Device"))
         self._tabs.currentChanged.connect(self._on_tab_changed)
-        self._tabs.currentChanged.connect(self._sync_tab_pills)
 
         # M9: 连接共享 — Live Tab 的 worker 和帧数据广播给 Device Tab
         self._live.connected_worker_changed.connect(self._device.set_worker)
@@ -113,10 +118,22 @@ class MainWindow(QMainWindow):
             self._live.set_handshake_retries_paused
         )
 
-        for view in (self._live, self._playback, self._log, self._device):
+        self._customer = CustomerWorkspace(self._live, self._settings, self._device)
+        for view in (self._customer, self._live, self._playback, self._log, self._device):
             view.status_message.connect(self._on_status_message)
 
-        self.setCentralWidget(self._tabs)
+        self._workspace = QStackedWidget()
+        self._workspace.addWidget(self._customer)
+        self._workspace.addWidget(self._tabs)
+        self._workspace.currentChanged.connect(self._sync_tab_pills)
+        self.setCentralWidget(self._workspace)
+
+        # 工程诊断默认不出现在客户导航中。现场工程师可通过快捷键确认后在
+        # 当前进程内解锁；该状态不持久化，也不改变设备连接或数据流。
+        self._engineering_shortcut = QShortcut(QKeySequence("Ctrl+Shift+E"), self)
+        self._engineering_shortcut.activated.connect(self._request_engineering_unlock)
+        self._engineering_unlocked = False
+        self._engineering_pill.setVisible(False)
 
         # ---------- 底部 statusbar ----------
         self.setStatusBar(QStatusBar())
@@ -132,6 +149,8 @@ class MainWindow(QMainWindow):
             self._tabs.setCurrentIndex(self._TAB_IDS.index(active_tab_id))
         except ValueError:
             self._tabs.setCurrentIndex(0)
+        self._workspace.setCurrentIndex(0)
+        self._sync_tab_pills(0)
 
         # M11：启动后台静默检查更新（settings.update.auto_check 控制）
         self._bg_check_thread = None
@@ -174,10 +193,8 @@ class MainWindow(QMainWindow):
         pill_row.setSpacing(2)
         self._tab_pills: list[QPushButton] = []
         pill_defs = [
-            (tr("Live"), "activity"),
-            (tr("Playback"), "history"),
-            ("Log", "list"),
-            (tr("Device"), "cpu"),
+            (tr("Operation"), "grid"),
+            (tr("Engineering"), "cpu"),
         ]
         for idx, (label, icon_name) in enumerate(pill_defs):
             b = QPushButton(label)
@@ -185,9 +202,10 @@ class MainWindow(QMainWindow):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setProperty("iconName", icon_name)
-            b.clicked.connect(lambda _checked, i=idx: self._tabs.setCurrentIndex(i))
+            b.clicked.connect(lambda _checked, i=idx: self._set_workspace(i))
             pill_row.addWidget(b)
             self._tab_pills.append(b)
+        self._engineering_pill = self._tab_pills[1]
         row.addWidget(self._tab_pillbar)
         row.addStretch(1)
 
@@ -240,13 +258,42 @@ class MainWindow(QMainWindow):
         self._settings.save()
 
     def _sync_tab_pills(self, index: int):
-        """QTabWidget 切换 → 同步药丸选中态 + 图标着色。"""
+        """工作区切换 → 同步顶栏选中态与图标。"""
         from satellite_debug_tool.ui import icons as _ic
         pal = S.palette(self._theme)
         for i, b in enumerate(getattr(self, "_tab_pills", [])):
             b.setChecked(i == index)
             col = pal["accent_2"] if i == index else pal["text_2"]
             b.setIcon(_ic.icon(b.property("iconName"), color=col, size=13))
+
+    def _set_workspace(self, index: int) -> None:
+        if index == 1 and not self._engineering_unlocked:
+            self._request_engineering_unlock()
+            return
+        self._workspace.setCurrentIndex(1 if index == 1 else 0)
+
+    def unlock_engineering_for_session(self) -> None:
+        """Expose engineering diagnostics for this process without persisting it."""
+        self._engineering_unlocked = True
+        self._engineering_pill.setVisible(True)
+        self._workspace.setCurrentIndex(1)
+
+    def _request_engineering_unlock(self) -> None:
+        if self._engineering_unlocked:
+            self._workspace.setCurrentIndex(1)
+            return
+        answer = QMessageBox.question(
+            self,
+            tr("Engineering diagnostics"),
+            tr(
+                "Engineering diagnostics expose internal channels and device controls. "
+                "Open them for this session?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.unlock_engineering_for_session()
 
     # ============================ 主题 ============================
 
@@ -307,7 +354,7 @@ class MainWindow(QMainWindow):
             f"QTabWidget::pane {{ border: 0; background: {pal['bg']}; }}"
         )
         # 广播到 view
-        for view in (self._live, self._playback, self._log, self._device):
+        for view in (self._customer, self._live, self._playback, self._log, self._device):
             if hasattr(view, "set_theme"):
                 view.set_theme(theme, "small")
 
