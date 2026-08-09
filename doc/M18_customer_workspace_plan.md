@@ -89,7 +89,7 @@ One recording contains the full support evidence; customer and engineering modes
 - Starting customer recording first requests the AFD01 `support_full` capture profile and waits for confirmation.
 - The recorder stores every received raw frame, product/profile snapshots, control operations, gap markers and capture-quality counters.
 - Stopping recording restores the previous stream profile.
-- Customer playback mirrors the live overview and adds play, pause, seek and speed controls. It is read-only.
+- Customer playback was superseded by M18.2: it is a read-only static curve workspace with a fixed customer field set, time ranges, quality summary and GNSS details.
 - Engineering playback keeps the current full-channel, state, event and GNSS analysis views.
 
 Add SDB v3 with record-level host receive timestamps, device/session identity, metadata snapshots and completeness information. SDB v2 remains import-compatible.
@@ -110,7 +110,7 @@ UI filtering is not a confidentiality boundary: a full SDB contains engineering 
 4. Guarded RF control with exact ACK and applied-value readback.
 5. SDB v3, capture negotiation and customer timeline playback.
 6. Customer maintenance and signed OTA package verification.
-7. Full upper-PC tests, AFD01 debug/release builds, simulator, visual QA and hardware acceptance.
+7. Full upper-PC tests, AFD01 debug/release builds, visual QA and hardware acceptance.
 
 ## 9. Explicit exclusions
 

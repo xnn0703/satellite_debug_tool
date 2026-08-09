@@ -13,7 +13,7 @@ from satellite_debug_tool.core.product import (
     ProductValue,
     TrackingPhase,
 )
-from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.core.profile import CHANNEL_ROLE_SNR, ProfileStore
 from satellite_debug_tool.core.protocol import (
     ChannelDefEntry,
     ChannelSample,
@@ -112,3 +112,19 @@ def test_projection_marks_supported_but_old_channel_stale(monkeypatch):
 
     assert snap.operation.snr_db.value == 0.0
     assert snap.operation.snr_db.availability == Availability.STALE
+
+
+def test_legacy_history_uses_device_uptime_seconds_across_rollover(monkeypatch):
+    profile = _afd_profile()
+    data = DataStore(max_channels=64)
+    states = StateStore()
+    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.time", lambda: 10.0)
+    data.update(DataReport(0xFFFFFF00, [ChannelSample(8, 10.0)]))
+    data.update(DataReport(0x00000100, [ChannelSample(8, 11.0)]))
+
+    times, values = LegacyV2Projector(profile, data, states).channel_history(
+        CHANNEL_ROLE_SNR, window_s=300.0
+    )
+
+    assert times.tolist() == pytest.approx([0xFFFFFF00 / 1000.0, 0x100000100 / 1000.0])
+    assert values.tolist() == pytest.approx([10.0, 11.0])

@@ -26,15 +26,6 @@ pip install -r satellite_debug_tool/requirements.txt
 python3 -m satellite_debug_tool.main
 ```
 
-For an offline UDP demonstration:
-
-```bash
-python tools/device_simulator.py --profile afd01 -v
-```
-
-Select `UDP`, use `127.0.0.1:4004`, and click **Connect**. A green **LINK OK**
-indicator and changing dashboard values confirm that the link is active.
-
 The default language follows the operating system. Chinese locales use Simplified
 Chinese; all other locales use English.
 

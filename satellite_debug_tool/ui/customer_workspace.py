@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -23,6 +23,39 @@ from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_playback_view import CustomerPlaybackView
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
+
+
+class _ViewportFitScrollArea(QScrollArea):
+    """Fill the viewport when the page can fit; scroll only below its minimum."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._fit_pending = False
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_page_height()
+        if not self._fit_pending:
+            self._fit_pending = True
+            QTimer.singleShot(0, self._finish_fit_page_height)
+
+    def _finish_fit_page_height(self) -> None:
+        self._fit_pending = False
+        self._fit_page_height()
+
+    def _fit_page_height(self) -> None:
+        page = self.widget()
+        if page is None:
+            return
+        page.setMinimumHeight(0)
+        page.setMaximumHeight(16777215)
+        viewport_height = self.viewport().height()
+        minimum_height = page.minimumSizeHint().height()
+        if viewport_height >= minimum_height:
+            page.setFixedHeight(viewport_height)
+        else:
+            page.setMinimumHeight(minimum_height)
+            page.resize(page.width(), minimum_height)
 
 
 class _PendingCustomerPage(QWidget):
@@ -91,7 +124,7 @@ class CustomerWorkspace(QWidget):
         self._maintenance = CustomerMaintenanceView(
             self._live, self._device, self._settings
         )
-        overview_scroll = QScrollArea()
+        overview_scroll = _ViewportFitScrollArea()
         overview_scroll.setObjectName("customerOverviewScroll")
         overview_scroll.setWidgetResizable(True)
         overview_scroll.setFrameShape(QFrame.Shape.NoFrame)

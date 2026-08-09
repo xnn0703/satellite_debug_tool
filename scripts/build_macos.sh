@@ -7,7 +7,6 @@
 # 用法：  ./scripts/build_macos.sh
 # 产物：  dist/SatelliteDebugTool.app                       ← 双击运行
 #         release/SatelliteDebugTool-macOS-<arch>.zip       ← 分发用
-#         release/DeviceSimulator-macOS-<arch>.zip
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,15 +43,12 @@ $PY "$HERE/scripts/update_translations.py" check
 # ---- 清旧产物 ----
 rm -rf "$HERE/build" "$HERE/dist"
 
-echo "[build_macos] 1/3 打包主程序..."
+echo "[build_macos] 1/2 打包主程序..."
 $PY -m PyInstaller --noconfirm satellite_debug_tool.spec
 $PY "$HERE/scripts/verify_model_assets.py" "$HERE/dist/SatelliteDebugTool.app"
 
-echo "[build_macos] 2/3 打包 updater..."
+echo "[build_macos] 2/2 打包 updater..."
 $PY -m PyInstaller --noconfirm updater.spec
-
-echo "[build_macos] 3/3 打包 device_simulator..."
-$PY -m PyInstaller --noconfirm device_simulator.spec
 
 # ---- 嵌入单文件 updater 到 .app ----
 APP_PATH="$HERE/dist/SatelliteDebugTool.app"
@@ -74,18 +70,15 @@ xattr -cr "$APP_PATH" 2>/dev/null || true
 
 # ---- 分发用 zip（ditto 保 symlink，避免之前 7z 那种 symlink 被毁的坑）----
 APP_ZIP="$RELEASE_DIR/SatelliteDebugTool-macOS-${ARCH}.zip"
-SIM_ZIP="$RELEASE_DIR/DeviceSimulator-macOS-${ARCH}.zip"
-rm -f "$APP_ZIP" "$SIM_ZIP"
+rm -f "$APP_ZIP"
 ( cd "$HERE/dist" && ditto -c -k --sequesterRsrc --keepParent "SatelliteDebugTool.app" "$APP_ZIP" )
-( cd "$HERE/dist" && zip -rq "$SIM_ZIP" "DeviceSimulator" )
 
 echo ""
 echo "==== ✅ 打包完成 ===="
 echo "本机直接跑：  open '$APP_PATH'"
 echo "分发 zip：    $APP_ZIP"
-echo "模拟器 zip：  $SIM_ZIP"
 echo ""
-ls -lh "$APP_ZIP" "$SIM_ZIP"
+ls -lh "$APP_ZIP"
 echo ""
 echo "对方拿到 zip 解压后首次双击若报"无法验证开发者"，让对方终端跑："
 echo "    xattr -cr <解压目录>/SatelliteDebugTool.app"

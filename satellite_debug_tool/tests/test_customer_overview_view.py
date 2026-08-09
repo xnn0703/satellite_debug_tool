@@ -7,7 +7,12 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
 
 from satellite_debug_tool.core.data import DataStore, GnssStore, StateStore
-from satellite_debug_tool.core.product import ProductServiceStore
+from satellite_debug_tool.core.product import (
+    Availability,
+    CustomerRecordingState,
+    ProductServiceStore,
+    ProductValue,
+)
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.protocol import (
     ChannelDefEntry,
@@ -15,18 +20,31 @@ from satellite_debug_tool.core.protocol import (
     DataReport,
     MetaInfo,
     ServiceIdentity,
+    ServiceComponentHealth,
+    ServiceComponentValue,
+    ServiceLinkDetail,
+    ServiceFastState,
+    ServiceRfLockStatus,
+    ServiceSlowState,
     StateDefEntry,
     StateEnumItem,
     StateReport,
     StateSample,
 )
-from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
+from satellite_debug_tool.ui.customer_overview_view import (
+    CustomerOverviewView,
+    combined_polarization,
+    format_polarization,
+    pll_lock_summary,
+)
+from satellite_debug_tool.i18n import tr
 
 
 class _LiveDouble(QObject):
     connection_state_changed = Signal(bool)
     profile_ready = Signal(str)
     recording_state_changed = Signal(bool, str)
+    customer_recording_state_changed = Signal(str, str)
 
     def __init__(self):
         super().__init__()
@@ -37,6 +55,7 @@ class _LiveDouble(QObject):
         self.products = ProductServiceStore()
         self.connected = True
         self.recording = False
+        self.customer_state = CustomerRecordingState.IDLE
         self.connect_kwargs = None
 
     def profile_store(self):
@@ -60,6 +79,9 @@ class _LiveDouble(QObject):
     def is_recording(self):
         return self.recording
 
+    def customer_recording_state(self):
+        return self.customer_state
+
     def connect_udp(self, *_args, **_kwargs):
         self.connect_kwargs = _kwargs
         self.connected = True
@@ -70,6 +92,14 @@ class _LiveDouble(QObject):
 
     def toggle_recording(self):
         self.recording = not self.recording
+
+    def toggle_customer_recording(self):
+        self.customer_state = (
+            CustomerRecordingState.IDLE
+            if self.customer_state != CustomerRecordingState.IDLE
+            else CustomerRecordingState.ARMED
+        )
+        self.customer_recording_state_changed.emit(self.customer_state.value, "")
 
     def show_gnss_details(self):
         return None
@@ -122,10 +152,14 @@ def test_customer_overview_renders_afd01_values_and_empty_components(app, monkey
 
     assert "afd01" in view._identity_label.text()
     assert "AFD01-0001" in view._identity_label.text()
-    assert view._metrics["snr"].value.text() == "18.50 dB"
-    assert view._metrics["longitude"].value.text().startswith("118.800")
+    assert tuple(view._data_values) == (
+        "longitude", "latitude", "altitude", "rx_rf",
+        "tx_rf", "rx_lo", "tx_lo", "satellite",
+    )
+    assert view._snr_readout.value.text() == "18.50 dB"
+    assert "118.800" in view._data_values["longitude"].text()
     assert "LOCK" not in view._status_values["tracking"].text()
-    assert view._component_table.item(0, 2).text() == "—"
+    assert view._component_details["converter"].text() == "— · — · — · —"
 
 
 def test_customer_connection_does_not_enable_engineering_debug(app) -> None:
@@ -163,3 +197,234 @@ def test_product_identity_loads_model_without_profile_ready(app) -> None:
     view.refresh()
 
     assert attitude.loaded == ["afd01"]
+
+
+def test_customer_overview_shows_independent_rx_tx_polarization(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceIdentity(1, 100, 0x17, "AFD01", "AFD01-0001", "0.0.130", "", 2)
+    )
+    live.products.feed(
+        ServiceSlowState(
+            1, 100, (1 << 5) | (1 << 6),
+            0.0, 0.0, 0.0, 0.0, 0.0, 2, 3, False,
+        )
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    text = view._beam_values["polarization"].value.text()
+    assert "/" in text
+    assert format_polarization(2) in text
+    assert format_polarization(3) in text
+
+
+def test_pll_lock_summary_preserves_each_path_and_availability() -> None:
+    summary, status = pll_lock_summary(
+        ProductValue.valid(True, 10),
+        ProductValue.valid(False, 10),
+        ProductValue.valid(True, 10),
+    )
+
+    assert summary.value is not None
+    assert "CLK ✓" in summary.value
+    assert "TX ×" in summary.value
+    assert "RX ✓" in summary.value
+    assert status == "warn"
+
+    unsupported, status = pll_lock_summary(
+        ProductValue.unsupported(),
+        ProductValue.unsupported(),
+        ProductValue.unsupported(),
+    )
+    assert unsupported.availability == Availability.UNSUPPORTED
+    assert status == "neutral"
+
+    stale, status = pll_lock_summary(
+        ProductValue.stale(True, 10),
+        ProductValue.valid(True, 10),
+        ProductValue.valid(True, 10),
+    )
+    assert stale.availability == Availability.STALE
+    assert status == "neutral"
+
+
+def test_customer_overview_shows_compact_pll_lock_summary(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(ServiceRfLockStatus(1, 100, 0x07, 0x05))
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    assert "CLK ✓" in view._pll_lock_summary.text()
+    assert "TX ×" in view._pll_lock_summary.text()
+    assert view._pll_lock_summary.property("status") == "warn"
+    assert tuple(view._data_values) == (
+        "longitude", "latitude", "altitude", "rx_rf",
+        "tx_rf", "rx_lo", "tx_lo", "satellite",
+    )
+
+
+def test_polarization_formatter_preserves_future_linear_angle() -> None:
+    assert "27.2°" in format_polarization(None, linear_angle_deg=27.25)
+    same = combined_polarization(ProductValue.valid(2), ProductValue.valid(2))
+    assert same.value == format_polarization(2)
+    stale = combined_polarization(ProductValue.stale(0), ProductValue.valid(0))
+    assert stale.availability == Availability.STALE
+
+
+def test_customer_overview_splits_compact_state_and_runtime_data(app) -> None:
+    view = CustomerOverviewView(_LiveDouble(), _SettingsDouble(), enable_3d=False)
+
+    assert tuple(view._status_values) == (
+        "link", "mode", "tracking", "lock", "navigation", "gnss", "tx", "modem"
+    )
+    assert view._info_layout.count() == 2
+    assert view._status_grid.getItemPosition(
+        view._status_grid.indexOf(view._status_values["modem"])
+    ) == (1, 3, 1, 1)
+    assert view._data_grid.getItemPosition(
+        view._data_grid.indexOf(view._data_values["satellite"])
+    ) == (1, 3, 1, 1)
+
+
+def test_customer_overview_does_not_mark_tx_on_when_array_is_offline(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceFastState(
+            1, 100, 1 << 5, 0, 0, False, 0, 0, True,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        )
+    )
+    unavailable = ServiceComponentValue(0x01, False, 0.0, 0.0, 0)
+    live.products.feed(
+        ServiceComponentHealth(1, 100, unavailable, unavailable, unavailable)
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    assert tr("Unavailable") in view._status_values["tx"].text()
+    assert view._status_values["tx"].property("status") == "warn"
+    assert tr("Offline") in view._component_details["tx_array"].text()
+
+
+def test_customer_overview_renders_link_detail_and_satellite_modes(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceLinkDetail(
+            1, 100, 0x3F, True, 18250.0, 28050.0, 2, 0.0, 25544, ""
+        )
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    assert tr("Online") in view._status_values["modem"].text()
+    assert "18250.00 MHz" in view._data_values["rx_lo"].text()
+    assert "NORAD 25544" in view._data_values["satellite"].text()
+
+    live.products.feed(
+        ServiceLinkDetail(
+            1, 200, 0x1F, False, 19250.0, 29050.0, 1, 125.0, 0, ""
+        )
+    )
+    view.refresh()
+
+    assert tr("Offline") in view._status_values["modem"].text()
+    assert "GEO 125.00°E" in view._data_values["satellite"].text()
+
+
+def test_customer_snr_plot_uses_five_minute_device_uptime_axis(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceIdentity(1, 1_230_000, 0x17, "AFD01", "AFD01-0001", "0.0.130", "", 2)
+    )
+    for timestamp, snr in ((1_230_000, 10.0), (1_530_000, 12.0)):
+        live.products.feed(
+            ServiceFastState(
+                1, timestamp, 1 << 11, 0, 0, False, 0, 0, False,
+                0.0, 0.0, 0.0, 0.0, 0.0, snr,
+            )
+        )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    times, values = view._snr_curve.getData()
+    assert times.tolist() == pytest.approx([1230.0, 1530.0])
+    assert values.tolist() == pytest.approx([10.0, 12.0])
+    x_range = view._snr_plot.getViewBox().viewRange()[0]
+    assert x_range == pytest.approx([1230.0, 1530.0])
+
+
+def test_customer_snr_plot_keeps_full_window_for_single_sample(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceIdentity(1, 1_230_000, 0x17, "AFD01", "AFD01-0001", "0.0.130", "", 3)
+    )
+    live.products.feed(
+        ServiceFastState(
+            1, 1_230_000, 1 << 11, 0, 0, False, 0, 0, False,
+            0.0, 0.0, 0.0, 0.0, 0.0, 12.4,
+        )
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    x_range = view._snr_plot.getViewBox().viewRange()[0]
+    y_range = view._snr_plot.getViewBox().viewRange()[1]
+    assert x_range == pytest.approx([930.0, 1230.0])
+    assert y_range == pytest.approx([10.4, 14.4])
+
+
+def test_customer_overview_density_controls_bottom_band_height(app) -> None:
+    view = CustomerOverviewView(_LiveDouble(), _SettingsDouble(), enable_3d=False)
+
+    view._apply_density("regular")
+    assert view._signal_panel.height() == 240
+    assert view._snr_plot.minimumHeight() == 180
+    assert view._component_panel.height() == 60
+
+    view._apply_density("compact")
+    assert view._signal_panel.height() == 175
+    assert view._snr_plot.minimumHeight() == 126
+    assert view._component_panel.height() == 52
+
+    view._apply_density("dense")
+    assert view._signal_panel.height() == 122
+    assert view._snr_plot.minimumHeight() == 86
+    assert view._component_panel.height() == 44
+    last = view._status_values["modem"]
+    index = view._status_grid.indexOf(last)
+    assert view._status_grid.getItemPosition(index) == (1, 3, 1, 1)
+
+
+def test_customer_overview_component_strip_is_last(app) -> None:
+    view = CustomerOverviewView(_LiveDouble(), _SettingsDouble(), enable_3d=False)
+
+    assert view._root_layout.indexOf(view._signal_panel) < view._root_layout.indexOf(
+        view._component_panel
+    )
+    assert view._root_layout.indexOf(view._component_panel) == view._root_layout.count() - 1
+
+
+def test_customer_record_button_renders_armed_active_and_restoring_states(app) -> None:
+    live = _LiveDouble()
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    live.customer_state = CustomerRecordingState.ARMED
+    live.customer_recording_state_changed.emit("armed", "/tmp/support.sdb")
+    assert view._record_btn.text() == tr("Cancel recording")
+    assert view._record_btn.isEnabled()
+
+    live.customer_state = CustomerRecordingState.ACTIVE
+    live.customer_recording_state_changed.emit("active", "/tmp/support.sdb")
+    assert view._record_btn.text() == tr("Stop recording")
+
+    live.customer_state = CustomerRecordingState.RESTORING
+    live.customer_recording_state_changed.emit("restoring", "/tmp/support.sdb")
+    assert view._record_btn.text() == tr("Restoring...")
+    assert not view._record_btn.isEnabled()

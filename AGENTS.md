@@ -45,7 +45,7 @@ Device:  共享 Live worker/frame stream → 参数表 / COMMAND_RESPONSE / OTA 
 - `core/config.py` — `Settings` 类，JSON 存 `~/.satellite_debug_tool/settings.json`
 - `ui/` — PySide6 组件，`MainWindow` 为主入口
 - `io/` — `DataRecorder`（异步，SDB v2 内嵌 profile JSON）、`DataImporter`
-- `tools/` — `device_simulator.py`（离线 demo）、`tile_downloader.py`（OSM 离线 tile CLI）
+- `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）
 - `updater/` — 自动升级模块（py7zr 解压 7z 分卷）
 
 ### 关键约定
@@ -57,10 +57,6 @@ Device:  共享 Live worker/frame stream → 参数表 / COMMAND_RESPONSE / OTA 
 - 测试在 `satellite_debug_tool/tests/`，名称和注释多为中文；UI 测试用 `qapp` fixture（`conftest.py` 设置 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_NO_UPDATE_CHECK=1`）
 - 字号已固化 `small`（12px 基准），`styles.py` 的 `FONT_SCALES` API 仅保留兼容 `test_styles.py`
 - 离线地图约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`）
-
-### 仿真模块 `core/simulation/`
-
-模拟对星闭环仿真当前以 `MockModem` / `tools/fake_device.py` 为主：ka256 扫描损失 + beampointing 几何 + SNR 模型 + 遮挡/雨衰/航向校准。LiveView 已有仿真入口和面板 metrics；Chart 数据注入仍是后续项，详见 `doc/simulation_delivery.md`。
 
 ## 构建与发版
 

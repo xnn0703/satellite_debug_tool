@@ -69,6 +69,11 @@ class CustomerMaintenanceView(QWidget):
         self._build_ui()
         self._store.updated.connect(self.refresh)
         self._live.connection_state_changed.connect(self._on_connection_changed)
+        phase_signal = getattr(
+            self._live, "device_connection_phase_changed", None
+        )
+        if phase_signal is not None:
+            phase_signal.connect(lambda _phase: self.refresh())
         self._device.ota_status_changed.connect(self._on_ota_status)
         self.refresh()
         register_translatable(self)
@@ -230,7 +235,11 @@ class CustomerMaintenanceView(QWidget):
             (tr("RX array"), snapshot.rx_array),
         )
         for row, (name, component) in enumerate(rows):
-            online = "—" if component.online.value is None else tr("Online") if component.online.value else tr("Offline")
+            online = (
+                "—"
+                if component.online.value is None
+                else tr("Online") if component.online.value else tr("Offline")
+            )
             values = (
                 name,
                 online,
@@ -256,7 +265,7 @@ class CustomerMaintenanceView(QWidget):
         snapshot = self._store.snapshot()
         hardware = self._live.profile_store().current_hw_type() or ""
         current_version = snapshot.identity.main_firmware.value or ""
-        if not self._live.is_connected() or not hardware or not current_version:
+        if not self._device_online() or not hardware or not current_version:
             self._set_local_status("Wait for authoritative AFD01 identity before selecting a package")
             return False
         if not self._trusted_keys:
@@ -374,7 +383,7 @@ class CustomerMaintenanceView(QWidget):
         self.refresh()
 
     def _refresh_actions(self) -> None:
-        available = self._device.customer_ota_available()
+        available = self._device_online() and self._device.customer_ota_available()
         trusted = bool(self._trusted_keys) and not self._trust_error
         self._select_btn.setEnabled(available and trusted)
         self._upload_btn.setEnabled(available and self._package is not None)
@@ -384,6 +393,10 @@ class CustomerMaintenanceView(QWidget):
                 if not self._trust_error
                 else tr("Firmware signature verification is unavailable")
             )
+
+    def _device_online(self) -> bool:
+        checker = getattr(self._live, "is_device_online", None)
+        return bool(checker()) if checker is not None else bool(self._live.is_connected())
 
     def set_theme(self, theme: str, _scale: str = "small") -> None:
         self._theme = theme

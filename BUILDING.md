@@ -4,12 +4,11 @@
 
 ## 产物
 
-每次构建会在 `release/` 下生成两个 zip：
+每次构建会在 `release/` 下生成主程序 zip：
 
 | 文件 | 内容 |
 |------|------|
 | `SatelliteDebugTool-<OS>-<arch>.zip` | 上位机主程序（GUI） |
-| `DeviceSimulator-<OS>-<arch>.zip` | 模拟器命令行工具（离线 demo 用） |
 
 目录结构（onedir 模式）：
 
@@ -135,7 +134,7 @@ git push github v1.1.0      # 推 GitHub tag 触发 release CI
 脚本自动：
 - 创建 `.venv`（如无）
 - 装 requirements.txt + pyinstaller
-- 跑 PyInstaller（主程序 + updater + simulator）
+- 跑 PyInstaller（主程序 + updater）
 - 把 updater 嵌入 `.app/Contents/MacOS/`
 - `xattr -cr` 清 quarantine（本机直接双击就能开）
 - `ditto -c -k` 出单文件 zip 给同事分发
@@ -169,11 +168,10 @@ Actions 页面 → Build & Release → Run workflow → 填 tag（例 `v0.1.0-rc
 
 ## 手动调用 PyInstaller
 
-如果想改细节（加 icon、嵌入 data 文件等），直接编辑 `satellite_debug_tool.spec` / `device_simulator.spec` 再：
+如果想改细节（加 icon、嵌入 data 文件等），直接编辑 `satellite_debug_tool.spec` 再：
 
 ```bash
 pyinstaller --noconfirm satellite_debug_tool.spec
-pyinstaller --noconfirm device_simulator.spec
 ```
 
 主程序 spec 显式包含 TS/QM、Leaflet/map 资源和 macOS `InfoPlist.strings`。
@@ -195,7 +193,6 @@ macOS `.app` 还应包含 `Contents/Resources/en.lproj` 和
 | 文件 | 作用 |
 |------|------|
 | `satellite_debug_tool.spec` | PyInstaller 主程序 spec，含 `collect_all(PySide6/pyqtgraph)` |
-| `device_simulator.spec` | 模拟器 spec，轻量（排除 PySide6/pyqtgraph） |
 | `scripts/build_macos.sh` | macOS/Linux 一键脚本 |
 | `scripts/build_windows.bat` | Windows 一键脚本 |
 | `.github/workflows/build.yml` | Windows CI 构建与可选 Release |

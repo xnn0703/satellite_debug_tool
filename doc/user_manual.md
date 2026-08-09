@@ -32,9 +32,6 @@ pip install -r satellite_debug_tool/requirements.txt
 # 2. 启动上位机
 python3 -m satellite_debug_tool.main
 
-# 3. (可选) 无真机时可以用 UDP 模拟器
-python tools/device_simulator.py --profile afd01 -v
-# 上位机选 UDP / 127.0.0.1 / 4004 → Connect
 ```
 
 看到状态条 `LINK OK` 绿灯 + Dashboard 卡片有数字 = 连接成功。
@@ -48,7 +45,7 @@ python tools/device_simulator.py --profile afd01 -v
 
 ```
 ┌── 全局栏 (Satellite Debug Tool / 实时 / 回放 / Log / 设备 / 主题 / 更新 / 设置) ──┐
-├── Live 工具栏 (Type / Remote / Connect / Debug / Record / Import / Clear / 仿真) ─┤
+├── Live 工具栏 (Type / Remote / Connect / Debug / Record / Import / Clear) ─────┤
 ├── 状态条 (LINK / REC / BEAT / critical states...) ────────────────────────────┤
 ├── Dashboard (KPI 卡片 + 模式按钮) ──────────────────────────────────────────┤
 │ ┌──────────┬────────────────┬──────────┬────────────────────┐
@@ -411,7 +408,6 @@ A: 两个地方：
 - 验收日志：[`doc/acceptance_log.md`](./acceptance_log.md)
 - 英文手册：[`doc/user_manual_en.md`](./user_manual_en.md)
 - 中英术语表：[`doc/i18n_terms.md`](./i18n_terms.md)
-- 下位机模拟器：`tools/device_simulator.py`（纯 UDP，可 `--profile afd01|ufd45`）
 
 ---
 

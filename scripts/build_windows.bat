@@ -2,7 +2,6 @@
 REM One-click build for Windows. Auto-installs pyinstaller if missing.
 REM Prereq: Python 3.9+ installed; current dir is project root (with .venv or system python).
 REM Output:  release\SatelliteDebugTool-Windows-x86_64.zip
-REM          release\DeviceSimulator-Windows-x86_64.zip
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0.."
@@ -50,8 +49,6 @@ echo [build_windows] Verifying built-in 3D models...
 echo [build_windows] Building updater (M11)...
 "%PY%" -m PyInstaller --noconfirm updater.spec || goto :err
 
-echo [build_windows] Building simulator...
-"%PY%" -m PyInstaller --noconfirm device_simulator.spec || goto :err
 
 REM ---- M11: embed onefile updater into main install dir ----
 if exist "dist\updater.exe" if exist "dist\SatelliteDebugTool" (
@@ -68,13 +65,10 @@ if exist "dist\SatelliteDebugTool" (
 
 REM ---- archive ----
 set "APP_ZIP=%RELEASE_DIR%\SatelliteDebugTool-Windows-x86_64.zip"
-set "SIM_ZIP=%RELEASE_DIR%\DeviceSimulator-Windows-x86_64.zip"
 if exist "%APP_ZIP%" del "%APP_ZIP%"
-if exist "%SIM_ZIP%" del "%SIM_ZIP%"
 
 pushd dist
 powershell -NoProfile -Command "Compress-Archive -Path 'SatelliteDebugTool' -DestinationPath '%APP_ZIP%' -Force" || goto :errpop
-powershell -NoProfile -Command "Compress-Archive -Path 'DeviceSimulator' -DestinationPath '%SIM_ZIP%' -Force" || goto :errpop
 popd
 
 echo.

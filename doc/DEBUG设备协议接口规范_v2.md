@@ -7,7 +7,7 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
-| 最近修订 | 2026-08-05（AFD01 客户产品服务扩展） |
+| 最近修订 | 2026-08-07（AFD01 客户本振锁定状态扩展） |
 | 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / ufd45，后续新型号无需改协议） |
 | 适用上位机 | satellite_debug_tool ≥ v2.0 |
 
@@ -94,6 +94,8 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x24 | `SERVICE_CAPABILITIES` | D→H | AFD01 控制能力 | 接入时 + 0.2 Hz |
 | 0x25 | `SERVICE_CONTROL_REQUEST` | H→D | AFD01 类型化客户控制 | 按需 |
 | 0x26 | `SERVICE_CONTROL_RESPONSE` | D→H | 带 request_id 的精确响应 | 按需 |
+| 0x27 | `SERVICE_LINK_DETAIL` | D→H | AFD01 Modem、本振和卫星信息 | 1 Hz |
+| 0x28 | `SERVICE_RF_LOCK_STATUS` | D→H | AFD01 时钟/收发本振锁定 | 与快速状态同频 |
 
 **定义帧（0x04/0x05/0x06/0x07/0x0C）**：下位机启动后立刻全量发送，之后每 5 秒重发一次（处理 UDP 丢包 / 上位机后接入）。上位机也可主动 `CONTROL` 请求重发。`PROFILE_SEMANTICS` 是 M13 扩展帧，不参与握手 ready 判定；旧上位机可忽略，旧下位机缺失时上位机按名称 fallback。
 
@@ -456,7 +458,7 @@ signal[N]:
   `LOCK` 与 `USED` 是两个独立维度，未参与解算的锁定信号仍应显示 C/N0。
 - 旧上位机把 0x0F/0x10 当 RawFrame 忽略；新上位机继续兼容 0x0D/0x0E 和旧 SDB。
 
-### 5.16 AFD01 产品服务扩展 (0x20~0x26)
+### 5.16 AFD01 产品服务扩展 (0x20~0x28)
 
 **用途**：为客户工作台提供稳定的产品语义。该扩展复用 v2 帧包络，但不依赖动态
 `CHANNEL_DEFINE/STATE_DEFINE` 名称；工程 Debug 与产品服务可以同时存在。M18 只规定并实现
@@ -481,7 +483,8 @@ service_protocol    u8
 ```
 
 AFD01 序列号来自 MCU 96-bit UID 的稳定派生值。当前未取得 boot 版本时 bit3=0，空字符串不得
-当成有效版本。
+当成有效版本。AFD01 当前 `service_protocol=4`；版本 4 表示支持可选的 0x28，版本 3 表示支持
+可选的 0x27，版本 2 仅包含 0x20~0x26。该字段不改变外层 Debug v2 的 `META_INFO.protocol_ver`。
 
 #### 5.16.2 `SERVICE_FAST_STATE` (0x21)
 
@@ -585,6 +588,40 @@ rx_polarization, tx_polarization, tx_enabled           u8, u8, u8
 
 产品服务结果码独立于 §6 的通用 Debug 响应码：`0=SUCCESS, 1=INVALID_REQUEST,
 2=OUT_OF_RANGE, 3=STATE_NOT_ALLOWED, 4=NOT_SUPPORTED, 5=BUSY, 6=INTERNAL_ERROR`。
+
+#### 5.16.7 `SERVICE_LINK_DETAIL` (0x27)
+
+该帧是可选扩展，不改变 0x20~0x26 的定长布局。旧上位机按未知 `RawFrame` 忽略；新上位机
+在帧缺失或有效位未置位时显示不可用。
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+modem_online                           u8
+rx_lo, tx_lo                           float32 x2, MHz
+satellite_mode                         u8
+satellite_longitude                    float32, deg
+satellite_id                           u32
+satellite_name                         u8 len + utf8
+```
+
+`valid_mask` bit0..6 依次对应 Modem 在线、RX LO、TX LO、卫星模式、卫星经度、卫星编号和
+卫星名称。`satellite_mode` 为 `0=UNKNOWN, 1=GEO, 2=LEO_TLE`。GEO 模式置 bit3/bit4，
+`satellite_longitude` 东经为正、西经为负；TLE 模式置 bit3，并在可解析时置 bit5 或 bit6。
+当前 AFD01 从 TLE 第一行的 NORAD catalog number 提供 bit5，设备没有权威名称时 bit6 必须为 0。
+
+#### 5.16.8 `SERVICE_RF_LOCK_STATUS` (0x28)
+
+该帧是可选扩展，不改变 0x20~0x27 的既有布局。旧上位机按未知 `RawFrame` 忽略；新上位机在
+帧缺失或有效位未置位时显示不可用，不得把缺失值当成锁定或失锁。
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+lock_mask                              u8
+```
+
+`valid_mask` 和 `lock_mask` 的 bit0..2 分别对应 `clock PLL`、`TX PLL`、`RX PLL`。
+有效位已置且对应 `lock_mask` 位为 1 表示锁定，为 0 表示失锁。三路均锁定时等价于工程 Debug
+的聚合 `PLL_LOCKED`，但客户服务必须保留三路明细，便于定位具体射频链路。
 
 ---
 

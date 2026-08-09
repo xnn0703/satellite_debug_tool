@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -15,25 +17,27 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from satellite_debug_tool.core.comm import DeviceConnectionPhase
 from satellite_debug_tool.core.product import (
     Availability,
     ControlMode,
+    CustomerRecordingState,
     LegacyV2Projector,
     NavigationState,
     ProductSnapshot,
     ProductValue,
+    SatelliteMode,
     TrackingPhase,
 )
 from satellite_debug_tool.core.profile import CHANNEL_ROLE_SNR
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import icons, styles as S
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
+from satellite_debug_tool.ui.beam_polar_widget import BeamPolarWidget
 
 
 def _control_mode_text(value: ControlMode) -> str:
@@ -68,20 +72,124 @@ def _navigation_text(value: NavigationState) -> str:
     }.get(value, tr("Unknown"))
 
 
+def format_polarization(
+    value: Optional[int],
+    *,
+    linear_angle_deg: Optional[float] = None,
+) -> str:
+    """Format the current enum or a future authoritative linear angle."""
+
+    if linear_angle_deg is not None and math.isfinite(float(linear_angle_deg)):
+        return tr("{angle}° linear", angle=f"{float(linear_angle_deg):.1f}")
+    return {
+        0: tr("Vertical"),
+        1: tr("Horizontal"),
+        2: tr("Left circular"),
+        3: tr("Right circular"),
+    }.get(value, tr("Unknown"))
+
+
+def combined_polarization(
+    rx: ProductValue[int],
+    tx: ProductValue[int],
+) -> ProductValue[str]:
+    """Combine independent RX/TX polarization without inventing missing data."""
+
+    entries: list[tuple[str, ProductValue[int]]] = []
+    if rx.value is not None:
+        entries.append(("RX", rx))
+    if tx.value is not None:
+        entries.append(("TX", tx))
+    if not entries:
+        return ProductValue.unsupported()
+
+    if len(entries) == 2 and rx.value == tx.value:
+        text = format_polarization(rx.value)
+    elif len(entries) == 2:
+        text = tr(
+            "RX {rx} / TX {tx}",
+            rx=format_polarization(rx.value),
+            tx=format_polarization(tx.value),
+        )
+    elif entries[0][0] == "RX":
+        text = tr("RX {value}", value=format_polarization(entries[0][1].value))
+    else:
+        text = tr("TX {value}", value=format_polarization(entries[0][1].value))
+
+    timestamp = max(
+        (
+            item.device_timestamp_ms
+            for _, item in entries
+            if item.device_timestamp_ms is not None
+        ),
+        default=None,
+    )
+    if any(item.availability == Availability.STALE for _, item in entries):
+        return ProductValue.stale(text, timestamp)
+    return ProductValue.valid(text, timestamp)
+
+
+def pll_lock_summary(
+    clock: ProductValue[bool],
+    tx: ProductValue[bool],
+    rx: ProductValue[bool],
+) -> tuple[ProductValue[str], str]:
+    """Format explicit CLK/TX/RX lock states without inventing missing paths."""
+
+    entries = (("clock", clock), ("tx", tx), ("rx", rx))
+    if all(value.value is None for _, value in entries):
+        return ProductValue.unsupported(), "neutral"
+
+    markers = {
+        key: "—" if value.value is None else "✓" if value.value else "×"
+        for key, value in entries
+    }
+    text = tr(
+        "CLK {clock} · TX {tx} · RX {rx}",
+        clock=markers["clock"],
+        tx=markers["tx"],
+        rx=markers["rx"],
+    )
+    timestamp = max(
+        (value.device_timestamp_ms for _, value in entries if value.device_timestamp_ms is not None),
+        default=None,
+    )
+    if any(value.availability == Availability.STALE for _, value in entries):
+        return ProductValue.stale(text, timestamp), "neutral"
+    if any(value.value is False for _, value in entries):
+        return ProductValue.valid(text, timestamp), "warn"
+    if all(value.value is True for _, value in entries):
+        return ProductValue.valid(text, timestamp), "ok"
+    return ProductValue.valid(text, timestamp), "neutral"
+
+
 class _MetricValue(QWidget):
     def __init__(self, title: str, unit: str = "", parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._title_source = title
         self._unit = unit
-        row = QVBoxLayout(self)
-        row.setContentsMargins(10, 8, 10, 8)
-        row.setSpacing(3)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(10, 8, 10, 8)
+        self._layout.setSpacing(3)
         self.title = QLabel(tr(title))
         self.title.setObjectName("customerMetricTitle")
         self.value = QLabel("—")
         self.value.setObjectName("customerMetricValue")
-        row.addWidget(self.title)
-        row.addWidget(self.value)
+        self.value.setWordWrap(True)
+        self._layout.addWidget(self.title)
+        self._layout.addWidget(self.value)
+
+    def set_density(self, density: str) -> None:
+        margins = {
+            "regular": (10, 8, 10, 8, 3),
+            "compact": (7, 5, 7, 5, 2),
+            "dense": (5, 3, 5, 3, 1),
+        }.get(density, (10, 8, 10, 8, 3))
+        self._layout.setContentsMargins(*margins[:4])
+        self._layout.setSpacing(margins[4])
+        self.setProperty("density", density)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def set_product_value(self, value: ProductValue, decimals: int = 2) -> None:
         if value.value is None:
@@ -115,18 +223,19 @@ class CustomerOverviewView(QWidget):
         ("lock", tr_source("Lock")),
         ("navigation", tr_source("Navigation")),
         ("gnss", tr_source("GNSS fix")),
+        ("tx", tr_source("TX")),
+        ("modem", tr_source("Modem")),
     )
 
-    _METRIC_DEFS = (
-        ("beam_az", tr_source("Beam azimuth"), "°"),
-        ("beam_el", tr_source("Beam elevation"), "°"),
-        ("roll", tr_source("Roll"), "°"),
-        ("pitch", tr_source("Pitch"), "°"),
-        ("yaw", tr_source("Yaw"), "°"),
-        ("snr", tr_source("SNR"), "dB"),
+    _DATA_DEFS = (
         ("longitude", tr_source("Longitude"), "°"),
         ("latitude", tr_source("Latitude"), "°"),
         ("altitude", tr_source("Altitude"), "m"),
+        ("rx_rf", tr_source("RX RF"), "MHz"),
+        ("tx_rf", tr_source("TX RF"), "MHz"),
+        ("rx_lo", tr_source("RX LO"), "MHz"),
+        ("tx_lo", tr_source("TX LO"), "MHz"),
+        ("satellite", tr_source("Satellite"), ""),
     )
 
     def __init__(
@@ -153,10 +262,21 @@ class CustomerOverviewView(QWidget):
             live_view.product_store() if hasattr(live_view, "product_store") else None
         )
         self._last_model = ""
+        self._density = ""
         self._setup_ui(enable_3d)
         self._live.connection_state_changed.connect(self._on_connection_changed)
+        phase_signal = getattr(
+            self._live, "device_connection_phase_changed", None
+        )
+        if phase_signal is not None:
+            phase_signal.connect(self._on_device_connection_phase_changed)
         self._live.profile_ready.connect(self._on_profile_ready)
         self._live.recording_state_changed.connect(self._on_recording_changed)
+        recording_state_signal = getattr(
+            self._live, "customer_recording_state_changed", None
+        )
+        if recording_state_signal is not None:
+            recording_state_signal.connect(self._on_customer_recording_state_changed)
         self._timer = QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(self.refresh)
@@ -165,42 +285,42 @@ class CustomerOverviewView(QWidget):
         register_translatable(self)
 
     def _setup_ui(self, enable_3d: bool) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
-        root.setSpacing(8)
+        self._root_layout = QVBoxLayout(self)
+        self._root_layout.setContentsMargins(10, 8, 10, 10)
+        self._root_layout.setSpacing(8)
 
         connection = QFrame()
         connection.setObjectName("customerConnectionBar")
-        connection_row = QHBoxLayout(connection)
-        connection_row.setContentsMargins(10, 6, 10, 6)
-        connection_row.setSpacing(7)
+        self._connection_layout = QHBoxLayout(connection)
+        self._connection_layout.setContentsMargins(10, 6, 10, 6)
+        self._connection_layout.setSpacing(7)
         self._identity_label = QLabel(tr("No device connected"))
         self._identity_label.setObjectName("customerIdentity")
         self._identity_label.setMinimumWidth(0)
-        connection_row.addWidget(self._identity_label, 1)
+        self._connection_layout.addWidget(self._identity_label, 1)
         self._ip_label = QLabel(tr("Device IP"))
-        connection_row.addWidget(self._ip_label)
+        self._connection_layout.addWidget(self._ip_label)
         self._ip_edit = QLineEdit(str(self._settings.get("udp.remote_ip", "192.168.1.12")))
         self._ip_edit.setFixedWidth(132)
-        connection_row.addWidget(self._ip_edit)
+        self._connection_layout.addWidget(self._ip_edit)
         self._remote_port = QSpinBox()
         self._remote_port.setRange(1, 65535)
         self._remote_port.setValue(int(self._settings.get("udp.remote_port", 4004)))
         self._remote_port.setFixedWidth(78)
-        connection_row.addWidget(self._remote_port)
+        self._connection_layout.addWidget(self._remote_port)
         self._connect_btn = QPushButton(tr("Connect"))
         self._connect_btn.clicked.connect(self._toggle_connection)
-        connection_row.addWidget(self._connect_btn)
+        self._connection_layout.addWidget(self._connect_btn)
         self._gnss_btn = QPushButton("GNSS")
         self._gnss_btn.setEnabled(False)
         self._gnss_btn.clicked.connect(self._live.show_gnss_details)
-        connection_row.addWidget(self._gnss_btn)
+        self._connection_layout.addWidget(self._gnss_btn)
         self._record_btn = QPushButton(tr("Record"))
         record_action = getattr(self._live, "toggle_customer_recording", None)
         if record_action is None:
             record_action = self._live.toggle_recording
         self._record_btn.clicked.connect(record_action)
-        connection_row.addWidget(self._record_btn)
+        self._connection_layout.addWidget(self._record_btn)
         if self._playback_mode:
             for widget in (
                 self._ip_edit,
@@ -210,36 +330,91 @@ class CustomerOverviewView(QWidget):
                 self._record_btn,
             ):
                 widget.hide()
-        root.addWidget(connection)
+        self._root_layout.addWidget(connection)
 
-        status = QFrame()
-        status.setObjectName("customerStatusBand")
-        status_grid = QGridLayout(status)
-        status_grid.setContentsMargins(8, 5, 8, 5)
-        status_grid.setSpacing(6)
+        info_band = QFrame()
+        info_band.setObjectName("customerInfoBand")
+        info_band.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._info_layout = QHBoxLayout(info_band)
+        self._info_layout.setContentsMargins(5, 4, 5, 4)
+        self._info_layout.setSpacing(6)
+
+        state_group = QFrame()
+        state_group.setObjectName("customerInfoGroup")
+        self._state_group_layout = QVBoxLayout(state_group)
+        self._state_group_layout.setContentsMargins(4, 2, 4, 2)
+        self._state_group_layout.setSpacing(3)
+        self._state_group_title = QLabel(tr("Status"))
+        self._state_group_title.setObjectName("customerInfoTitle")
+        self._state_group_layout.addWidget(self._state_group_title)
+        self._status_grid = QGridLayout()
+        self._status_grid.setContentsMargins(0, 0, 0, 0)
+        self._status_grid.setSpacing(4)
         self._status_values: dict[str, QLabel] = {}
         for index, (key, title) in enumerate(self._STATUS_DEFS):
             item = QLabel(f"{tr(title)}: —")
             item.setObjectName("customerStatusItem")
             item.setProperty("status", "neutral")
             item.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            item.setMinimumHeight(30)
+            item.setMinimumHeight(24)
             item.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self._status_values[key] = item
-            status_grid.addWidget(item, index // 3, index % 3)
-        for column in range(3):
-            status_grid.setColumnStretch(column, 1)
-        root.addWidget(status)
+            self._status_grid.addWidget(item, index // 4, index % 4)
+        for column in range(4):
+            self._status_grid.setColumnStretch(column, 1)
+        self._state_group_layout.addLayout(self._status_grid)
 
-        main = QHBoxLayout()
-        main.setSpacing(8)
-        model_panel = QFrame()
-        model_panel.setObjectName("customerSection")
-        model_layout = QVBoxLayout(model_panel)
-        model_layout.setContentsMargins(6, 6, 6, 6)
+        data_group = QFrame()
+        data_group.setObjectName("customerInfoGroup")
+        self._data_group_layout = QVBoxLayout(data_group)
+        self._data_group_layout.setContentsMargins(4, 2, 4, 2)
+        self._data_group_layout.setSpacing(3)
+        self._data_group_title = QLabel(tr("Runtime data"))
+        self._data_group_title.setObjectName("customerInfoTitle")
+        data_title_row = QHBoxLayout()
+        data_title_row.setContentsMargins(0, 0, 0, 0)
+        data_title_row.setSpacing(6)
+        data_title_row.addWidget(self._data_group_title)
+        data_title_row.addStretch(1)
+        self._pll_lock_summary = QLabel(tr("PLL lock: —"))
+        self._pll_lock_summary.setObjectName("customerPllLockSummary")
+        self._pll_lock_summary.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._pll_lock_summary.setProperty("availability", Availability.UNSUPPORTED.value)
+        self._pll_lock_summary.setProperty("status", "neutral")
+        data_title_row.addWidget(self._pll_lock_summary)
+        self._data_group_layout.addLayout(data_title_row)
+        self._data_grid = QGridLayout()
+        self._data_grid.setContentsMargins(0, 0, 0, 0)
+        self._data_grid.setSpacing(4)
+        self._data_values: dict[str, QLabel] = {}
+        for index, (key, title, _unit) in enumerate(self._DATA_DEFS):
+            item = QLabel(f"{tr(title)}: —")
+            item.setObjectName("customerDataItem")
+            item.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setMinimumHeight(24)
+            item.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self._data_values[key] = item
+            self._data_grid.addWidget(item, index // 4, index % 4)
+        for column in range(4):
+            self._data_grid.setColumnStretch(column, 1)
+        self._data_group_layout.addLayout(self._data_grid)
+
+        self._info_layout.addWidget(state_group, 5)
+        self._info_layout.addWidget(data_group, 7)
+        self._root_layout.addWidget(info_band)
+
+        self._main_grid = QGridLayout()
+        self._main_grid.setSpacing(8)
+        self._model_panel = QFrame()
+        self._model_panel.setObjectName("customerSection")
+        self._model_layout = QVBoxLayout(self._model_panel)
+        self._model_layout.setContentsMargins(6, 6, 6, 6)
         self._attitude = AttitudeWidget() if enable_3d else None
         if self._attitude is not None:
-            self._attitude.setMinimumSize(340, 260)
+            self._attitude.setMinimumSize(180, 150)
+            self._attitude.set_readout_emphasis(True)
             self._attitude.set_auto_bindings(
                 roll="customer_roll",
                 pitch="customer_pitch",
@@ -247,70 +422,122 @@ class CustomerOverviewView(QWidget):
                 ant_az="customer_beam_az",
                 ant_el="customer_beam_el",
             )
-            model_layout.addWidget(self._attitude)
+            self._model_layout.addWidget(self._attitude)
         else:
             placeholder = QLabel(tr("3D model"))
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            model_layout.addWidget(placeholder)
-        main.addWidget(model_panel, 3)
+            self._model_layout.addWidget(placeholder)
 
-        metric_panel = QFrame()
-        metric_panel.setObjectName("customerSection")
-        metric_grid = QGridLayout(metric_panel)
-        metric_grid.setContentsMargins(6, 6, 6, 6)
-        metric_grid.setSpacing(5)
-        self._metrics: dict[str, _MetricValue] = {}
-        for index, (key, title, unit) in enumerate(self._METRIC_DEFS):
+        self._beam_panel = QFrame()
+        self._beam_panel.setObjectName("customerSection")
+        self._beam_layout = QVBoxLayout(self._beam_panel)
+        self._beam_layout.setContentsMargins(8, 6, 8, 6)
+        self._beam_layout.setSpacing(4)
+        self._beam_title = QLabel(tr("Beam direction"))
+        self._beam_title.setObjectName("customerSectionTitle")
+        self._beam_layout.addWidget(self._beam_title)
+        self._beam_polar = BeamPolarWidget()
+        self._beam_layout.addWidget(self._beam_polar, 1)
+        beam_footer = QWidget()
+        footer_layout = QHBoxLayout(beam_footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(4)
+        self._beam_values: dict[str, _MetricValue] = {}
+        for key, title, unit in (
+            ("beam_el", tr_source("Elevation / off-axis"), "°"),
+            ("beam_az", tr_source("Azimuth"), "°"),
+            ("polarization", tr_source("Polarization"), ""),
+        ):
             metric = _MetricValue(title, unit)
-            metric.setObjectName("customerMetric")
+            metric.setObjectName("customerBeamValue")
             metric.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
             )
-            self._metrics[key] = metric
-            metric_grid.addWidget(metric, index // 3, index % 3)
-        for column in range(3):
-            metric_grid.setColumnStretch(column, 1)
-        main.addWidget(metric_panel, 2)
-        root.addLayout(main, 5)
+            self._beam_values[key] = metric
+            footer_layout.addWidget(metric, 1)
+        self._beam_layout.addWidget(beam_footer)
 
-        signal_panel = QFrame()
-        signal_panel.setObjectName("customerSection")
-        signal_layout = QVBoxLayout(signal_panel)
-        signal_layout.setContentsMargins(10, 7, 10, 7)
-        signal_layout.setSpacing(3)
-        self._snr_title = QLabel(tr("Signal strength - last 60 seconds"))
+        self._main_grid.addWidget(self._model_panel, 0, 0)
+        self._main_grid.addWidget(self._beam_panel, 0, 1)
+        self._main_grid.setColumnStretch(0, 1)
+        self._main_grid.setColumnStretch(1, 1)
+        self._main_grid.setRowStretch(0, 1)
+        self._root_layout.addLayout(self._main_grid, 1)
+
+        self._signal_panel = QFrame()
+        self._signal_panel.setObjectName("customerSection")
+        self._signal_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self._signal_panel.setMinimumHeight(188)
+        self._signal_panel.setMaximumHeight(220)
+        self._signal_layout = QVBoxLayout(self._signal_panel)
+        self._signal_layout.setContentsMargins(10, 7, 10, 7)
+        self._signal_layout.setSpacing(3)
+        self._snr_title = QLabel(tr("Signal strength - last 5 minutes"))
         self._snr_title.setObjectName("customerSectionTitle")
-        signal_layout.addWidget(self._snr_title)
+        self._signal_layout.addWidget(self._snr_title)
+        signal_body = QWidget()
+        self._signal_body_layout = QHBoxLayout(signal_body)
+        self._signal_body_layout.setContentsMargins(0, 0, 0, 0)
+        self._signal_body_layout.setSpacing(10)
+        self._snr_readout = _MetricValue(tr_source("SNR"), "dB")
+        self._snr_readout.setObjectName("customerSnrReadout")
+        self._snr_readout.setMinimumWidth(150)
+        self._snr_readout.setMaximumWidth(220)
+        self._snr_readout.setFixedHeight(150)
+        self._signal_body_layout.addWidget(
+            self._snr_readout, 0, Qt.AlignmentFlag.AlignTop
+        )
         self._snr_plot = pg.PlotWidget()
         self._snr_plot.setMinimumHeight(150)
         self._snr_plot.setMouseEnabled(x=False, y=False)
         self._snr_plot.hideButtons()
         self._snr_plot.showGrid(x=True, y=True, alpha=0.18)
         self._snr_plot.setLabel("left", "SNR", units="dB")
-        self._snr_plot.setLabel("bottom", tr("Time"), units="s")
+        self._snr_plot.setLabel("bottom", tr("Device uptime"), units="s")
+        self._snr_plot.getAxis("bottom").enableAutoSIPrefix(False)
         self._snr_curve = self._snr_plot.plot([], [])
-        signal_layout.addWidget(self._snr_plot)
-        root.addWidget(signal_panel, 3)
+        self._signal_body_layout.addWidget(self._snr_plot, 1)
+        self._signal_layout.addWidget(signal_body)
 
-        component_panel = QFrame()
-        component_panel.setObjectName("customerSection")
-        component_layout = QVBoxLayout(component_panel)
-        component_layout.setContentsMargins(10, 7, 10, 7)
-        self._component_title = QLabel(tr("Device components"))
-        self._component_title.setObjectName("customerSectionTitle")
-        component_layout.addWidget(self._component_title)
-        self._component_table = QTableWidget(3, 5)
-        self._component_table.setHorizontalHeaderLabels([
-            tr("Component"), tr("Status"), tr("Temperature"), tr("Voltage"), tr("Version")
-        ])
-        self._component_table.verticalHeader().hide()
-        self._component_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._component_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self._component_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._component_table.horizontalHeader().setStretchLastSection(True)
-        self._fit_component_table(self._component_table)
-        component_layout.addWidget(self._component_table)
-        root.addWidget(component_panel, 2)
+        self._component_panel = QFrame()
+        self._component_panel.setObjectName("customerSection")
+        self._component_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self._component_layout = QHBoxLayout(self._component_panel)
+        self._component_layout.setContentsMargins(10, 5, 10, 5)
+        self._component_layout.setSpacing(0)
+        self._component_widgets: dict[str, QWidget] = {}
+        self._component_names: dict[str, QLabel] = {}
+        self._component_details: dict[str, QLabel] = {}
+        for key, title in (
+            ("converter", tr_source("Converter")),
+            ("tx_array", tr_source("TX array")),
+            ("rx_array", tr_source("RX array")),
+        ):
+            item = QWidget()
+            item.setObjectName("customerComponentItem")
+            item_layout = QVBoxLayout(item)
+            item_layout.setContentsMargins(10, 1, 10, 1)
+            item_layout.setSpacing(1)
+            name = QLabel(tr(title))
+            name.setObjectName("customerComponentName")
+            detail = QLabel("— · — · — · —")
+            detail.setObjectName("customerComponentDetail")
+            detail.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            detail.setMinimumWidth(0)
+            item_layout.addWidget(name)
+            item_layout.addWidget(detail)
+            self._component_widgets[key] = item
+            self._component_names[key] = name
+            self._component_details[key] = detail
+            self._component_layout.addWidget(item, 1)
+
+        self._root_layout.addWidget(self._signal_panel)
+        self._root_layout.addWidget(self._component_panel)
+        self._apply_density("dense")
 
     def _toggle_connection(self) -> None:
         if self._live.is_connected():
@@ -330,9 +557,40 @@ class CustomerOverviewView(QWidget):
             self.status_message.emit(tr("Connection failed"), 3000)
 
     def _on_connection_changed(self, connected: bool) -> None:
-        self._connect_btn.setText(tr("Disconnect") if connected else tr("Connect"))
+        phase = self._connection_phase()
+        if not connected:
+            label = tr("Connect")
+        elif phase == DeviceConnectionPhase.WAITING:
+            label = tr("Cancel")
+        else:
+            label = tr("Disconnect")
+        self._connect_btn.setText(label)
         self._ip_edit.setEnabled(not connected)
         self._remote_port.setEnabled(not connected)
+        self.refresh()
+
+    def _on_device_connection_phase_changed(self, _phase: str) -> None:
+        self._on_connection_changed(self._live.is_connected())
+
+    def _connection_phase(self) -> DeviceConnectionPhase:
+        getter = getattr(self._live, "connection_phase", None)
+        if getter is None:
+            return (
+                DeviceConnectionPhase.ONLINE
+                if self._live.is_connected()
+                else DeviceConnectionPhase.DISCONNECTED
+            )
+        raw = getter()
+        if isinstance(raw, DeviceConnectionPhase):
+            return raw
+        try:
+            return DeviceConnectionPhase(str(raw))
+        except ValueError:
+            return DeviceConnectionPhase.DISCONNECTED
+
+    def _device_online(self) -> bool:
+        checker = getattr(self._live, "is_device_online", None)
+        return bool(checker()) if checker is not None else bool(self._live.is_connected())
 
     def _on_profile_ready(self, hw_type: str) -> None:
         if self._attitude is not None and hw_type != self._last_model:
@@ -340,7 +598,190 @@ class CustomerOverviewView(QWidget):
             self._last_model = hw_type
 
     def _on_recording_changed(self, recording: bool, _path: str) -> None:
-        self._record_btn.setText(tr("Stop recording") if recording else tr("Record"))
+        self._render_recording_control(recording=recording)
+
+    def _on_customer_recording_state_changed(self, _state: str, _path: str) -> None:
+        self._render_recording_control()
+
+    def _recording_state(self) -> CustomerRecordingState:
+        getter = getattr(self._live, "customer_recording_state", None)
+        if getter is None:
+            return (
+                CustomerRecordingState.ACTIVE
+                if self._live.is_recording()
+                else CustomerRecordingState.IDLE
+            )
+        raw = getter()
+        if isinstance(raw, CustomerRecordingState):
+            return raw
+        try:
+            return CustomerRecordingState(str(raw))
+        except ValueError:
+            return CustomerRecordingState.IDLE
+
+    def _render_recording_control(self, *, recording: Optional[bool] = None) -> None:
+        state = self._recording_state()
+        if state == CustomerRecordingState.ACTIVE or recording is True:
+            text = tr("Stop recording")
+            enabled = True
+        elif state in {
+            CustomerRecordingState.ARMED,
+            CustomerRecordingState.PREPARING,
+        }:
+            text = tr("Cancel recording")
+            enabled = True
+        elif state == CustomerRecordingState.RESTORING:
+            text = tr("Restoring...")
+            enabled = False
+        else:
+            text = tr("Record")
+            enabled = True
+        self._record_btn.setText(text)
+        self._record_btn.setEnabled(enabled)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_main_grid"):
+            self._apply_density(self._density_for_height(event.size().height()))
+
+    def sizeHint(self):
+        # QScrollArea otherwise prefers the tall beam plot's natural hint and
+        # creates a page scrollbar even though every panel can fit its minimum.
+        return self.minimumSizeHint()
+
+    @staticmethod
+    def _density_for_height(height: int) -> str:
+        if height >= 860:
+            return "regular"
+        if height >= 680:
+            return "compact"
+        return "dense"
+
+    def _apply_density(self, density: str) -> None:
+        if self._density == density:
+            return
+        self._density = density
+        config = {
+            "regular": {
+                "root": (10, 8, 10, 10, 8),
+                "connection": (10, 6, 10, 6, 7),
+                "info": (5, 4, 5, 4, 6, 4, 28),
+                "panel": (6, 6, 6, 6, 5),
+                "beam": (8, 6, 8, 6, 4),
+                "lower": (240, 188, 180, 60),
+                "attitude": (240, 220),
+                "polar": (210, 180),
+                "main_min": 300,
+            },
+            "compact": {
+                "root": (7, 5, 7, 7, 5),
+                "connection": (8, 4, 8, 4, 5),
+                "info": (4, 3, 4, 3, 4, 3, 25),
+                "panel": (4, 4, 4, 4, 3),
+                "beam": (5, 4, 5, 4, 3),
+                "lower": (175, 132, 126, 52),
+                "attitude": (180, 155),
+                "polar": (170, 135),
+                "main_min": 235,
+            },
+            "dense": {
+                "root": (5, 4, 5, 5, 3),
+                "connection": (6, 3, 6, 3, 4),
+                "info": (3, 2, 3, 2, 3, 2, 22),
+                "panel": (3, 3, 3, 3, 2),
+                "beam": (4, 3, 4, 3, 2),
+                "lower": (122, 90, 86, 44),
+                "attitude": (150, 120),
+                "polar": (135, 105),
+                "main_min": 175,
+            },
+        }[density]
+
+        root = config["root"]
+        self._root_layout.setContentsMargins(*root[:4])
+        self._root_layout.setSpacing(root[4])
+        connection = config["connection"]
+        self._connection_layout.setContentsMargins(*connection[:4])
+        self._connection_layout.setSpacing(connection[4])
+
+        info = config["info"]
+        self._info_layout.setContentsMargins(*info[:4])
+        self._info_layout.setSpacing(info[4])
+        for group_layout in (self._state_group_layout, self._data_group_layout):
+            group_layout.setContentsMargins(info[5], 1, info[5], 1)
+            group_layout.setSpacing(info[5])
+        self._status_grid.setSpacing(info[5])
+        self._data_grid.setSpacing(info[5])
+        self._reflow_status(4)
+        for item in self._status_values.values():
+            item.setFixedHeight(info[6])
+            item.setProperty("density", density)
+            item.style().unpolish(item)
+            item.style().polish(item)
+        for item in self._data_values.values():
+            item.setFixedHeight(info[6])
+            item.setProperty("density", density)
+            item.style().unpolish(item)
+            item.style().polish(item)
+        self._pll_lock_summary.setProperty("density", density)
+        self._pll_lock_summary.style().unpolish(self._pll_lock_summary)
+        self._pll_lock_summary.style().polish(self._pll_lock_summary)
+
+        panel = config["panel"]
+        self._model_layout.setContentsMargins(*panel[:4])
+        beam = config["beam"]
+        self._beam_layout.setContentsMargins(*beam[:4])
+        self._beam_layout.setSpacing(beam[4])
+
+        main_min = config["main_min"]
+        for item in (self._model_panel, self._beam_panel):
+            item.setMinimumHeight(main_min)
+        if self._attitude is not None:
+            self._attitude.setMinimumSize(*config["attitude"])
+        self._beam_polar.setMinimumSize(*config["polar"])
+
+        for metric in self._beam_values.values():
+            metric.set_density(density)
+        self._snr_readout.set_density(density)
+
+        signal_height, readout_height, plot_height, component_height = config["lower"]
+        self._signal_panel.setFixedHeight(signal_height)
+        self._component_panel.setFixedHeight(component_height)
+        side_margin = 10 if density == "regular" else 6 if density == "compact" else 4
+        vertical_margin = 7 if density == "regular" else 4 if density == "compact" else 3
+        self._signal_layout.setContentsMargins(
+            side_margin, vertical_margin, side_margin, vertical_margin
+        )
+        self._component_layout.setContentsMargins(
+            side_margin, vertical_margin, side_margin, vertical_margin
+        )
+        for item in self._component_widgets.values():
+            item.layout().setContentsMargins(
+                side_margin, 1, side_margin, 1
+            )
+            item.setProperty("density", density)
+            item.style().unpolish(item)
+            item.style().polish(item)
+        self._signal_body_layout.setSpacing(
+            10 if density == "regular" else 6 if density == "compact" else 4
+        )
+        self._snr_readout.setFixedHeight(readout_height)
+        self._snr_readout.setMinimumWidth(
+            150 if density == "regular" else 122 if density == "compact" else 94
+        )
+        self._snr_readout.setMaximumWidth(
+            220 if density == "regular" else 170 if density == "compact" else 128
+        )
+        self._snr_plot.setMinimumHeight(plot_height)
+
+    def _reflow_status(self, columns: int) -> None:
+        items = list(self._status_values.values())
+        for item in items:
+            self._status_grid.removeWidget(item)
+        for column in range(4):
+            self._status_grid.setColumnStretch(column, 1 if column < columns else 0)
+        for index, item in enumerate(items):
+            self._status_grid.addWidget(item, index // columns, index % columns)
 
     @staticmethod
     def _display(value: ProductValue) -> str:
@@ -362,9 +803,9 @@ class CustomerOverviewView(QWidget):
             snapshot = self._service_store.snapshot(snapshot)
         self._refresh_identity(snapshot)
         self._refresh_status(snapshot)
-        self._refresh_metrics(snapshot)
+        self._refresh_data_and_beam(snapshot)
         self._refresh_model(snapshot)
-        self._refresh_snr()
+        self._refresh_snr(snapshot)
         self._refresh_components(snapshot)
 
     def _refresh_identity(self, snapshot: ProductSnapshot) -> None:
@@ -377,27 +818,35 @@ class CustomerOverviewView(QWidget):
         model = self._display(snapshot.identity.model)
         serial = self._display(snapshot.identity.serial_number)
         firmware = self._display(snapshot.identity.main_firmware)
-        if self._live.is_connected():
+        if self._device_online():
             self._identity_label.setText(
                 tr("{model} | SN {serial} | Firmware {firmware}", model=model, serial=serial, firmware=firmware)
             )
+        elif self._connection_phase() == DeviceConnectionPhase.WAITING:
+            self._identity_label.setText(tr("Waiting for device..."))
+        elif self._connection_phase() == DeviceConnectionPhase.RECONNECTING:
+            self._identity_label.setText(tr("Reconnecting to device..."))
         else:
             self._identity_label.setText(tr("No device connected"))
 
     def _refresh_status(self, snapshot: ProductSnapshot) -> None:
         op = snapshot.operation
-        link_value = (
-            tr("Loaded")
-            if self._playback_mode and self._live.is_connected()
-            else tr("Online")
-            if self._live.is_connected()
-            else tr("Offline")
-        )
+        phase = self._connection_phase()
+        if self._playback_mode and self._live.is_connected():
+            link_value = tr("Loaded")
+        elif phase == DeviceConnectionPhase.ONLINE:
+            link_value = tr("Online")
+        elif phase == DeviceConnectionPhase.WAITING:
+            link_value = tr("Waiting")
+        elif phase == DeviceConnectionPhase.RECONNECTING:
+            link_value = tr("Reconnecting")
+        else:
+            link_value = tr("Offline")
         self._set_status(
             "link",
             "Connection",
             link_value,
-            "ok" if self._live.is_connected() else "neutral",
+            "ok" if phase == DeviceConnectionPhase.ONLINE else "neutral",
         )
         mode = "—" if op.control_mode.value is None else _control_mode_text(op.control_mode.value)
         if op.control_mode.availability == Availability.STALE:
@@ -420,23 +869,143 @@ class CustomerOverviewView(QWidget):
             "ok" if op.navigation.value == NavigationState.READY else "warn",
         )
         self._set_status("gnss", "GNSS fix", self._display(op.gnss_fix))
+        # Old firmware can briefly report PA enabled while its component record says TX array Offline.
+        # Never present that contradictory state as a customer-facing successful transmission.
+        if snapshot.tx_array.online.value is False:
+            tx = tr("Unavailable")
+            tx_status = "warn"
+        else:
+            tx = "—" if op.tx_enabled.value is None else tr("On") if op.tx_enabled.value else tr("Off")
+            if op.tx_enabled.availability == Availability.STALE:
+                tx = tr("{value} (stale)", value=tx)
+            tx_status = "ok" if op.tx_enabled.value else "neutral"
+        self._set_status("tx", "TX", tx, tx_status)
+        modem = (
+            "—"
+            if op.modem_online.value is None
+            else tr("Online") if op.modem_online.value else tr("Offline")
+        )
+        if op.modem_online.availability == Availability.STALE:
+            modem = tr("{value} (stale)", value=modem)
+        self._set_status(
+            "modem",
+            "Modem",
+            modem,
+            "ok" if op.modem_online.value else "warn" if op.modem_online.value is False else "neutral",
+        )
         self._gnss_btn.setEnabled(self._live.gnss_store().has_data())
 
-    def _refresh_metrics(self, snapshot: ProductSnapshot) -> None:
+    def _refresh_data_and_beam(self, snapshot: ProductSnapshot) -> None:
         op = snapshot.operation
-        values = {
-            "beam_az": op.beam_az_deg,
-            "beam_el": op.beam_el_deg,
-            "roll": op.roll_deg,
-            "pitch": op.pitch_deg,
-            "yaw": op.yaw_deg,
-            "snr": op.snr_db,
-            "longitude": op.longitude_deg,
-            "latitude": op.latitude_deg,
-            "altitude": op.altitude_m,
+        polarization = combined_polarization(op.rx_polarization, op.tx_polarization)
+        data_values = {
+            "longitude": (op.longitude_deg, 6),
+            "latitude": (op.latitude_deg, 6),
+            "altitude": (op.altitude_m, 2),
+            "rx_rf": (op.rx_frequency_mhz, 2),
+            "tx_rf": (op.tx_frequency_mhz, 2),
+            "rx_lo": (op.rx_lo_mhz, 2),
+            "tx_lo": (op.tx_lo_mhz, 2),
+            "satellite": (self._satellite_summary(op), 2),
         }
-        for key, value in values.items():
-            self._metrics[key].set_product_value(value, 6 if key in {"longitude", "latitude"} else 2)
+        for key, (value, decimals) in data_values.items():
+            self._set_data_value(key, value, decimals)
+        pll_summary, pll_status = pll_lock_summary(
+            op.clock_pll_locked,
+            op.tx_pll_locked,
+            op.rx_pll_locked,
+        )
+        self._set_pll_lock_summary(pll_summary, pll_status)
+
+        beam_values = {
+            "beam_el": op.beam_el_deg,
+            "beam_az": op.beam_az_deg,
+            "polarization": polarization,
+        }
+        for key, value in beam_values.items():
+            self._beam_values[key].set_product_value(value, 2)
+
+        beam_stale = (
+            op.beam_az_deg.availability == Availability.STALE
+            or op.beam_el_deg.availability == Availability.STALE
+        )
+        self._beam_polar.set_beam(
+            None if op.beam_az_deg.value is None else float(op.beam_az_deg.value),
+            None if op.beam_el_deg.value is None else float(op.beam_el_deg.value),
+            stale=beam_stale,
+        )
+
+    def _set_data_value(self, key: str, value: ProductValue, decimals: int) -> None:
+        title, unit = next(
+            (title, unit) for item_key, title, unit in self._DATA_DEFS if item_key == key
+        )
+        if value.value is None:
+            rendered = "—"
+        elif isinstance(value.value, float):
+            rendered = f"{value.value:.{decimals}f}"
+        else:
+            rendered = str(value.value)
+        if rendered != "—" and unit:
+            rendered = f"{rendered} {unit}"
+        if value.availability == Availability.STALE:
+            rendered = tr("{value} (stale)", value=rendered)
+        label = self._data_values[key]
+        label.setText(f"{tr(title)}: {rendered}")
+        label.setToolTip(label.text())
+        label.setProperty("availability", value.availability.value)
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def _set_pll_lock_summary(self, value: ProductValue[str], status: str) -> None:
+        rendered = "—" if value.value is None else str(value.value)
+        if value.availability == Availability.STALE:
+            rendered = tr("{value} (stale)", value=rendered)
+        self._pll_lock_summary.setText(tr("PLL lock: {value}", value=rendered))
+        self._pll_lock_summary.setToolTip(self._pll_lock_summary.text())
+        self._pll_lock_summary.setProperty("availability", value.availability.value)
+        self._pll_lock_summary.setProperty("status", status)
+        self._pll_lock_summary.style().unpolish(self._pll_lock_summary)
+        self._pll_lock_summary.style().polish(self._pll_lock_summary)
+
+    @staticmethod
+    def _satellite_summary(op) -> ProductValue[str]:
+        mode = op.satellite_mode
+        selected: list[ProductValue] = [mode]
+        text = ""
+        if mode.value == SatelliteMode.GEO:
+            longitude = op.satellite_longitude_deg
+            selected.append(longitude)
+            if longitude.value is None:
+                text = "GEO"
+            else:
+                direction = "E" if float(longitude.value) >= 0.0 else "W"
+                text = f"GEO {abs(float(longitude.value)):.2f}°{direction}"
+        elif mode.value == SatelliteMode.LEO_TLE:
+            name = op.satellite_name
+            sat_id = op.satellite_id
+            if name.value:
+                selected.append(name)
+                text = str(name.value)
+            elif sat_id.value is not None:
+                selected.append(sat_id)
+                text = tr("NORAD {id}", id=sat_id.value)
+            else:
+                text = tr("LEO/TLE")
+        else:
+            for candidate in (op.satellite_name, op.satellite_id):
+                if candidate.value is not None:
+                    selected.append(candidate)
+                    text = str(candidate.value)
+                    break
+        if not text:
+            return ProductValue.unsupported()
+        timestamp = max(
+            (item.device_timestamp_ms for item in selected if item.device_timestamp_ms is not None),
+            default=None,
+        )
+        if any(item.availability == Availability.STALE for item in selected):
+            return ProductValue.stale(text, timestamp)
+        return ProductValue.valid(text, timestamp)
 
     def _refresh_model(self, snapshot: ProductSnapshot) -> None:
         if self._attitude is None:
@@ -455,32 +1024,53 @@ class CustomerOverviewView(QWidget):
             None if op.beam_el_deg.value is None else float(op.beam_el_deg.value),
         )
 
-    def _refresh_snr(self) -> None:
+    def _refresh_snr(self, snapshot: ProductSnapshot) -> None:
+        self._snr_readout.set_product_value(snapshot.operation.snr_db, 2)
         if self._service_store is not None and self._service_store.service_available:
-            times, values = self._service_store.snr_history(window_s=60.0)
+            times, values = self._service_store.snr_history(window_s=300.0)
         else:
-            times, values = self._projector.channel_history(CHANNEL_ROLE_SNR, window_s=60.0)
+            times, values = self._projector.channel_history(CHANNEL_ROLE_SNR, window_s=300.0)
         self._snr_curve.setData(times, values)
+        finite_values = [float(value) for value in values if math.isfinite(float(value))]
+        if finite_values:
+            minimum = min(finite_values)
+            maximum = max(finite_values)
+            spread = maximum - minimum
+            if spread < 2.0:
+                center = (minimum + maximum) / 2.0
+                minimum = center - 2.0
+                maximum = center + 2.0
+            else:
+                padding = max(0.5, spread * 0.1)
+                minimum -= padding
+                maximum += padding
+            self._snr_plot.setYRange(minimum, maximum, padding=0.0)
         if times.size:
-            self._snr_plot.setXRange(-60.0, 0.0, padding=0.0)
+            data_end = float(times[-1])
+            end = max(300.0, data_end)
+            start = max(0.0, end - 300.0)
+            self._snr_plot.setXRange(start, end, padding=0.0)
 
     def _refresh_components(self, snapshot: ProductSnapshot) -> None:
         rows = (
-            (tr("Converter"), snapshot.converter),
-            (tr("TX array"), snapshot.tx_array),
-            (tr("RX array"), snapshot.rx_array),
+            ("converter", snapshot.converter),
+            ("tx_array", snapshot.tx_array),
+            ("rx_array", snapshot.rx_array),
         )
-        for row, (name, component) in enumerate(rows):
-            online = "—" if component.online.value is None else tr("Online") if component.online.value else tr("Offline")
+        for key, component in rows:
+            online = (
+                "—"
+                if component.online.value is None
+                else tr("Online") if component.online.value else tr("Offline")
+            )
             values = (
-                name,
                 online,
                 self._format_component_value(component.temperature_c, "°C"),
                 self._format_component_value(component.voltage_v, "V"),
                 self._display(component.version),
             )
-            for column, text in enumerate(values):
-                self._component_table.setItem(row, column, QTableWidgetItem(text))
+            self._component_details[key].setText(" · ".join(values))
+            self._component_details[key].setToolTip(" · ".join(values))
 
     @staticmethod
     def _format_component_value(value: ProductValue[float], unit: str) -> str:
@@ -489,37 +1079,64 @@ class CustomerOverviewView(QWidget):
         text = f"{float(value.value):.1f} {unit}"
         return tr("{value} (stale)", value=text) if value.availability == Availability.STALE else text
 
-    @staticmethod
-    def _fit_component_table(table: QTableWidget) -> None:
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.horizontalHeader().setFixedHeight(28)
-        for row in range(table.rowCount()):
-            table.setRowHeight(row, 26)
-        table.setFixedHeight(28 + table.rowCount() * 26 + 4)
-
     def set_theme(self, theme: str, _scale: str = "small") -> None:
         self._theme = theme
         self._apply_theme()
         if self._attitude is not None:
             self._attitude.set_theme(theme, "small")
+        self._beam_polar.set_theme(theme)
 
     def _apply_theme(self) -> None:
         pal = S.palette(self._theme)
         self.setStyleSheet(
             f"CustomerOverviewView {{ background: {pal['bg']}; color: {pal['text']}; }}"
-            f"#customerConnectionBar, #customerStatusBand, #customerSection {{ "
+            f"#customerConnectionBar, #customerInfoBand, #customerSection {{ "
             f"background: {pal['panel']}; border: 1px solid {pal['border']}; border-radius: 6px; }}"
-            f"#customerIdentity, #customerSectionTitle {{ color: {pal['text']}; font-weight: 600; }}"
+            f"#customerIdentity, #customerSectionTitle, #customerInfoTitle {{ color: {pal['text']}; font-weight: 600; }}"
+            f"#customerInfoGroup {{ background: {pal['panel']}; border: 0; }}"
             f"#customerStatusItem {{ background: {pal['card_2']}; border: 1px solid {pal['border']}; "
             f"border-radius: 5px; padding: 3px 7px; color: {pal['text_2']}; }}"
+            f"#customerStatusItem[density='dense'] {{ padding: 1px 3px; font-size: 10px; }}"
             f"#customerStatusItem[status='ok'] {{ color: {pal['ok']}; border-color: {pal['ok']}; }}"
             f"#customerStatusItem[status='warn'] {{ color: {pal['warn']}; border-color: {pal['warn']}; }}"
+            f"#customerDataItem {{ background: {pal['card_2']}; border: 1px solid {pal['border']}; "
+            f"border-radius: 4px; padding: 2px 5px; color: {pal['text_2']}; }}"
+            f"#customerDataItem[density='dense'] {{ padding: 1px 3px; font-size: 10px; }}"
+            f"#customerDataItem[availability='stale'] {{ color: {pal['text_3']}; }}"
+            f"#customerPllLockSummary {{ color: {pal['text_2']}; font-size: 11px; font-weight: 600; }}"
+            f"#customerPllLockSummary[density='dense'] {{ font-size: 10px; }}"
+            f"#customerPllLockSummary[status='ok'] {{ color: {pal['ok']}; }}"
+            f"#customerPllLockSummary[status='warn'] {{ color: {pal['warn']}; }}"
+            f"#customerPllLockSummary[availability='stale'] {{ color: {pal['text_3']}; }}"
             f"#customerMetric {{ background: {pal['card_2']}; border: 1px solid {pal['border']}; "
             f"border-radius: 5px; }}"
             f"#customerMetricTitle {{ color: {pal['text_2']}; font-size: 11px; }}"
             f"#customerMetricValue {{ color: {pal['text']}; font-family: '{S.monospace_family()}'; "
             f"font-size: 17px; font-weight: 600; }}"
+            f"#customerMetric[density='compact'] #customerMetricTitle {{ font-size: 10px; }}"
+            f"#customerMetric[density='compact'] #customerMetricValue {{ font-size: 15px; }}"
+            f"#customerMetric[density='dense'] #customerMetricTitle {{ font-size: 9px; }}"
+            f"#customerMetric[density='dense'] #customerMetricValue {{ font-size: 14px; }}"
             f"#customerMetric[availability='stale'] #customerMetricValue {{ color: {pal['text_3']}; }}"
+            f"#customerBeamValue {{ border-right: 1px solid {pal['border']}; }}"
+            f"#customerBeamValue #customerMetricTitle {{ font-size: 10px; }}"
+            f"#customerBeamValue #customerMetricValue {{ font-size: 14px; }}"
+            f"#customerBeamValue[density='dense'] #customerMetricTitle {{ font-size: 9px; }}"
+            f"#customerBeamValue[density='dense'] #customerMetricValue {{ font-size: 12px; }}"
+            f"#customerBeamValue[availability='stale'] #customerMetricValue {{ color: {pal['text_3']}; }}"
+            f"#customerSnrReadout {{ border-right: 1px solid {pal['border_2']}; }}"
+            f"#customerSnrReadout #customerMetricTitle {{ font-size: 13px; }}"
+            f"#customerSnrReadout #customerMetricValue {{ color: {pal['accent_2']}; "
+            f"font-size: 32px; font-weight: 700; }}"
+            f"#customerSnrReadout[density='compact'] #customerMetricValue {{ font-size: 27px; }}"
+            f"#customerSnrReadout[density='dense'] #customerMetricTitle {{ font-size: 10px; }}"
+            f"#customerSnrReadout[density='dense'] #customerMetricValue {{ font-size: 23px; }}"
+            f"#customerSnrReadout[availability='stale'] #customerMetricValue {{ color: {pal['text_3']}; }}"
+            f"#customerComponentItem {{ border-right: 1px solid {pal['border']}; }}"
+            f"#customerComponentName {{ color: {pal['text_2']}; font-size: 10px; }}"
+            f"#customerComponentDetail {{ color: {pal['text']}; font-family: '{S.monospace_family()}'; font-weight: 600; }}"
+            f"#customerComponentItem[density='dense'] #customerComponentName {{ font-size: 9px; }}"
+            f"#customerComponentItem[density='dense'] #customerComponentDetail {{ font-size: 10px; }}"
         )
         self._snr_plot.setBackground(pal["panel"])
         self._snr_curve.setPen(pg.mkPen(pal["accent_2"], width=2))
@@ -528,14 +1145,20 @@ class CustomerOverviewView(QWidget):
             self._snr_plot.getAxis(axis).setTextPen(pg.mkPen(pal["text_2"]))
 
     def retranslate_ui(self) -> None:
-        self._snr_title.setText(tr("Signal strength - last 60 seconds"))
-        self._component_title.setText(tr("Device components"))
-        self._component_table.setHorizontalHeaderLabels([
-            tr("Component"), tr("Status"), tr("Temperature"), tr("Voltage"), tr("Version")
-        ])
-        for metric in self._metrics.values():
+        self._beam_title.setText(tr("Beam direction"))
+        self._snr_title.setText(tr("Signal strength - last 5 minutes"))
+        self._state_group_title.setText(tr("Status"))
+        self._data_group_title.setText(tr("Runtime data"))
+        for key, title in (
+            ("converter", tr_source("Converter")),
+            ("tx_array", tr_source("TX array")),
+            ("rx_array", tr_source("RX array")),
+        ):
+            self._component_names[key].setText(tr(title))
+        for metric in self._beam_values.values():
             metric.retranslate_ui()
-        self._snr_plot.setLabel("bottom", tr("Time"), units="s")
+        self._snr_readout.retranslate_ui()
+        self._snr_plot.setLabel("bottom", tr("Device uptime"), units="s")
         self._on_connection_changed(self._live.is_connected())
-        self._on_recording_changed(self._live.is_recording(), "")
+        self._render_recording_control(recording=self._live.is_recording())
         self.refresh()

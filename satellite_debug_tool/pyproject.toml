@@ -26,7 +26,6 @@ packages = [
     "satellite_debug_tool.core.log_parser",
     "satellite_debug_tool.core.profile",
     "satellite_debug_tool.core.protocol",
-    "satellite_debug_tool.core.simulation",
     "satellite_debug_tool.io",
     "satellite_debug_tool.ui",
     "satellite_debug_tool.updater",

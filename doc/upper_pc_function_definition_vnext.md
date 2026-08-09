@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |------|------|
-| 日期 | 2026-08-05 |
+| 日期 | 2026-08-06 |
 | 适用项目 | `satellite_debug_tool` |
 | 适用协议 | DEBUG protocol v2 |
 | 当前定位 | 当前产品功能定义 + 后续优化路线 |
@@ -35,13 +35,15 @@ Satellite Debug Tool 当前是一套同时服务客户操作与内部工程诊�
 |-------------|----------|----------|----------|
 | 客户 / Overview | 客户操作员 | 连接设备、看整机状态、录制现场 | 跟踪/INS/GNSS、姿态/波束、3D、SNR、部件健康 |
 | 客户 / RF control | 授权客户操作员 | 自动/手动切换与手动射频控制 | 精确响应和设备最终读回 |
-| 客户 / Playback | 客户/支持人员 | 按时间复现客户可见状态 | 只读 Overview、时间轴、质量摘要、GNSS 弹窗 |
+| 客户 / Playback | 客户/支持人员 | 分析客户可见历史曲线 | 九路受限曲线、设备开机时间轴、质量摘要、GNSS 弹窗 |
 | 客户 / Maintenance | 客户维护人员 | 查看设备清单和升级 | 设备/部件信息、签名 `.sfpkg` OTA |
 | 工程 / Live、Playback、Log、Device | 内部工程人员 | 全量调试与故障分析 | 动态通道、状态、事件、参数和开发 OTA |
 
-工作区切换不得重连设备、重建 worker 或清空 Store。工程入口默认隐藏，通过 `Ctrl+Shift+E`
-确认后仅在当前进程内开放，不持久化解锁状态。M18 客户功能只实现 AFD01；ESA01 保留已有工程
-兼容，不属于本阶段交付范围。
+工作区切换不得重连设备、重建 worker 或清空 Store。客户模式不显示模式标识。工程入口默认隐藏，
+首次按 `Ctrl+Shift+E` 确认后仅在当前进程内开放；后续同一快捷键可在客户与工程工作区之间切换。
+工程工作区只显示原有 `Live / Playback / Log / Device` 四个入口，不显示模式或退出标签，客户页面
+不混入工程导航，解锁状态不持久化。M18 客户功能只实现 AFD01；ESA01 保留已有工程兼容，不属于
+本阶段交付范围。
 
 ## 2. 当前功能基线
 
@@ -49,11 +51,18 @@ Satellite Debug Tool 当前是一套同时服务客户操作与内部工程诊�
 
 客户 Overview 消费 AFD01 稳定产品服务，不依赖动态 Debug 字段名：
 
-- 显示型号、序列号、连接状态、控制模式、跟踪阶段、锁定、组合导航和 GNSS 状态。
-- 显示波束角、姿态角、3D 整机、经纬高、当前 SNR 和 60 秒历史曲线。
-- 显示变频板、发射阵列和接收阵列的在线、温度、电压和版本；没有权威来源的字段显示 `—`。
+- 顶部紧凑分为状态区和运行数据区。状态区显示连接、控制模式、跟踪阶段、锁定、组合导航、GNSS、发射和 Modem 在线状态。
+- 3D 整机与波束方向图组成双栏主视图，各自在底部显示姿态角和波束角，不再另设重复的 3x3 数据区。
+- 运行数据区显示经纬高、收发射频点、收发本振、CLK/TX/RX 三路本振锁定和卫星信息；GEO 显示卫星经度，LEO/TLE 显示编号或名称。当前 SNR 和 5 分钟历史曲线独占一行。
+- 变频板、发射阵列和接收阵列横向排列在最底部，显示在线、温度、电压和版本；没有权威来源的字段显示 `—`。
 - GNSS 天空图和信号详情继续复用现有弹窗。
 - 客户连接只订阅产品服务，不自动打开动态工程 Debug。
+- 客户连接区分等待设备、在线和重连；可在设备上电前绑定 UDP 并持续探测，设备恢复后无需再次点击连接。
+- 客户总览按逻辑视口高度选择 Regular/Compact/Dense 密度；1024x600 及以上的常见分辨率在一页内显示全部例行数据。
+
+客户全量录制可在设备上电前预置保存路径。文件仅在 AFD01 声明能力并精确确认
+`support_full` 后创建；掉线期间记录中断 metadata，重连后重新协商全量采集。停止录制恢复
+`customer_live`，手动断开会清理所有待处理录制状态。
 
 RF control 只在 AFD01 能力声明和设备读回有效时开放。手动参数必须等 MANUAL 模式读回确认；
 收发频点和极化作为一个事务原子下发；发射开关独立确认。AFD01 当前只支持左/右旋圆极化。
@@ -64,7 +73,7 @@ Maintenance 不显示任意参数编辑，只接受通过内置 Ed25519 公钥�
 
 ### 2.2 工程 Live
 
-Live 是核心工作台，负责连接真实设备或仿真链路。
+Live 是核心工作台，负责连接真实设备。
 
 已定义能力：
 
@@ -79,13 +88,11 @@ Live 是核心工作台，负责连接真实设备或仿真链路。
 - `AttitudeWidget` 自动按 profile 通道名绑定 roll/pitch/yaw/ant_az/ant_el，显示机体、波束、扫描轨迹，并可加载本地 STL。
 - `ControlPanel` 支持采样率、用户标记、通道 enable mask、复位统计。
 - 工程录制保持 `.sdb v2`；客户“全量录制”使用 `.sdb v3`，写盘均为后台线程。
-- 仿真入口集成在 Live，当前通过 MockModem/fake-device 验证对星闭环与 SNR 模型。
 
 当前限制：
 
 - 模式切换目前只对 `state_id == 0` 下发 `SET_TRACE_MODE`，其它 ENUM 状态字显示“协议待扩展”。
 - 3D 绑定当前是自动绑定，不提供手动持久化覆盖。
-- 仿真模式下 Chart 数据注入仍是后续项，当前主要显示仿真面板 metrics。
 - Worker 仍按解析到的单帧 emit，旧 plan 中“20ms 批量 emit”没有作为当前事实实现。
 
 ### 2.3 Playback
@@ -99,7 +106,10 @@ Live 是核心工作台，负责连接真实设备或仿真链路。
 - 回放曲线支持时间窗、事件标记、跳转曲线。
 - 如果 profile 中存在 `gps_lat` / `gps_lon`，可启用地图浮窗显示轨迹。
 - SDB v3 保存每个 RX chunk 的主机时间、控制请求、metadata、gap marker 和质量 summary。
-- 客户回放按记录时间驱动独立 ProductServiceStore，支持播放、暂停、拖动和倍速，不提供控制。
+- 客户回放使用固定九路合成 profile，仅显示 Roll、Pitch、Yaw、波束方位/俯仰、SNR、经纬高。
+- 产品服务记录优先；旧 SDB v2 只按权威 profile role 投影，不提供工程原始通道选择。
+- 客户回放是完整文件的静态曲线分析页，支持单图/分组、时间范围、质量摘要和 GNSS 弹窗；不提供播放、倍速或设备控制。
+- 客户曲线 X 轴使用帧内 u32 设备开机时间并处理回绕，SDB v3 的主机时间只用于记录级审计，不替代设备时间轴。
 
 当前限制：
 
@@ -164,7 +174,7 @@ vNext 应补 profile 语义层，方向是协议 v2.x 或 profile cache schema �
 - `semantic_role`: `gps_lat`、`gps_lon`、`roll`、`pitch`、`yaw`、`antenna_az`、`antenna_el`、`snr` 等。
 - `control_binding`: ENUM 状态字绑定到哪个 CONTROL 子命令和参数编码。
 - `ui_role`: critical、dashboard、status、map、attitude、hidden/default visible 等更明确的 UI 角色。
-- `capabilities`: 设备是否支持参数表、OTA、采样率调整、通道 mask、仿真模式。
+- `capabilities`: 设备是否支持参数表、OTA、采样率调整和通道 mask。
 
 ### 3.2 数据格式
 
@@ -232,11 +242,10 @@ vNext 应补 profile 语义层，方向是协议 v2.x 或 profile cache schema �
 |------|------|------|----------|
 | G-01 | profile 缺语义角色 | 地图/3D/控制仍靠名称和 state_id 约定 | M13 |
 | G-02 | 真机/外场验收散落 | 已实现项难以转为可签收基线 | M15 |
-| G-03 | 仿真 Chart 不滚动 | 演示和回归体验不完整 | M14 |
-| G-04 | SDB/CSV 数据互操作未定案 | 外部分析和历史数据迁移容易反复 | M16 |
-| G-05 | OTA 失败恢复 SOP 不够细 | 现场升级风险无法量化关闭 | M16 |
-| G-06 | Worker 批量 emit 未实现或未重新决策 | 高频性能优化路线不清晰 | M15 |
-| G-07 | 文档历史状态和当前状态容易混读 | 新开发者容易按旧计划改错方向 | 本次已处理一部分 |
+| G-03 | SDB/CSV 数据互操作未定案 | 外部分析和历史数据迁移容易反复 | M16 |
+| G-04 | OTA 失败恢复 SOP 不够细 | 现场升级风险无法量化关闭 | M16 |
+| G-05 | Worker 批量 emit 未实现或未重新决策 | 高频性能优化路线不清晰 | M15 |
+| G-06 | 文档历史状态和当前状态容易混读 | 新开发者容易按旧计划改错方向 | 本次已处理一部分 |
 
 ## 6. 后续路线
 
@@ -255,22 +264,6 @@ vNext 应补 profile 语义层，方向是协议 v2.x 或 profile cache schema �
 
 - 新设备通道名不用 `gps_lat/gps_lon`，只要 semantic role 正确，地图仍启用。
 - trace mode 不在 state_id 0 时，Dashboard 仍能下发正确控制。
-
-### M14 — 仿真产品化
-
-目标：把仿真从“面板可看”推进到“完整模拟设备数据流”。
-
-建议交付：
-
-- MockModem 或 fake-device 将 SNR、扫描角、失指等注入 DataStore/Chart。
-- 清理旧仿真模块或明确标为 legacy。
-- 固化 PC fake-device 与设备端 simulate_modem 契约。
-- 增加仿真演示 SOP。
-
-验收锚点：
-
-- 开启仿真后 Live Chart 自动滚动，Dashboard/Event/State 有可解释数据。
-- 遮挡、雨衰、航向偏差能在曲线和事件中同步体现。
 
 ### M15 — 真机/外场验收闭环
 
@@ -313,7 +306,6 @@ vNext 应补 profile 语义层，方向是协议 v2.x 或 profile cache schema �
 | `doc/acceptance_log.md` | M1-M6 及后续验收状态跟踪 |
 | `doc/M7_plan.md` ~ `doc/M12_plan.md` | 各里程碑局部计划 |
 | `doc/M13_profile_semantics_plan.md` | M13 profile 语义层计划 |
-| `doc/simulation_delivery.md` | 当前仿真交付和遗留 |
 | `doc/DEBUG设备协议接口规范_v2.md` | 协议权威规范 |
 | `doc/user_manual.md` | 用户操作手册 |
 | `doc/RELEASING.md` | 发版流程 |

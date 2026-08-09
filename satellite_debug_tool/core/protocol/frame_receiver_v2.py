@@ -44,6 +44,8 @@ from .codec_v2 import (
     decode_service_control_response,
     decode_service_fast_state,
     decode_service_identity,
+    decode_service_link_detail,
+    decode_service_rf_lock_status,
     decode_service_slow_state,
 )
 from .crc16 import Crc16
@@ -92,6 +94,8 @@ _DECODERS = {
     int(CmdType.SERVICE_IDENTITY): decode_service_identity,
     int(CmdType.SERVICE_FAST_STATE): decode_service_fast_state,
     int(CmdType.SERVICE_SLOW_STATE): decode_service_slow_state,
+    int(CmdType.SERVICE_LINK_DETAIL): decode_service_link_detail,
+    int(CmdType.SERVICE_RF_LOCK_STATUS): decode_service_rf_lock_status,
     int(CmdType.SERVICE_COMPONENT_HEALTH): decode_service_component_health,
     int(CmdType.SERVICE_CAPABILITIES): decode_service_capabilities,
     int(CmdType.SERVICE_CONTROL_RESPONSE): decode_service_control_response,

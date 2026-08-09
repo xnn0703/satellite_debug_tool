@@ -1,131 +1,73 @@
-"""Read-only customer playback over full SDB v2/v3 support recordings."""
+"""Read-only customer curve analysis over full SDB v2/v3 recordings."""
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDockWidget,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
-    QSlider,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from satellite_debug_tool.core.data import DataStore, GnssStore, StateStore
-from satellite_debug_tool.core.product import ProductServiceStore
+from satellite_debug_tool.core.data import DataStore, GnssStore
+from satellite_debug_tool.core.product import (
+    CUSTOMER_PLAYBACK_HW_TYPE,
+    CustomerPlaybackProjector,
+    customer_channel_entries,
+)
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.protocol import (
-    DataReport,
-    EventReport,
     GnssCnrReport,
     GnssSatReport,
     GnssSignalReport,
     GnssSkyReport,
     MetaInfo,
-    StateReport,
+    ServiceFastState,
+    ServiceIdentity,
+    ServiceSlowState,
 )
-from satellite_debug_tool.i18n import register_translatable, tr
+from satellite_debug_tool.i18n import (
+    register_translatable,
+    set_raw_text,
+    set_translatable_text,
+    tr,
+)
 from satellite_debug_tool.io.data_importer import DataImporter, SdbFile
-from satellite_debug_tool.ui import icons, styles as S
-from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
+from satellite_debug_tool.ui import styles as S
+from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
+from satellite_debug_tool.ui.time_range_control import TimeRangeControl
 
 
-class _PlaybackSession(QObject):
-    connection_state_changed = Signal(bool)
-    profile_ready = Signal(str)
-    recording_state_changed = Signal(bool, str)
-    gnss_requested = Signal()
-    is_playback = True
+_GNSS_RECORDS = (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._profiles = ProfileStore(cache=None)
-        self._data = DataStore(max_channels=64, buffer_capacity=None)
-        self._states = StateStore()
-        self._gnss = GnssStore(keep_history=True, parent=self)
-        self._products = ProductServiceStore(parent=self, enforce_stale=False)
-        self._loaded = False
 
-    def profile_store(self):
-        return self._profiles
+def _customer_channel_name(source: str) -> str:
+    """Keep synthetic profile labels visible to Qt's static translation scan."""
 
-    def data_store(self):
-        return self._data
-
-    def state_store(self):
-        return self._states
-
-    def gnss_store(self):
-        return self._gnss
-
-    def product_store(self):
-        return self._products
-
-    def is_connected(self):
-        return self._loaded
-
-    def is_recording(self):
-        return False
-
-    def toggle_recording(self):
-        return None
-
-    def show_gnss_details(self):
-        self.gnss_requested.emit()
-
-    def clear_runtime(self) -> None:
-        self._data.clear()
-        self._states.clear()
-        self._gnss.clear()
-        self._products.clear()
-
-    def reset_file(self) -> None:
-        self.clear_runtime()
-        self._profiles.clear()
-        self._loaded = False
-        self.connection_state_changed.emit(False)
-
-    def load_profile(self, sdb: SdbFile) -> Optional[str]:
-        self._profiles.clear()
-        hw_type: Optional[str] = None
-        if sdb.profile is not None:
-            hw_type = self._profiles.import_dict(sdb.profile)
-            if hw_type is not None:
-                profile = self._profiles.get_profile(hw_type)
-                if profile is not None and profile.meta is not None:
-                    self._profiles.apply_meta(profile.meta)
-        if hw_type is None:
-            identity = sdb.metadata.get("identity", {})
-            candidate = sdb.metadata.get("hardware_type") or identity.get("model")
-            if candidate:
-                hw_type = str(candidate).lower()
-                self._profiles.apply_meta(
-                    MetaInfo(
-                        protocol_ver=2,
-                        fw_ver=str(identity.get("main_firmware") or ""),
-                        hw_type=hw_type,
-                        device_sn=str(identity.get("serial_number") or ""),
-                    )
-                )
-        self._loaded = True
-        self.connection_state_changed.emit(True)
-        if hw_type:
-            self.profile_ready.emit(hw_type)
-        return hw_type
+    return {
+        "Roll": tr("Roll"),
+        "Pitch": tr("Pitch"),
+        "Yaw": tr("Yaw"),
+        "Beam azimuth": tr("Beam azimuth"),
+        "Beam elevation": tr("Beam elevation"),
+        "SNR": tr("SNR"),
+        "Longitude": tr("Longitude"),
+        "Latitude": tr("Latitude"),
+        "Altitude": tr("Altitude"),
+    }[source]
 
 
 class CustomerPlaybackView(QWidget):
-    """Timeline playback that exposes only stable customer product semantics."""
+    """Expose customer-approved curves while retaining full recordings on disk."""
 
     status_message = Signal(str, int)
 
@@ -139,87 +81,101 @@ class CustomerPlaybackView(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._theme = "dark"
-        self._enable_3d = bool(enable_3d)
-        self._session = _PlaybackSession()
-        self._entries: list[tuple[float, object]] = []
-        self._cursor_index = 0
-        self._position_s = 0.0
-        self._duration_s = 0.0
-        self._playing = False
-        self._last_tick = time.monotonic()
+        self._data_store = DataStore(max_channels=16, buffer_capacity=None)
+        self._profile_store = ProfileStore(cache=None)
+        self._gnss_store = GnssStore(keep_history=True, parent=self)
         self._current_file: Optional[Path] = None
         self._loaded_version: Optional[int] = None
         self._loaded_quality: dict = {}
+        self._metadata_events: tuple[dict, ...] = ()
+        self._first_ts_ms: Optional[float] = None
+        self._last_ts_ms: Optional[float] = None
+        self._total_sec = 0.0
+        self._loaded_count = 0
+        self._identity_parts: tuple[str, str, str] = ("", "", "")
         self._gnss_widget = None
         self._gnss_dock: Optional[QDockWidget] = None
         self._build_ui()
-        self._session.gnss_requested.connect(self._toggle_gnss)
-        self._timer = QTimer(self)
-        self._timer.setInterval(50)
-        self._timer.timeout.connect(self._on_tick)
-        self._timer.start()
+        self._refresh_customer_profile()
+        self._chart.set_mode("stacked")
+        self._apply_theme()
         register_translatable(self)
 
     @property
-    def overview(self) -> CustomerOverviewView:
-        return self._overview
+    def chart(self) -> GroupedChartWidget:
+        return self._chart
+
+    @property
+    def data_store(self) -> DataStore:
+        return self._data_store
+
+    @property
+    def gnss_store(self) -> GnssStore:
+        return self._gnss_store
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setContentsMargins(5, 5, 5, 5)
+        root.setSpacing(5)
 
         toolbar = QFrame()
         toolbar.setObjectName("customerPlaybackToolbar")
         row = QHBoxLayout(toolbar)
-        row.setContentsMargins(12, 7, 12, 7)
-        row.setSpacing(8)
+        row.setContentsMargins(8, 5, 8, 5)
+        row.setSpacing(7)
         self._open_btn = QPushButton(tr("Open recording"))
         self._open_btn.clicked.connect(self._choose_file)
         row.addWidget(self._open_btn)
-        self._play_btn = QPushButton(tr("Play"))
-        self._play_btn.setEnabled(False)
-        self._play_btn.clicked.connect(self._toggle_play)
-        row.addWidget(self._play_btn)
-        self._slider = QSlider(Qt.Orientation.Horizontal)
-        self._slider.setRange(0, 10000)
-        self._slider.setEnabled(False)
-        self._slider.sliderMoved.connect(self._on_slider_moved)
-        row.addWidget(self._slider, 1)
-        self._time_label = QLabel("00:00.0 / 00:00.0")
-        self._time_label.setObjectName("customerPlaybackTime")
-        row.addWidget(self._time_label)
-        self._speed = QComboBox()
-        for text, value in (("0.5x", 0.5), ("1x", 1.0), ("2x", 2.0), ("4x", 4.0)):
-            self._speed.addItem(text, value)
-        self._speed.setCurrentIndex(1)
-        row.addWidget(self._speed)
+        self._clear_btn = QPushButton(tr("Clear"))
+        self._clear_btn.setEnabled(False)
+        self._clear_btn.clicked.connect(self.clear)
+        row.addWidget(self._clear_btn)
+        self._file_label = QLabel(tr("No recording loaded"))
+        self._file_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        row.addWidget(self._file_label, 1)
+        self._duration_label = QLabel(tr("Duration: —"))
+        row.addWidget(self._duration_label)
+        self._range_ctl = TimeRangeControl()
+        self._range_ctl.range_changed.connect(self._on_range_changed)
+        row.addWidget(self._range_ctl)
+        self._gnss_btn = QPushButton("GNSS")
+        self._gnss_btn.setEnabled(False)
+        self._gnss_btn.clicked.connect(self._toggle_gnss)
+        row.addWidget(self._gnss_btn)
         root.addWidget(toolbar)
 
         info = QFrame()
         info.setObjectName("customerPlaybackInfo")
         info_row = QHBoxLayout(info)
-        info_row.setContentsMargins(12, 5, 12, 5)
-        self._file_label = QLabel(tr("No recording loaded"))
-        info_row.addWidget(self._file_label, 1)
+        info_row.setContentsMargins(9, 4, 9, 4)
+        info_row.setSpacing(12)
+        self._identity_label = QLabel(tr("Device: —"))
+        self._identity_label.setObjectName("customerPlaybackIdentity")
+        info_row.addWidget(self._identity_label, 1)
         self._quality_label = QLabel("—")
         self._quality_label.setObjectName("customerPlaybackQuality")
         info_row.addWidget(self._quality_label)
         root.addWidget(info)
 
-        self._overview = CustomerOverviewView(
-            self._session,
-            self._settings,
-            enable_3d=self._enable_3d,
-            playback_mode=True,
+        self._chart = GroupedChartWidget()
+        self._chart.set_profile_store(self._profile_store)
+        self._chart.set_settings(self._settings)
+        self._chart.set_device_uptime_axis(True)
+        self._chart.mode_changed.connect(self._on_chart_mode_changed)
+        root.addWidget(self._chart, 1)
+
+    def _refresh_customer_profile(self) -> None:
+        self._profile_store.apply_meta(
+            MetaInfo(2, "", CUSTOMER_PLAYBACK_HW_TYPE, "")
         )
-        scroll = QScrollArea()
-        scroll.setObjectName("customerPlaybackScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(self._overview)
-        root.addWidget(scroll, 1)
+        self._profile_store.apply_channel_define(
+            CUSTOMER_PLAYBACK_HW_TYPE,
+            1,
+            customer_channel_entries(_customer_channel_name),
+        )
+        self._chart.set_hw_type(CUSTOMER_PLAYBACK_HW_TYPE)
 
     def _choose_file(self) -> None:
         last_dir = self._settings.get("paths.recording_dir", "") or ""
@@ -233,168 +189,220 @@ class CustomerPlaybackView(QWidget):
             self.load_file(Path(filepath))
 
     def load_file(self, path: Path) -> bool:
+        self.status_message.emit(tr("Loading {file}...", file=path.name), 0)
         try:
             sdb = DataImporter.open_sdb(path)
         except Exception as exc:
             self.status_message.emit(tr("Failed to open: {detail}", detail=exc), 5000)
             return False
 
-        timed = list(sdb.iter_timed_records())
-        self._entries = self._build_timeline(timed)
-        self._duration_s = self._entries[-1][0] if self._entries else 0.0
-        self._cursor_index = 0
-        self._position_s = 0.0
-        self._playing = False
-        self._session.reset_file()
-        hw_type = self._session.load_profile(sdb)
-        self._process_until(0.0)
-        self._overview.refresh()
-        self._current_file = path
+        prefer_product_service = any(
+            isinstance(record, (ServiceFastState, ServiceSlowState))
+            for _host_ns, record in sdb.iter_timed_records()
+        )
+        source_profile, source_hw = self._source_profile(sdb)
+        projector = CustomerPlaybackProjector(
+            source_profile=source_profile,
+            source_hw_type=source_hw,
+            prefer_product_service=prefer_product_service,
+        )
+
+        self._data_store.clear()
+        self._gnss_store.clear()
+        first_ts_ms: Optional[float] = None
+        last_ts_ms: Optional[float] = None
+        projected_count = 0
+        latest_identity: Optional[ServiceIdentity] = None
+        for _host_ns, record in sdb.iter_timed_records():
+            report = projector.project(record)
+            if report is not None:
+                self._data_store.update(report)
+                timestamp = float(report.timestamp)
+                first_ts_ms = (
+                    timestamp if first_ts_ms is None else min(first_ts_ms, timestamp)
+                )
+                last_ts_ms = (
+                    timestamp if last_ts_ms is None else max(last_ts_ms, timestamp)
+                )
+                projected_count += 1
+            if isinstance(record, ServiceIdentity):
+                latest_identity = record
+            elif isinstance(record, _GNSS_RECORDS):
+                self._gnss_store.update(record)
+
+        self._first_ts_ms = first_ts_ms
+        self._last_ts_ms = last_ts_ms
+        self._total_sec = (
+            max(0.0, (self._last_ts_ms - self._first_ts_ms) / 1000.0)
+            if self._first_ts_ms is not None and self._last_ts_ms is not None
+            else 0.0
+        )
+        self._loaded_count = projected_count
+        self._current_file = Path(path)
         self._loaded_version = sdb.version
         self._loaded_quality = dict(sdb.quality)
-        self._file_label.setText(path.name)
-        self._refresh_quality_label()
-        self._play_btn.setEnabled(bool(self._entries))
-        self._slider.setEnabled(bool(self._entries))
-        self._update_controls()
-        if hw_type:
-            self._overview._on_profile_ready(hw_type)
+        self._metadata_events = tuple(sdb.metadata_events)
+        self._identity_parts = self._resolve_identity(
+            sdb,
+            source_profile,
+            source_hw,
+            latest_identity,
+        )
+
+        self._range_ctl.set_total(self._total_sec)
+        self._reset_chart()
+        self._gnss_btn.setEnabled(self._gnss_store.has_data())
+        self._clear_btn.setEnabled(True)
+        set_raw_text(path.name, self._file_label)
+        self._refresh_labels()
         self.status_message.emit(
             tr(
-                "Loaded customer playback: {count} record(s), {duration:.1f}s",
-                count=len(self._entries),
-                duration=self._duration_s,
+                "Loaded customer curves: {count} sample frame(s), {duration:.1f}s",
+                count=self._loaded_count,
+                duration=self._total_sec,
             ),
             4000,
         )
         return True
 
+    @staticmethod
+    def _source_profile(sdb: SdbFile) -> tuple[Optional[ProfileStore], Optional[str]]:
+        if sdb.profile is None:
+            return None, None
+        store = ProfileStore(cache=None)
+        hw_type = store.import_dict(sdb.profile)
+        return store, hw_type
+
+    @staticmethod
+    def _resolve_identity(
+        sdb: SdbFile,
+        source_profile: Optional[ProfileStore],
+        source_hw: Optional[str],
+        identity: Optional[ServiceIdentity],
+    ) -> tuple[str, str, str]:
+        metadata = sdb.metadata.get("identity", {})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        model = str(metadata.get("model") or sdb.metadata.get("hardware_type") or "")
+        serial = str(metadata.get("serial_number") or "")
+        firmware = str(metadata.get("main_firmware") or "")
+        if identity is not None:
+            if identity.valid_mask & (1 << 0):
+                model = identity.model
+            if identity.valid_mask & (1 << 1):
+                serial = identity.serial_number
+            if identity.valid_mask & (1 << 2):
+                firmware = identity.main_firmware
+        if source_profile is not None and source_hw:
+            profile = source_profile.get_profile(source_hw)
+            meta = None if profile is None else profile.meta
+            model = model or source_hw
+            if meta is not None:
+                serial = serial or meta.device_sn
+                firmware = firmware or meta.fw_ver
+        return model, serial, firmware
+
+    def _reset_chart(self) -> None:
+        self._chart.set_hw_type(None)
+        self._chart.set_hw_type(CUSTOMER_PLAYBACK_HW_TYPE)
+        self._chart.set_auto_range(True)
+        self._chart.refresh(self._data_store)
+        if self._first_ts_ms is not None and self._last_ts_ms is not None:
+            start = self._first_ts_ms / 1000.0
+            end = self._last_ts_ms / 1000.0
+            if end <= start:
+                start = max(0.0, start - 0.5)
+                end += 0.5
+            self._chart.set_x_range_sec(start, end)
+            self._chart.enable_y_autorange(True)
+
+    def _on_range_changed(self, start_sec: float, end_sec: float) -> None:
+        if self._first_ts_ms is None:
+            return
+        uptime_origin = self._first_ts_ms / 1000.0
+        self._chart.set_x_range_sec(
+            uptime_origin + start_sec,
+            uptime_origin + end_sec,
+        )
+
+    def _on_chart_mode_changed(self, _mode: str) -> None:
+        if self._loaded_count:
+            self._reset_chart()
+
+    def clear(self) -> None:
+        self._data_store.clear()
+        self._gnss_store.clear()
+        self._current_file = None
+        self._loaded_version = None
+        self._loaded_quality = {}
+        self._metadata_events = ()
+        self._first_ts_ms = None
+        self._last_ts_ms = None
+        self._total_sec = 0.0
+        self._loaded_count = 0
+        self._identity_parts = ("", "", "")
+        self._range_ctl.set_total(0.0)
+        self._reset_chart()
+        self._gnss_btn.setEnabled(False)
+        self._clear_btn.setEnabled(False)
+        self._refresh_labels()
+
+    def _refresh_labels(self) -> None:
+        if self._current_file is None:
+            self._file_label.setText(tr("No recording loaded"))
+            self._duration_label.setText(tr("Duration: —"))
+        else:
+            set_translatable_text(
+                "Duration: {duration:.1f}s · {count} sample frame(s)",
+                self._duration_label,
+                duration=self._total_sec,
+                count=self._loaded_count,
+            )
+        model, serial, firmware = self._identity_parts
+        identity_values = [value for value in (model, serial, firmware) if value]
+        if identity_values:
+            set_translatable_text(
+                "Device: {identity}",
+                self._identity_label,
+                identity=" · ".join(identity_values),
+            )
+        else:
+            self._identity_label.setText(tr("Device: —"))
+        self._refresh_quality_label()
+
     def _refresh_quality_label(self) -> None:
         dropped = int(self._loaded_quality.get("dropped_chunks", 0))
+        interruptions = sum(
+            1 for event in self._metadata_events if event.get("event") == "device_offline"
+        )
+        complete = False
         if self._loaded_version == 3:
             complete = bool(self._loaded_quality.get("complete", False))
-            self._quality_label.setText(
-                tr("Complete · no gaps")
-                if complete and dropped == 0
-                else tr("Incomplete · {count} dropped chunk(s)", count=dropped)
-            )
-            self._quality_label.setProperty("complete", complete and dropped == 0)
+            if interruptions:
+                self._quality_label.setText(
+                    tr("{count} device interruption(s)", count=interruptions)
+                )
+            elif complete and dropped == 0:
+                self._quality_label.setText(tr("Complete · no gaps"))
+            else:
+                self._quality_label.setText(
+                    tr("Incomplete · {count} dropped chunk(s)", count=dropped)
+                )
         elif self._loaded_version == 2:
             self._quality_label.setText(tr("SDB v2 · capture quality unavailable"))
-            self._quality_label.setProperty("complete", False)
         else:
             self._quality_label.setText("—")
-            self._quality_label.setProperty("complete", False)
+        self._quality_label.setProperty(
+            "complete", complete and dropped == 0 and interruptions == 0
+        )
         self._repolish(self._quality_label)
 
-    @staticmethod
-    def _build_timeline(timed: list[tuple[int, object]]) -> list[tuple[float, object]]:
-        if not timed:
-            return []
-        host_values = [host for host, _record in timed if host > 0]
-        first_host = host_values[0] if host_values else 0
-        first_device: Optional[float] = None
-        last_position = 0.0
-        entries: list[tuple[float, object]] = []
-        for host_ns, record in timed:
-            if first_host and host_ns > 0:
-                position = max(0.0, (host_ns - first_host) / 1_000_000_000.0)
-            else:
-                timestamp = getattr(record, "timestamp", None)
-                if timestamp is not None:
-                    if first_device is None:
-                        first_device = float(timestamp)
-                    position = max(0.0, (float(timestamp) - first_device) / 1000.0)
-                else:
-                    position = last_position
-            last_position = max(last_position, position)
-            entries.append((last_position, record))
-        return entries
-
-    def _toggle_play(self) -> None:
-        if not self._entries:
-            return
-        if self._position_s >= self._duration_s and not self._playing:
-            self.seek(0.0)
-        self._playing = not self._playing
-        self._last_tick = time.monotonic()
-        self._update_controls()
-
-    def _on_tick(self) -> None:
-        now = time.monotonic()
-        elapsed = now - self._last_tick
-        self._last_tick = now
-        if not self._playing:
-            return
-        speed = float(self._speed.currentData() or 1.0)
-        self._position_s = min(self._duration_s, self._position_s + elapsed * speed)
-        self._process_until(self._position_s)
-        if self._position_s >= self._duration_s:
-            self._playing = False
-        self._update_controls()
-
-    def _on_slider_moved(self, value: int) -> None:
-        position = self._duration_s * max(0, min(10000, int(value))) / 10000.0
-        self.seek(position)
-
-    def seek(self, position_s: float) -> None:
-        target = max(0.0, min(self._duration_s, float(position_s)))
-        if target < self._position_s:
-            self._session.clear_runtime()
-            self._cursor_index = 0
-        self._position_s = target
-        self._process_until(target)
-        self._overview.refresh()
-        self._update_controls()
-
-    def _process_until(self, position_s: float) -> None:
-        while self._cursor_index < len(self._entries):
-            record_position, record = self._entries[self._cursor_index]
-            if record_position > position_s:
-                break
-            self._apply_record(record)
-            self._cursor_index += 1
-
-    def _apply_record(self, record: object) -> None:
-        if self._session.product_store().feed(record):
-            return
-        hw_type = self._session.profile_store().current_hw_type()
-        if isinstance(record, DataReport):
-            self._session.data_store().update(record)
-        elif hw_type is not None and isinstance(record, StateReport):
-            self._session.state_store().update(hw_type, record)
-        elif isinstance(record, (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)):
-            self._session.gnss_store().update(record)
-        elif isinstance(record, EventReport):
-            return
-
-    def _update_controls(self) -> None:
-        self._play_btn.setText(tr("Pause") if self._playing else tr("Play"))
-        icon_name = "pause" if self._playing else "play"
-        self._play_btn.setIcon(
-            icons.icon(icon_name, color=S.palette(self._theme)["text"], size=14)
-        )
-        if self._duration_s > 0.0:
-            self._slider.setValue(int(self._position_s / self._duration_s * 10000.0))
-        else:
-            self._slider.setValue(0)
-        self._time_label.setText(
-            f"{self._format_time(self._position_s)} / {self._format_time(self._duration_s)}"
-        )
-
-    @staticmethod
-    def _format_time(seconds: float) -> str:
-        minutes = int(max(0.0, seconds)) // 60
-        remain = max(0.0, seconds) - minutes * 60
-        return f"{minutes:02d}:{remain:04.1f}"
-
     def _toggle_gnss(self) -> None:
-        if not self._session.gnss_store().has_data():
+        if not self._gnss_store.has_data():
             return
         if self._gnss_dock is None:
             from satellite_debug_tool.ui.gnss_widget import GnssWidget
 
-            self._gnss_widget = GnssWidget(self._session.gnss_store(), playback=True)
+            self._gnss_widget = GnssWidget(self._gnss_store, playback=True)
             self._gnss_widget.set_theme(self._theme)
             self._gnss_dock = QDockWidget(tr("GNSS details — Playback"), self)
             self._gnss_dock.setAllowedAreas(Qt.DockWidgetArea.NoDockWidgetArea)
@@ -410,24 +418,32 @@ class CustomerPlaybackView(QWidget):
 
     def set_theme(self, theme: str, scale: str = "small") -> None:
         self._theme = theme
-        pal = S.palette(theme)
+        self._apply_theme()
+        self._chart.set_theme(theme, scale)
+        self._range_ctl.set_theme(theme, scale)
+        if self._loaded_count:
+            self._reset_chart()
+        if self._gnss_widget is not None:
+            self._gnss_widget.set_theme(theme, scale)
+
+    def _apply_theme(self) -> None:
+        pal = S.palette(self._theme)
         self.setStyleSheet(
             f"CustomerPlaybackView {{ background: {pal['bg']}; color: {pal['text']}; }}"
             f"#customerPlaybackToolbar, #customerPlaybackInfo {{ background: {pal['panel']}; "
-            f"border-bottom: 1px solid {pal['border']}; }}"
-            f"#customerPlaybackTime {{ color: {pal['text_2']}; font-family: '{S.monospace_family()}'; }}"
+            f"border: 1px solid {pal['border']}; border-radius: 5px; }}"
+            f"#customerPlaybackIdentity {{ color: {pal['text_2']}; }}"
             f"#customerPlaybackQuality {{ color: {pal['warn']}; }}"
             f"#customerPlaybackQuality[complete='true'] {{ color: {pal['ok']}; }}"
         )
-        self._overview.set_theme(theme, scale)
-        if self._gnss_widget is not None:
-            self._gnss_widget.set_theme(theme, scale)
-        self._update_controls()
 
     def retranslate_ui(self) -> None:
         self._open_btn.setText(tr("Open recording"))
-        if self._current_file is None:
-            self._file_label.setText(tr("No recording loaded"))
-        self._refresh_quality_label()
-        self._update_controls()
-        self._overview.retranslate_ui()
+        self._clear_btn.setText(tr("Clear"))
+        self._refresh_customer_profile()
+        self._chart.retranslate_ui()
+        if self._loaded_count:
+            self._reset_chart()
+        self._refresh_labels()
+        if self._gnss_dock is not None:
+            self._gnss_dock.setWindowTitle(tr("GNSS details — Playback"))

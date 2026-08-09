@@ -63,6 +63,8 @@ from .frame_v2 import (
     ServiceControlResponse,
     ServiceFastState,
     ServiceIdentity,
+    ServiceLinkDetail,
+    ServiceRfLockStatus,
     ServiceSlowState,
 )
 
@@ -391,6 +393,39 @@ def decode_service_slow_state(data: bytes) -> ServiceSlowState:
         tx_polarization=values[9],
         tx_enabled=bool(values[10]),
     )
+
+
+def decode_service_link_detail(data: bytes) -> ServiceLinkDetail:
+    fmt = "<BIIBffBfI"
+    fixed_size = struct.calcsize(fmt)
+    if len(data) < fixed_size + 1:
+        raise CodecError("SERVICE_LINK_DETAIL too short")
+    values = struct.unpack_from(fmt, data, 0)
+    _require_service_schema(values[0], "SERVICE_LINK_DETAIL")
+    satellite_name, offset = _read_u8_prefixed_utf8(data, fixed_size)
+    if offset != len(data):
+        raise CodecError("SERVICE_LINK_DETAIL invalid length")
+    return ServiceLinkDetail(
+        schema=values[0],
+        timestamp=values[1],
+        valid_mask=values[2],
+        modem_online=bool(values[3]),
+        rx_lo_mhz=values[4],
+        tx_lo_mhz=values[5],
+        satellite_mode=values[6],
+        satellite_longitude_deg=values[7],
+        satellite_id=values[8],
+        satellite_name=satellite_name,
+    )
+
+
+def decode_service_rf_lock_status(data: bytes) -> ServiceRfLockStatus:
+    fmt = "<BIIB"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_RF_LOCK_STATUS invalid length")
+    schema, timestamp, valid_mask, lock_mask = struct.unpack(fmt, data)
+    _require_service_schema(schema, "SERVICE_RF_LOCK_STATUS")
+    return ServiceRfLockStatus(schema, timestamp, valid_mask, lock_mask)
 
 
 def decode_service_component_health(data: bytes) -> ServiceComponentHealth:
@@ -888,6 +923,8 @@ __all__ = [
     "decode_gnss_sky_report", "decode_gnss_cnr_report",
     "decode_gnss_sat_report", "decode_gnss_signal_report",
     "decode_service_identity", "decode_service_fast_state",
-    "decode_service_slow_state", "decode_service_component_health",
+    "decode_service_slow_state", "decode_service_link_detail",
+    "decode_service_rf_lock_status",
+    "decode_service_component_health",
     "decode_service_capabilities", "decode_service_control_response",
 ]

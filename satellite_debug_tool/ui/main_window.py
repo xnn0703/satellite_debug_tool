@@ -104,6 +104,7 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._log, "Log")
         self._tabs.addTab(self._device, tr("Device"))
         self._tabs.currentChanged.connect(self._on_tab_changed)
+        self._tabs.currentChanged.connect(self._sync_tab_pills)
 
         # M9: 连接共享 — Live Tab 的 worker 和帧数据广播给 Device Tab
         self._live.connected_worker_changed.connect(self._device.set_worker)
@@ -133,7 +134,6 @@ class MainWindow(QMainWindow):
         self._engineering_shortcut = QShortcut(QKeySequence("Ctrl+Shift+E"), self)
         self._engineering_shortcut.activated.connect(self._request_engineering_unlock)
         self._engineering_unlocked = False
-        self._engineering_pill.setVisible(False)
 
         # ---------- 底部 statusbar ----------
         self.setStatusBar(QStatusBar())
@@ -185,27 +185,33 @@ class MainWindow(QMainWindow):
         row.addWidget(self._brand_text)
         row.addStretch(1)
 
-        # 中：Tab 药丸（seg--accent）
+        # 中：客户模式不显示模式标识；工程模式只显示原来的四个 Tab。
         self._tab_pillbar = QWidget()
         self._tab_pillbar.setObjectName("tabPills")
         pill_row = QHBoxLayout(self._tab_pillbar)
         pill_row.setContentsMargins(3, 3, 3, 3)
         pill_row.setSpacing(2)
-        self._tab_pills: list[QPushButton] = []
-        pill_defs = [
-            (tr("Operation"), "grid"),
-            (tr("Engineering"), "cpu"),
+        self._engineering_tab_pills: list[QPushButton] = []
+        engineering_defs = [
+            (tr("Live"), "activity"),
+            (tr("Playback"), "history"),
+            ("Log", "list"),
+            (tr("Device"), "cpu"),
         ]
-        for idx, (label, icon_name) in enumerate(pill_defs):
-            b = QPushButton(label)
-            b.setObjectName("tabPill")
-            b.setCheckable(True)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setProperty("iconName", icon_name)
-            b.clicked.connect(lambda _checked, i=idx: self._set_workspace(i))
-            pill_row.addWidget(b)
-            self._tab_pills.append(b)
-        self._engineering_pill = self._tab_pills[1]
+        for idx, (label, icon_name) in enumerate(engineering_defs):
+            button = QPushButton(label)
+            button.setObjectName("tabPill")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setProperty("iconName", icon_name)
+            button.clicked.connect(
+                lambda _checked, i=idx: self._select_engineering_tab(i)
+            )
+            button.hide()
+            pill_row.addWidget(button)
+            self._engineering_tab_pills.append(button)
+        self._tab_pills = self._engineering_tab_pills
+        self._tab_pillbar.hide()
         row.addWidget(self._tab_pillbar)
         row.addStretch(1)
 
@@ -257,30 +263,41 @@ class MainWindow(QMainWindow):
         self._settings.set("ui.theme", nxt)
         self._settings.save()
 
-    def _sync_tab_pills(self, index: int):
-        """工作区切换 → 同步顶栏选中态与图标。"""
+    def _sync_tab_pills(self, _index: int = -1):
+        """客户模式隐藏导航，工程模式显示四个 Tab 并同步选中态。"""
         from satellite_debug_tool.ui import icons as _ic
+
         pal = S.palette(self._theme)
-        for i, b in enumerate(getattr(self, "_tab_pills", [])):
-            b.setChecked(i == index)
-            col = pal["accent_2"] if i == index else pal["text_2"]
+        engineering_active = (
+            hasattr(self, "_workspace") and self._workspace.currentIndex() == 1
+        )
+        current_tab = self._tabs.currentIndex() if hasattr(self, "_tabs") else 0
+
+        self._tab_pillbar.setVisible(engineering_active)
+        for tab_index, button in enumerate(self._engineering_tab_pills):
+            button.setVisible(engineering_active)
+            button.setChecked(engineering_active and tab_index == current_tab)
+
+        for b in self._tab_pills:
+            col = pal["accent_2"] if b.isChecked() else pal["text_2"]
             b.setIcon(_ic.icon(b.property("iconName"), color=col, size=13))
 
-    def _set_workspace(self, index: int) -> None:
-        if index == 1 and not self._engineering_unlocked:
-            self._request_engineering_unlock()
-            return
-        self._workspace.setCurrentIndex(1 if index == 1 else 0)
+    def _select_engineering_tab(self, index: int) -> None:
+        self._tabs.setCurrentIndex(index)
+        # 重复点击当前页不会触发 currentChanged，需要主动恢复药丸选中态。
+        self._sync_tab_pills()
 
     def unlock_engineering_for_session(self) -> None:
         """Expose engineering diagnostics for this process without persisting it."""
         self._engineering_unlocked = True
-        self._engineering_pill.setVisible(True)
         self._workspace.setCurrentIndex(1)
+        self._sync_tab_pills()
 
     def _request_engineering_unlock(self) -> None:
         if self._engineering_unlocked:
-            self._workspace.setCurrentIndex(1)
+            self._workspace.setCurrentIndex(
+                0 if self._workspace.currentIndex() == 1 else 1
+            )
             return
         answer = QMessageBox.question(
             self,
@@ -431,6 +448,11 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         if sb is not None:
             sb.clearMessage()
+        for button, source in zip(
+            self._engineering_tab_pills,
+            ("Live", "Playback", "Log", "Device"),
+        ):
+            button.setText(tr(source))
 
     # ============================ 设置 ============================
 

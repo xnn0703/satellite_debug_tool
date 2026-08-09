@@ -42,6 +42,12 @@ class NavigationState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class SatelliteMode(str, Enum):
+    UNKNOWN = "unknown"
+    GEO = "geo"
+    LEO_TLE = "leo_tle"
+
+
 @dataclass(frozen=True)
 class ProductValue(Generic[T]):
     value: Optional[T] = None
@@ -112,6 +118,16 @@ class OperationalSnapshot:
     tx_frequency_mhz: ProductValue[float] = field(default_factory=ProductValue.unsupported)
     rx_polarization: ProductValue[int] = field(default_factory=ProductValue.unsupported)
     tx_polarization: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    modem_online: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    rx_lo_mhz: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    tx_lo_mhz: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    clock_pll_locked: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    tx_pll_locked: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    rx_pll_locked: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    satellite_mode: ProductValue[SatelliteMode] = field(default_factory=ProductValue.unsupported)
+    satellite_longitude_deg: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    satellite_id: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    satellite_name: ProductValue[str] = field(default_factory=ProductValue.unsupported)
 
 
 @dataclass(frozen=True)

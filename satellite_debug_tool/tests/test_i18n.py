@@ -243,6 +243,77 @@ def test_runtime_switch_preserves_main_window_state(i18n_context, qapp):
     qapp.processEvents()
 
 
+def test_engineering_workspace_restores_four_tabs_and_shortcut_toggles(
+    i18n_context,
+    qapp,
+):
+    from satellite_debug_tool.i18n import LANGUAGE_EN_US, LANGUAGE_ZH_CN
+    from satellite_debug_tool.ui.main_window import MainWindow
+
+    settings, manager = i18n_context
+    manager.set_preference(LANGUAGE_EN_US)
+    window = MainWindow(settings=settings)
+    window.resize(1280, 800)
+    window.show()
+    qapp.processEvents()
+
+    engineering_views = tuple(window._tabs.widget(index) for index in range(4))
+    assert window._workspace.currentWidget() is window._customer
+    assert window._customer.isVisible()
+    assert not any(button.isVisible() for button in window._engineering_tab_pills)
+
+    window.unlock_engineering_for_session()
+    qapp.processEvents()
+
+    assert window._workspace.currentWidget() is window._tabs
+    assert not window._customer.isVisible()
+    assert [button.text() for button in window._engineering_tab_pills] == [
+        "Live",
+        "Playback",
+        "Log",
+        "Device",
+    ]
+    assert all(button.isVisible() for button in window._engineering_tab_pills)
+    assert not hasattr(window, "_operation_pill")
+    assert not hasattr(window, "_engineering_pill")
+    assert not hasattr(window, "_exit_engineering_btn")
+
+    for index, button in enumerate(window._engineering_tab_pills):
+        button.click()
+        qapp.processEvents()
+        assert window._tabs.currentIndex() == index
+        assert button.isChecked()
+    assert tuple(window._tabs.widget(index) for index in range(4)) == engineering_views
+
+    manager.set_preference(LANGUAGE_ZH_CN)
+    qapp.processEvents()
+    assert [button.text() for button in window._engineering_tab_pills] == [
+        "实时",
+        "回放",
+        "Log",
+        "设备",
+    ]
+    window._engineering_shortcut.activated.emit()
+    qapp.processEvents()
+    assert window._workspace.currentWidget() is window._customer
+    assert window._customer.isVisible()
+    assert not window._tab_pillbar.isVisible()
+
+    window._engineering_shortcut.activated.emit()
+    qapp.processEvents()
+    assert window._workspace.currentWidget() is window._tabs
+    assert window._tabs.currentIndex() == 3
+    assert tuple(window._tabs.widget(index) for index in range(4)) == engineering_views
+
+    window._engineering_shortcut.activated.emit()
+    qapp.processEvents()
+    assert window._workspace.currentWidget() is window._customer
+
+    window.close()
+    window.deleteLater()
+    qapp.processEvents()
+
+
 def _collect_widget_texts(root) -> list[tuple[str, str]]:
     from PySide6.QtCore import QObject
     from PySide6.QtGui import QAction
@@ -386,9 +457,12 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
     settings, manager = i18n_context
     manager.set_preference(LANGUAGE_ZH_CN)
     window = MainWindow(settings=settings)
-    window.resize(1024, 600)
+    window.resize(1920, 1080)
     window.show()
     qapp.processEvents()
+    window.resize(1024, 600)
+    for _ in range(3):
+        qapp.processEvents()
 
     customer = window._customer
     overview = customer.overview
@@ -402,9 +476,21 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
         "维护",
     ]
     assert overview._status_values["link"].text().startswith("连接状态:")
-    assert overview._metrics["beam_az"].title.text() == "波束方位角"
-    assert overview._snr_plot.getAxis("bottom").label.toPlainText() == "时间 (s)"
+    assert overview._beam_values["beam_az"].title.text() == "方位角"
+    assert overview._state_group_title.text() == "状态"
+    assert overview._data_group_title.text() == "运行数据"
+    assert overview._snr_plot.getAxis("bottom").label.toPlainText() == "设备开机时间 (s)"
     assert overview_scroll.horizontalScrollBar().maximum() == 0
+    assert overview_scroll.verticalScrollBar().maximum() == 0
+    assert overview._density == "dense"
+    playback_channels = customer._playback._profile_store.get_channels(
+        "customer_playback"
+    )
+    assert {channel.name for channel in playback_channels} >= {
+        "横滚角",
+        "波束俯仰角",
+        "经度",
+    }
 
     customer.set_page("maintenance")
     qapp.processEvents()
@@ -417,8 +503,17 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
     overview.refresh()
     assert customer._nav_buttons[0].text() == "Overview"
     assert overview._status_values["link"].text().startswith("Connection:")
-    assert overview._metrics["beam_az"].title.text() == "Beam azimuth"
-    assert overview._snr_plot.getAxis("bottom").label.toPlainText() == "Time (s)"
+    assert overview._beam_values["beam_az"].title.text() == "Azimuth"
+    assert overview._data_group_title.text() == "Runtime data"
+    assert overview._snr_plot.getAxis("bottom").label.toPlainText() == "Device uptime (s)"
+    playback_channels = customer._playback._profile_store.get_channels(
+        "customer_playback"
+    )
+    assert {channel.name for channel in playback_channels} >= {
+        "Roll",
+        "Beam elevation",
+        "Longitude",
+    }
 
     window.close()
     window.deleteLater()

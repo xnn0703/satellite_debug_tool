@@ -16,10 +16,15 @@ from __future__ import annotations
 import math
 import numpy as np
 import pytest
+from PySide6.QtGui import QVector3D
 
 from satellite_debug_tool.ui.attitude_widget import (
     AttitudeWidget,
     P_NED_NWU,
+    _CAM_AZIMUTH,
+    _CAM_CENTER_Z,
+    _CAM_DISTANCE,
+    _CAM_ELEVATION,
     _ant_to_world_nwu,
 )
 
@@ -80,6 +85,24 @@ class TestBindingAccessors:
 
         assert widget.current_attitude_bindings() == ("ch_00", "ch_01", "ch_02")
         assert widget.current_pointing_bindings() == ("", "", "ch_03", "ch_04")
+
+
+class TestDefaultCamera:
+    def test_default_camera_keeps_skyward_beam_headroom_after_reset(self, qapp):
+        widget = AttitudeWidget()
+        widget._gl_view.setCameraPosition(
+            pos=QVector3D(3.0, 2.0, -1.0), distance=7.0, elevation=-12.0, azimuth=120.0
+        )
+
+        widget._reset_view()
+
+        center = widget._gl_view.opts["center"]
+        assert center.x() == pytest.approx(0.0)
+        assert center.y() == pytest.approx(0.0)
+        assert center.z() == pytest.approx(_CAM_CENTER_Z)
+        assert widget._gl_view.opts["distance"] == pytest.approx(_CAM_DISTANCE)
+        assert widget._gl_view.opts["elevation"] == pytest.approx(_CAM_ELEVATION)
+        assert widget._gl_view.opts["azimuth"] == pytest.approx(_CAM_AZIMUTH)
 
 
 class TestZeroAttitudeCases:

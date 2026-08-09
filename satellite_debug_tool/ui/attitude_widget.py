@@ -63,6 +63,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QVector3D
 from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLMeshItem, MeshData
 
 from satellite_debug_tool.i18n import register_translatable, tr
@@ -73,11 +74,12 @@ from satellite_debug_tool.ui import styles as S
 R_POINTING = 4.0             # 波束矢量画到球面半径
 SCAN_TRAIL_LEN = 300         # 扫描轨迹最长保留点数
 
-# 默认相机：距离拉远到能同时框住模型(±1.8)+波束(半径4)+扫描椭圆，
-# 仰角压低些避免波束顶端被裁。复位视角与初始化共用这组参数。
+# 默认相机：设备位于下半区、正常朝天的波束和轨迹位于上半区。
+# 观察中心上移，避免固定半径的扫描轨迹贴住顶部工具栏；不改变波束几何或用户手动视角。
 _CAM_DISTANCE = 14.0
 _CAM_ELEVATION = 22.0
 _CAM_AZIMUTH = 45.0
+_CAM_CENTER_Z = 0.9
 
 # NED↔NWU 映射（也用于 FRD↔FLU）：Y,Z 翻号，det=+1 保持右手系
 P_NED_NWU = np.diag([1.0, -1.0, -1.0]).astype(np.float64)
@@ -87,6 +89,11 @@ P_NED_NWU = np.diag([1.0, -1.0, -1.0]).astype(np.float64)
 # az_ccw_positive=false：硬件 az_out = -az_math
 # el_is_zenith=true：硬件 el_out = 90 - el_up
 _MOUNT_YAW_DEG = 90.0
+
+
+def _default_camera_center() -> QVector3D:
+    """返回新的默认观察中心，避免用户拖动相机时改写共享对象。"""
+    return QVector3D(0.0, 0.0, _CAM_CENTER_Z)
 
 
 def _ant_to_world_nwu(
@@ -141,6 +148,7 @@ class AttitudeWidget(QWidget):
         self._is_dark = True
         self._theme = "dark"
         self._scale = "medium"
+        self._readout_emphasis = False
         # 2026-04-21：combo 已全部移除，_selector_labels 不再需要
         self._value_name_labels: list[QLabel] = []
 
@@ -202,9 +210,7 @@ class AttitudeWidget(QWidget):
 
         # ---- 3D OpenGL view ----
         self._gl_view = GLViewWidget()
-        self._gl_view.setCameraPosition(
-            distance=_CAM_DISTANCE, elevation=_CAM_ELEVATION, azimuth=_CAM_AZIMUTH
-        )
+        self._set_default_camera()
         self._gl_view.setBackgroundColor(0x1E, 0x1E, 0x1E)
 
         # 地面参考网格已移除：z=0 网格平面会横穿居中的设备模型，网格线在穿出
@@ -675,8 +681,15 @@ class AttitudeWidget(QWidget):
 
     def _reset_view(self) -> None:
         """把 3D 相机恢复到默认角度。"""
+        self._set_default_camera()
+
+    def _set_default_camera(self) -> None:
+        """恢复兼顾设备与朝天波束轨迹的默认构图。"""
         self._gl_view.setCameraPosition(
-            distance=_CAM_DISTANCE, elevation=_CAM_ELEVATION, azimuth=_CAM_AZIMUTH
+            pos=_default_camera_center(),
+            distance=_CAM_DISTANCE,
+            elevation=_CAM_ELEVATION,
+            azimuth=_CAM_AZIMUTH,
         )
 
     def update_pointing(
@@ -718,12 +731,14 @@ class AttitudeWidget(QWidget):
     def _apply_label_styles(self) -> None:
         p = S.palette(self._theme)
         selector_px = S.font_px(11, self._scale)
-        value_px = S.font_px(10, self._scale)
+        name_px = S.font_px(11 if self._readout_emphasis else 10, self._scale)
+        value_px = S.font_px(15 if self._readout_emphasis else 10, self._scale)
         for lbl in self._value_name_labels:
-            lbl.setStyleSheet(f"color: {p['text_muted']}; font-size: {value_px}px;")
+            lbl.setStyleSheet(f"color: {p['text_muted']}; font-size: {name_px}px;")
         for val_lbl in (self._roll_val_lbl, self._pitch_val_lbl, self._yaw_val_lbl):
             val_lbl.setStyleSheet(
-                f"color: {p['text']}; font-size: {value_px}px; min-width: 50px;"
+                f"color: {p['text']}; font-family: '{S.monospace_family()}'; "
+                f"font-size: {value_px}px; font-weight: 600; min-width: 66px;"
             )
         # M6: 复位视角按钮样式跟随主题
         self._reset_view_btn.setStyleSheet(
@@ -748,6 +763,12 @@ class AttitudeWidget(QWidget):
         else:
             self._gl_view.setBackgroundColor(0x1E, 0x1E, 0x1E)
         self._apply_scene_colors()
+        self._apply_label_styles()
+
+    def set_readout_emphasis(self, enabled: bool) -> None:
+        """Enlarge attitude values for the customer overview only."""
+
+        self._readout_emphasis = bool(enabled)
         self._apply_label_styles()
 
     def _apply_scene_colors(self) -> None:

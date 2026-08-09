@@ -36,6 +36,7 @@ from .models import (
     ProductValue,
     TrackingPhase,
 )
+from .timestamps import unwrap_u32_series
 
 
 _SERIAL_PLACEHOLDERS = {"", "-", "--", "unknown", "afd01-dev"}
@@ -100,10 +101,10 @@ class LegacyV2Projector:
         self,
         role: str,
         *,
-        window_s: float = 60.0,
-        max_points: int = 2000,
+        window_s: float = 300.0,
+        max_points: int = 30000,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Return relative seconds and values for one customer channel role."""
+        """Return device-uptime seconds and values for one customer channel role."""
         hw = self._profiles.current_hw_type()
         if hw is None:
             return np.array([], dtype=np.float64), np.array([], dtype=np.float32)
@@ -116,10 +117,14 @@ class LegacyV2Projector:
         times, values = buf.get_tail(max_points)
         if times.size == 0:
             return times, values
-        end = float(times[-1])
+        unwrapped, accepted = unwrap_u32_series(times)
+        if unwrapped.size == 0:
+            return unwrapped, np.array([], dtype=np.float32)
+        accepted_values = values[accepted]
+        end = float(unwrapped[-1])
         cutoff = end - max(0.0, float(window_s)) * 1000.0
-        mask = times >= cutoff
-        return (times[mask] - end) / 1000.0, values[mask]
+        mask = unwrapped >= cutoff
+        return unwrapped[mask] / 1000.0, accepted_values[mask]
 
     @staticmethod
     def _text_value(text: Optional[str]) -> ProductValue[str]:

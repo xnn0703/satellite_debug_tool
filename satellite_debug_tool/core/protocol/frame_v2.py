@@ -74,6 +74,8 @@ class CmdType(IntEnum):
     SERVICE_CAPABILITIES = 0x24
     SERVICE_CONTROL_REQUEST = 0x25
     SERVICE_CONTROL_RESPONSE = 0x26
+    SERVICE_LINK_DETAIL = 0x27
+    SERVICE_RF_LOCK_STATUS = 0x28
 
 
 class SubCmd(IntEnum):
@@ -442,6 +444,28 @@ class ServiceSlowState:
 
 
 @dataclass(frozen=True)
+class ServiceLinkDetail:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    modem_online: bool
+    rx_lo_mhz: float
+    tx_lo_mhz: float
+    satellite_mode: int
+    satellite_longitude_deg: float
+    satellite_id: int
+    satellite_name: str
+
+
+@dataclass(frozen=True)
+class ServiceRfLockStatus:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    lock_mask: int
+
+
+@dataclass(frozen=True)
 class ServiceComponentValue:
     valid_mask: int
     online: bool
@@ -616,6 +640,8 @@ FrameV2Record = Union[
     ServiceIdentity,
     ServiceFastState,
     ServiceSlowState,
+    ServiceLinkDetail,
+    ServiceRfLockStatus,
     ServiceComponentHealth,
     ServiceCapabilities,
     ServiceControlResponse,
@@ -661,7 +687,8 @@ __all__ = [
     "GnssCnrObservation", "GnssCnrReport",
     "GnssSatRecord", "GnssSatReport",
     "GnssSignalRecord", "GnssSignalReport",
-    "ServiceIdentity", "ServiceFastState", "ServiceSlowState",
+    "ServiceIdentity", "ServiceFastState", "ServiceSlowState", "ServiceLinkDetail",
+    "ServiceRfLockStatus",
     "ServiceComponentValue", "ServiceComponentHealth",
     "ServiceCapabilities", "ServiceControlResponse",
     "RawFrame", "FrameV2Record",

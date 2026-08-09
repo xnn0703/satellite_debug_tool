@@ -17,6 +17,8 @@ from satellite_debug_tool.core.protocol import (
     ServiceControlResponse,
     ServiceFastState,
     ServiceIdentity,
+    ServiceLinkDetail,
+    ServiceRfLockStatus,
     ServiceSlowState,
 )
 
@@ -29,8 +31,10 @@ from .models import (
     ProductSnapshot,
     ProductValue,
     RfCapabilities,
+    SatelliteMode,
     TrackingPhase,
 )
+from .timestamps import U32UptimeUnwrapper
 
 
 _TRACKING_PHASES = {
@@ -62,6 +66,15 @@ _CONTROL_MODES = {
     0: ControlMode.AUTO,
     1: ControlMode.MANUAL,
 }
+_SATELLITE_MODES = {
+    0: SatelliteMode.UNKNOWN,
+    1: SatelliteMode.GEO,
+    2: SatelliteMode.LEO_TLE,
+}
+
+_SNR_HISTORY_SECONDS = 300.0
+_SNR_MAX_RATE_HZ = 20
+_SNR_HISTORY_CAPACITY = int(_SNR_HISTORY_SECONDS * _SNR_MAX_RATE_HZ) + _SNR_MAX_RATE_HZ
 
 
 class ProductServiceStore(QObject):
@@ -81,10 +94,15 @@ class ProductServiceStore(QObject):
         self._identity: Optional[ServiceIdentity] = None
         self._fast: Optional[ServiceFastState] = None
         self._slow: Optional[ServiceSlowState] = None
+        self._link_detail: Optional[ServiceLinkDetail] = None
+        self._rf_lock_status: Optional[ServiceRfLockStatus] = None
         self._components: Optional[ServiceComponentHealth] = None
         self._capabilities: Optional[ServiceCapabilities] = None
         self._received: dict[str, float] = {}
-        self._snr_history: deque[tuple[int, float]] = deque(maxlen=2400)
+        self._snr_history: deque[tuple[int, float]] = deque(
+            maxlen=_SNR_HISTORY_CAPACITY
+        )
+        self._snr_timestamp = U32UptimeUnwrapper()
 
     @property
     def service_available(self) -> bool:
@@ -102,10 +120,13 @@ class ProductServiceStore(QObject):
         self._identity = None
         self._fast = None
         self._slow = None
+        self._link_detail = None
+        self._rf_lock_status = None
         self._components = None
         self._capabilities = None
         self._received.clear()
         self._snr_history.clear()
+        self._snr_timestamp.reset()
         self.updated.emit()
 
     def feed(self, record, *, received_wallclock: Optional[float] = None) -> bool:
@@ -118,10 +139,21 @@ class ProductServiceStore(QObject):
             self._fast = record
             key = "fast"
             if record.valid_mask & (1 << 11):
-                self._snr_history.append((record.timestamp, float(record.snr_db)))
+                timestamp = self._snr_timestamp.add(record.timestamp)
+                if timestamp is not None:
+                    self._snr_history.append((timestamp, float(record.snr_db)))
+                    cutoff = timestamp - int(_SNR_HISTORY_SECONDS * 1000.0)
+                    while self._snr_history and self._snr_history[0][0] < cutoff:
+                        self._snr_history.popleft()
         elif isinstance(record, ServiceSlowState):
             self._slow = record
             key = "slow"
+        elif isinstance(record, ServiceLinkDetail):
+            self._link_detail = record
+            key = "link_detail"
+        elif isinstance(record, ServiceRfLockStatus):
+            self._rf_lock_status = record
+            key = "rf_lock_status"
         elif isinstance(record, ServiceComponentHealth):
             self._components = record
             key = "components"
@@ -160,14 +192,14 @@ class ProductServiceStore(QObject):
             source=source,
         )
 
-    def snr_history(self, *, window_s: float = 60.0) -> tuple[np.ndarray, np.ndarray]:
+    def snr_history(self, *, window_s: float = 300.0) -> tuple[np.ndarray, np.ndarray]:
         if not self._snr_history:
             return np.array([], dtype=np.float64), np.array([], dtype=np.float32)
         samples = list(self._snr_history)
         end = samples[-1][0]
         cutoff = end - int(max(0.0, window_s) * 1000.0)
         selected = [(timestamp, value) for timestamp, value in samples if timestamp >= cutoff]
-        times = np.asarray([(timestamp - end) / 1000.0 for timestamp, _ in selected])
+        times = np.asarray([timestamp / 1000.0 for timestamp, _ in selected])
         values = np.asarray([value for _, value in selected], dtype=np.float32)
         return times, values
 
@@ -254,6 +286,68 @@ class ProductServiceStore(QObject):
                 ),
                 tx_enabled=self._dynamic(
                     slow.valid_mask, 7, slow.tx_enabled, slow.timestamp, stale
+                ),
+            )
+        link = self._link_detail
+        if link is not None:
+            stale = self._is_stale("link_detail", now, 3.0)
+            operation = replace(
+                operation,
+                modem_online=self._dynamic(
+                    link.valid_mask, 0, link.modem_online, link.timestamp, stale
+                ),
+                rx_lo_mhz=self._dynamic(
+                    link.valid_mask, 1, link.rx_lo_mhz, link.timestamp, stale
+                ),
+                tx_lo_mhz=self._dynamic(
+                    link.valid_mask, 2, link.tx_lo_mhz, link.timestamp, stale
+                ),
+                satellite_mode=self._dynamic(
+                    link.valid_mask,
+                    3,
+                    _SATELLITE_MODES.get(link.satellite_mode, SatelliteMode.UNKNOWN),
+                    link.timestamp,
+                    stale,
+                ),
+                satellite_longitude_deg=self._dynamic(
+                    link.valid_mask,
+                    4,
+                    link.satellite_longitude_deg,
+                    link.timestamp,
+                    stale,
+                ),
+                satellite_id=self._dynamic(
+                    link.valid_mask, 5, link.satellite_id, link.timestamp, stale
+                ),
+                satellite_name=self._dynamic(
+                    link.valid_mask, 6, link.satellite_name, link.timestamp, stale
+                ),
+            )
+        rf_lock_status = self._rf_lock_status
+        if rf_lock_status is not None:
+            stale = self._is_stale("rf_lock_status", now, 1.0)
+            operation = replace(
+                operation,
+                clock_pll_locked=self._dynamic(
+                    rf_lock_status.valid_mask,
+                    0,
+                    bool(rf_lock_status.lock_mask & (1 << 0)),
+                    rf_lock_status.timestamp,
+                    stale,
+                ),
+                tx_pll_locked=self._dynamic(
+                    rf_lock_status.valid_mask,
+                    1,
+                    bool(rf_lock_status.lock_mask & (1 << 1)),
+                    rf_lock_status.timestamp,
+                    stale,
+                ),
+                rx_pll_locked=self._dynamic(
+                    rf_lock_status.valid_mask,
+                    2,
+                    bool(rf_lock_status.lock_mask & (1 << 2)),
+                    rf_lock_status.timestamp,
+                    stale,
                 ),
             )
         return operation

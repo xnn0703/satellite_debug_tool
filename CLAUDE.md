@@ -138,7 +138,6 @@ Device Tab
 - [doc/M8_acceptance.md](doc/M8_acceptance.md) — M8 验收锚点 + 自评
 - [doc/M8_dev_log.md](doc/M8_dev_log.md) — M8 实施日志
 - [doc/M10_plan.md](doc/M10_plan.md) / [doc/M11_plan.md](doc/M11_plan.md) / [doc/M12_plan.md](doc/M12_plan.md) — 后续局部优化计划
-- [doc/simulation_delivery.md](doc/simulation_delivery.md) — 当前仿真交付与遗留
 - [doc/DEBUG设备协议接口规范_v2.md](doc/DEBUG设备协议接口规范_v2.md) — 协议权威规范
 - [doc/development_log.md](doc/development_log.md) — M1–M6 实施日志
 - [doc/acceptance_log.md](doc/acceptance_log.md) — F-/A- 系列验收跟踪

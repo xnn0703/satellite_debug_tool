@@ -89,7 +89,7 @@ jobs:
           pip install pyinstaller
           pip install -r satellite_debug_tool/requirements.txt
 
-      - name: Build (main + updater + simulator)
+      - name: Build (main + updater)
         shell: cmd
         run: scripts\build_windows.bat
 

@@ -78,6 +78,11 @@ class CustomerRfControlView(QWidget):
         self._store.updated.connect(self._on_store_updated)
         self._store.control_response.connect(self._on_control_response)
         self._live.connection_state_changed.connect(lambda _connected: self.refresh())
+        phase_signal = getattr(
+            self._live, "device_connection_phase_changed", None
+        )
+        if phase_signal is not None:
+            phase_signal.connect(lambda _phase: self.refresh())
         self.refresh()
         register_translatable(self)
 
@@ -236,10 +241,18 @@ class CustomerRfControlView(QWidget):
         hw_type = self._live.profile_store().current_hw_type()
         return isinstance(hw_type, str) and hw_type.lower() == "afd01"
 
+    def _device_online(self) -> bool:
+        checker = getattr(self._live, "is_device_online", None)
+        return bool(checker()) if checker is not None else bool(self._live.is_connected())
+
     def refresh(self) -> None:
         snapshot = self._store.snapshot()
         self._last_snapshot = snapshot
-        service_ready = self._live.is_connected() and self._is_afd01() and self._store.service_available
+        service_ready = (
+            self._device_online()
+            and self._is_afd01()
+            and self._store.service_available
+        )
         self._service_state.setText(tr("AFD01 service online") if service_ready else tr("Waiting for AFD01 service"))
         self._service_state.setProperty("online", service_ready)
         self._repolish(self._service_state)

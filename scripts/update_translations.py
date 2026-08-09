@@ -55,6 +55,7 @@ def _lupdate(output: Path) -> None:
         _tool("pyside6-lupdate"),
         "-extensions",
         "py",
+        "-no-obsolete",
         "-tr-function-alias",
         (
             "tr+=tr,tr+=set_translatable_text,tr+=set_translatable_tooltip,"

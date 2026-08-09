@@ -111,6 +111,7 @@ class GroupedChartWidget(QWidget):
         # 默认 120s 窗口；配合 ChannelBuffer=30000 容量，足够保留最近几分钟历史
         self._time_window = 120.0
         self._auto_range = False
+        self._device_uptime_axis = False
         self._is_dark = True
         self._theme = "dark"
         self._scale = "medium"
@@ -294,7 +295,7 @@ class GroupedChartWidget(QWidget):
             )
             plot.setLabel("left", tr("Value"))
             if plot is first_plot:
-                plot.setLabel("bottom", tr("Time"), units="s")
+                plot.setLabel("bottom", self._time_axis_text(), units="s")
             action = self._plot_norm_actions.get(plot_key)
             if action is not None:
                 action.setText(tr("Normalize this chart"))
@@ -323,6 +324,20 @@ class GroupedChartWidget(QWidget):
 
     def set_auto_range(self, enabled: bool) -> None:
         self._auto_range = bool(enabled)
+
+    def set_device_uptime_axis(self, enabled: bool) -> None:
+        """Display absolute device uptime instead of time since the first sample."""
+        enabled = bool(enabled)
+        if self._device_uptime_axis == enabled:
+            return
+        self._device_uptime_axis = enabled
+        self._x_origin_ms = None
+        first_plot = next(iter(self._plots.values()), None)
+        if first_plot is not None:
+            first_plot.setLabel("bottom", self._time_axis_text(), units="s")
+
+    def _time_axis_text(self) -> str:
+        return tr("Device uptime") if self._device_uptime_axis else tr("Time")
 
     def _on_hide_all_toggled(self, checked: bool) -> None:
         """M9：一键隐藏 / 显示所有曲线（不影响 legend 单独切换的状态历史）。"""
@@ -704,7 +719,7 @@ class GroupedChartWidget(QWidget):
             if xs.size == 0:
                 continue
             if self._x_origin_ms is None:
-                self._x_origin_ms = float(xs[0])
+                self._x_origin_ms = 0.0 if self._device_uptime_axis else float(xs[0])
             xs_sec = (xs - self._x_origin_ms) / 1000.0
             # M9.1：Live 模式 setData 前峰值降采样到 ~3000 点，避免 buffer
             # 满后 18000 点全量 setData 阻塞主线程（回放/log 不降，靠
@@ -930,7 +945,7 @@ class GroupedChartWidget(QWidget):
             row=0, col=0, title=tr("All channels")
         )
         plot.setLabel("left", tr("Value"))
-        plot.setLabel("bottom", tr("Time"), units="s")
+        plot.setLabel("bottom", self._time_axis_text(), units="s")
         plot.showGrid(x=True, y=True, alpha=0.25)
         plot.getAxis("left").setTextPen(self._plot_axis_color())
         plot.getAxis("bottom").setTextPen(self._plot_axis_color())
@@ -1049,7 +1064,7 @@ class GroupedChartWidget(QWidget):
             self._connect_user_y_override(group_id, plot)
 
         if first_plot is not None:
-            first_plot.setLabel("bottom", tr("Time"), units="s")
+            first_plot.setLabel("bottom", self._time_axis_text(), units="s")
             # 初始 X 范围同 combined
             first_plot.setXRange(0.0, self._time_window, padding=0)
             self._x_view_max = self._time_window
