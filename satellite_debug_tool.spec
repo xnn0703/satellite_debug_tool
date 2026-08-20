@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec — Satellite Debug Tool 主程序。
+"""PyInstaller spec — SoftHertz Phased-Array Terminal Tool 主程序。
 
 构建：
     pyinstaller --noconfirm satellite_debug_tool.spec
@@ -175,7 +175,7 @@ if sys.platform == "darwin":
         bundle_identifier="com.softhz.satellite-debug-tool",
         info_plist={
             "CFBundleName": APP_NAME,
-            "CFBundleDisplayName": "Satellite Debug Tool",
+            "CFBundleDisplayName": "SoftHertz Phased-Array Terminal Tool",
             "CFBundleDevelopmentRegion": "en",
             "CFBundleLocalizations": ["en", "zh_CN"],
             "CFBundleShortVersionString": APP_VERSION,
