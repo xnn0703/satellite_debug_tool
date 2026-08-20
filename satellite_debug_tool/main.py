@@ -7,13 +7,17 @@ from satellite_debug_tool.ui.main_window import MainWindow
 
 
 def main():
-    app = QApplication(sys.argv)
+    production_requested = "--production" in sys.argv[1:]
+    qt_argv = [arg for arg in sys.argv if arg != "--production"]
+    app = QApplication(qt_argv)
     settings = Settings()
     initialize_translation_manager(app, settings)
     # Mission Console：先加载打包字体（IBM Plex 若存在），再设全局界面字体
     S.load_bundled_fonts()
     S.apply_global_font(app, scale="small", base_px=13)
     window = MainWindow(settings=settings)
+    if production_requested:
+        window.unlock_production_for_session()
     window.show()
     sys.exit(app.exec())
 

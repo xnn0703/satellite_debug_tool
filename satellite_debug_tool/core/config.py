@@ -38,6 +38,15 @@ class Settings:
             "recording_dir": "",  # Live 录制 / Playback 加载 .sdb 的默认目录
             "log_dir": "",        # Log Tab 导入 WindTerm .log 的默认目录
             "firmware_dir": "",   # Device Tab OTA 选择 .bin 的默认目录
+            "production_dir": "",  # 批量试产数据库、SDB 和报告输出根目录
+        },
+        "production": {
+            "last_operator": "",
+            "last_recipe": "",
+            "discovery_cidr": "192.168.1.0/24",
+            "device_port": 4004,
+            "local_port": 45679,
+            "max_devices": 4,
         },
         # M10 F1/F2：chart UX 持久化
         "chart": {

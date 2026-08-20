@@ -36,6 +36,7 @@ from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.log_view import LogView
 from satellite_debug_tool.ui.playback_view import PlaybackView
+from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
 from satellite_debug_tool.ui.settings_dialog import SettingsDialog
 from satellite_debug_tool.ui.update_dialog import (
     UpdateDialog,
@@ -48,7 +49,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, settings: Settings | None = None):
         super().__init__()
-        self.setWindowTitle("Satellite Debug Tool")
+        self.setWindowTitle(tr("SoftHertz Phased-Array Terminal Tool"))
         self.resize(1280, 800)
         self.setMinimumWidth(1024)
         self.setMinimumHeight(600)
@@ -120,12 +121,21 @@ class MainWindow(QMainWindow):
         )
 
         self._customer = CustomerWorkspace(self._live, self._settings, self._device)
-        for view in (self._customer, self._live, self._playback, self._log, self._device):
+        self._production = ProductionWorkspace(self._settings)
+        for view in (
+            self._customer,
+            self._production,
+            self._live,
+            self._playback,
+            self._log,
+            self._device,
+        ):
             view.status_message.connect(self._on_status_message)
 
         self._workspace = QStackedWidget()
         self._workspace.addWidget(self._customer)
         self._workspace.addWidget(self._tabs)
+        self._workspace.addWidget(self._production)
         self._workspace.currentChanged.connect(self._sync_tab_pills)
         self.setCentralWidget(self._workspace)
 
@@ -134,6 +144,9 @@ class MainWindow(QMainWindow):
         self._engineering_shortcut = QShortcut(QKeySequence("Ctrl+Shift+E"), self)
         self._engineering_shortcut.activated.connect(self._request_engineering_unlock)
         self._engineering_unlocked = False
+        self._production_shortcut = QShortcut(QKeySequence("Ctrl+Shift+P"), self)
+        self._production_shortcut.activated.connect(self._request_production_unlock)
+        self._production_unlocked = False
 
         # ---------- 底部 statusbar ----------
         self.setStatusBar(QStatusBar())
@@ -179,7 +192,7 @@ class MainWindow(QMainWindow):
         self._brand_mark.setObjectName("brandMark")
         self._brand_mark.setFixedSize(26, 26)
         self._brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._brand_text = QLabel("Satellite Debug Tool")
+        self._brand_text = QLabel(tr("SoftHertz"))
         self._brand_text.setObjectName("brandText")
         row.addWidget(self._brand_mark)
         row.addWidget(self._brand_text)
@@ -312,6 +325,33 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Yes:
             self.unlock_engineering_for_session()
 
+    def unlock_production_for_session(self) -> None:
+        """Expose the production console for this process without persistence."""
+        self._production_unlocked = True
+        self._production.activate()
+        self._workspace.setCurrentIndex(2)
+        self._sync_tab_pills()
+
+    def _request_production_unlock(self) -> None:
+        if self._production_unlocked:
+            self._workspace.setCurrentIndex(
+                0 if self._workspace.currentIndex() == 2 else 2
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            tr("Production batch test"),
+            tr(
+                "M19-A is an engineering-preview evidence capture workspace. It does "
+                "not execute the complete formal production-release workflow. Open "
+                "it for this session?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.unlock_production_for_session()
+
     # ============================ 主题 ============================
 
     @staticmethod
@@ -371,7 +411,14 @@ class MainWindow(QMainWindow):
             f"QTabWidget::pane {{ border: 0; background: {pal['bg']}; }}"
         )
         # 广播到 view
-        for view in (self._customer, self._live, self._playback, self._log, self._device):
+        for view in (
+            self._customer,
+            self._production,
+            self._live,
+            self._playback,
+            self._log,
+            self._device,
+        ):
             if hasattr(view, "set_theme"):
                 view.set_theme(theme, "small")
 
@@ -445,6 +492,8 @@ class MainWindow(QMainWindow):
     def retranslate_ui(self) -> None:
         # Transient messages arrive already formatted. Clearing one on a locale
         # change avoids leaving stale-language text without rebuilding any view.
+        self.setWindowTitle(tr("SoftHertz Phased-Array Terminal Tool"))
+        self._brand_text.setText(tr("SoftHertz"))
         sb = self.statusBar()
         if sb is not None:
             sb.clearMessage()
@@ -489,3 +538,7 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         if sb is not None:
             sb.showMessage(msg, 15000)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._production.shutdown()
+        super().closeEvent(event)

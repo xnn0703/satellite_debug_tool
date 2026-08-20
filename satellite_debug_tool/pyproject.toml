@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satellite_debug_tool"
-description = "Satellite communication debug tool"
+description = "软赫卫星通信相控阵设备调试系统 (SoftHertz Phased-Array Terminal Tool)"
 requires-python = ">=3.9"
 dynamic = ["version"]
 dependencies = [
@@ -25,6 +25,7 @@ packages = [
     "satellite_debug_tool.core.data",
     "satellite_debug_tool.core.log_parser",
     "satellite_debug_tool.core.profile",
+    "satellite_debug_tool.core.production",
     "satellite_debug_tool.core.protocol",
     "satellite_debug_tool.io",
     "satellite_debug_tool.ui",

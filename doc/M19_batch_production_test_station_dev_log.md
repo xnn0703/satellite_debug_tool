@@ -1,5 +1,123 @@
 # M19 小批试产批量测试工作站开发记录
 
+## 2026-08-20：未提交工作区整理与防误用收口
+
+- 全量回归为 `756 passed, 4 warnings in 40.28s`，warning 均为既有 `datetime.utcnow()` 弃用提示。
+- 翻译目录为 `739 messages`，TS/QM 同步且校验通过；`git diff --check` 通过。
+- 生产工作区和解锁对话显式标记为“M19-A 工程预览/只做证据采集”；完整预检、夹具编排、
+  指标与报告完成前不得用于正式试产放行。
+
+## 2026-08-17：批次参与设备门禁修正
+
+### 源码核对与契约
+
+- `FleetController` 和 `FixtureCoordinator` 原本均支持 1~4 台设备，结果库也只限制上限 4 台；不存在底层必须四台的判断。
+- 现场看到的“必须四台”实际来自 Production Workspace 的“开始批次”按钮永久禁用且没有处理函数，并非在线设备计数错误。
+- 本轮将并发容量与开始门限分离：当前在线、已识别且录制器已 ARMED 的设备达到 1 台即可开始，最多纳入 4 台；空槽和离线历史会话不阻塞。
+- 开始时冻结参与设备身份与槽位并写入批次证据，随后只为冻结名单创建初始 attempt。批次运行后出现的新设备不得自动加入本批判定。
+
+### 实施与验证
+
+- `ProductionResultStore.start_batch()` 在一个 SQLite 事务内冻结 1~4 台参与设备、把其他已登记设备标记为 `excluded`、切换批次到 RUNNING，并为每个参与设备创建首轮 attempt。
+- Production Workspace 的开始按钮改为动态门控：1 台在线即可启用；要求身份已确认、录制已 ARMED 且身份已持久化。批次开始后新设备仅记录忽略事件，不创建 attempt，也不进入该批录制。
+- `FleetController` 同步冻结录制参与者，未入选会话立即完成暂存录制；批次中止会终止活动 attempt、结束各参与设备录制并留下状态事件。
+- AFD01 Product Service 新增 `SERVICE_NAV_SOURCE_INFO(0x2A)` 和 `SERVICE_EXTERNAL_INS_DIAGNOSTICS(0x2B)`，服务版本升至 6。设备从参数区读取 GNSS/IMU/姿态来源，从 Bynav 驱动读取在线、报文频率/计数、CRC/格式错误、RX 溢出和最新姿态/精度量。
+- 上位机新增严格定长解码、类型化 ProductSnapshot 和外部 INS 适用性门控。未配置/明确不支持时只跳过该设备的外部 INS attempt；配置存在但离线仍保留为应测对象。
+- 当前没有权威的 Bynav 模块型号、模块固件和配置哈希读取接口，本轮明确不制造占位值，待设备侧取得稳定来源后再扩展 schema。
+- 单设备/能力门控/协议联合专项测试：`50 passed`；上位机全量回归：`740 passed, 4 warnings in 47.35s`。4 条 warning 均为既有 `datetime.utcnow()` 弃用提示，本轮没有新增 warning。
+- 翻译目录：`669 messages`，TS/QM 同步，无 unfinished、空翻译或占位符错误；两仓库 `git diff --check` 通过。
+- AFD01 app debug/release 均构建成功。debug：FLASH `709376 B / 768 KB (90.20%)`、RAM `394856 B / 512 KB (75.31%)`；release：FLASH `646744 B / 768 KB (82.24%)`、RAM `388936 B / 512 KB (74.18%)`。构建日志仍含工程既有 warning，未出现本轮协议实现相关编译错误。
+
+## 2026-08-09：外部 INS 与整机组合导航分层
+
+### 源码核对
+
+- AFD01 已保存 Bynav 外部 INS 的对准/解算状态、定位类型、姿态、姿态/位置/速度标准差、solution/differential age，以及报文频率、计数、CRC/格式错误和 RX 溢出等内部数据。
+- 当前 Debug Profile 只公开了外部 INS 的部分姿态和状态字段，Product Service 则把内部/外部来源折叠为客户可见的整机组合导航结果。现有生产协议不足以独立验收 Bynav 模块，不能在上位机通过通道名称反推完整模块性能。
+- 原始 IMU、外部 INS 模块和整机组合导航属于三个不同被测层级；最终姿态稳定不等于每颗 IMU 和已配置外部模块均合格。
+
+### 设计与主机实现
+
+- M19 固定为四类跨工况性能视图：GNSS、原始 IMU、外部 INS 和整机组合导航。它们复用冷启动静置、锁定后摇摆、摇摆中上电、锁定后行驶、行驶中上电五个物理窗口，不增加额外串行测试时长。
+- Production Workspace 从九行调整为七项执行流程和四项性能汇总；五个物理工况显示“至少 60 min”，四个性能视图显示“共享窗口”。
+- 配方可通过 `tests.external_ins.enabled` 声明需要评价外部 INS。未启用时显示 `N/A`；整机组合导航汇总在任一物理工况启用时自动进入待测。运行状态一旦由流程引擎更新，语言切换不会把它重置为配方默认值。
+- 后续设备门控必须使用类型化的来源角色与能力：外部 INS 未安装、未启用或未承担 GNSS/IMU/姿态角色时为 `N/A`；已配置却失联或质量不足才形成 `FAIL/INCOMPLETE`。
+
+### 软件验证
+
+- Production Workspace 与配方定向回归：`22 passed in 1.97s`，覆盖十一行顺序、共享窗口时长、外部 INS 启用/禁用和语言切换状态保持。
+- 全量回归：`732 passed, 4 warnings in 55.75s`；四个 warning 仍为既有 `datetime.utcnow()` 弃用提示，本轮没有新增 warning。
+- 翻译目录：`648 messages`，TS/QM 同步，无 unfinished、空翻译或占位符错误；`git diff --check` 通过。
+
+### 未完成边界
+
+- 来源角色和 Bynav 运行诊断已具备类型化链路；外部 INS 指标引擎、跨窗口聚合、报告生成和真机阈值验收仍未实现。
+- Bynav 型号/固件/配置哈希和正式阈值仍需随试产配方冻结；在此之前生产页的外部 INS 行不构成硬件性能放行结论。
+
+## 2026-08-09：M19.1 AFD01 生产身份
+
+- AFD01 FRAM 仅保存 `202607N001` 形式的序列后缀，对外完整 SN 由型号组合为 `AFD01-202607N001`；上位机只能读取，产线通过 Shell 写入。
+- boot/app 使用同一 96-bit MCU UID 派生本地单播 MAC，并通过 Product Service `0x29` 上报完整 UID、MAC 和派生版本。
+- Fleet 和 SQLite 以 UID 为首选不可变身份，SN 用于人工识别和目录命名；旧固件缺少 UID 时回退 SN，重复 UID/SN/MAC 或绑定冲突均阻断批次。
+- 软件验证为上位机 `730 passed`、固件身份测试 `1/1 passed`，AFD01 app/boot debug/release 四组构建通过；硬件验收仍待进行。详细记录见 `doc/M19_1_device_identity_dev_log.md`。
+
+## 2026-08-09：M19-A.1 四设备实时 SNR 工作区
+
+### 已确认设计
+
+- 将原四设备表格替换为 `2 x 2` SNR 小图，图头合并槽位、SN、IP、当前值、在线/录制、当前测试和结果。
+- 四图以工作站单调时钟建立公共批次相对时间轴，滚动显示最近 5 min；共享 `0~20 dB` 默认 Y 轴，出现超界值时统一扩展。
+- 离线和长样本间隔用断线表达，不跨缺口插值。会话保留 20 Hz 样本，UI 约 5 Hz 重绘，独立 SDB 的原始帧录制链不变。
+- 主区左侧显示四图，右侧显示测试流程和共享夹具，批次事件移到底部并允许调整高度。
+
+### 实施状态
+
+- 主机软件实现完成：`DeviceSession` 按每个 UDP 数据报的工作站单调时间保存最多约 5 min 的 20 Hz SNR 样本，同时保留设备 uptime；无效掩码和非有限值不进入显示缓存。
+- 新增四个独立 `ProductionSnrPanel`，采用稳定配色、共享 X/Y 范围、5 min 滚动窗口和超 1 s 间隔的 `NaN` 断线；当前值超过 1.5 s 未更新时不再显示为实时值。
+- 批次创建时清空批次前显示历史并重建相对时间零点。UI 定时器为 200 ms，SDB 仍在解码前记录原始帧，未改变 20 Hz 捕获和证据链。
+- 生产页调整为左侧 `2 x 2` 四图、右侧流程/夹具、底部可调事件区。小于 1500 px 宽时隐藏流程表的序号、前置条件和有效时长列，底层数据不删除，宽屏自动恢复；低高度时仅收紧坐标轴标签，不隐藏设备图头字段。
+
+### 软件验证
+
+- M19 定向测试：`53 passed in 1.45s`。
+- 全量回归：`725 passed, 4 warnings in 40.76s`；warning 均为既有 `datetime.utcnow()` 弃用提示，没有新增 warning。
+- 翻译目录：`639 messages`，TS/QM 同步，无 unfinished、空翻译或占位符错误。
+- 1280x800 与 1024x600 offscreen 截图已检查：四图、图头、流程、夹具和事件区无重叠；1024x600 使用紧凑坐标轴和内部表格滚动。offscreen 环境不支持隐藏客户页的 OpenGL 3D 上下文，不影响本次纯 2D 生产页检查。
+- Windows 125%/150% DPI、四台 AFD01 20 Hz 真机和约 5 h 长时运行仍待硬件验收，本节勾选不构成试产放行。
+
+## 2026-08-09：M19-A 工作站底座实施
+
+### 干净起点
+
+- 按用户要求先提交原有本地改动：`dd3a82d feat(customer): 完善客户工作台并移除仿真功能`。
+- 随后提交 M19 计划基线：`cf56191 docs(production): 制定M19批量试产测试方案`。
+- 实施前全量基线为 `672 passed, 4 warnings`；warning 均为既有 `datetime.utcnow()` 弃用提示。
+
+### 已实现
+
+- 新增 `core/production`：稳定批次/attempt/夹具证据枚举、不可变 JSON 配方及 SHA-256、SQLite WAL 结果库、追加式重测和带事件的崩溃恢复。
+- 新增单 socket `UdpFleetHub` 和最多四台 `DeviceSession`：探测使用 1 Hz Product Service 订阅，只接纳合法身份，接纳后单播提升到 20 Hz；按源 endpoint 独立解码。
+- M19.1 接入后，新固件以 MCU UID 为首选身份键、完整 SN 为可读标识，旧固件缺少 UID 时回退 SN；离线换 IP 迁移原槽位、录制器和数据库 endpoint，并检测 UID/SN/MAC 重复或绑定冲突。
+- 批次创建后为每台设备独立预置 SDB v3；新设备出现时先启动录制再消费首个身份帧，结束后优先归档到 `devices/<完整SN>/evidence/`，未配置 SN 时回退 UID。
+- 新增隐藏 Production Workspace：`Ctrl+Shift+P` 首次确认后进入，`--production` 可直接启动；支持配方导入、批次锁定、四设备矩阵、九项流程、共享夹具和事件视图。
+- 新增 `FixtureCoordinator`，只有满足录制、身份、配方、夹具和安全屏障的设备才能进入共享动作；`COMMAND_SENT / MOTION_OBSERVED / POSE_VERIFIED` 只能单调升级。
+- 新增灵境 A6/A6T 类型化适配器、回中/复位隔离、轴符号/软限位/步长/最短时长门禁、组合正弦轨迹和绝对单调时钟调度器。
+- 新增 GW Instek PSW 80-27 TCP/SCPI 核心：LF 字节流、单查询串行化、身份白名单、OFF 预检、设定值闭环、ON/OFF 实测确认、保护/错误检查和重连不重放输出。
+- 电源电压/电流没有采用 MATLAB 的 14 V/2 A 作为默认值；构造配置时必须显式提供，正式值仍待现场批准。
+
+### 软件验证
+
+- M19 定向测试当前为 `50 passed`，覆盖配方、结果库、夹具协调、Fleet、Production Workspace、灵境平台和 PSW。
+- 全量回归为 `722 passed, 4 warnings in 40.11s`；warning 仍是实施前已有的 `datetime.utcnow()` 弃用提示，没有新增 warning。
+- 翻译目录共 639 条源文案，`update / compile / check` 通过，无 unfinished 或空翻译。
+- 1280x800 和 1024x600 offscreen 截图已检查：四设备与四夹具槽位无重叠；1024x600 的九项流程通过表格滚动查看。
+
+### 尚未完成
+
+- Production Workspace 的“开始批次”仍保持禁用；M19-B/C 的只读版本/参数客户端、流程编排和夹具状态机尚未接入。
+- MS-6222 采集/时间链、车辆人工门禁、指标引擎、报告生成和 AFD01 Boot/IMU 试产协议尚未实现。
+- 尚未进行 Windows DPI、PSW/摇摆台/MS-6222、四台 AFD01 和约 5 h 真机试产验收；当前实现不能用于正式放行。
+
 ## 2026-08-09：MS-6222 独立姿态参考审查
 
 ### 输入资料
