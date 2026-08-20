@@ -25,6 +25,7 @@ from .gnss_store import (
     signal_record_locked,
     signal_record_used,
 )
+from .orbit_store import OrbitCatalogSnapshot, OrbitSkySnapshot, OrbitSkyTrailPoint, OrbitStore
 
 __all__ = [
     "ChannelBuffer",
@@ -38,4 +39,5 @@ __all__ = [
     "SIGNAL_NAMESPACE_RAW",
     "signal_band", "signal_name", "satellite_label", "observation_locked", "infer_sky_system",
     "signal_record_cnr_valid", "signal_record_locked", "signal_record_used",
+    "OrbitStore", "OrbitCatalogSnapshot", "OrbitSkySnapshot", "OrbitSkyTrailPoint",
 ]

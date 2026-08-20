@@ -9,6 +9,8 @@ import pytest
 from satellite_debug_tool.core.product import (
     Availability,
     ControlMode,
+    ExternalInsState,
+    NavigationSource,
     ProductServiceStore,
     SatelliteMode,
     TrackingPhase,
@@ -21,8 +23,11 @@ from satellite_debug_tool.core.protocol import (
     ServiceCapabilities,
     ServiceComponentHealth,
     ServiceFastState,
+    ServiceExternalInsDiagnostics,
+    ServiceHardwareIdentity,
     ServiceIdentity,
     ServiceLinkDetail,
+    ServiceNavigationSourceInfo,
     ServiceRfLockStatus,
     ServiceSlowState,
     build_frame,
@@ -49,6 +54,25 @@ def test_service_identity_and_fixed_records_decode() -> None:
     assert isinstance(identity, ServiceIdentity)
     assert identity.serial_number == "AFD01-A1B2"
     assert identity.valid_mask == 0x17
+
+    hardware = _decode(
+        CmdType.SERVICE_HARDWARE_IDENTITY,
+        struct.pack(
+            "<BIIIII6sB",
+            1,
+            1234,
+            0x07,
+            0x12345678,
+            0x9ABCDEF0,
+            0x0BADBEEF,
+            bytes.fromhex("4A65A6999E4B"),
+            1,
+        ),
+    )
+    assert isinstance(hardware, ServiceHardwareIdentity)
+    assert hardware.device_uid == "123456789ABCDEF00BADBEEF"
+    assert hardware.mac_text == "4A:65:A6:99:9E:4B"
+    assert hardware.mac_source == 1
 
     fast_payload = struct.pack(
         "<BII6B6f",
@@ -137,10 +161,173 @@ def test_service_control_builders_include_context() -> None:
     assert capture[6:13] == struct.pack("<BIBB", 1, 8, 4, 1)
 
 
+def test_navigation_source_and_external_ins_diagnostics_decode() -> None:
+    source = _decode(
+        CmdType.SERVICE_NAV_SOURCE_INFO,
+        struct.pack("<BII7B", 1, 3000, 0x7F, 3, 3, 3, 3, 0x07, 0x0F, 0),
+    )
+    assert isinstance(source, ServiceNavigationSourceInfo)
+    assert source.external_role_mask == 0x07
+    assert source.capability_flags == 0x0F
+
+    payload = struct.pack(
+        "<BII9B3I3f4I14f",
+        1,
+        3000,
+        0xFFF,
+        3,
+        0x07,
+        1,
+        4,
+        1,
+        3,
+        56,
+        50,
+        18,
+        1000,
+        10000,
+        1000,
+        10.0,
+        100.0,
+        10.0,
+        2,
+        3,
+        4,
+        5,
+        123.0,
+        1.0,
+        -2.0,
+        0.2,
+        0.1,
+        0.1,
+        0.4,
+        0.5,
+        0.8,
+        0.05,
+        0.06,
+        0.07,
+        0.25,
+        0.5,
+    )
+    diagnostics = _decode(CmdType.SERVICE_EXTERNAL_INS_DIAGNOSTICS, payload)
+    assert isinstance(diagnostics, ServiceExternalInsDiagnostics)
+    assert diagnostics.online is True
+    assert diagnostics.inspvax_hz == pytest.approx(10.0)
+    assert diagnostics.yaw_std_deg == pytest.approx(0.2)
+    assert diagnostics.differential_age_s == pytest.approx(0.5)
+
+
+def test_service_store_distinguishes_external_ins_na_online_and_stale() -> None:
+    store = ProductServiceStore()
+    store.feed(
+        ServiceNavigationSourceInfo(1, 100, 0x7F, 2, 1, 0, 0, 0, 0x01, 0),
+        received_wallclock=10.0,
+    )
+    store.feed(
+        ServiceExternalInsDiagnostics(
+            1,
+            100,
+            0x01,
+            0,
+            0,
+            False,
+            0,
+            False,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+            0,
+            0,
+            0,
+            *([0.0] * 14),
+        ),
+        received_wallclock=10.0,
+    )
+    not_applicable = store.snapshot(now_wallclock=10.1)
+    assert not_applicable.navigation_sources.external_ins_supported.value is True
+    assert not_applicable.navigation_sources.external_ins_configured.value is False
+    assert not_applicable.navigation_sources.external_role_mask.value == 0
+    assert not_applicable.external_ins.source.value == NavigationSource.NONE
+    assert not_applicable.external_ins.online.availability == Availability.UNSUPPORTED
+
+    store.feed(
+        ServiceNavigationSourceInfo(1, 200, 0x7F, 3, 3, 3, 3, 0x07, 0x0F, 0),
+        received_wallclock=20.0,
+    )
+    configured = ServiceExternalInsDiagnostics(
+        1,
+        200,
+        0xFFF,
+        3,
+        0x07,
+        True,
+        4,
+        True,
+        3,
+        56,
+        50,
+        18,
+        1000,
+        10000,
+        1000,
+        10.0,
+        100.0,
+        10.0,
+        2,
+        3,
+        4,
+        5,
+        123.0,
+        1.0,
+        -2.0,
+        0.2,
+        0.1,
+        0.1,
+        0.4,
+        0.5,
+        0.8,
+        0.05,
+        0.06,
+        0.07,
+        0.25,
+        0.5,
+    )
+    store.feed(configured, received_wallclock=20.0)
+    online = store.snapshot(now_wallclock=20.5)
+    assert online.navigation_sources.external_ins_source.value == NavigationSource.BYNAV
+    assert online.navigation_sources.external_ins_configured.value is True
+    assert online.external_ins.state.value == ExternalInsState.YAW_ALIGNED
+    assert online.external_ins.online.value is True
+    assert online.external_ins.inspvax_hz.value == pytest.approx(10.0)
+
+    stale = store.snapshot(now_wallclock=23.1)
+    assert stale.external_ins.online.availability == Availability.STALE
+    assert stale.external_ins.yaw_std_deg.availability == Availability.STALE
+
+
 def test_service_store_overrides_legacy_and_marks_stale() -> None:
     store = ProductServiceStore()
     store.feed(
         ServiceIdentity(1, 10, 0x17, "afd01", "AFD01-A1B2", "0.0.130", "", 2),
+        received_wallclock=100.0,
+    )
+    store.feed(
+        ServiceHardwareIdentity(
+            1,
+            10,
+            0x07,
+            (0x12345678, 0x9ABCDEF0, 0x0BADBEEF),
+            bytes.fromhex("4A65A6999E4B"),
+            1,
+        ),
         received_wallclock=100.0,
     )
     store.feed(
@@ -160,6 +347,9 @@ def test_service_store_overrides_legacy_and_marks_stale() -> None:
     snapshot = store.snapshot(now_wallclock=100.5)
     assert snapshot.source == "product_service"
     assert snapshot.identity.serial_number.value == "AFD01-A1B2"
+    assert snapshot.identity.device_uid.value == "123456789ABCDEF00BADBEEF"
+    assert snapshot.identity.mac_address.value == "4A:65:A6:99:9E:4B"
+    assert snapshot.identity.mac_source.value == 1
     assert snapshot.operation.control_mode.value == ControlMode.AUTO
     assert snapshot.operation.tracking_phase.value == TrackingPhase.LOCKED
     assert snapshot.operation.snr_db.availability == Availability.VALID

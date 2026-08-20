@@ -44,7 +44,7 @@ from satellite_debug_tool.core.comm import (
     UdpWorker,
 )
 from satellite_debug_tool.core.config import Settings
-from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, GnssStore, StateStore
+from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, GnssStore, OrbitStore, StateStore
 from satellite_debug_tool.core.link_trace import trace_message
 from satellite_debug_tool.core.product import (
     CustomerRecordingState,
@@ -78,6 +78,15 @@ from satellite_debug_tool.core.protocol import (
     ServiceControlOp,
     ServiceResultCode,
     StateReport,
+    ORBIT_FEATURE_SKY_SNAPSHOT,
+    OrbitCapabilitiesReport,
+    OrbitOperation,
+    OrbitSkyReport,
+    OrbitStatus,
+    OrbitStatusReport,
+    build_orbit_capabilities,
+    build_orbit_select,
+    build_orbit_sky_snapshot,
     build_debug_enable_v2,
     build_reset_stats,
     build_service_set_capture_profile,
@@ -114,6 +123,7 @@ DEVICE_ACTIVITY_TIMEOUT_S = 3.0
 DISCOVERY_FAST_ATTEMPTS = 10
 DISCOVERY_FAST_INTERVAL_MS = 1000
 DISCOVERY_SLOW_INTERVAL_MS = 3000
+ORBIT_SKY_REQUEST_TIMEOUT_S = 3.0
 
 
 def _debug_ctrl_log(message: str) -> None:
@@ -144,6 +154,7 @@ class LiveView(QWidget):
     profile_ready = Signal(str)
     recording_state_changed = Signal(bool, str)
     customer_recording_state_changed = Signal(str, str)
+    orbit_capability_changed = Signal(bool)
 
     def __init__(self, settings: Settings, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -157,6 +168,16 @@ class LiveView(QWidget):
         self._state_store = StateStore()
         self._event_log = EventLog()
         self._gnss_store = GnssStore(parent=self)
+        self._orbit_store = OrbitStore(parent=self)
+        self._orbit_sky_consumers: set[str] = set()
+        self._orbit_sky_request_active = False
+        self._orbit_sky_request_id = 0
+        self._orbit_sky_request_started_at = 0.0
+        self._orbit_sky_snapshot_id = 0
+        self._orbit_sky_expected_page = 0
+        self._orbit_sky_timer = QTimer(self)
+        self._orbit_sky_timer.setInterval(1000)
+        self._orbit_sky_timer.timeout.connect(self.request_orbit_sky_refresh)
         self._product_store = ProductServiceStore(parent=self)
         self._product_request_id = 0
         self._product_subscribe_attempts = 0
@@ -167,6 +188,10 @@ class LiveView(QWidget):
         self._gnss_store.changed.connect(self._on_gnss_store_changed)
         self._gnss_widget = None
         self._gnss_dock: Optional[QDockWidget] = None
+        self._orbit_widget = None
+        self._orbit_dock: Optional[QDockWidget] = None
+        self._orbit_store.capability_changed.connect(self._on_orbit_capability_changed)
+        self._orbit_store.changed.connect(self._on_orbit_store_changed)
         self._event_log.event_added.connect(self._on_event_added_for_chart)
         self._profile_store.profile_changed.connect(self._on_profile_changed_sync)
         self._handshake: Handshake | None = None
@@ -227,6 +252,82 @@ class LiveView(QWidget):
 
     def product_store(self) -> ProductServiceStore:
         return self._product_store
+
+    def orbit_store(self) -> OrbitStore:
+        return self._orbit_store
+
+    def set_orbit_sky_consumer(self, name: str, active: bool) -> None:
+        """Register a visible view that needs the shared 1 Hz array-sky snapshot."""
+        key = str(name).strip()
+        if not key:
+            return
+        if active:
+            self._orbit_sky_consumers.add(key)
+            self._sync_orbit_sky_timer()
+            if self._orbit_sky_timer.isActive():
+                QTimer.singleShot(0, self.request_orbit_sky_refresh)
+        else:
+            self._orbit_sky_consumers.discard(key)
+            self._sync_orbit_sky_timer()
+
+    def _orbit_sky_supported(self) -> bool:
+        capabilities = self._orbit_store.capabilities
+        return bool(
+            capabilities is not None
+            and capabilities.status == OrbitStatus.OK
+            and capabilities.feature_flags & ORBIT_FEATURE_SKY_SNAPSHOT
+        )
+
+    def _sync_orbit_sky_timer(self) -> None:
+        should_run = bool(
+            self._orbit_sky_consumers
+            and self._is_connected
+            and self._orbit_sky_supported()
+        )
+        if should_run:
+            if not self._orbit_sky_timer.isActive():
+                self._orbit_sky_timer.start()
+        else:
+            self._orbit_sky_timer.stop()
+            self._reset_orbit_sky_request()
+
+    def request_orbit_sky_refresh(self) -> bool:
+        """Start one snapshot only when a consumer, connection, and capability are present."""
+        if self._orbit_sky_request_active:
+            if time.monotonic() - self._orbit_sky_request_started_at < ORBIT_SKY_REQUEST_TIMEOUT_S:
+                return False
+            self._reset_orbit_sky_request()
+        if (
+            not self._orbit_sky_consumers
+            or not self._is_connected
+            or not self._orbit_sky_supported()
+        ):
+            return False
+        request_id = self.next_product_request_id()
+        self._orbit_sky_request_active = True
+        self._orbit_sky_request_id = request_id
+        self._orbit_sky_request_started_at = time.monotonic()
+        self._orbit_sky_snapshot_id = 0
+        self._orbit_sky_expected_page = 0
+        if not self._send_control_frame(build_orbit_sky_snapshot(request_id, 0, 0)):
+            self._reset_orbit_sky_request()
+            return False
+        return True
+
+    def select_orbit_tracking_target(self, norad_id: int) -> bool:
+        """Send the existing confirmed single-target selection; this never controls TX."""
+        if not self._is_connected or not (1 <= int(norad_id) <= 0xFFFFFFFF):
+            return False
+        return self._send_control_frame(
+            build_orbit_select(self.next_product_request_id(), int(norad_id))
+        )
+
+    def _reset_orbit_sky_request(self) -> None:
+        self._orbit_sky_request_active = False
+        self._orbit_sky_request_id = 0
+        self._orbit_sky_request_started_at = 0.0
+        self._orbit_sky_snapshot_id = 0
+        self._orbit_sky_expected_page = 0
 
     def is_connected(self) -> bool:
         """Return whether the transport/session is active."""
@@ -304,6 +405,14 @@ class LiveView(QWidget):
 
     def show_gnss_details(self) -> None:
         self._toggle_gnss()
+
+    def show_orbit_details(self) -> None:
+        self._toggle_orbit()
+
+    def probe_orbit_capabilities(self) -> bool:
+        if not self._is_connected:
+            return False
+        return self._send_control_frame(build_orbit_capabilities(self.next_product_request_id()))
 
     def next_product_request_id(self) -> int:
         self._product_request_id = (self._product_request_id + 1) & 0xFFFFFFFF
@@ -539,6 +648,13 @@ class LiveView(QWidget):
         self._gnss_btn.setToolTip(tr("Open the sky plot and signal-level C/N₀ window"))
         self._gnss_btn.clicked.connect(self._toggle_gnss)
         self._toolbar.addWidget(self._gnss_btn)
+
+        self._orbit_btn = QPushButton("Orbit/TLE")
+        self._orbit_btn.setMinimumSize(88, 29)
+        self._orbit_btn.setEnabled(False)
+        self._orbit_btn.setToolTip(tr("Open the XESA01 satellite catalog and prediction window"))
+        self._orbit_btn.clicked.connect(self._toggle_orbit)
+        self._toolbar.addWidget(self._orbit_btn)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -873,6 +989,7 @@ class LiveView(QWidget):
             self._try_restore_customer_profile()
             if not self._product_store.service_available:
                 self._start_product_subscription()
+            QTimer.singleShot(0, self.probe_orbit_capabilities)
 
     def _check_device_activity(self) -> None:
         if (
@@ -888,17 +1005,20 @@ class LiveView(QWidget):
         self._product_store.clear()
         self._state_store.clear()
         self._gnss_store.clear()
+        self._orbit_store.clear()
         self._set_device_connection_phase(DeviceConnectionPhase.RECONNECTING)
         self._start_product_subscription()
 
     def _on_connected(self):
         self._is_connected = True
+        self._sync_orbit_sky_timer()
         self._last_valid_frame_at = None
         self._set_device_connection_phase(DeviceConnectionPhase.WAITING)
         self._device_activity_timer.start()
         # 新连接必须丢弃上一轮运行态；profile 可以复用，但 state 必须等设备重新上报。
         self._state_store.clear()
         self._gnss_store.clear()
+        self._orbit_store.clear()
         self._connect_btn.setEnabled(False)
         self._disconnect_btn.setEnabled(True)
         self._update_debug_button_enabled()
@@ -908,6 +1028,7 @@ class LiveView(QWidget):
         self.connection_state_changed.emit(True)
 
         self._receiver.reset()
+        QTimer.singleShot(0, self.probe_orbit_capabilities)
         # Customer product telemetry is intentionally independent of the
         # dynamic Debug profile handshake. Send its subscription as soon as the
         # transport is usable; profile negotiation continues in parallel.
@@ -1213,6 +1334,7 @@ class LiveView(QWidget):
         if self._debug_enabled and self._worker is not None:
             self._worker.send(build_debug_enable_v2(False))
         self._is_connected = False
+        self._orbit_sky_timer.stop()
         self._last_valid_frame_at = None
         self._device_activity_timer.stop()
         self._set_device_connection_phase(DeviceConnectionPhase.DISCONNECTED)
@@ -1249,10 +1371,13 @@ class LiveView(QWidget):
             self._handshake.stop()
             self._handshake = None
         self._gnss_store.clear()
+        self._orbit_store.clear()
+        self._reset_orbit_sky_request()
         self._state_store.clear()
         self._product_store.clear()
         self._active_hw_type = None
         self._gnss_btn.setEnabled(False)
+        self._orbit_btn.setEnabled(False)
 
     def _on_debug_toggled(self):
         target = not self._debug_enabled
@@ -1438,6 +1563,9 @@ class LiveView(QWidget):
         for rec in records:
             # M9: 广播给 DeviceView 等外部消费者
             self.frame_received.emit(rec)
+
+            if self._orbit_store.feed(rec):
+                continue
 
             if self._product_store.feed(rec):
                 continue
@@ -1969,6 +2097,68 @@ class LiveView(QWidget):
         if self._gnss_store.has_data():
             self._gnss_btn.setEnabled(True)
 
+    @Slot(bool)
+    def _on_orbit_capability_changed(self, available: bool) -> None:
+        enabled = bool(available and self._is_connected)
+        self._orbit_btn.setEnabled(enabled)
+        self.orbit_capability_changed.emit(enabled)
+        self._sync_orbit_sky_timer()
+        if self._orbit_sky_timer.isActive():
+            QTimer.singleShot(0, self.request_orbit_sky_refresh)
+
+    @Slot(object)
+    def _on_orbit_store_changed(self, report: object) -> None:
+        if isinstance(report, OrbitCapabilitiesReport):
+            self._sync_orbit_sky_timer()
+            return
+        if isinstance(report, OrbitStatusReport) and report.operation == OrbitOperation.SKY_SNAPSHOT:
+            if report.request_id == self._orbit_sky_request_id:
+                self._reset_orbit_sky_request()
+            return
+        if isinstance(report, OrbitStatusReport) and report.operation == OrbitOperation.SELECT:
+            if report.status == OrbitStatus.OK:
+                self.status_message.emit(tr("Tracking target accepted; TX state was not changed"), 3500)
+            else:
+                self.status_message.emit(
+                    tr("Orbit request {operation} failed: {status}", operation=report.operation.name,
+                       status=report.status.name),
+                    5000,
+                )
+            return
+        if (
+            not isinstance(report, OrbitSkyReport)
+            or not self._orbit_sky_request_active
+            or report.request_id != self._orbit_sky_request_id
+        ):
+            return
+        if self._orbit_sky_snapshot_id == 0:
+            if report.page != 0:
+                self._reset_orbit_sky_request()
+                return
+            self._orbit_sky_snapshot_id = report.snapshot_id
+        if (
+            report.snapshot_id != self._orbit_sky_snapshot_id
+            or report.page != self._orbit_sky_expected_page
+        ):
+            self._reset_orbit_sky_request()
+            return
+        snapshot = self._orbit_store.sky_snapshot()
+        if snapshot is not None and snapshot.snapshot_id == report.snapshot_id:
+            self._reset_orbit_sky_request()
+            return
+        self._orbit_sky_expected_page += 1
+        request_id = self.next_product_request_id()
+        self._orbit_sky_request_id = request_id
+        self._orbit_sky_request_started_at = time.monotonic()
+        if not self._send_control_frame(
+            build_orbit_sky_snapshot(
+                request_id,
+                self._orbit_sky_snapshot_id,
+                self._orbit_sky_expected_page,
+            )
+        ):
+            self._reset_orbit_sky_request()
+
     def _toggle_gnss(self) -> None:
         if self._gnss_dock is None:
             from satellite_debug_tool.ui.gnss_widget import GnssWidget
@@ -1983,6 +2173,31 @@ class LiveView(QWidget):
             self._gnss_dock.setWidget(self._gnss_widget)
             self._gnss_dock.resize(1180, 700)
         self._gnss_dock.setVisible(not self._gnss_dock.isVisible())
+
+    def _toggle_orbit(self) -> None:
+        if not self._orbit_store.available:
+            self.status_message.emit(tr("The connected firmware does not advertise Orbit/TLE support"), 3500)
+            self.probe_orbit_capabilities()
+            return
+        if self._orbit_dock is None:
+            from satellite_debug_tool.ui.orbit_widget import OrbitWidget
+
+            self._orbit_widget = OrbitWidget(
+                self._orbit_store,
+                self._send_control_frame,
+                self.next_product_request_id,
+                self.is_connected,
+                self.set_orbit_sky_consumer,
+                self.request_orbit_sky_refresh,
+            )
+            self._orbit_widget.set_theme(self._theme)
+            self._orbit_widget.status_message.connect(self.status_message)
+            self._orbit_dock = QDockWidget(tr("Satellite catalog and orbit prediction — Live"), self)
+            self._orbit_dock.setAllowedAreas(Qt.NoDockWidgetArea)
+            self._orbit_dock.setFloating(True)
+            self._orbit_dock.setWidget(self._orbit_widget)
+            self._orbit_dock.resize(1180, 760)
+        self._orbit_dock.setVisible(not self._orbit_dock.isVisible())
 
     # ============================ 主题应用 ============================
 
@@ -2014,6 +2229,8 @@ class LiveView(QWidget):
             dispatch(w)
         if self._gnss_widget is not None:
             dispatch(self._gnss_widget)
+        if self._orbit_widget is not None:
+            dispatch(self._orbit_widget)
 
         # 工具栏（用 QToolBar 选择器，避免 bare 声明 cascade 到子按钮）
         self._toolbar.setStyleSheet(

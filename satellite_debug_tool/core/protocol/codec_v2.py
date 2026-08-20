@@ -62,10 +62,29 @@ from .frame_v2 import (
     ServiceControlOp,
     ServiceControlResponse,
     ServiceFastState,
+    ServiceExternalInsDiagnostics,
+    ServiceHardwareIdentity,
     ServiceIdentity,
     ServiceLinkDetail,
+    ServiceNavigationSourceInfo,
     ServiceRfLockStatus,
     ServiceSlowState,
+    OrbitCapabilitiesReport,
+    OrbitCatalogEntry,
+    OrbitCatalogReport,
+    OrbitCurrentReport,
+    OrbitCurrentSample,
+    OrbitSkyReport,
+    OrbitSkySample,
+    OrbitOperation,
+    OrbitPassPage,
+    OrbitPassSummary,
+    OrbitPredictionAccepted,
+    OrbitPredictionPage,
+    OrbitPredictionSample,
+    OrbitStatus,
+    OrbitStatusReport,
+    OrbitUploadProgress,
 )
 
 
@@ -286,6 +305,116 @@ def build_service_set_capture_profile(request_id: int, support_full: bool) -> by
     )
 
 
+# XESA01 Orbit/TLE controls --------------------------------------------------
+
+ORBIT_SCHEMA_VERSION = 1
+ORBIT_UPLOAD_CHUNK_MAX = MAX_DATA_LENGTH - 12
+ORBIT_FEATURE_SKY_SNAPSHOT = 1 << 3
+
+
+def _build_orbit_request(request_id: int, operation: OrbitOperation, payload: bytes = b"") -> bytes:
+    if not (1 <= request_id <= 0xFFFFFFFF):
+        raise CodecError("orbit request id must be a non-zero u32")
+    data = struct.pack("<BBI", ORBIT_SCHEMA_VERSION, int(operation), request_id) + payload
+    return build_frame(CmdType.ORBIT_REQUEST, data)
+
+
+def build_orbit_capabilities(request_id: int) -> bytes:
+    return _build_orbit_request(request_id, OrbitOperation.CAPABILITIES)
+
+
+def build_orbit_scan(request_id: int) -> bytes:
+    return _build_orbit_request(request_id, OrbitOperation.SCAN)
+
+
+def build_orbit_catalog(request_id: int, page: int = 0) -> bytes:
+    if not (0 <= page <= 0xFFFF):
+        raise CodecError("orbit catalog page out of u16 range")
+    return _build_orbit_request(request_id, OrbitOperation.CATALOG, struct.pack("<H", page))
+
+
+def build_orbit_current(request_id: int, norad_id: int = 0, page: int = 0) -> bytes:
+    if not (0 <= norad_id <= 0xFFFFFFFF) or not (0 <= page <= 0xFFFF):
+        raise CodecError("orbit current argument out of range")
+    return _build_orbit_request(
+        request_id, OrbitOperation.CURRENT, struct.pack("<IH", norad_id, page)
+    )
+
+
+def build_orbit_sky_snapshot(
+    request_id: int,
+    snapshot_id: int = 0,
+    page: int = 0,
+) -> bytes:
+    """Create page zero or request another page from one frozen array-sky snapshot."""
+    if not (0 <= snapshot_id <= 0xFFFFFFFF) or not (0 <= page <= 0xFFFF):
+        raise CodecError("orbit sky snapshot argument out of range")
+    if snapshot_id == 0 and page != 0:
+        raise CodecError("a new orbit sky snapshot must start at page zero")
+    return _build_orbit_request(
+        request_id, OrbitOperation.SKY_SNAPSHOT, struct.pack("<IH", snapshot_id, page)
+    )
+
+
+def build_orbit_predict(
+    request_id: int,
+    norad_id: int,
+    horizon_s: int,
+    step_s: int,
+    minimum_elevation_deg: float,
+) -> bytes:
+    if not (0 <= norad_id <= 0xFFFFFFFF):
+        raise CodecError("orbit NORAD id out of range")
+    if not (0 <= horizon_s <= 0xFFFFFFFF) or not (0 <= step_s <= 0xFFFF):
+        raise CodecError("orbit prediction interval out of wire range")
+    if not math.isfinite(minimum_elevation_deg):
+        raise CodecError("orbit minimum elevation must be finite")
+    return _build_orbit_request(
+        request_id,
+        OrbitOperation.PREDICT_SUBMIT,
+        struct.pack("<IIHf", norad_id, horizon_s, step_s, minimum_elevation_deg),
+    )
+
+
+def build_orbit_prediction_page(request_id: int, job_id: int, page: int = 0) -> bytes:
+    if not (1 <= job_id <= 0xFFFFFFFF) or not (0 <= page <= 0xFFFF):
+        raise CodecError("orbit prediction page argument out of range")
+    return _build_orbit_request(
+        request_id, OrbitOperation.PREDICT_PAGE, struct.pack("<IH", job_id, page)
+    )
+
+
+def build_orbit_select(request_id: int, norad_id: int) -> bytes:
+    if not (1 <= norad_id <= 0xFFFFFFFF):
+        raise CodecError("orbit selection requires a non-zero NORAD id")
+    return _build_orbit_request(request_id, OrbitOperation.SELECT, struct.pack("<I", norad_id))
+
+
+def build_orbit_upload_begin(request_id: int, file_size: int, crc32: int) -> bytes:
+    if not (1 <= file_size <= 0xFFFFFFFF) or not (0 <= crc32 <= 0xFFFFFFFF):
+        raise CodecError("orbit upload size/crc out of range")
+    return _build_orbit_request(
+        request_id, OrbitOperation.UPLOAD_BEGIN, struct.pack("<II", file_size, crc32)
+    )
+
+
+def build_orbit_upload_chunk(request_id: int, offset: int, chunk: bytes) -> bytes:
+    if not (0 <= offset <= 0xFFFFFFFF):
+        raise CodecError("orbit upload offset out of range")
+    if not chunk or len(chunk) > ORBIT_UPLOAD_CHUNK_MAX:
+        raise CodecError(f"orbit upload chunk must contain 1..{ORBIT_UPLOAD_CHUNK_MAX} bytes")
+    payload = struct.pack("<IH", offset, len(chunk)) + bytes(chunk)
+    return _build_orbit_request(request_id, OrbitOperation.UPLOAD_CHUNK, payload)
+
+
+def build_orbit_upload_end(request_id: int) -> bytes:
+    return _build_orbit_request(request_id, OrbitOperation.UPLOAD_END)
+
+
+def build_orbit_upload_abort(request_id: int) -> bytes:
+    return _build_orbit_request(request_id, OrbitOperation.UPLOAD_ABORT)
+
+
 # -----------------------------------------------------------------------------
 # Small helpers for variable-length utf8 reads
 # -----------------------------------------------------------------------------
@@ -346,6 +475,77 @@ def decode_service_identity(data: bytes) -> ServiceIdentity:
         main_firmware,
         boot_firmware,
         data[offset],
+    )
+
+
+def decode_service_hardware_identity(data: bytes) -> ServiceHardwareIdentity:
+    fmt = "<BIIIII6sB"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_HARDWARE_IDENTITY invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_HARDWARE_IDENTITY")
+    return ServiceHardwareIdentity(
+        schema=values[0],
+        timestamp=values[1],
+        valid_mask=values[2],
+        uid_words=(values[3], values[4], values[5]),
+        mac_address=values[6],
+        mac_source=values[7],
+    )
+
+
+def decode_service_navigation_source_info(data: bytes) -> ServiceNavigationSourceInfo:
+    fmt = "<BII7B"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_NAV_SOURCE_INFO invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_NAV_SOURCE_INFO")
+    return ServiceNavigationSourceInfo(*values)
+
+
+def decode_service_external_ins_diagnostics(data: bytes) -> ServiceExternalInsDiagnostics:
+    fmt = "<BII9B3I3f4I14f"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_EXTERNAL_INS_DIAGNOSTICS invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_EXTERNAL_INS_DIAGNOSTICS")
+    return ServiceExternalInsDiagnostics(
+        schema=values[0],
+        timestamp=values[1],
+        valid_mask=values[2],
+        source=values[3],
+        role_mask=values[4],
+        online=bool(values[5]),
+        state=values[6],
+        aligned=bool(values[7]),
+        raw_ins_status=values[8],
+        raw_position_type=values[9],
+        gnss_position_type=values[10],
+        num_svs=values[11],
+        inspvax_count=values[12],
+        rawimuxa_count=values[13],
+        bestpvt_count=values[14],
+        inspvax_hz=values[15],
+        rawimuxa_hz=values[16],
+        bestpvt_hz=values[17],
+        ascii_crc_errors=values[18],
+        binary_crc_errors=values[19],
+        binary_format_errors=values[20],
+        rx_overflow_bytes=values[21],
+        yaw_deg=values[22],
+        pitch_deg=values[23],
+        roll_deg=values[24],
+        yaw_std_deg=values[25],
+        pitch_std_deg=values[26],
+        roll_std_deg=values[27],
+        latitude_std_m=values[28],
+        longitude_std_m=values[29],
+        height_std_m=values[30],
+        velocity_north_std_mps=values[31],
+        velocity_east_std_mps=values[32],
+        velocity_up_std_mps=values[33],
+        solution_age_s=values[34],
+        differential_age_s=values[35],
     )
 
 
@@ -479,6 +679,261 @@ def decode_service_control_response(data: bytes) -> ServiceControlResponse:
         tx_polarization=values[9],
         tx_enabled=bool(values[10]),
     )
+
+
+def decode_orbit_report(data: bytes):
+    """Decode one versioned XESA01 Orbit/TLE report payload."""
+    header_fmt = "<BBBI"
+    header_size = struct.calcsize(header_fmt)
+    if len(data) < header_size:
+        raise CodecError("ORBIT_REPORT too short")
+    version, raw_operation, raw_status, request_id = struct.unpack_from(header_fmt, data, 0)
+    if version != ORBIT_SCHEMA_VERSION:
+        raise CodecError(
+            f"ORBIT_REPORT unsupported schema {version}; expected {ORBIT_SCHEMA_VERSION}"
+        )
+    try:
+        operation = OrbitOperation(raw_operation)
+        status = OrbitStatus(raw_status)
+    except ValueError as exc:
+        raise CodecError(f"ORBIT_REPORT invalid enum: {exc}") from exc
+    header = (version, operation, status, request_id)
+    if status != OrbitStatus.OK:
+        if len(data) != header_size:
+            raise CodecError("failed ORBIT_REPORT must not contain an operation payload")
+        return OrbitStatusReport(*header)
+
+    offset = header_size
+    if operation in (
+        OrbitOperation.SCAN,
+        OrbitOperation.SELECT,
+        OrbitOperation.UPLOAD_END,
+        OrbitOperation.UPLOAD_ABORT,
+    ):
+        if len(data) != offset:
+            raise CodecError("ORBIT_REPORT unexpected acknowledgement payload")
+        return OrbitStatusReport(*header)
+
+    if operation == OrbitOperation.CAPABILITIES:
+        fmt = "<IHIIHHf"
+        if len(data) != offset + struct.calcsize(fmt):
+            raise CodecError("ORBIT_CAPABILITIES invalid length")
+        return OrbitCapabilitiesReport(*header, *struct.unpack_from(fmt, data, offset))
+
+    if operation == OrbitOperation.CATALOG:
+        fixed_fmt = "<IHHBBBBIII"
+        fixed_size = struct.calcsize(fixed_fmt)
+        if len(data) < offset + fixed_size:
+            raise CodecError("ORBIT_CATALOG too short")
+        (
+            generation,
+            total_entries,
+            page,
+            count,
+            scan_pending,
+            scan_running,
+            last_scan_success,
+            invalid_records,
+            duplicate_records,
+            capacity_rejections,
+        ) = struct.unpack_from(fixed_fmt, data, offset)
+        offset += fixed_size
+        entries = []
+        for _ in range(count):
+            if offset + 10 > len(data):
+                raise CodecError("ORBIT_CATALOG entry header overflow")
+            norad_id, epoch_unix_s, name_len, source_len = struct.unpack_from("<IIBB", data, offset)
+            offset += 10
+            if offset + name_len + source_len > len(data):
+                raise CodecError("ORBIT_CATALOG entry text overflow")
+            try:
+                name = data[offset:offset + name_len].decode("utf-8")
+                offset += name_len
+                source = data[offset:offset + source_len].decode("utf-8")
+                offset += source_len
+            except UnicodeDecodeError as exc:
+                raise CodecError(f"ORBIT_CATALOG invalid utf-8: {exc}") from exc
+            entries.append(OrbitCatalogEntry(norad_id, epoch_unix_s, name, source))
+        if offset != len(data):
+            raise CodecError("ORBIT_CATALOG trailing bytes")
+        return OrbitCatalogReport(
+            *header,
+            generation,
+            total_entries,
+            page,
+            bool(scan_pending),
+            bool(scan_running),
+            bool(last_scan_success),
+            invalid_records,
+            duplicate_records,
+            capacity_rejections,
+            tuple(entries),
+        )
+
+    if operation == OrbitOperation.CURRENT:
+        fixed_fmt = "<IHHB"
+        if len(data) < offset + struct.calcsize(fixed_fmt):
+            raise CodecError("ORBIT_CURRENT too short")
+        generation, total_entries, page, count = struct.unpack_from(fixed_fmt, data, offset)
+        offset += struct.calcsize(fixed_fmt)
+        sample_fmt = "<IQ7fB"
+        sample_size = struct.calcsize(sample_fmt)
+        if len(data) != offset + count * sample_size:
+            raise CodecError("ORBIT_CURRENT invalid sample length")
+        samples = []
+        for _ in range(count):
+            values = struct.unpack_from(sample_fmt, data, offset)
+            offset += sample_size
+            flags = values[9]
+            samples.append(OrbitCurrentSample(*values[:9], bool(flags & 1), bool(flags & 2)))
+        return OrbitCurrentReport(*header, generation, total_entries, page, tuple(samples))
+
+    if operation == OrbitOperation.SKY_SNAPSHOT:
+        fixed_fmt = "<IIQHHB6fbBIB"
+        fixed_size = struct.calcsize(fixed_fmt)
+        if len(data) < offset + fixed_size:
+            raise CodecError("ORBIT_SKY_SNAPSHOT too short")
+        values = struct.unpack_from(fixed_fmt, data, offset)
+        offset += fixed_size
+        (
+            snapshot_id,
+            generation,
+            utc_unix_ms,
+            total_entries,
+            page,
+            count,
+            hard_offaxis_limit_deg,
+            recommended_offaxis_limit_deg,
+            mount_yaw_deg,
+            mount_pitch_deg,
+            mount_roll_deg,
+            azimuth_zero_offset_deg,
+            azimuth_direction,
+            second_angle_type,
+            active_target_id,
+            profile_flags,
+        ) = values
+        if snapshot_id == 0 or azimuth_direction not in (-1, 1) or second_angle_type not in (0, 1):
+            raise CodecError("ORBIT_SKY_SNAPSHOT invalid profile metadata")
+        if profile_flags & ~1:
+            raise CodecError("ORBIT_SKY_SNAPSHOT unknown profile flags")
+        numeric = values[6:12]
+        if not all(math.isfinite(value) for value in numeric):
+            raise CodecError("ORBIT_SKY_SNAPSHOT non-finite profile metadata")
+        if not (0.0 < recommended_offaxis_limit_deg <= hard_offaxis_limit_deg <= 90.0):
+            raise CodecError("ORBIT_SKY_SNAPSHOT invalid off-axis envelope")
+        expected_count = min(16, total_entries - page * 16) if page * 16 < total_entries else 0
+        if not (1 <= total_entries <= 128) or count != expected_count:
+            raise CodecError("ORBIT_SKY_SNAPSHOT invalid page bounds")
+        sample_fmt = "<I9fB"
+        sample_size = struct.calcsize(sample_fmt)
+        if len(data) != offset + count * sample_size:
+            raise CodecError("ORBIT_SKY_SNAPSHOT invalid sample length")
+        samples = []
+        for _ in range(count):
+            item = struct.unpack_from(sample_fmt, data, offset)
+            offset += sample_size
+            if not all(math.isfinite(value) for value in item[1:10]):
+                raise CodecError("ORBIT_SKY_SNAPSHOT non-finite sample")
+            flags = item[10]
+            if (
+                item[0] == 0
+                or not -90.0 <= item[1] <= 90.0
+                or not -180.0 <= item[2] <= 180.0
+                or not 0.0 <= item[4] < 360.0
+                or not -90.0 <= item[5] <= 90.0
+                or item[6] < 0.0
+                or not 0.0 <= item[7] < 360.0
+                or not 0.0 <= item[8] <= 180.0
+                or item[9] < 0.0
+                or flags & ~0x1F
+                or (flags & 8 and (not flags & 4 or item[8] > hard_offaxis_limit_deg + 1.0e-3))
+            ):
+                raise CodecError("ORBIT_SKY_SNAPSHOT invalid sample bounds")
+            samples.append(
+                OrbitSkySample(
+                    *item[:10],
+                    bool(flags & 1),
+                    bool(flags & 2),
+                    bool(flags & 4),
+                    bool(flags & 8),
+                    bool(flags & 16),
+                )
+            )
+        return OrbitSkyReport(
+            *header,
+            snapshot_id,
+            generation,
+            utc_unix_ms,
+            total_entries,
+            page,
+            hard_offaxis_limit_deg,
+            recommended_offaxis_limit_deg,
+            mount_yaw_deg,
+            mount_pitch_deg,
+            mount_roll_deg,
+            azimuth_zero_offset_deg,
+            azimuth_direction,
+            second_angle_type,
+            active_target_id,
+            bool(profile_flags & 1),
+            tuple(samples),
+        )
+
+    if operation == OrbitOperation.PREDICT_SUBMIT:
+        fmt = "<IIIQIH4fB"
+        if len(data) != offset + struct.calcsize(fmt):
+            raise CodecError("ORBIT_PREDICT_SUBMIT invalid length")
+        return OrbitPredictionAccepted(*header, *struct.unpack_from(fmt, data, offset))
+
+    if operation == OrbitOperation.PREDICT_PAGE:
+        fixed_fmt = "<BIHIHB"
+        if len(data) < offset + struct.calcsize(fixed_fmt):
+            raise CodecError("ORBIT_PREDICT_PAGE too short")
+        mode, job_id, page, generation, total, count = struct.unpack_from(fixed_fmt, data, offset)
+        offset += struct.calcsize(fixed_fmt)
+        if mode == 0:
+            item_fmt = "<Q7fB"
+            item_size = struct.calcsize(item_fmt)
+            if len(data) != offset + count * item_size:
+                raise CodecError("ORBIT_PREDICT_PAGE invalid sample length")
+            samples = []
+            for _ in range(count):
+                values = struct.unpack_from(item_fmt, data, offset)
+                offset += item_size
+                flags = values[8]
+                samples.append(OrbitPredictionSample(*values[:8], bool(flags & 1), bool(flags & 2)))
+            return OrbitPredictionPage(
+                *header, job_id, page, generation, total, tuple(samples)
+            )
+        if mode == 1:
+            item_fmt = "<IQQQfB"
+            item_size = struct.calcsize(item_fmt)
+            if len(data) != offset + count * item_size:
+                raise CodecError("ORBIT_PREDICT_PAGE invalid pass length")
+            passes = []
+            for _ in range(count):
+                values = struct.unpack_from(item_fmt, data, offset)
+                offset += item_size
+                flags = values[5]
+                passes.append(
+                    OrbitPassSummary(
+                        *values[:5],
+                        bool(flags & 1),
+                        bool(flags & 2),
+                        bool(flags & 4),
+                        bool(flags & 8),
+                    )
+                )
+            return OrbitPassPage(*header, job_id, page, generation, total, tuple(passes))
+        raise CodecError(f"ORBIT_PREDICT_PAGE invalid mode {mode}")
+
+    if operation in (OrbitOperation.UPLOAD_BEGIN, OrbitOperation.UPLOAD_CHUNK):
+        if len(data) != offset + 4:
+            raise CodecError("ORBIT_UPLOAD_PROGRESS invalid length")
+        return OrbitUploadProgress(*header, struct.unpack_from("<I", data, offset)[0])
+
+    raise CodecError(f"ORBIT_REPORT unsupported operation {operation}")
 
 
 def decode_channel_define(data: bytes) -> ChannelDefineTable:
@@ -916,15 +1371,23 @@ __all__ = [
     "build_service_subscribe", "build_service_set_control_mode",
     "build_service_apply_rf", "build_service_set_tx_enable",
     "build_service_set_capture_profile",
+    "ORBIT_SCHEMA_VERSION", "ORBIT_UPLOAD_CHUNK_MAX", "ORBIT_FEATURE_SKY_SNAPSHOT",
+    "build_orbit_capabilities", "build_orbit_scan", "build_orbit_catalog",
+    "build_orbit_current", "build_orbit_sky_snapshot", "build_orbit_predict", "build_orbit_prediction_page",
+    "build_orbit_select", "build_orbit_upload_begin", "build_orbit_upload_chunk",
+    "build_orbit_upload_end",
+    "build_orbit_upload_abort",
     "decode_meta_info", "decode_channel_define", "decode_state_define",
     "decode_event_define", "decode_data_report", "decode_state_report",
     "decode_event_report", "decode_heartbeat", "decode_command_response",
     "decode_para_table_report", "decode_profile_semantics",
     "decode_gnss_sky_report", "decode_gnss_cnr_report",
     "decode_gnss_sat_report", "decode_gnss_signal_report",
-    "decode_service_identity", "decode_service_fast_state",
+    "decode_service_identity", "decode_service_hardware_identity",
+    "decode_service_fast_state",
     "decode_service_slow_state", "decode_service_link_detail",
     "decode_service_rf_lock_status",
     "decode_service_component_health",
     "decode_service_capabilities", "decode_service_control_response",
+    "decode_orbit_report",
 ]

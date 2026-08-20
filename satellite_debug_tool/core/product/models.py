@@ -48,6 +48,27 @@ class SatelliteMode(str, Enum):
     LEO_TLE = "leo_tle"
 
 
+class NavigationSource(str, Enum):
+    NONE = "none"
+    ICM42688 = "icm42688"
+    MG902 = "mg902"
+    BYNAV = "bynav"
+    TRACE = "trace"
+    IAM20680 = "iam20680"
+    MS6222 = "ms6222"
+    DEBUG_ORACLE = "debug_oracle"
+    UNKNOWN = "unknown"
+
+
+class ExternalInsState(str, Enum):
+    NONE = "none"
+    STALE = "stale"
+    UNALIGNED = "unaligned"
+    ROLL_PITCH_READY = "roll_pitch_ready"
+    YAW_ALIGNED = "yaw_aligned"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class ProductValue(Generic[T]):
     value: Optional[T] = None
@@ -71,6 +92,9 @@ class ProductValue(Generic[T]):
 class DeviceIdentity:
     model: ProductValue[str] = field(default_factory=ProductValue.unsupported)
     serial_number: ProductValue[str] = field(default_factory=ProductValue.unsupported)
+    device_uid: ProductValue[str] = field(default_factory=ProductValue.unsupported)
+    mac_address: ProductValue[str] = field(default_factory=ProductValue.unsupported)
+    mac_source: ProductValue[int] = field(default_factory=ProductValue.unsupported)
     main_firmware: ProductValue[str] = field(default_factory=ProductValue.unsupported)
     boot_firmware: ProductValue[str] = field(default_factory=ProductValue.unsupported)
     protocol_version: ProductValue[str] = field(default_factory=ProductValue.unsupported)
@@ -95,6 +119,57 @@ class RfCapabilities:
     independent_polarization: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
     tx_control: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
     support_full_capture: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+
+
+@dataclass(frozen=True)
+class NavigationSourceInfo:
+    gnss_source: ProductValue[NavigationSource] = field(default_factory=ProductValue.unsupported)
+    imu_source: ProductValue[NavigationSource] = field(default_factory=ProductValue.unsupported)
+    attitude_source: ProductValue[NavigationSource] = field(default_factory=ProductValue.unsupported)
+    external_ins_source: ProductValue[NavigationSource] = field(default_factory=ProductValue.unsupported)
+    external_role_mask: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    external_ins_supported: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    external_ins_configured: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    external_data_seen: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    external_online: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    imu_mount_rotation: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+
+
+@dataclass(frozen=True)
+class ExternalInsDiagnostics:
+    source: ProductValue[NavigationSource] = field(default_factory=ProductValue.unsupported)
+    role_mask: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    online: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    state: ProductValue[ExternalInsState] = field(default_factory=ProductValue.unsupported)
+    aligned: ProductValue[bool] = field(default_factory=ProductValue.unsupported)
+    raw_ins_status: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    raw_position_type: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    gnss_position_type: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    satellite_count: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    inspvax_count: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    rawimuxa_count: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    bestpvt_count: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    inspvax_hz: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    rawimuxa_hz: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    bestpvt_hz: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    ascii_crc_errors: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    binary_crc_errors: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    binary_format_errors: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    rx_overflow_bytes: ProductValue[int] = field(default_factory=ProductValue.unsupported)
+    yaw_deg: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    pitch_deg: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    roll_deg: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    yaw_std_deg: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    pitch_std_deg: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    roll_std_deg: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    latitude_std_m: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    longitude_std_m: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    height_std_m: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    velocity_north_std_mps: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    velocity_east_std_mps: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    velocity_up_std_mps: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    solution_age_s: ProductValue[float] = field(default_factory=ProductValue.unsupported)
+    differential_age_s: ProductValue[float] = field(default_factory=ProductValue.unsupported)
 
 
 @dataclass(frozen=True)
@@ -138,4 +213,6 @@ class ProductSnapshot:
     tx_array: ComponentHealth = field(default_factory=ComponentHealth)
     rx_array: ComponentHealth = field(default_factory=ComponentHealth)
     rf_capabilities: RfCapabilities = field(default_factory=RfCapabilities)
+    navigation_sources: NavigationSourceInfo = field(default_factory=NavigationSourceInfo)
+    external_ins: ExternalInsDiagnostics = field(default_factory=ExternalInsDiagnostics)
     source: str = "none"

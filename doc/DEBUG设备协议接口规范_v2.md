@@ -7,7 +7,7 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
-| 最近修订 | 2026-08-07（AFD01 客户本振锁定状态扩展） |
+| 最近修订 | 2026-08-17（AFD01 导航源与外部 INS 诊断扩展） |
 | 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / ufd45，后续新型号无需改协议） |
 | 适用上位机 | satellite_debug_tool ≥ v2.0 |
 
@@ -55,9 +55,12 @@
 ┌────────┬──────────┬──────────┬──────────┬────────┬────────┬────────┐
 │  帧头   │ 设备类型  │ 命令类型  │ 数据长度  │  数据  │  CRC   │  帧尾  │
 │ 2字节   │ 1字节     │ 1字节     │ 2字节    │ 可变   │ 2字节   │ 1字节  │
-│ AA 55   │ 0D       │ 01..26   │ 小端序   │        │ 小端序  │ EE    │
+│ AA 55   │ 0D       │ 01..31*  │ 小端序   │        │ 小端序  │ EE    │
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
+
+`*` 命令空间分段分配：通用 Debug/GNSS 为 `0x01..0x10`，AFD01 Product Service 为
+`0x20..0x2B`，XESA01 Orbit 为 `0x30..0x31`；中间保留值不因图中范围而成为有效命令。
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
 
@@ -96,6 +99,11 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x26 | `SERVICE_CONTROL_RESPONSE` | D→H | 带 request_id 的精确响应 | 按需 |
 | 0x27 | `SERVICE_LINK_DETAIL` | D→H | AFD01 Modem、本振和卫星信息 | 1 Hz |
 | 0x28 | `SERVICE_RF_LOCK_STATUS` | D→H | AFD01 时钟/收发本振锁定 | 与快速状态同频 |
+| 0x29 | `SERVICE_HARDWARE_IDENTITY` | D→H | AFD01 MCU UID 与实际 MAC | 接入时 + 0.2 Hz |
+| 0x2A | `SERVICE_NAV_SOURCE_INFO` | D→H | AFD01 导航源角色与外部 INS 能力 | 接入时 + 0.2 Hz |
+| 0x2B | `SERVICE_EXTERNAL_INS_DIAGNOSTICS` | D→H | 已配置外部 INS 的类型化诊断 | 1 Hz |
+| 0x30 | `ORBIT_REQUEST` | H→D | XESA01 TLE 目录、预测、选星和上传请求 | 按需 |
+| 0x31 | `ORBIT_REPORT` | D→H | 带 request_id 的 Orbit 分页响应/确认 | 按需 |
 
 **定义帧（0x04/0x05/0x06/0x07/0x0C）**：下位机启动后立刻全量发送，之后每 5 秒重发一次（处理 UDP 丢包 / 上位机后接入）。上位机也可主动 `CONTROL` 请求重发。`PROFILE_SEMANTICS` 是 M13 扩展帧，不参与握手 ready 判定；旧上位机可忽略，旧下位机缺失时上位机按名称 fallback。
 
@@ -458,7 +466,7 @@ signal[N]:
   `LOCK` 与 `USED` 是两个独立维度，未参与解算的锁定信号仍应显示 C/N0。
 - 旧上位机把 0x0F/0x10 当 RawFrame 忽略；新上位机继续兼容 0x0D/0x0E 和旧 SDB。
 
-### 5.16 AFD01 产品服务扩展 (0x20~0x28)
+### 5.16 AFD01 产品服务扩展 (0x20~0x2B)
 
 **用途**：为客户工作台提供稳定的产品语义。该扩展复用 v2 帧包络，但不依赖动态
 `CHANNEL_DEFINE/STATE_DEFINE` 名称；工程 Debug 与产品服务可以同时存在。M18 只规定并实现
@@ -482,9 +490,13 @@ boot_firmware       u8 len + utf8
 service_protocol    u8
 ```
 
-AFD01 序列号来自 MCU 96-bit UID 的稳定派生值。当前未取得 boot 版本时 bit3=0，空字符串不得
-当成有效版本。AFD01 当前 `service_protocol=4`；版本 4 表示支持可选的 0x28，版本 3 表示支持
-可选的 0x27，版本 2 仅包含 0x20~0x26。该字段不改变外层 Debug v2 的 `META_INFO.protocol_ver`。
+AFD01 序列号由参数 `DeviceType` 与 10 位生产后缀 `dev_sn` 组合，例如
+`AFD01-202607N001`。未写入合法后缀时 bit1=0 且字符串为空，不得用 MCU UID 冒充生产 SN。
+当前未取得 boot 版本时 bit3=0，空字符串不得当成有效版本。AFD01 当前
+`service_protocol=6`；版本 6 表示支持可选的 0x2A/0x2B，版本 5 表示支持可选的 0x29，
+版本 4 表示支持可选的 0x28，版本 3 表示
+支持可选的 0x27，版本 2 仅包含 0x20~0x26。该字段不改变外层 Debug v2 的
+`META_INFO.protocol_ver`。
 
 #### 5.16.2 `SERVICE_FAST_STATE` (0x21)
 
@@ -622,6 +634,181 @@ lock_mask                              u8
 `valid_mask` 和 `lock_mask` 的 bit0..2 分别对应 `clock PLL`、`TX PLL`、`RX PLL`。
 有效位已置且对应 `lock_mask` 位为 1 表示锁定，为 0 表示失锁。三路均锁定时等价于工程 Debug
 的聚合 `PLL_LOCKED`，但客户服务必须保留三路明细，便于定位具体射频链路。
+
+#### 5.16.9 `SERVICE_HARDWARE_IDENTITY` (0x29)
+
+该帧是可选扩展，不改变 0x20 的字符串布局。旧上位机按未知 `RawFrame` 忽略；生产测试上位机
+优先使用完整 MCU UID 绑定跨工位测试工程，旧固件缺失 0x29 时才回退到生产 SN。
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+uid_word0, uid_word1, uid_word2        u32 x3
+mac_address                            u8[6]，网络显示顺序
+mac_source                             u8
+```
+
+`valid_mask.bit0=UID`、`bit1=MAC`、`bit2=MAC 派生算法版本`。UID 文本展示固定按
+`uid_word0/1/2` 各 8 位大写十六进制拼接为 24 字符，不改变 payload 的小端整数编码。
+`mac_source=1` 表示 `SOFTHZ/AFD01/MAC/V1`：以命名空间和 UID 三个 word 的固定小端字节序
+执行 FNV-1a 64，取低 48 bit 后强制 `I/G=0, U/L=1`。bootloader 与 application 必须使用
+同一实现；MAC 不允许通过参数系统覆盖。由于 96-bit UID 压缩到 46 个可用地址位不可能形成
+数学上的一一映射，产线必须同时保存完整 UID 并拒绝重复 MAC。
+
+#### 5.16.10 `SERVICE_NAV_SOURCE_INFO` (0x2A)
+
+该帧声明设备实际配置的导航来源角色，是试产流程判断外部 INS 是否适用的唯一产品服务依据。
+不得根据动态通道名称或最终整机姿态反推外部模块是否安装。
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+gnss_source                            u8
+imu_source                             u8
+attitude_source                        u8
+external_ins_source                    u8
+external_role_mask                     u8
+capability_flags                       u8
+imu_mount_rotation                     u8
+```
+
+`valid_mask.bit0..6` 依次对应 GNSS 源、IMU 源、姿态源、外部 INS 源、外部角色掩码、能力标志和
+IMU 安装旋转。来源枚举固定为 `0=NONE, 1=ICM42688, 2=MG902, 3=BYNAV, 4=TRACE,
+5=IAM20680, 6=MS6222, 7=DEBUG_ORACLE`；未知值必须保留为 UNKNOWN，不得映射成 NONE。
+
+`external_role_mask.bit0=GNSS, bit1=IMU, bit2=ATTITUDE`。`capability_flags` 定义为：
+
+- bit0：固件支持外部 INS 类型化诊断；不代表硬件已安装。
+- bit1：当前至少一个导航角色配置为外部 INS。
+- bit2：本次启动已观察到外部 INS 数据。
+- bit3：当前外部 INS 在线。
+
+未配置外部 INS 时，bit0 仍可为 1，bit1..3 为 0，`external_ins_source=NONE` 且
+`external_role_mask=0`。试产上位机应将外部 INS 项记为 `N/A/SKIPPED`，不能将“未安装”判为
+故障；配置存在但离线时仍是应测对象。
+
+#### 5.16.11 `SERVICE_EXTERNAL_INS_DIAGNOSTICS` (0x2B)
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+source, role_mask, online              u8 x3
+state, aligned, raw_ins_status         u8 x3
+raw_position_type, gnss_position_type  u8 x2
+num_svs                                u8
+inspvax_count, rawimuxa_count,
+bestpvt_count                          u32 x3
+inspvax_hz, rawimuxa_hz, bestpvt_hz    float32 x3, Hz
+ascii_crc_errors, binary_crc_errors,
+binary_format_errors, rx_overflow_bytes u32 x4
+yaw, pitch, roll                       float32 x3, deg
+yaw_std, pitch_std, roll_std           float32 x3, deg
+latitude_std, longitude_std, height_std float32 x3, m
+velocity_north_std, velocity_east_std,
+velocity_up_std                        float32 x3, m/s
+solution_age, differential_age         float32 x2, s
+```
+
+`valid_mask` 以字段组定义：bit0=来源与角色，bit1=在线，bit2=归一化状态/对准/原始 INS 状态，
+bit3=两类 position type，bit4=卫星数，bit5=帧累计与频率，bit6=错误计数，bit7=原始姿态，
+bit8=姿态标准差，bit9=位置标准差，bit10=速度标准差，bit11=解算/差分龄期。
+
+`state` 固定为 `0=NONE, 1=STALE, 2=UNALIGNED, 3=ROLL_PITCH_READY,
+4=YAW_ALIGNED`。AFD01 的 Bynav 适配直接读取驱动统计和最新 `INSPVAXA/BESTPVTA`；
+未配置外部 INS 时仅 bit0 可有效，其余字段不得以 0 冒充测量值。当前设备端没有权威的外部模块
+型号、模块固件版本和配置哈希来源，因此本 schema 不上报这些字段；后续取得稳定来源后必须通过
+新 schema 或独立可选记录扩展，禁止伪造占位值。
+
+### 5.17 XESA01 Orbit/TLE 扩展 (0x30~0x31)
+
+Orbit Service 复用 Debug v2 envelope，但不依赖 `DEBUG_ENABLE`，也不会因 capability/查询请求隐式打开连续
+工程遥测。所有多字节整数和 float32 均为 little-endian。
+
+请求 DATA 头固定为：
+
+```text
+schema_version  u8      当前 1
+operation       u8
+request_id      u32     非零，由上位机分配
+payload         bytes   由 operation 决定
+```
+
+响应 DATA 头固定为：
+
+```text
+schema_version  u8      当前 1
+operation       u8      回显请求操作
+status          u8      0=OK, 1=INVALID_REQUEST, 2=UNAVAILABLE, 3=BUSY,
+                        4=INTERNAL_ERROR, 5=CRC_ERROR
+request_id      u32
+payload         bytes   status 非 OK 时为空
+```
+
+operation 和请求 payload：
+
+| 值 | 名称 | 请求 payload | 成功响应摘要 |
+|---:|---|---|---|
+| 1 | `CAPABILITIES` | — | feature flags、目录/文件/窗口/步长/点数上限、stale 天数 |
+| 2 | `SCAN` | — | 无 payload；请求已入队或与当前扫描合并 |
+| 3 | `CATALOG` | `page:u16` | generation、total/page/count、扫描/错误统计、变长名称和来源 |
+| 4 | `CURRENT` | `norad:u32, page:u16`；0=all | generation、total/page/count、卫星 LLA、az/el/range、TLE age/flags |
+| 5 | `PREDICT_SUBMIT` | `norad:u32, horizon:u32, step:u16, min_el:f32` | job/generation/参数、起点 UTC、固定站位 LLA、assumption flags |
+| 6 | `PREDICT_PAGE` | `job:u32, page:u16` | 单星每页 16 点；all 每页 8 颗首过境摘要 |
+| 7 | `SELECT` | `norad:u32` | 无 payload；只替换 tracking target，不改变 TX |
+| 8 | `UPLOAD_BEGIN` | `size:u32, crc32:u32` | 接受的文件总长度 |
+| 9 | `UPLOAD_CHUNK` | `offset:u32, len:u16, bytes` | 已确认的累计 offset |
+| 10 | `UPLOAD_END` | — | 长度/CRC/parser/原子替换和 rescan 结果 |
+| 11 | `UPLOAD_ABORT` | — | 释放匹配 request ID 的上传会话 |
+| 12 | `SKY_SNAPSHOT` | `snapshot_id:u32, page:u16`；0/0=新快照 | 同一 UTC/导航/姿态/阵面 profile 下的地理与规范阵面位置 |
+
+`CAPABILITIES.feature_flags` 当前定义为bit0=catalog、bit1=prediction、bit2=TLE upload、
+bit3=array sky snapshot；未声明 bit3 的旧固件继续使用 `CURRENT`，不得将地理 az/el 直接画入阵面极坐标图。
+
+`CATALOG` 每页最多 4 项。每项为
+`norad:u32, epoch_unix_s:u32, name_len:u8, source_len:u8, name:utf8, source:utf8`。`CURRENT` 每项为
+`norad:u32, utc_unix_ms:u64, sat_lat/lon/alt:f32×3, az/el/range:f32×3, tle_age_days:f32, flags:u8`，
+flags bit0=stale、bit1=地平线以上。
+
+`PREDICT_PAGE` 首字节 `mode=0` 表示单星采样，`mode=1` 表示 all-satellite 首过境摘要；之后固定包含
+`job_id:u32, page:u16, generation:u32, total:u16, count:u8`。预测提交的 `assumption_flags.bit0` 表示整个
+窗口固定使用请求时地面站位置。上位机不得将该结果标成未来真实平台姿态或可直接执行的 TX 波束命令。
+`PREDICT_PAGE` 在 Debug RX 上只完成校验与排队，页内 SGP4 计算和回包由低优先级 Orbit owner 异步执行；
+队列已满时返回 `BUSY`，上位机应按 request ID 等待对应报告，不应假定请求调用内同步完成。
+
+`SKY_SNAPSHOT` 的首页请求固定为 `snapshot_id=0,page=0`。设备在 Orbit owner 中原子捕获
+catalog generation、GNSS/UTC、body FRD 姿态、RX 阵面安装/profile、扫描包络和当前 tracking target，
+分配非零 snapshot ID；后续页必须回传该 ID。每页最多 16 颗，固定元数据为：
+
+```text
+snapshot_id, catalog_generation        u32 x2
+utc_unix_ms                            u64
+total, page                            u16 x2
+count                                  u8
+hard_offaxis, recommended_offaxis      float32 x2, deg
+mount_yaw, mount_pitch, mount_roll     float32 x3, deg（R_array_to_body）
+azimuth_zero_offset                    float32, deg
+azimuth_direction                      int8，+1=同向，-1=反向
+second_angle_type                      u8，0=offaxis，1=elevation
+active_target_id                       u32，0=无
+profile_flags                          u8，bit0=characterized
+```
+
+每颗卫星的 41 字节记录为：
+
+```text
+norad_id                               u32
+sat_lat, sat_lon, sat_alt              float32 x3, deg/deg/m
+geographic_az, geographic_el, range    float32 x3, deg/deg/m
+array_az, array_offaxis                float32 x2, deg（规范阵面系）
+tle_age_days                           float32
+flags                                  u8
+```
+
+flags bit0=stale、bit1=地平线可见、bit2=阵面正半球、bit3=硬离轴包络内、bit4=当前跟踪目标。
+页内 SGP4 传播与坐标换算同样由低优先级 Orbit owner 异步执行。上位机只有完整收齐同一
+snapshot ID、generation 和元数据的连续分页后才能原子替换显示；迟到页、缺页和跨 generation 页必须丢弃。
+本操作只读，不执行阵面指向、自动换星或 TX 授权。
+
+上传会话使用同一个 request ID，严格等待每片 ACK 后再发送下一 offset；总文件最大 64 KiB。上位机可显式
+`UPLOAD_ABORT`；设备会回收 10 秒无合法分片的会话。乱序、重复、越界、错误 CRC、坏 TLE 或未知版本均
+失败关闭，并保留旧 active catalog。
 
 ---
 

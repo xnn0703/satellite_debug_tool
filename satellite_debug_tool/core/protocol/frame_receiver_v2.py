@@ -42,11 +42,15 @@ from .codec_v2 import (
     decode_service_capabilities,
     decode_service_component_health,
     decode_service_control_response,
+    decode_service_external_ins_diagnostics,
     decode_service_fast_state,
+    decode_service_hardware_identity,
     decode_service_identity,
     decode_service_link_detail,
+    decode_service_navigation_source_info,
     decode_service_rf_lock_status,
     decode_service_slow_state,
+    decode_orbit_report,
 )
 from .crc16 import Crc16
 from .frame_v2 import (
@@ -92,6 +96,9 @@ _DECODERS = {
     int(CmdType.GNSS_SAT_REPORT): decode_gnss_sat_report,
     int(CmdType.GNSS_SIGNAL_REPORT): decode_gnss_signal_report,
     int(CmdType.SERVICE_IDENTITY): decode_service_identity,
+    int(CmdType.SERVICE_HARDWARE_IDENTITY): decode_service_hardware_identity,
+    int(CmdType.SERVICE_NAV_SOURCE_INFO): decode_service_navigation_source_info,
+    int(CmdType.SERVICE_EXTERNAL_INS_DIAGNOSTICS): decode_service_external_ins_diagnostics,
     int(CmdType.SERVICE_FAST_STATE): decode_service_fast_state,
     int(CmdType.SERVICE_SLOW_STATE): decode_service_slow_state,
     int(CmdType.SERVICE_LINK_DETAIL): decode_service_link_detail,
@@ -99,6 +106,7 @@ _DECODERS = {
     int(CmdType.SERVICE_COMPONENT_HEALTH): decode_service_component_health,
     int(CmdType.SERVICE_CAPABILITIES): decode_service_capabilities,
     int(CmdType.SERVICE_CONTROL_RESPONSE): decode_service_control_response,
+    int(CmdType.ORBIT_REPORT): decode_orbit_report,
 }
 
 

@@ -105,6 +105,8 @@ class CustomerMaintenanceView(QWidget):
             (
                 "model",
                 "serial",
+                "device_uid",
+                "mac_address",
                 "main_fw",
                 "boot_fw",
                 "protocol",
@@ -199,6 +201,10 @@ class CustomerMaintenanceView(QWidget):
             return tr("Model")
         if key == "serial":
             return tr("Serial number")
+        if key == "device_uid":
+            return tr("MCU UID")
+        if key == "mac_address":
+            return tr("MAC address")
         if key == "main_fw":
             return tr("Main firmware")
         if key == "boot_fw":
@@ -222,6 +228,8 @@ class CustomerMaintenanceView(QWidget):
         identity = snapshot.identity
         self._identity_labels["model"].setText(self._text(identity.model))
         self._identity_labels["serial"].setText(self._text(identity.serial_number))
+        self._identity_labels["device_uid"].setText(self._text(identity.device_uid))
+        self._identity_labels["mac_address"].setText(self._text(identity.mac_address))
         self._identity_labels["main_fw"].setText(self._text(identity.main_firmware))
         self._identity_labels["boot_fw"].setText(self._text(identity.boot_firmware))
         self._identity_labels["protocol"].setText(self._text(identity.protocol_version))

@@ -76,6 +76,13 @@ class CmdType(IntEnum):
     SERVICE_CONTROL_RESPONSE = 0x26
     SERVICE_LINK_DETAIL = 0x27
     SERVICE_RF_LOCK_STATUS = 0x28
+    SERVICE_HARDWARE_IDENTITY = 0x29
+    SERVICE_NAV_SOURCE_INFO = 0x2A
+    SERVICE_EXTERNAL_INS_DIAGNOSTICS = 0x2B
+    # XESA01 Orbit/TLE service. It uses the Debug v2 envelope but remains
+    # independent from continuous engineering telemetry and product service.
+    ORBIT_REQUEST = 0x30
+    ORBIT_REPORT = 0x31
 
 
 class SubCmd(IntEnum):
@@ -171,6 +178,34 @@ class ServiceResultCode(IntEnum):
     NOT_SUPPORTED = 4
     BUSY = 5
     INTERNAL_ERROR = 6
+
+
+class OrbitOperation(IntEnum):
+    """XESA01 Orbit/TLE request/report operation values."""
+
+    CAPABILITIES = 1
+    SCAN = 2
+    CATALOG = 3
+    CURRENT = 4
+    PREDICT_SUBMIT = 5
+    PREDICT_PAGE = 6
+    SELECT = 7
+    UPLOAD_BEGIN = 8
+    UPLOAD_CHUNK = 9
+    UPLOAD_END = 10
+    UPLOAD_ABORT = 11
+    SKY_SNAPSHOT = 12
+
+
+class OrbitStatus(IntEnum):
+    """Orbit report status values."""
+
+    OK = 0
+    INVALID_REQUEST = 1
+    UNAVAILABLE = 2
+    BUSY = 3
+    INTERNAL_ERROR = 4
+    CRC_ERROR = 5
 
 
 # 参数 flags
@@ -398,6 +433,179 @@ class ProfileSemanticsReport:
 
 
 @dataclass(frozen=True)
+class OrbitReportHeader:
+    version: int
+    operation: OrbitOperation
+    status: OrbitStatus
+    request_id: int
+
+
+@dataclass(frozen=True)
+class OrbitStatusReport(OrbitReportHeader):
+    """无附加载荷的成功确认或失败响应。"""
+
+
+@dataclass(frozen=True)
+class OrbitCapabilitiesReport(OrbitReportHeader):
+    feature_flags: int
+    max_catalog_entries: int
+    max_file_size: int
+    max_horizon_s: int
+    min_step_s: int
+    max_output_points: int
+    stale_days: float
+
+
+@dataclass(frozen=True)
+class OrbitCatalogEntry:
+    norad_id: int
+    epoch_unix_s: int
+    name: str
+    source: str
+
+
+@dataclass(frozen=True)
+class OrbitCatalogReport(OrbitReportHeader):
+    generation: int
+    total_entries: int
+    page: int
+    scan_pending: bool
+    scan_running: bool
+    last_scan_success: bool
+    invalid_records: int
+    duplicate_records: int
+    capacity_rejections: int
+    entries: tuple[OrbitCatalogEntry, ...]
+
+
+@dataclass(frozen=True)
+class OrbitCurrentSample:
+    norad_id: int
+    utc_unix_ms: int
+    latitude_deg: float
+    longitude_deg: float
+    altitude_m: float
+    azimuth_deg: float
+    elevation_deg: float
+    slant_range_m: float
+    tle_age_days: float
+    stale: bool
+    visible: bool
+
+
+@dataclass(frozen=True)
+class OrbitCurrentReport(OrbitReportHeader):
+    generation: int
+    total_entries: int
+    page: int
+    samples: tuple[OrbitCurrentSample, ...]
+
+
+@dataclass(frozen=True)
+class OrbitSkySample:
+    norad_id: int
+    latitude_deg: float
+    longitude_deg: float
+    altitude_m: float
+    azimuth_deg: float
+    elevation_deg: float
+    slant_range_m: float
+    array_azimuth_deg: float
+    array_offaxis_deg: float
+    tle_age_days: float
+    stale: bool
+    geographic_visible: bool
+    front_hemisphere: bool
+    in_hard_envelope: bool
+    active_target: bool
+
+
+@dataclass(frozen=True)
+class OrbitSkyReport(OrbitReportHeader):
+    snapshot_id: int
+    generation: int
+    utc_unix_ms: int
+    total_entries: int
+    page: int
+    hard_offaxis_limit_deg: float
+    recommended_offaxis_limit_deg: float
+    mount_yaw_deg: float
+    mount_pitch_deg: float
+    mount_roll_deg: float
+    azimuth_zero_offset_deg: float
+    azimuth_direction: int
+    second_angle_type: int
+    active_target_id: int
+    profile_characterized: bool
+    samples: tuple[OrbitSkySample, ...]
+
+
+@dataclass(frozen=True)
+class OrbitPredictionAccepted(OrbitReportHeader):
+    job_id: int
+    generation: int
+    norad_id: int
+    start_utc_ms: int
+    horizon_s: int
+    step_s: int
+    minimum_elevation_deg: float
+    station_latitude_deg: float
+    station_longitude_deg: float
+    station_altitude_m: float
+    assumption_flags: int
+
+
+@dataclass(frozen=True)
+class OrbitPredictionSample:
+    utc_unix_ms: int
+    latitude_deg: float
+    longitude_deg: float
+    altitude_m: float
+    azimuth_deg: float
+    elevation_deg: float
+    slant_range_m: float
+    tle_age_days: float
+    stale: bool
+    visible: bool
+
+
+@dataclass(frozen=True)
+class OrbitPredictionPage(OrbitReportHeader):
+    job_id: int
+    page: int
+    generation: int
+    total_samples: int
+    samples: tuple[OrbitPredictionSample, ...]
+
+
+@dataclass(frozen=True)
+class OrbitPassSummary:
+    norad_id: int
+    aos_utc_ms: int
+    los_utc_ms: int
+    maximum_elevation_utc_ms: int
+    maximum_elevation_deg: float
+    has_pass: bool
+    stale: bool
+    open_at_start: bool
+    open_at_end: bool
+
+
+@dataclass(frozen=True)
+class OrbitPassPage(OrbitReportHeader):
+    job_id: int
+    page: int
+    generation: int
+    total_satellites: int
+    passes: tuple[OrbitPassSummary, ...]
+
+
+@dataclass(frozen=True)
+class OrbitUploadProgress(OrbitReportHeader):
+    acknowledged_size: int
+
+
+@dataclass(frozen=True)
 class ServiceIdentity:
     schema: int
     timestamp: int
@@ -407,6 +615,78 @@ class ServiceIdentity:
     main_firmware: str
     boot_firmware: str
     protocol_version: int
+
+
+@dataclass(frozen=True)
+class ServiceHardwareIdentity:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    uid_words: tuple[int, int, int]
+    mac_address: bytes
+    mac_source: int
+
+    @property
+    def device_uid(self) -> str:
+        return "".join(f"{word:08X}" for word in self.uid_words)
+
+    @property
+    def mac_text(self) -> str:
+        return ":".join(f"{octet:02X}" for octet in self.mac_address)
+
+
+@dataclass(frozen=True)
+class ServiceNavigationSourceInfo:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    gnss_source: int
+    imu_source: int
+    attitude_source: int
+    external_ins_source: int
+    external_role_mask: int
+    capability_flags: int
+    imu_mount_rotation: int
+
+
+@dataclass(frozen=True)
+class ServiceExternalInsDiagnostics:
+    schema: int
+    timestamp: int
+    valid_mask: int
+    source: int
+    role_mask: int
+    online: bool
+    state: int
+    aligned: bool
+    raw_ins_status: int
+    raw_position_type: int
+    gnss_position_type: int
+    num_svs: int
+    inspvax_count: int
+    rawimuxa_count: int
+    bestpvt_count: int
+    inspvax_hz: float
+    rawimuxa_hz: float
+    bestpvt_hz: float
+    ascii_crc_errors: int
+    binary_crc_errors: int
+    binary_format_errors: int
+    rx_overflow_bytes: int
+    yaw_deg: float
+    pitch_deg: float
+    roll_deg: float
+    yaw_std_deg: float
+    pitch_std_deg: float
+    roll_std_deg: float
+    latitude_std_m: float
+    longitude_std_m: float
+    height_std_m: float
+    velocity_north_std_mps: float
+    velocity_east_std_mps: float
+    velocity_up_std_mps: float
+    solution_age_s: float
+    differential_age_s: float
 
 
 @dataclass(frozen=True)
@@ -638,6 +918,9 @@ FrameV2Record = Union[
     GnssSatReport,
     GnssSignalReport,
     ServiceIdentity,
+    ServiceHardwareIdentity,
+    ServiceNavigationSourceInfo,
+    ServiceExternalInsDiagnostics,
     ServiceFastState,
     ServiceSlowState,
     ServiceLinkDetail,
@@ -645,6 +928,15 @@ FrameV2Record = Union[
     ServiceComponentHealth,
     ServiceCapabilities,
     ServiceControlResponse,
+    OrbitStatusReport,
+    OrbitCapabilitiesReport,
+    OrbitCatalogReport,
+    OrbitCurrentReport,
+    OrbitSkyReport,
+    OrbitPredictionAccepted,
+    OrbitPredictionPage,
+    OrbitPassPage,
+    OrbitUploadProgress,
     # 未识别/未解码的控制帧等，保留原始 cmd+data
     "RawFrame",
 ]
@@ -671,7 +963,7 @@ __all__ = [
     "PARA_FLAG_REQUIRES_REBOOT", "PARA_FLAG_READ_ONLY",
     # enums
     "CmdType", "SubCmd", "RespCode", "DataType", "StateType", "Level", "ParaType",
-    "ServiceControlOp", "ServiceResultCode",
+    "ServiceControlOp", "ServiceResultCode", "OrbitOperation", "OrbitStatus",
     # dataclasses
     "MetaInfo",
     "ChannelDefEntry", "ChannelDefineTable",
@@ -687,9 +979,16 @@ __all__ = [
     "GnssCnrObservation", "GnssCnrReport",
     "GnssSatRecord", "GnssSatReport",
     "GnssSignalRecord", "GnssSignalReport",
-    "ServiceIdentity", "ServiceFastState", "ServiceSlowState", "ServiceLinkDetail",
+    "ServiceIdentity", "ServiceHardwareIdentity",
+    "ServiceNavigationSourceInfo", "ServiceExternalInsDiagnostics",
+    "ServiceFastState", "ServiceSlowState", "ServiceLinkDetail",
     "ServiceRfLockStatus",
     "ServiceComponentValue", "ServiceComponentHealth",
     "ServiceCapabilities", "ServiceControlResponse",
+    "OrbitReportHeader", "OrbitStatusReport", "OrbitCapabilitiesReport",
+    "OrbitCatalogEntry", "OrbitCatalogReport",
+    "OrbitCurrentSample", "OrbitCurrentReport", "OrbitSkySample", "OrbitSkyReport",
+    "OrbitPredictionAccepted", "OrbitPredictionSample", "OrbitPredictionPage",
+    "OrbitPassSummary", "OrbitPassPage", "OrbitUploadProgress",
     "RawFrame", "FrameV2Record",
 ]

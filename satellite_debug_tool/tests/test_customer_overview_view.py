@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-from satellite_debug_tool.core.data import DataStore, GnssStore, StateStore
+from satellite_debug_tool.core.data import DataStore, GnssStore, OrbitStore, StateStore
 from satellite_debug_tool.core.product import (
     Availability,
     CustomerRecordingState,
@@ -19,6 +19,10 @@ from satellite_debug_tool.core.protocol import (
     ChannelSample,
     DataReport,
     MetaInfo,
+    OrbitOperation,
+    OrbitSkyReport,
+    OrbitSkySample,
+    OrbitStatus,
     ServiceIdentity,
     ServiceComponentHealth,
     ServiceComponentValue,
@@ -52,11 +56,14 @@ class _LiveDouble(QObject):
         self.data = DataStore(max_channels=64)
         self.states = StateStore()
         self.gnss = GnssStore()
+        self.orbits = OrbitStore()
         self.products = ProductServiceStore()
         self.connected = True
         self.recording = False
         self.customer_state = CustomerRecordingState.IDLE
         self.connect_kwargs = None
+        self.sky_consumers: list[tuple[str, bool]] = []
+        self.selected_target = 0
 
     def profile_store(self):
         return self.profiles
@@ -72,6 +79,9 @@ class _LiveDouble(QObject):
 
     def product_store(self):
         return self.products
+
+    def orbit_store(self):
+        return self.orbits
 
     def is_connected(self):
         return self.connected
@@ -103,6 +113,13 @@ class _LiveDouble(QObject):
 
     def show_gnss_details(self):
         return None
+
+    def set_orbit_sky_consumer(self, name: str, active: bool):
+        self.sky_consumers.append((name, active))
+
+    def select_orbit_tracking_target(self, norad_id: int):
+        self.selected_target = norad_id
+        return True
 
 
 class _SettingsDouble:
@@ -160,6 +177,99 @@ def test_customer_overview_renders_afd01_values_and_empty_components(app, monkey
     assert "118.800" in view._data_values["longitude"].text()
     assert "LOCK" not in view._status_values["tracking"].text()
     assert view._component_details["converter"].text() == "— · — · — · —"
+
+
+def test_customer_overview_overlays_array_sky_and_converts_native_beam(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceFastState(
+            1,
+            100,
+            (1 << 9) | (1 << 10),
+            0,
+            0,
+            False,
+            0,
+            0,
+            False,
+            0.0,
+            0.0,
+            0.0,
+            244.0,
+            60.0,
+            0.0,
+        )
+    )
+    sample = OrbitSkySample(
+        25544,
+        1.0,
+        2.0,
+        400000.0,
+        90.0,
+        45.0,
+        700000.0,
+        120.0,
+        30.0,
+        2.5,
+        False,
+        True,
+        True,
+        True,
+        True,
+    )
+    live.orbits.feed(
+        OrbitSkyReport(
+            1,
+            OrbitOperation.SKY_SNAPSHOT,
+            OrbitStatus.OK,
+            7,
+            42,
+            4,
+            1723939200123,
+            1,
+            0,
+            70.0,
+            60.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            -1,
+            1,
+            25544,
+            False,
+            (sample,),
+        )
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    assert view._beam_polar._azimuth_deg == pytest.approx(120.0)
+    assert view._beam_polar._off_axis_deg == pytest.approx(30.0)
+    assert view._beam_polar.satellites()[0].active_target
+
+
+def test_customer_overview_requests_sky_only_while_visible_and_confirms_selection(
+    app, monkeypatch
+) -> None:
+    live = _LiveDouble()
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.show()
+    app.processEvents()
+    assert live.sky_consumers[-1] == ("customer_overview", True)
+
+    monkeypatch.setattr(
+        "satellite_debug_tool.ui.customer_overview_view.QMessageBox.question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
+    view._on_satellite_clicked(25544)
+    assert live.selected_target == 25544
+
+    view.hide()
+    app.processEvents()
+    assert live.sky_consumers[-1] == ("customer_overview", False)
 
 
 def test_customer_connection_does_not_enable_engineering_debug(app) -> None:

@@ -7,7 +7,11 @@ import math
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from satellite_debug_tool.ui.beam_polar_widget import BeamPolarWidget, beam_endpoint
+from satellite_debug_tool.ui.beam_polar_widget import (
+    BeamPolarWidget,
+    BeamSatelliteMarker,
+    beam_endpoint,
+)
 
 
 @pytest.fixture
@@ -47,3 +51,14 @@ def test_beam_widget_never_treats_missing_or_nonfinite_data_as_zero(app) -> None
 
     widget.set_beam(0.0, 0.0, stale=True)
     assert widget.has_beam()
+
+
+def test_beam_widget_uses_hard_envelope_and_filters_invalid_satellites(app) -> None:
+    widget = BeamPolarWidget()
+    valid = BeamSatelliteMarker(25544, "ISS", 120.0, 30.0, active_target=True)
+    outside = BeamSatelliteMarker(2, "OUT", 10.0, 71.0)
+
+    widget.set_satellites((valid, outside), max_off_axis_deg=70.0)
+
+    assert widget.satellites() == (valid,)
+    assert beam_endpoint(90.0, 35.0, max_off_axis_deg=70.0) == pytest.approx((0.5, 0.0))

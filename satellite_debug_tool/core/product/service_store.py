@@ -15,9 +15,12 @@ from satellite_debug_tool.core.protocol import (
     ServiceComponentHealth,
     ServiceComponentValue,
     ServiceControlResponse,
+    ServiceExternalInsDiagnostics,
     ServiceFastState,
+    ServiceHardwareIdentity,
     ServiceIdentity,
     ServiceLinkDetail,
+    ServiceNavigationSourceInfo,
     ServiceRfLockStatus,
     ServiceSlowState,
 )
@@ -26,7 +29,11 @@ from .models import (
     ComponentHealth,
     ControlMode,
     DeviceIdentity,
+    ExternalInsDiagnostics,
+    ExternalInsState,
     NavigationState,
+    NavigationSource,
+    NavigationSourceInfo,
     OperationalSnapshot,
     ProductSnapshot,
     ProductValue,
@@ -71,6 +78,23 @@ _SATELLITE_MODES = {
     1: SatelliteMode.GEO,
     2: SatelliteMode.LEO_TLE,
 }
+_NAVIGATION_SOURCES = {
+    0: NavigationSource.NONE,
+    1: NavigationSource.ICM42688,
+    2: NavigationSource.MG902,
+    3: NavigationSource.BYNAV,
+    4: NavigationSource.TRACE,
+    5: NavigationSource.IAM20680,
+    6: NavigationSource.MS6222,
+    7: NavigationSource.DEBUG_ORACLE,
+}
+_EXTERNAL_INS_STATES = {
+    0: ExternalInsState.NONE,
+    1: ExternalInsState.STALE,
+    2: ExternalInsState.UNALIGNED,
+    3: ExternalInsState.ROLL_PITCH_READY,
+    4: ExternalInsState.YAW_ALIGNED,
+}
 
 _SNR_HISTORY_SECONDS = 300.0
 _SNR_MAX_RATE_HZ = 20
@@ -92,6 +116,9 @@ class ProductServiceStore(QObject):
         super().__init__(parent)
         self._enforce_stale = bool(enforce_stale)
         self._identity: Optional[ServiceIdentity] = None
+        self._hardware_identity: Optional[ServiceHardwareIdentity] = None
+        self._navigation_source: Optional[ServiceNavigationSourceInfo] = None
+        self._external_ins: Optional[ServiceExternalInsDiagnostics] = None
         self._fast: Optional[ServiceFastState] = None
         self._slow: Optional[ServiceSlowState] = None
         self._link_detail: Optional[ServiceLinkDetail] = None
@@ -106,7 +133,13 @@ class ProductServiceStore(QObject):
 
     @property
     def service_available(self) -> bool:
-        return self._identity is not None or self._capabilities is not None
+        return (
+            self._identity is not None
+            or self._hardware_identity is not None
+            or self._capabilities is not None
+            or self._navigation_source is not None
+            or self._external_ins is not None
+        )
 
     @property
     def capabilities_record(self) -> Optional[ServiceCapabilities]:
@@ -118,6 +151,9 @@ class ProductServiceStore(QObject):
 
     def clear(self) -> None:
         self._identity = None
+        self._hardware_identity = None
+        self._navigation_source = None
+        self._external_ins = None
         self._fast = None
         self._slow = None
         self._link_detail = None
@@ -135,6 +171,15 @@ class ProductServiceStore(QObject):
         if isinstance(record, ServiceIdentity):
             self._identity = record
             key = "identity"
+        elif isinstance(record, ServiceHardwareIdentity):
+            self._hardware_identity = record
+            key = "hardware_identity"
+        elif isinstance(record, ServiceNavigationSourceInfo):
+            self._navigation_source = record
+            key = "navigation_source"
+        elif isinstance(record, ServiceExternalInsDiagnostics):
+            self._external_ins = record
+            key = "external_ins"
         elif isinstance(record, ServiceFastState):
             self._fast = record
             key = "fast"
@@ -181,6 +226,8 @@ class ProductServiceStore(QObject):
         operation = self._operation_snapshot(base.operation, now)
         converter, tx_array, rx_array = self._component_snapshot(base, now)
         capabilities = self._capability_snapshot(base.rf_capabilities)
+        navigation_sources = self._navigation_source_snapshot(base.navigation_sources)
+        external_ins = self._external_ins_snapshot(base.external_ins, now)
         source = "product_service" if self.service_available else base.source
         return ProductSnapshot(
             identity=identity,
@@ -189,6 +236,8 @@ class ProductServiceStore(QObject):
             tx_array=tx_array,
             rx_array=rx_array,
             rf_capabilities=capabilities,
+            navigation_sources=navigation_sources,
+            external_ins=external_ins,
             source=source,
         )
 
@@ -205,18 +254,29 @@ class ProductServiceStore(QObject):
 
     def _identity_snapshot(self, fallback: DeviceIdentity) -> DeviceIdentity:
         record = self._identity
-        if record is None:
-            return fallback
-        mask = record.valid_mask
-        return DeviceIdentity(
-            model=self._static(mask, 0, record.model, record.timestamp),
-            serial_number=self._static(mask, 1, record.serial_number, record.timestamp),
-            main_firmware=self._static(mask, 2, record.main_firmware, record.timestamp),
-            boot_firmware=self._static(mask, 3, record.boot_firmware, record.timestamp),
-            protocol_version=self._static(
-                mask, 4, f"v{record.protocol_version}", record.timestamp
-            ),
-        )
+        identity = fallback
+        if record is not None:
+            mask = record.valid_mask
+            identity = replace(
+                identity,
+                model=self._static(mask, 0, record.model, record.timestamp),
+                serial_number=self._static(mask, 1, record.serial_number, record.timestamp),
+                main_firmware=self._static(mask, 2, record.main_firmware, record.timestamp),
+                boot_firmware=self._static(mask, 3, record.boot_firmware, record.timestamp),
+                protocol_version=self._static(
+                    mask, 4, f"v{record.protocol_version}", record.timestamp
+                ),
+            )
+        hardware = self._hardware_identity
+        if hardware is not None:
+            mask = hardware.valid_mask
+            identity = replace(
+                identity,
+                device_uid=self._static(mask, 0, hardware.device_uid, hardware.timestamp),
+                mac_address=self._static(mask, 1, hardware.mac_text, hardware.timestamp),
+                mac_source=self._static(mask, 2, hardware.mac_source, hardware.timestamp),
+            )
+        return identity
 
     def _operation_snapshot(
         self, fallback: OperationalSnapshot, now: float
@@ -398,6 +458,149 @@ class ProductServiceStore(QObject):
             ),
             support_full_capture=self._static(
                 mask, 7, bool(record.capture_profile_mask & 0x02), record.timestamp
+            ),
+        )
+
+    def _navigation_source_snapshot(
+        self, fallback: NavigationSourceInfo
+    ) -> NavigationSourceInfo:
+        record = self._navigation_source
+        if record is None:
+            return fallback
+        mask = record.valid_mask
+        flags = record.capability_flags
+        return NavigationSourceInfo(
+            gnss_source=self._static(
+                mask,
+                0,
+                _NAVIGATION_SOURCES.get(record.gnss_source, NavigationSource.UNKNOWN),
+                record.timestamp,
+            ),
+            imu_source=self._static(
+                mask,
+                1,
+                _NAVIGATION_SOURCES.get(record.imu_source, NavigationSource.UNKNOWN),
+                record.timestamp,
+            ),
+            attitude_source=self._static(
+                mask,
+                2,
+                _NAVIGATION_SOURCES.get(record.attitude_source, NavigationSource.UNKNOWN),
+                record.timestamp,
+            ),
+            external_ins_source=self._static(
+                mask,
+                3,
+                _NAVIGATION_SOURCES.get(
+                    record.external_ins_source, NavigationSource.UNKNOWN
+                ),
+                record.timestamp,
+            ),
+            external_role_mask=self._static(
+                mask, 4, record.external_role_mask, record.timestamp
+            ),
+            external_ins_supported=self._static(
+                mask, 5, bool(flags & (1 << 0)), record.timestamp
+            ),
+            external_ins_configured=self._static(
+                mask, 5, bool(flags & (1 << 1)), record.timestamp
+            ),
+            external_data_seen=self._static(
+                mask, 5, bool(flags & (1 << 2)), record.timestamp
+            ),
+            external_online=self._static(
+                mask, 5, bool(flags & (1 << 3)), record.timestamp
+            ),
+            imu_mount_rotation=self._static(
+                mask, 6, record.imu_mount_rotation, record.timestamp
+            ),
+        )
+
+    def _external_ins_snapshot(
+        self, fallback: ExternalInsDiagnostics, now: float
+    ) -> ExternalInsDiagnostics:
+        record = self._external_ins
+        if record is None:
+            return fallback
+        mask = record.valid_mask
+        stale = self._is_stale("external_ins", now, 3.0)
+        dynamic = self._dynamic
+        timestamp = record.timestamp
+        return ExternalInsDiagnostics(
+            source=dynamic(
+                mask,
+                0,
+                _NAVIGATION_SOURCES.get(record.source, NavigationSource.UNKNOWN),
+                timestamp,
+                stale,
+            ),
+            role_mask=dynamic(mask, 0, record.role_mask, timestamp, stale),
+            online=dynamic(mask, 1, record.online, timestamp, stale),
+            state=dynamic(
+                mask,
+                2,
+                _EXTERNAL_INS_STATES.get(record.state, ExternalInsState.UNKNOWN),
+                timestamp,
+                stale,
+            ),
+            aligned=dynamic(mask, 2, record.aligned, timestamp, stale),
+            raw_ins_status=dynamic(
+                mask, 2, record.raw_ins_status, timestamp, stale
+            ),
+            raw_position_type=dynamic(
+                mask, 3, record.raw_position_type, timestamp, stale
+            ),
+            gnss_position_type=dynamic(
+                mask, 3, record.gnss_position_type, timestamp, stale
+            ),
+            satellite_count=dynamic(mask, 4, record.num_svs, timestamp, stale),
+            inspvax_count=dynamic(mask, 5, record.inspvax_count, timestamp, stale),
+            rawimuxa_count=dynamic(mask, 5, record.rawimuxa_count, timestamp, stale),
+            bestpvt_count=dynamic(mask, 5, record.bestpvt_count, timestamp, stale),
+            inspvax_hz=dynamic(mask, 5, record.inspvax_hz, timestamp, stale),
+            rawimuxa_hz=dynamic(mask, 5, record.rawimuxa_hz, timestamp, stale),
+            bestpvt_hz=dynamic(mask, 5, record.bestpvt_hz, timestamp, stale),
+            ascii_crc_errors=dynamic(
+                mask, 6, record.ascii_crc_errors, timestamp, stale
+            ),
+            binary_crc_errors=dynamic(
+                mask, 6, record.binary_crc_errors, timestamp, stale
+            ),
+            binary_format_errors=dynamic(
+                mask, 6, record.binary_format_errors, timestamp, stale
+            ),
+            rx_overflow_bytes=dynamic(
+                mask, 6, record.rx_overflow_bytes, timestamp, stale
+            ),
+            yaw_deg=dynamic(mask, 7, record.yaw_deg, timestamp, stale),
+            pitch_deg=dynamic(mask, 7, record.pitch_deg, timestamp, stale),
+            roll_deg=dynamic(mask, 7, record.roll_deg, timestamp, stale),
+            yaw_std_deg=dynamic(mask, 8, record.yaw_std_deg, timestamp, stale),
+            pitch_std_deg=dynamic(
+                mask, 8, record.pitch_std_deg, timestamp, stale
+            ),
+            roll_std_deg=dynamic(mask, 8, record.roll_std_deg, timestamp, stale),
+            latitude_std_m=dynamic(
+                mask, 9, record.latitude_std_m, timestamp, stale
+            ),
+            longitude_std_m=dynamic(
+                mask, 9, record.longitude_std_m, timestamp, stale
+            ),
+            height_std_m=dynamic(mask, 9, record.height_std_m, timestamp, stale),
+            velocity_north_std_mps=dynamic(
+                mask, 10, record.velocity_north_std_mps, timestamp, stale
+            ),
+            velocity_east_std_mps=dynamic(
+                mask, 10, record.velocity_east_std_mps, timestamp, stale
+            ),
+            velocity_up_std_mps=dynamic(
+                mask, 10, record.velocity_up_std_mps, timestamp, stale
+            ),
+            solution_age_s=dynamic(
+                mask, 11, record.solution_age_s, timestamp, stale
+            ),
+            differential_age_s=dynamic(
+                mask, 11, record.differential_age_s, timestamp, stale
             ),
         )
 

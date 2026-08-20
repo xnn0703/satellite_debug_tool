@@ -6,7 +6,7 @@ import math
 from typing import Optional
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -37,7 +38,7 @@ from satellite_debug_tool.core.profile import CHANNEL_ROLE_SNR
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import icons, styles as S
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
-from satellite_debug_tool.ui.beam_polar_widget import BeamPolarWidget
+from satellite_debug_tool.ui.beam_polar_widget import BeamPolarWidget, BeamSatelliteMarker
 
 
 def _control_mode_text(value: ControlMode) -> str:
@@ -261,6 +262,8 @@ class CustomerOverviewView(QWidget):
         self._service_store = (
             live_view.product_store() if hasattr(live_view, "product_store") else None
         )
+        orbit_store_getter = getattr(live_view, "orbit_store", None)
+        self._orbit_store = orbit_store_getter() if orbit_store_getter is not None else None
         self._last_model = ""
         self._density = ""
         self._setup_ui(enable_3d)
@@ -277,6 +280,12 @@ class CustomerOverviewView(QWidget):
         )
         if recording_state_signal is not None:
             recording_state_signal.connect(self._on_customer_recording_state_changed)
+        orbit_signal = getattr(self._live, "orbit_capability_changed", None)
+        if orbit_signal is not None:
+            orbit_signal.connect(self._orbit_btn.setEnabled)
+        if self._orbit_store is not None:
+            self._orbit_store.sky_changed.connect(self._on_orbit_sky_changed)
+            self._orbit_store.cleared.connect(self._on_orbit_cleared)
         self._timer = QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(self.refresh)
@@ -315,6 +324,10 @@ class CustomerOverviewView(QWidget):
         self._gnss_btn.setEnabled(False)
         self._gnss_btn.clicked.connect(self._live.show_gnss_details)
         self._connection_layout.addWidget(self._gnss_btn)
+        self._orbit_btn = QPushButton("Orbit/TLE")
+        self._orbit_btn.setEnabled(False)
+        self._orbit_btn.clicked.connect(getattr(self._live, "show_orbit_details", lambda: None))
+        self._connection_layout.addWidget(self._orbit_btn)
         self._record_btn = QPushButton(tr("Record"))
         record_action = getattr(self._live, "toggle_customer_recording", None)
         if record_action is None:
@@ -436,7 +449,15 @@ class CustomerOverviewView(QWidget):
         self._beam_title = QLabel(tr("Beam direction"))
         self._beam_title.setObjectName("customerSectionTitle")
         self._beam_layout.addWidget(self._beam_title)
+        self._beam_legend = QLabel()
+        self._beam_legend.setObjectName("customerBeamLegend")
+        self._beam_legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._beam_legend.setTextFormat(Qt.TextFormat.RichText)
+        self._beam_legend.setVisible(False)
+        self._update_beam_legend(profile_characterized=True)
+        self._beam_layout.addWidget(self._beam_legend)
         self._beam_polar = BeamPolarWidget()
+        self._beam_polar.satellite_clicked.connect(self._on_satellite_clicked)
         self._beam_layout.addWidget(self._beam_polar, 1)
         beam_footer = QWidget()
         footer_layout = QHBoxLayout(beam_footer)
@@ -894,6 +915,10 @@ class CustomerOverviewView(QWidget):
             "ok" if op.modem_online.value else "warn" if op.modem_online.value is False else "neutral",
         )
         self._gnss_btn.setEnabled(self._live.gnss_store().has_data())
+        orbit_store_getter = getattr(self._live, "orbit_store", None)
+        self._orbit_btn.setEnabled(
+            bool(orbit_store_getter is not None and orbit_store_getter().available)
+        )
 
     def _refresh_data_and_beam(self, snapshot: ProductSnapshot) -> None:
         op = snapshot.operation
@@ -929,11 +954,144 @@ class CustomerOverviewView(QWidget):
             op.beam_az_deg.availability == Availability.STALE
             or op.beam_el_deg.availability == Availability.STALE
         )
-        self._beam_polar.set_beam(
-            None if op.beam_az_deg.value is None else float(op.beam_az_deg.value),
-            None if op.beam_el_deg.value is None else float(op.beam_el_deg.value),
-            stale=beam_stale,
+        beam_az = None if op.beam_az_deg.value is None else float(op.beam_az_deg.value)
+        beam_second = None if op.beam_el_deg.value is None else float(op.beam_el_deg.value)
+        sky = None if self._orbit_store is None else self._orbit_store.sky_snapshot()
+        if sky is not None and beam_az is not None and beam_second is not None:
+            beam_az = (
+                sky.azimuth_direction * (beam_az - sky.azimuth_zero_offset_deg)
+            ) % 360.0
+            beam_second = beam_second if sky.second_angle_type == 0 else 90.0 - beam_second
+        self._beam_polar.set_beam(beam_az, beam_second, stale=beam_stale)
+        self._refresh_satellite_layer()
+
+    def _refresh_satellite_layer(self) -> None:
+        if self._orbit_store is None:
+            return
+        snapshot = self._orbit_store.sky_snapshot()
+        if snapshot is None:
+            self._beam_legend.setVisible(False)
+            self._beam_polar.set_satellites((), max_off_axis_deg=90.0)
+            return
+        self._update_beam_legend(profile_characterized=snapshot.profile_characterized)
+        self._beam_legend.setVisible(True)
+        catalog = {
+            entry.norad_id: entry.name
+            for entry in self._orbit_store.catalog_snapshot().entries
+        }
+        available = tuple(
+            sample
+            for sample in snapshot.samples
+            if sample.geographic_visible
+            and sample.front_hemisphere
+            and sample.in_hard_envelope
         )
+        candidates = tuple(
+            sample
+            for sample in available
+            if not sample.stale and not sample.active_target
+        )
+        candidate_id = (
+            min(candidates, key=lambda item: (item.array_offaxis_deg, item.norad_id)).norad_id
+            if candidates
+            else 0
+        )
+        markers = []
+        for sample in available:
+            name = catalog.get(sample.norad_id, "")
+            label = name[:12] if name else str(sample.norad_id)
+            trail = tuple(
+                (point.array_azimuth_deg, point.array_offaxis_deg)
+                for point in self._orbit_store.sky_trail(sample.norad_id)
+            )
+            tooltip = tr(
+                "{name} (NORAD {norad})\n"
+                "Array az/off-axis: {array_az}° / {offaxis}°\n"
+                "Geographic az/el: {geo_az}° / {geo_el}°\n"
+                "Range: {range_km} km · TLE age: {age_days} d",
+                name=name or "NORAD",
+                norad=sample.norad_id,
+                array_az=f"{sample.array_azimuth_deg:.2f}",
+                offaxis=f"{sample.array_offaxis_deg:.2f}",
+                geo_az=f"{sample.azimuth_deg:.2f}",
+                geo_el=f"{sample.elevation_deg:.2f}",
+                range_km=f"{sample.slant_range_m / 1000.0:.1f}",
+                age_days=f"{sample.tle_age_days:.1f}",
+            )
+            markers.append(
+                BeamSatelliteMarker(
+                    sample.norad_id,
+                    label,
+                    sample.array_azimuth_deg,
+                    sample.array_offaxis_deg,
+                    stale=sample.stale,
+                    active_target=sample.active_target,
+                    candidate=sample.norad_id == candidate_id,
+                    trail=trail,
+                    tooltip=tooltip,
+                )
+            )
+        self._beam_polar.set_satellites(
+            tuple(markers),
+            max_off_axis_deg=snapshot.hard_offaxis_limit_deg,
+        )
+
+    @Slot(object)
+    def _on_orbit_sky_changed(self, _snapshot: object) -> None:
+        self._refresh_satellite_layer()
+
+    @Slot()
+    def _on_orbit_cleared(self) -> None:
+        self._beam_legend.setVisible(False)
+        self._beam_polar.set_satellites((), max_off_axis_deg=90.0)
+
+    def _update_beam_legend(self, *, profile_characterized: bool) -> None:
+        entries = [
+            f'<span style="color:#22C55E">●</span> {tr("Current target")}',
+            f'<span style="color:#F59E0B">●</span> {tr("Geometric candidate")}',
+            f'<span style="color:#38BDF8">●</span> {tr("Other satellite")}',
+            f'<span style="color:#64748B">●</span> {tr("Stale")}',
+        ]
+        if not profile_characterized:
+            entries.append(f'<span style="color:#F59E0B">⚠</span> {tr("Profile fallback")}')
+        self._beam_legend.setText(" · ".join(entries))
+
+    @Slot(int)
+    def _on_satellite_clicked(self, norad_id: int) -> None:
+        if self._orbit_store is None:
+            return
+        name = next(
+            (
+                entry.name
+                for entry in self._orbit_store.catalog_snapshot().entries
+                if entry.norad_id == norad_id
+            ),
+            str(norad_id),
+        )
+        answer = QMessageBox.question(
+            self,
+            tr("Tracking target"),
+            tr(
+                "Set {name} (NORAD {norad}) as the tracking target? This does not enable TX.",
+                name=name,
+                norad=norad_id,
+            ),
+        )
+        action = getattr(self._live, "select_orbit_tracking_target", None)
+        if answer == QMessageBox.Yes and (action is None or not action(norad_id)):
+            self.status_message.emit(tr("Failed to send tracking target request"), 3500)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        consumer = getattr(self._live, "set_orbit_sky_consumer", None)
+        if consumer is not None and not self._playback_mode:
+            consumer("customer_overview", True)
+
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override
+        consumer = getattr(self._live, "set_orbit_sky_consumer", None)
+        if consumer is not None:
+            consumer("customer_overview", False)
+        super().hideEvent(event)
 
     def _set_data_value(self, key: str, value: ProductValue, decimals: int) -> None:
         title, unit = next(
@@ -1124,6 +1282,7 @@ class CustomerOverviewView(QWidget):
             f"#customerBeamValue[density='dense'] #customerMetricTitle {{ font-size: 9px; }}"
             f"#customerBeamValue[density='dense'] #customerMetricValue {{ font-size: 12px; }}"
             f"#customerBeamValue[availability='stale'] #customerMetricValue {{ color: {pal['text_3']}; }}"
+            f"#customerBeamLegend {{ color: {pal['text_2']}; font-size: 10px; }}"
             f"#customerSnrReadout {{ border-right: 1px solid {pal['border_2']}; }}"
             f"#customerSnrReadout #customerMetricTitle {{ font-size: 13px; }}"
             f"#customerSnrReadout #customerMetricValue {{ color: {pal['accent_2']}; "
@@ -1146,6 +1305,8 @@ class CustomerOverviewView(QWidget):
 
     def retranslate_ui(self) -> None:
         self._beam_title.setText(tr("Beam direction"))
+        sky = None if self._orbit_store is None else self._orbit_store.sky_snapshot()
+        self._update_beam_legend(profile_characterized=bool(sky is None or sky.profile_characterized))
         self._snr_title.setText(tr("Signal strength - last 5 minutes"))
         self._state_group_title.setText(tr("Status"))
         self._data_group_title.setText(tr("Runtime data"))
