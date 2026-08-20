@@ -7,7 +7,7 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
-| 最近修订 | 2026-08-17（AFD01 导航源与外部 INS 诊断扩展） |
+| 最近修订 | 2026-08-20（1536 B 长帧、AFD01 DEFINE 容量与固定上传分片口径） |
 | 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / ufd45，后续新型号无需改协议） |
 | 适用上位机 | satellite_debug_tool ≥ v2.0 |
 
@@ -64,9 +64,9 @@
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
 
-`DATA` 段最大长度：**1024 字节**。早期 v2 版本按 512 字节设计；2026-04-24 起为兼容 esa01 27 路 channel 的 `CHANNEL_DEFINE` 长帧，上位机接收上限与测试基线已同步上调到 1024 字节。afd01 / ufd45 等旧设备继续发送 ≤512 字节帧时仍兼容。
+`DATA` 段最大长度：**1536 字节**。早期 v2 版本按 512 字节设计，后续曾上调到 1024 字节以兼容 esa01 27 路 `CHANNEL_DEFINE` 长帧；现统一以 1536 字节作为上位机接收与协议测试上限。afd01 / ufd45 等旧设备继续发送较短帧时仍兼容。
 
-> 下位机调整点：若设备端也需要发送 1024 字节 DATA 长帧，帧缓冲需按 **至少 1036 字节** 预留（与上位机 `MAX_FRAME_LENGTH = MAX_DATA_LENGTH + 12` 对齐）。
+> 下位机调整点：若设备端支持 1536 字节 DATA 长帧，`DEBUG_MAX_FRAME_LENGTH` 应按 **至少 1548 字节** 预留。这是 `MAX_DATA_LENGTH + 12` 的保守缓冲值；实际线上帧固定开销为帧头 2 B、设备类型 1 B、命令 1 B、长度 2 B、CRC 2 B、帧尾 1 B，合计 9 B，最大实际 wire 长度为 1545 B。
 
 ---
 
@@ -165,11 +165,14 @@ payload   bytes      长度由 sub_cmd 决定
 | 0x0C | `PARA_SET`             | `name_len + name + value_len + value` | 设置参数 |
 | 0x0D | `PARA_RESET`           | —                          | 恢复参数默认值 |
 | 0x0E | `OTA_BEGIN`            | `file_size u32 + name_len + filename` | OTA 开始 |
-| 0x0F | `OTA_DATA`             | `seq u16 + chunk`          | OTA 数据块 |
+| 0x0F | `OTA_DATA`             | `seq u16 + chunk[1..1021]` | OTA 数据块；chunk 上限固定为 1021 B，不随 DEBUG 长帧上限变化 |
 | 0x10 | `OTA_END`              | `crc32 u32`                | OTA 结束校验 |
 | 0x11 | `OTA_ABORT`            | —                          | OTA 中止 |
 | 0x12 | `DEVICE_REBOOT`        | —                          | 请求设备重启 |
 | 0x13 | `REQUEST_PROFILE_SEMANTICS` | —                      | 请求重发 `PROFILE_SEMANTICS` |
+
+`OTA_DATA` 的 payload 为 2 B 序号加 1..1021 B 数据块；当前上位机通常按 512 B 分片，最后一片可更短。
+1021 B 是独立于 `MAX_DATA_LENGTH=1536` 的兼容上限，不得因长帧能力自动增大。
 
 ### 5.4 `META_INFO` (0x04) — 元信息
 
@@ -220,7 +223,7 @@ channel[N]:
 | 4 | 位置 / GPS | 自动 |
 | 5 | 其它 | 自动 |
 
-**容量边界**：注册 ID 范围为 0..63；整张定义表仍必须放入 1024 字节 DATA 段。
+**容量边界**：注册 ID 范围为 0..63；整张定义表必须放入 1536 字节 DATA 段。
 条目大小随名称和单位长度变化，设备 profile 注册后必须验证序列化结果非 0。当前 AFD01
 31 个已注册通道的定义表约 774 字节。
 
@@ -248,6 +251,9 @@ state[N]:
 ```
 
 **注意**：状态字 ID 和含义由**下位机自定**，不同设备型号（afd01 / ufd45 / ...）可以有完全不同的状态字集合。上位机通过 `META_INFO.hw_type` 识别设备类型，按 DEFINE 表动态渲染 UI。附录 §8 给出 afd01 参考实现（**仅作示例，非协议强制**）。
+
+当前 AFD01 `STATE_DEFINE` 序列化后约 1159 字节，属于 1024 字节历史上限无法承载、但在
+1536 字节上限内的典型 DEFINE 长帧；设备 profile 变化后仍必须以实际序列化长度校验。
 
 ### 5.7 `EVENT_DEFINE` (0x07) — 事件定义表
 
@@ -753,7 +759,7 @@ operation 和请求 payload：
 | 6 | `PREDICT_PAGE` | `job:u32, page:u16` | 单星每页 16 点；all 每页 8 颗首过境摘要 |
 | 7 | `SELECT` | `norad:u32` | 无 payload；只替换 tracking target，不改变 TX |
 | 8 | `UPLOAD_BEGIN` | `size:u32, crc32:u32` | 接受的文件总长度 |
-| 9 | `UPLOAD_CHUNK` | `offset:u32, len:u16, bytes` | 已确认的累计 offset |
+| 9 | `UPLOAD_CHUNK` | `offset:u32, len:u16, bytes[1..1012]` | 已确认的累计 offset；bytes 上限固定为 1012 B |
 | 10 | `UPLOAD_END` | — | 长度/CRC/parser/原子替换和 rescan 结果 |
 | 11 | `UPLOAD_ABORT` | — | 释放匹配 request ID 的上传会话 |
 | 12 | `SKY_SNAPSHOT` | `snapshot_id:u32, page:u16`；0/0=新快照 | 同一 UTC/导航/姿态/阵面 profile 下的地理与规范阵面位置 |
@@ -806,9 +812,10 @@ flags bit0=stale、bit1=地平线可见、bit2=阵面正半球、bit3=硬离轴�
 snapshot ID、generation 和元数据的连续分页后才能原子替换显示；迟到页、缺页和跨 generation 页必须丢弃。
 本操作只读，不执行阵面指向、自动换星或 TX 授权。
 
-上传会话使用同一个 request ID，严格等待每片 ACK 后再发送下一 offset；总文件最大 64 KiB。上位机可显式
-`UPLOAD_ABORT`；设备会回收 10 秒无合法分片的会话。乱序、重复、越界、错误 CRC、坏 TLE 或未知版本均
-失败关闭，并保留旧 active catalog。
+上传会话使用同一个 request ID，严格等待每片 ACK 后再发送下一 offset；总文件最大 64 KiB。
+`UPLOAD_CHUNK.bytes` 为 1..1012 B，1012 B 上限独立于 `MAX_DATA_LENGTH=1536`，不得因长帧能力自动增大。
+上位机可显式 `UPLOAD_ABORT`；设备会回收 10 秒无合法分片的会话。乱序、重复、越界、错误 CRC、坏 TLE
+或未知版本均失败关闭，并保留旧 active catalog。
 
 ---
 
@@ -923,8 +930,10 @@ Device -> COMMAND_RESPONSE(code=0, msg="OK")
 | GNSS_CNR_REPORT       | 约 1 Hz | 最大 921 B/片，最多 2 片 | 最大约 1.8 KB/s |
 | GNSS_SAT_REPORT       | 约 1 Hz | 最大 663 B/片，最多 2 片 | 最大约 1.3 KB/s |
 | GNSS_SIGNAL_REPORT    | 约 1 Hz | 最大 791 B/片，最多 2 片 | 最大约 1.6 KB/s |
-| CHANNEL/STATE/EVENT_DEFINE | 0.2 Hz | ~500 B | 0.1 KB/s |
-| **合计（同时上报两类接收机数据的理论上界）** | | | **~13.1 KB/s** |
+| CHANNEL_DEFINE（AFD01 31ch） | 0.2 Hz | 约 774 B | 约 0.15 KB/s |
+| STATE_DEFINE（AFD01） | 0.2 Hz | 约 1159 B | 约 0.23 KB/s |
+| EVENT_DEFINE | 0.2 Hz | 约 500 B | 约 0.10 KB/s |
+| **合计（同时上报两类接收机数据的典型上界；不含按需 OTA/Orbit 上传）** | | | **~13.5 KB/s** |
 
 W5500 UDP 实测吞吐 ≥ 1 MB/s，**余量充足**（利用率 ~1%）。
 
@@ -940,7 +949,7 @@ W5500 UDP 实测吞吐 ≥ 1 MB/s，**余量充足**（利用率 ~1%）。
 - ROM：定义表字符串常量，估算 ~1 KB
 - RAM：channel/state/event/semantic 表均为静态容量，具体占用以目标固件 map 为准；不得用协议条目数
   直接推算，也不得把 Host/模拟器结果当作目标板 RAM 证据
-- 帧缓冲：早期 afd01 / ufd45 的 512 字节 DATA 帧可继续使用约 540 B 缓冲；若启用 1024 字节 DATA 长帧，`DEBUG_MAX_FRAME_LENGTH` 需预留至少 1036 B。
+- 帧缓冲：早期 afd01 / ufd45 的 512 字节 DATA 帧可继续使用约 540 B 缓冲；支持 1536 字节 DATA 长帧时，`DEBUG_MAX_FRAME_LENGTH` 必须预留至少 1548 B。1548 B 是保守缓冲值，实际最大 wire 长度为 1536 B DATA + 9 B 包络 = 1545 B。
 
 ### 9.4 实时性要求
 

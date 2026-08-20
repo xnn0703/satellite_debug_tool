@@ -68,23 +68,8 @@ class UdpWorker(BaseWorker):
                         f"from={addr[0]}:{addr[1]} datagram_len={len(data)}",
                     )
                     buffer.extend(data)
-                    while buffer:
-                        idx = buffer.find(b"\xaa\x55")
-                        if idx < 0:
-                            buffer.clear()
-                            break
-                        buffer = buffer[idx:]
-                        if len(buffer) >= 9:
-                            data_len = int.from_bytes(buffer[4:6], "little")
-                            frame_len = 9 + data_len
-                            if len(buffer) >= frame_len:
-                                frame = bytes(buffer[:frame_len])
-                                self.data_received.emit(frame)
-                                buffer = buffer[frame_len:]
-                            else:
-                                break
-                        else:
-                            break
+                    for frame in self._drain_debug_frames(buffer):
+                        self.data_received.emit(frame)
                 except socket.timeout:
                     pass
                 except Exception as e:

@@ -53,23 +53,8 @@ class SerialWorker(BaseWorker):
                 try:
                     data = self._serial.read(self._serial.in_waiting)
                     buffer.extend(data)
-                    while buffer:
-                        idx = buffer.find(b"\xaa\x55")
-                        if idx < 0:
-                            buffer.clear()
-                            break
-                        buffer = buffer[idx:]
-                        if len(buffer) >= 9:
-                            data_len = int.from_bytes(buffer[4:6], "little")
-                            frame_len = 9 + data_len
-                            if len(buffer) >= frame_len:
-                                frame = bytes(buffer[:frame_len])
-                                self.data_received.emit(frame)
-                                buffer = buffer[frame_len:]
-                            else:
-                                break
-                        else:
-                            break
+                    for frame in self._drain_debug_frames(buffer):
+                        self.data_received.emit(frame)
                 except Exception as e:
                     self.error.emit(f"Serial read error: {e}")
         self._running = False

@@ -3,6 +3,11 @@ from unittest.mock import Mock, patch
 from satellite_debug_tool.core.comm.base_worker import BaseWorker
 from satellite_debug_tool.core.comm.serial_worker import SerialWorker
 from satellite_debug_tool.core.comm.udp_worker import UdpWorker
+from satellite_debug_tool.core.protocol import build_frame
+
+
+def _oversize_header() -> bytes:
+    return bytes((0xAA, 0x55, 0x0D, 0x11)) + (1537).to_bytes(2, "little")
 
 
 class TestBaseWorker:
@@ -54,6 +59,32 @@ class TestSerialWorker:
         worker.disconnect()
         assert worker._running is False
 
+    def test_receive_max_frame_and_recover_after_1537_byte_header(self):
+        worker = SerialWorker()
+        maximum = build_frame(0x11, b"\xA5" * 1536)
+        recovered = build_frame(0x11, b"recovered")
+        payload = maximum + _oversize_header() + recovered
+
+        class ReadOnceSerial:
+            is_open = True
+
+            @property
+            def in_waiting(self) -> int:
+                return len(payload)
+
+            def read(self, _size: int) -> bytes:
+                worker._running = False
+                return payload
+
+        received: list[bytes] = []
+        worker._serial = ReadOnceSerial()
+        worker._running = True
+        worker.data_received.connect(received.append)
+
+        worker.run()
+
+        assert received == [maximum, recovered]
+
 
 class TestUdpWorker:
     def test_init(self):
@@ -86,6 +117,26 @@ class TestUdpWorker:
         worker.disconnect()
         assert worker._running is False
         assert worker._sock is None
+
+    def test_receive_max_frame_and_recover_after_1537_byte_header(self):
+        worker = UdpWorker()
+        maximum = build_frame(0x11, b"\xA5" * 1536)
+        recovered = build_frame(0x11, b"recovered")
+        payload = maximum + _oversize_header() + recovered
+
+        class ReceiveOnceSocket:
+            def recvfrom(self, _size: int):
+                worker._running = False
+                return payload, ("192.168.1.12", 4004)
+
+        received: list[bytes] = []
+        worker._sock = ReceiveOnceSocket()
+        worker._running = True
+        worker.data_received.connect(received.append)
+
+        worker.run()
+
+        assert received == [maximum, recovered]
 
 
 class TestUdpDefaultConfig:

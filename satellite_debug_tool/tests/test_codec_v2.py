@@ -13,11 +13,13 @@ from satellite_debug_tool.core.protocol import (
     FRAME_HEADER_0,
     FRAME_HEADER_1,
     MAX_DATA_LENGTH,
+    MAX_FRAME_LENGTH,
     PROTOCOL_VERSION,
     SubCmd,
     build_control,
     build_debug_enable_v2,
     build_frame,
+    build_ota_data,
     build_request_channel_define,
     build_request_event_define,
     build_request_meta_info,
@@ -69,11 +71,18 @@ class TestBuildFrame:
         frame = build_frame(CmdType.CONTROL, b"")
         assert len(frame) == 4 + 2 + 0 + 2 + 1   # header4 + len2 + data0 + crc2 + footer1
 
+    def test_maximum_data_length_accepted(self):
+        assert MAX_DATA_LENGTH == 1536
+        assert MAX_FRAME_LENGTH == 1548
+
+        frame = build_frame(0x11, b"\xA5" * 1536)
+        assert int.from_bytes(frame[4:6], "little") == 1536
+        # MAX_FRAME_LENGTH 保留设备端 +12B 缓冲合同；实际 wire envelope 是 9B。
+        assert len(frame) == 1545
+
     def test_oversize_data_rejected(self):
-        # MAX_DATA_LENGTH 历史从 512 升到 1024（commit ae878cf 兼容 esa01 27ch），
-        # 用常量 + 1 而非写死数字，未来再升也不破。
         with pytest.raises(CodecError):
-            build_frame(CmdType.DATA_REPORT, b"\x00" * (MAX_DATA_LENGTH + 1))
+            build_frame(CmdType.DATA_REPORT, b"\x00" * 1537)
 
 
 # -----------------------------------------------------------------------------
@@ -126,6 +135,17 @@ class TestControlBuilders:
     def test_set_trace_mode(self):
         frame = build_set_trace_mode(3)
         assert self._data_of(frame) == bytes([SubCmd.SET_TRACE_MODE, 3])
+
+    def test_ota_chunk_keeps_legacy_1021_byte_limit(self):
+        frame = build_ota_data(0x1234, b"\x5A" * 1021)
+        data = self._data_of(frame)
+        assert len(data) == 1024
+        assert data[:3] == bytes([SubCmd.OTA_DATA, 0x34, 0x12])
+
+        with pytest.raises(CodecError, match="1..1021"):
+            build_ota_data(0x1234, b"")
+        with pytest.raises(CodecError, match="1021"):
+            build_ota_data(0x1234, b"\x5A" * 1022)
 
 
 # -----------------------------------------------------------------------------

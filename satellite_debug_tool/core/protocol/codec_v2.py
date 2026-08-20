@@ -211,9 +211,9 @@ def build_ota_begin(file_size: int, filename: str) -> bytes:
 
 
 def build_ota_data(seq: int, chunk: bytes) -> bytes:
-    """OTA_DATA: seq(u16) + data(≤1021B)。MAX_DATA=1024 减去 sub_cmd(1)+seq(2)=3。"""
-    if len(chunk) > 1021:
-        raise CodecError("OTA chunk exceeds 1021 bytes")
+    """OTA_DATA: seq(u16) + data(1..1021B)；兼容上限独立于通用 DATA 上限。"""
+    if not chunk or len(chunk) > 1021:
+        raise CodecError("OTA chunk must contain 1..1021 bytes")
     return build_control(SubCmd.OTA_DATA, struct.pack("<H", seq) + chunk)
 
 
@@ -308,7 +308,8 @@ def build_service_set_capture_profile(request_id: int, support_full: bool) -> by
 # XESA01 Orbit/TLE controls --------------------------------------------------
 
 ORBIT_SCHEMA_VERSION = 1
-ORBIT_UPLOAD_CHUNK_MAX = MAX_DATA_LENGTH - 12
+# 保持既有 1024B Orbit DATA 合同：请求头 6B + offset/length 6B + chunk 1012B。
+ORBIT_UPLOAD_CHUNK_MAX = 1012
 ORBIT_FEATURE_SKY_SNAPSHOT = 1 << 3
 
 

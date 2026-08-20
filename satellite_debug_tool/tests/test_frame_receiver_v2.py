@@ -50,6 +50,17 @@ class TestBasicRecv:
         assert isinstance(records[0], Heartbeat)
         assert records[0].cpu_load == 42
 
+    def test_1536_byte_data_received(self):
+        r = FrameReceiverV2()
+        payload = b"\xA5" * 1536
+        records = r.feed(build_frame(0x11, payload))
+
+        assert len(records) == 1
+        assert isinstance(records[0], RawFrame)
+        assert records[0].data == payload
+        assert r.frames_ok == 1
+        assert r.error_count == 0
+
 
 class TestFragmentation:
     def test_byte_by_byte(self):
@@ -109,11 +120,11 @@ class TestErrors:
 
     def test_oversize_len_field_discarded(self):
         r = FrameReceiverV2()
-        # len=0xFFFF 远超 MAX_DATA_LENGTH
-        bad = bytes([0xAA, 0x55, 0x0D, 0x01, 0xFF, 0xFF])
+        length = (1537).to_bytes(2, "little")
+        bad = bytes([0xAA, 0x55, 0x0D, 0x01]) + length
         records = r.feed(bad)
         assert records == []
-        assert r.framing_errors >= 1
+        assert r.framing_errors == 1
 
     def test_decode_error_counted(self):
         """DATA_REPORT 段 channel_count=3 但只带 1 个样本 → decode_errors+1。"""

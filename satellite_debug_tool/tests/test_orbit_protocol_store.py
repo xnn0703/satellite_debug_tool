@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 from satellite_debug_tool.core.data import OrbitStore
 from satellite_debug_tool.core.protocol import (
     CmdType,
+    CodecError,
     FrameReceiverV2,
     OrbitCapabilitiesReport,
     OrbitCatalogReport,
@@ -22,6 +23,7 @@ from satellite_debug_tool.core.protocol import (
     OrbitPredictionPage,
     OrbitStatus,
     OrbitStatusReport,
+    ORBIT_UPLOAD_CHUNK_MAX,
     OrbitUploadProgress,
     build_frame,
     build_orbit_capabilities,
@@ -62,7 +64,16 @@ def test_orbit_request_wire_payloads_are_little_endian_and_bounded():
     assert frames[0][6:12] == bytes.fromhex("010178563412")
     assert frames[1][6:14] == bytes.fromhex("0103010000000200")
     assert frames[3][6:18] == bytes.fromhex("010c020000002a0000000100")
-    assert len(frames[-2]) <= 1024 + 12
+
+
+def test_orbit_upload_chunk_keeps_legacy_1012_byte_limit():
+    assert ORBIT_UPLOAD_CHUNK_MAX == 1012
+
+    frame = build_orbit_upload_chunk(6, 0, b"\x5A" * 1012)
+    assert int.from_bytes(frame[4:6], "little") == 1024
+
+    with pytest.raises(CodecError, match="1012"):
+        build_orbit_upload_chunk(6, 0, b"\x5A" * 1013)
 
 
 def test_decode_capability_catalog_and_current_reports():
