@@ -1,8 +1,8 @@
 """
 协议 v2 握手状态机。
 
-连接建立后主动请求 META_INFO + 三张 DEFINE 表，周期重发直到全部到齐；
-收到 META 后独立请求 PROFILE_SEMANTICS，失败不会阻塞基础握手就绪；
+连接建立后先请求 META_INFO；当前连接代际确认设备身份后再请求三张 DEFINE 表，
+周期重发直到全部到齐；PROFILE_SEMANTICS 独立重试，失败不会阻塞基础握手就绪；
 收到 `HEARTBEAT` 帧刷新链路心跳，超时发射 `link_lost`。
 
 时间推进由外部调用 ``tick(dt_ms)`` 驱动。调用方可把 receiver 吐出的 record
@@ -88,11 +88,13 @@ class Handshake(QObject):
         self._semantics_attempts = 0
         self._elapsed_since_hb_ms = 0
         self._heartbeat_alive = False  # 从未收到过 HB 时为 False
+        self._epoch_identity: Optional[tuple[int, str, str, str]] = None
+        self._epoch_hw_type: Optional[str] = None
 
     # ---- 生命周期 ----
 
     def start(self) -> None:
-        """连接建立后调用，立即发出四条基础定义 REQUEST。"""
+        """连接建立后调用，开启新代际并请求设备身份。"""
         self._enabled = True
         self._ready = False
         self._received_meta = False
@@ -106,8 +108,10 @@ class Handshake(QObject):
         self._semantics_attempts = 0
         self._elapsed_since_hb_ms = 0
         self._heartbeat_alive = False
+        self._epoch_identity = None
+        self._epoch_hw_type = None
         self._trace("START missing=meta,channel,state,event")
-        self._send_base_requests()
+        self._send_request("REQUEST_META_INFO", build_request_meta_info(), "initial")
 
     def stop(self) -> None:
         """断开连接时调用。握手状态置位 disabled，但 ProfileStore 保留以便下次连接复用。"""
@@ -144,17 +148,23 @@ class Handshake(QObject):
             return
 
         if isinstance(record, MetaInfo):
-            self._store.apply_meta(record)
-            first_meta = not self._received_meta
-            self._received_meta = True
+            identity = (
+                int(record.protocol_ver),
+                record.fw_ver,
+                record.hw_type or "unknown",
+                record.device_sn,
+            )
+            new_epoch = identity != self._epoch_identity
+            if new_epoch:
+                self._begin_profile_epoch(record, identity)
+            else:
+                self._store.apply_meta(record)
             self._trace(
                 f"APPLY META hw={record.hw_type!r} fw={record.fw_ver!r} "
-                f"first={int(first_meta)} missing={self._missing_text()}"
+                f"new_epoch={int(new_epoch)} missing={self._missing_text()}"
             )
-            if first_meta:
-                self._request_semantics_if_due(immediate_if_never_sent=True)
         elif isinstance(record, ChannelDefineTable):
-            hw = self._store.current_hw_type()
+            hw = self._epoch_hw_type
             if hw is not None:
                 self._store.apply_channel_define(hw, record.table_ver, record.channels)
                 self._received_channel = True
@@ -165,7 +175,7 @@ class Handshake(QObject):
             else:
                 self._trace("IGNORE CHANNEL_DEFINE reason=meta_missing")
         elif isinstance(record, StateDefineTable):
-            hw = self._store.current_hw_type()
+            hw = self._epoch_hw_type
             if hw is not None:
                 self._store.apply_state_define(hw, record.table_ver, record.states)
                 self._received_state = True
@@ -176,7 +186,7 @@ class Handshake(QObject):
             else:
                 self._trace("IGNORE STATE_DEFINE reason=meta_missing")
         elif isinstance(record, EventDefineTable):
-            hw = self._store.current_hw_type()
+            hw = self._epoch_hw_type
             if hw is not None:
                 self._store.apply_event_define(hw, record.table_ver, record.events)
                 self._received_event = True
@@ -187,7 +197,7 @@ class Handshake(QObject):
             else:
                 self._trace("IGNORE EVENT_DEFINE reason=meta_missing")
         elif isinstance(record, ProfileSemanticsReport):
-            hw = self._store.current_hw_type()
+            hw = self._epoch_hw_type
             if hw is not None:
                 self._store.apply_profile_semantics(hw, record)
                 self._received_semantics = True
@@ -220,7 +230,7 @@ class Handshake(QObject):
             and not self._ready
         ):
             self._ready = True
-            hw = self._store.current_hw_type() or "unknown"
+            hw = self._epoch_hw_type or "unknown"
             self._trace(f"READY hw={hw!r}")
             self.ready.emit(hw)
 
@@ -252,11 +262,30 @@ class Handshake(QObject):
 
     # ---- 内部 ----
 
-    def _send_base_requests(self) -> None:
-        self._send_request("REQUEST_META_INFO", build_request_meta_info(), "initial")
-        self._send_request("REQUEST_CHANNEL_DEFINE", build_request_channel_define(), "initial")
-        self._send_request("REQUEST_STATE_DEFINE", build_request_state_define(), "initial")
-        self._send_request("REQUEST_EVENT_DEFINE", build_request_event_define(), "initial")
+    def _begin_profile_epoch(
+        self,
+        meta: MetaInfo,
+        identity: tuple[int, str, str, str],
+    ) -> None:
+        self._epoch_identity = identity
+        self._epoch_hw_type = meta.hw_type or "unknown"
+        self._ready = False
+        self._received_meta = True
+        self._received_channel = False
+        self._received_state = False
+        self._received_event = False
+        self._received_semantics = False
+        self._elapsed_since_req_ms = 0
+        self._elapsed_since_semantics_req_ms = 0
+        self._semantics_attempts = 0
+        self._store.apply_meta(meta)
+        self._send_definition_requests("meta_confirmed")
+        self._request_semantics_if_due(immediate_if_never_sent=True)
+
+    def _send_definition_requests(self, reason: str) -> None:
+        self._send_request("REQUEST_CHANNEL_DEFINE", build_request_channel_define(), reason)
+        self._send_request("REQUEST_STATE_DEFINE", build_request_state_define(), reason)
+        self._send_request("REQUEST_EVENT_DEFINE", build_request_event_define(), reason)
 
     def _request_semantics_if_due(self, *, immediate_if_never_sent: bool = False) -> None:
         if (
@@ -284,6 +313,7 @@ class Handshake(QObject):
         if not self._received_meta:
             self._send_request("REQUEST_META_INFO", build_request_meta_info(), "retry_missing")
             self.define_timeout.emit("meta")
+            return
         if not self._received_channel:
             self._send_request(
                 "REQUEST_CHANNEL_DEFINE", build_request_channel_define(), "retry_missing",

@@ -540,5 +540,8 @@ class MainWindow(QMainWindow):
             sb.showMessage(msg, 15000)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._production.confirm_shutdown():
+            event.ignore()
+            return
         self._production.shutdown()
         super().closeEvent(event)

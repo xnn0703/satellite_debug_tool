@@ -7,6 +7,7 @@ ProfileStore 按 ``hw_type`` 分桶保存 DEFINE 表，支持：
 """
 
 from .models import DeviceProfile
+from .capabilities import CapabilitySupport
 from .profile_store import ProfileStore
 from .cache import ProfileCache, DEFAULT_CACHE_DIR
 from .semantics import (
@@ -48,7 +49,7 @@ from .semantics import (
 )
 
 __all__ = [
-    "DeviceProfile", "ProfileStore", "ProfileCache", "DEFAULT_CACHE_DIR",
+    "CapabilitySupport", "DeviceProfile", "ProfileStore", "ProfileCache", "DEFAULT_CACHE_DIR",
     "CHANNEL_ROLE_ANTENNA_AZ", "CHANNEL_ROLE_ANTENNA_EL",
     "CHANNEL_ROLE_GPS_ALT", "CHANNEL_ROLE_GPS_LAT", "CHANNEL_ROLE_GPS_LON",
     "CHANNEL_ROLE_GPS_COG", "CHANNEL_ROLE_GPS_COG_STD",

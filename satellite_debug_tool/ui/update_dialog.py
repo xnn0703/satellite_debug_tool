@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -369,7 +369,10 @@ class UpdateDialog(QDialog):
         self._check_thread.start()
 
         # 记录检查时间
-        self._settings.set("update.last_check_iso", datetime.utcnow().isoformat())
+        self._settings.set(
+            "update.last_check_iso",
+            datetime.now(timezone.utc).isoformat(),
+        )
         self._settings.save()
 
     def _on_check_done(self, latest: LatestRelease) -> None:
@@ -652,9 +655,10 @@ def _detect_updater_exe() -> Optional[Path]:
 def should_check_in_background(settings: Settings) -> bool:
     """根据 settings.update 配置判断是否该启动后台静默检查。
 
-    测试 / CI 可通过 `SATELLITE_NO_UPDATE_CHECK=1` 一键禁掉。
+    `SATELLITE_UPDATE_CHECK=0` 让测试 / CI 使用明确的关闭状态。
     """
-    if os.environ.get("SATELLITE_NO_UPDATE_CHECK"):
+    environment_state = os.environ.get("SATELLITE_UPDATE_CHECK", "1").strip().lower()
+    if environment_state in {"0", "false", "off", "no"}:
         return False
     if not settings.get("update.auto_check", True):
         return False
@@ -665,8 +669,10 @@ def should_check_in_background(settings: Settings) -> bool:
         last = datetime.fromisoformat(last_iso)
     except ValueError:
         return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
     interval_hours = float(settings.get("update.check_interval_hours", 24))
-    elapsed_h = (datetime.utcnow() - last).total_seconds() / 3600
+    elapsed_h = (datetime.now(timezone.utc) - last).total_seconds() / 3600
     return elapsed_h >= interval_hours
 
 
@@ -696,7 +702,10 @@ def silent_background_check(
     thread.started.connect(worker.run)
 
     def _on_done(latest: LatestRelease) -> None:
-        settings.set("update.last_check_iso", datetime.utcnow().isoformat())
+        settings.set(
+            "update.last_check_iso",
+            datetime.now(timezone.utc).isoformat(),
+        )
         settings.save()
         skip = settings.get("update.skip_version", "")
         if skip and skip == latest.tag_name:

@@ -49,7 +49,7 @@ from satellite_debug_tool.core.protocol import (
     PARA_FLAG_REQUIRES_REBOOT,
     ParaType,
 )
-from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.core.profile import CapabilitySupport, ProfileStore
 from satellite_debug_tool.i18n import (
     mark_raw_text,
     register_translatable,
@@ -534,22 +534,30 @@ class DeviceView(QWidget):
             return self._hw_type
         return None
 
-    def _capability_supported(self, name: str) -> bool:
+    def _capability_status(self, name: str) -> CapabilitySupport:
         hw = self._device_hw_type()
         if hw is None:
-            return False
-        default = hw == "afd01" and name in {"parameters", "ota"}
+            return CapabilitySupport.UNKNOWN
         if self._profile_store is None:
-            return default
-        return self._profile_store.has_capability(hw, name, default=default)
+            return CapabilitySupport.UNKNOWN
+        return self._profile_store.capability_status(hw, name)
 
     def _refresh_capabilities(self) -> None:
         connected = self._worker is not None
         hw = self._device_hw_type()
         previous_para_state = self._para_capability_state
         previous_ota_state = self._ota_capability_state
-        self._supports_parameters = connected and self._capability_supported("parameters")
-        self._supports_ota = connected and self._capability_supported("ota")
+        parameter_status = self._capability_status("parameters")
+        ota_status = self._capability_status("ota")
+        response_context_status = self._capability_status("command_response_context")
+        self._supports_parameters = connected and all(
+            status is CapabilitySupport.SUPPORTED
+            for status in (parameter_status, response_context_status)
+        )
+        self._supports_ota = connected and all(
+            status is CapabilitySupport.SUPPORTED
+            for status in (ota_status, response_context_status)
+        )
         self._set_controls_enabled(connected)
 
         if not connected:
@@ -565,6 +573,12 @@ class DeviceView(QWidget):
                 self._set_ota_status("Waiting for device Profile and capabilities...")
             return
 
+        parameter_unknown = CapabilitySupport.UNKNOWN in {
+            parameter_status,
+            response_context_status,
+        }
+        ota_unknown = CapabilitySupport.UNKNOWN in {ota_status, response_context_status}
+
         if self._supports_parameters:
             self._para_capability_state = CapabilityUiState.SUPPORTED
             if previous_para_state in {
@@ -573,11 +587,16 @@ class DeviceView(QWidget):
             }:
                 self._clear_para_status()
             self._maybe_auto_read_params()
+        elif parameter_unknown:
+            self._para_capability_state = CapabilityUiState.WAITING_PROFILE
+            self._params = []
+            self._para_table.setRowCount(0)
+            self._set_para_status("Waiting for device capability declaration...")
         else:
             self._para_capability_state = CapabilityUiState.UNSUPPORTED
             self._params = []
             self._para_table.setRowCount(0)
-            self._set_para_status("This firmware does not declare parameter-management support")
+            self._set_para_status("Parameter management is unavailable in this firmware")
 
         if self._supports_ota:
             self._ota_capability_state = CapabilityUiState.SUPPORTED
@@ -589,10 +608,14 @@ class DeviceView(QWidget):
                 }
             ):
                 self._set_ota_status("Idle")
+        elif ota_unknown:
+            self._ota_capability_state = CapabilityUiState.WAITING_PROFILE
+            if not self._ota_active:
+                self._set_ota_status("Waiting for device capability declaration...")
         else:
             self._ota_capability_state = CapabilityUiState.UNSUPPORTED
             if not self._ota_active:
-                self._set_ota_status("This firmware does not declare OTA support")
+                self._set_ota_status("OTA is unavailable in this firmware")
 
     def _maybe_auto_read_params(self) -> None:
         hw = self._device_hw_type()
@@ -656,13 +679,21 @@ class DeviceView(QWidget):
     def _on_read_params(self):
         self._request_para_table()
 
+    def _parameter_availability_message(self) -> str:
+        if self._para_capability_state is CapabilityUiState.WAITING_PROFILE:
+            return "Waiting for device capability declaration..."
+        return "Parameter management is unavailable in this firmware"
+
+    def _ota_availability_message(self) -> str:
+        if self._ota_capability_state is CapabilityUiState.WAITING_PROFILE:
+            return "Waiting for device capability declaration..."
+        return "OTA is unavailable in this firmware"
+
     def _request_para_table(self, *, allow_during_set: bool = False):
         if not self._supports_parameters:
-            message = tr("This firmware does not declare parameter-management support")
-            self._set_para_status(
-                "This firmware does not declare parameter-management support"
-            )
-            self.status_message.emit(message, 3000)
+            source = self._parameter_availability_message()
+            self._set_para_status(source)
+            self.status_message.emit(tr(source), 3000)
             return
         if self._ota_active:
             self._set_para_status("OTA is active; parameter operations are paused")
@@ -739,10 +770,7 @@ class DeviceView(QWidget):
 
     def _on_para_apply(self, row: int):
         if not self._supports_parameters:
-            self.status_message.emit(
-                tr("This firmware does not declare parameter-management support"),
-                3000,
-            )
+            self.status_message.emit(tr(self._parameter_availability_message()), 3000)
             return
         if row >= len(self._params):
             return
@@ -833,10 +861,7 @@ class DeviceView(QWidget):
 
     def _on_factory_reset(self):
         if not self._supports_parameters:
-            self.status_message.emit(
-                tr("This firmware does not declare parameter-management support"),
-                3000,
-            )
+            self.status_message.emit(tr(self._parameter_availability_message()), 3000)
             return
         ret = QMessageBox.warning(
             self,
@@ -858,10 +883,7 @@ class DeviceView(QWidget):
 
     def _on_select_firmware(self):
         if not self._supports_ota:
-            self.status_message.emit(
-                tr("This firmware does not declare OTA support"),
-                3000,
-            )
+            self.status_message.emit(tr(self._ota_availability_message()), 3000)
             return
         last_dir = ""
         if self._settings is not None:
@@ -891,7 +913,7 @@ class DeviceView(QWidget):
         if self._ota_file is None or self._worker is None or not self._supports_ota:
             if not self._supports_ota:
                 self.status_message.emit(
-                    tr("This firmware does not declare OTA support"),
+                    tr(self._ota_availability_message()),
                     3000,
                 )
             return
@@ -1036,15 +1058,11 @@ class DeviceView(QWidget):
 
     # ---- COMMAND_RESPONSE 处理 ----
 
-    def _requires_response_context(self) -> bool:
-        return self._capability_supported("command_response_context")
-
     def _success_response_matches(self, resp: CommandResponse, expected: str) -> bool:
-        if int(resp.code) != int(RespCode.SUCCESS):
-            return False
-        if not self._requires_response_context():
-            return True
-        return (resp.msg or "").strip() == expected
+        return (
+            int(resp.code) == int(RespCode.SUCCESS)
+            and (resp.msg or "").strip() == expected
+        )
 
     def _on_command_response(self, resp: CommandResponse):
         if self._pending_request is None:
@@ -1068,9 +1086,7 @@ class DeviceView(QWidget):
                         "Waiting for device readback...",
                         {},
                     )
-                # 新固件会主动回表；旧固件只做一次兜底读取，不再周期轮询。
-                if not self._requires_response_context():
-                    self._schedule_para_set_verify_read(300)
+                self._schedule_para_set_verify_read(300)
             else:
                 self._response_timer.stop()
                 detail = resp.msg or tr("Error {code}", code=resp.code)
@@ -1097,8 +1113,7 @@ class DeviceView(QWidget):
                     tr("Parameters restored to factory defaults; restart is recommended"),
                     5000,
                 )
-                if not self._requires_response_context():
-                    QTimer.singleShot(500, self._on_read_params)
+                QTimer.singleShot(500, self._on_read_params)
             else:
                 self.status_message.emit(
                     tr("Factory reset failed: {detail}", detail=resp.msg),

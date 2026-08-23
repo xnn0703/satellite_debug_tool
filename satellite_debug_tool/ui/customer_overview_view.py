@@ -878,28 +878,49 @@ class CustomerOverviewView(QWidget):
             tracking = tr("{value} (stale)", value=tracking)
         self._set_status(
             "tracking", "Tracking", tracking,
-            "ok" if op.tracking_phase.value == TrackingPhase.LOCKED else "warn",
+            (
+                "ok"
+                if op.tracking_phase.availability is Availability.VALID
+                and op.tracking_phase.value == TrackingPhase.LOCKED
+                else "warn"
+            ),
         )
         lock = "—" if op.locked.value is None else tr("Locked") if op.locked.value else tr("Unlocked")
-        self._set_status("lock", "Lock", lock, "ok" if op.locked.value else "warn")
+        if op.locked.availability is Availability.STALE:
+            lock = tr("{value} (stale)", value=lock)
+        self._set_status(
+            "lock",
+            "Lock",
+            lock,
+            (
+                "ok"
+                if op.locked.availability is Availability.VALID and op.locked.value
+                else "warn"
+            ),
+        )
         navigation = "—" if op.navigation.value is None else _navigation_text(op.navigation.value)
         if op.navigation.availability == Availability.STALE:
             navigation = tr("{value} (stale)", value=navigation)
         self._set_status(
             "navigation", "Navigation", navigation,
-            "ok" if op.navigation.value == NavigationState.READY else "warn",
+            (
+                "ok"
+                if op.navigation.availability is Availability.VALID
+                and op.navigation.value == NavigationState.READY
+                else "warn"
+            ),
         )
         self._set_status("gnss", "GNSS fix", self._display(op.gnss_fix))
-        # Old firmware can briefly report PA enabled while its component record says TX array Offline.
-        # Never present that contradictory state as a customer-facing successful transmission.
-        if snapshot.tx_array.online.value is False:
-            tx = tr("Unavailable")
-            tx_status = "warn"
-        else:
-            tx = "—" if op.tx_enabled.value is None else tr("On") if op.tx_enabled.value else tr("Off")
-            if op.tx_enabled.availability == Availability.STALE:
-                tx = tr("{value} (stale)", value=tx)
-            tx_status = "ok" if op.tx_enabled.value else "neutral"
+        tx = "—" if op.tx_enabled.value is None else tr("On") if op.tx_enabled.value else tr("Off")
+        if op.tx_enabled.availability is Availability.STALE:
+            tx = tr("{value} (stale)", value=tx)
+        tx_status = (
+            "ok"
+            if op.tx_enabled.availability is Availability.VALID and op.tx_enabled.value
+            else "neutral"
+            if op.tx_enabled.availability is Availability.VALID
+            else "warn"
+        )
         self._set_status("tx", "TX", tx, tx_status)
         modem = (
             "—"
@@ -912,7 +933,15 @@ class CustomerOverviewView(QWidget):
             "modem",
             "Modem",
             modem,
-            "ok" if op.modem_online.value else "warn" if op.modem_online.value is False else "neutral",
+            (
+                "ok"
+                if op.modem_online.availability is Availability.VALID
+                and op.modem_online.value
+                else "warn"
+                if op.modem_online.value is False
+                or op.modem_online.availability is Availability.STALE
+                else "neutral"
+            ),
         )
         self._gnss_btn.setEnabled(self._live.gnss_store().has_data())
         orbit_store_getter = getattr(self._live, "orbit_store", None)
@@ -1169,9 +1198,16 @@ class CustomerOverviewView(QWidget):
         if self._attitude is None:
             return
         op = snapshot.operation
-        roll = float(op.roll_deg.value or 0.0)
-        pitch = float(op.pitch_deg.value or 0.0)
-        yaw = float(op.yaw_deg.value or 0.0)
+        attitude = (op.roll_deg, op.pitch_deg, op.yaw_deg)
+        if any(
+            value.availability is not Availability.VALID or value.value is None
+            for value in attitude
+        ):
+            self._attitude.set_attitude_unavailable()
+            return
+        roll = float(op.roll_deg.value)
+        pitch = float(op.pitch_deg.value)
+        yaw = float(op.yaw_deg.value)
         self._attitude.update_attitude(
             roll, pitch, yaw,
             "customer_roll", "customer_pitch", "customer_yaw",
@@ -1184,7 +1220,7 @@ class CustomerOverviewView(QWidget):
 
     def _refresh_snr(self, snapshot: ProductSnapshot) -> None:
         self._snr_readout.set_product_value(snapshot.operation.snr_db, 2)
-        if self._service_store is not None and self._service_store.service_available:
+        if self._service_store is not None and self._service_store.has_snr_stream:
             times, values = self._service_store.snr_history(window_s=300.0)
         else:
             times, values = self._projector.channel_history(CHANNEL_ROLE_SNR, window_s=300.0)

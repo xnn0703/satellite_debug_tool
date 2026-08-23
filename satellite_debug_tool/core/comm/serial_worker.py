@@ -47,16 +47,18 @@ class SerialWorker(BaseWorker):
         return False
 
     def run(self):
-        buffer = bytearray()
         while self._running:
-            if self._serial and self._serial.in_waiting > 0:
-                try:
-                    data = self._serial.read(self._serial.in_waiting)
-                    buffer.extend(data)
-                    for frame in self._drain_debug_frames(buffer):
-                        self.data_received.emit(frame)
-                except Exception as e:
-                    self.error.emit(f"Serial read error: {e}")
+            serial_port = self._serial
+            if serial_port is None:
+                break
+            try:
+                data = serial_port.read(max(1, serial_port.in_waiting))
+                if data:
+                    self.data_received.emit(bytes(data))
+            except Exception as exc:
+                if self._running:
+                    self.error.emit(f"Serial read error: {exc}")
+                break
         self._running = False
 
     @staticmethod

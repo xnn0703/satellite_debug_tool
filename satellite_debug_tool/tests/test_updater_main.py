@@ -71,7 +71,7 @@ class TestSelfRelocate:
             str(target),
             "--pid",
             "42",
-            "--no-relocate",
+            "--relocated",
         ]
         assert not (relocated_root / install.name).exists()
 

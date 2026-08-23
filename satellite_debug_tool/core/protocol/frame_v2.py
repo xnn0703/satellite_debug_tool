@@ -21,7 +21,7 @@ DEVICE_TYPE = 0x0D
 
 # 每帧 DATA 段最大长度
 # 2026-04-24：esa01 注册 27 路 channel，CHANNEL_DEFINE 序列化约 785B，上限从 512 扩到 1024。
-# 2026-08-20：AFD01 的 21-state STATE_DEFINE 序列化为 1159B，上限扩到 1536。
+# 2026-08-23：AFD01 的 21-state STATE_DEFINE 序列化为 1170B，上限保持 1536。
 # 旧设备发送的 ≤512/1024B 帧仍能被本上位机正确接收（向后兼容）。
 MAX_DATA_LENGTH = 1536
 # 设备端保守帧缓冲合同；实际 wire 固定开销为 9B，此处额外预留 3B。

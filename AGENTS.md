@@ -1,5 +1,15 @@
 # AGENTS.md
 
+## 最高优先级：根因修复与肯定式逻辑
+
+- 先定位并证明根因，再修改根因所属的状态源、协议合同或数据流。超时放宽、重复重试、额外轮询、吞异常、硬编码设备特例和 UI 补偿不能替代根因修复。
+- 现有逻辑错误时，直接用单一正确实现替换，并删除被替代的旧分支、临时绕行、重复状态源和失效 fallback。一个业务事实只保留一个权威来源。
+- 条件、状态、API、变量、日志和界面文案使用直接、肯定、可验证的领域语义，例如 `ready`、`valid`、`connected`、`has_reference`。禁止 `not_disabled`、`not_invalid`、`no_error == false` 一类双重否定。
+- 状态描述只陈述证据已经确认的事实。例如 UDP 写入成功表示“指令已发送”；设备回读确认后才表示“平台在线”或“已到位”。
+- 兼容路径只服务于明确的版本合同，并具备独立边界、专项测试和退出条件。未知设备或未知版本使用明确的“待确认”或“不支持”状态。
+- 每次修复都增加一项回归测试：该测试在旧实现上稳定复现故障，在新实现上稳定通过；同时检查相邻入口，确保被替代逻辑已经完整移除。
+- 评审先检查事实来源和状态流，再检查局部条件。发现多条路径表达同一事实时，统一到领域模型或 Store，由界面只负责呈现和发出意图。
+
 ## 运行命令
 
 ```bash
@@ -7,7 +17,7 @@
 python3 -m satellite_debug_tool.main
 python3 -m satellite_debug_tool.main --production   # 解锁批量试产工作区（启动即进）
 
-# 测试（无 editable install 时需要 PYTHONPATH；62 个测试，conftest 已设 offscreen + 静默更新）
+# 测试（无 editable install 时需要 PYTHONPATH；69 个测试文件，conftest 已设 offscreen + 静默更新）
 PYTHONPATH=. pytest satellite_debug_tool/tests
 pytest satellite_debug_tool/tests/test_frame_v2.py -v      # 单文件
 pytest satellite_debug_tool/tests -k "crc"                 # 按 pattern
@@ -33,7 +43,7 @@ python3 scripts/update_translations.py check
 |------|--------|------|------|
 | 0 | **Customer Workspace**（默认） | 直接进 | 面向 AFD01 终端用户：Overview / RF control / Playback / Maintenance。共享 `LiveView` 实例。 |
 | 1 | **Engineering Tabs**（Live / Playback / Log / Device） | `Ctrl+Shift+E` 首次确认后本会话解锁 | 内部诊断、协议解码、设备参数读写、OTA。 |
-| 2 | **Production Workspace**（批量试产） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | M19-A 工程预览证据采集底座，未实现正式试产放行流程。 |
+| 2 | **Production Workspace**（批量试产） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | 批次测试 / 夹具调试双页面；正式试产放行流程仍在后续里程碑。 |
 
 - 三个工作区共享同一个 `LiveView`（worker、握手、`frame_received` 广播）；切换不重建连接。
 - 设备 OTA / 参数表读写时 `LiveView` 会 `set_device_transaction_active(True)`，期间禁用握手重试。
@@ -65,12 +75,12 @@ Production   Product Service 单播 SUBSCRIBE → 参与设备冻结 → ResultS
 - `core/comm/` — QThread worker：`BaseWorker`（QThread 基类）→ `SerialWorker` / `UdpWorker`
 - `core/data/` — `ChannelBuffer`（环形 ndarray 或无界 list）、`DataStore`、`StateStore`、`EventLog`、`gnss_store.py`
 - `core/profile/` — `ProfileStore` + `ProfileCache`，设备 profile 驱动 UI；`semantics.py` 通道语义；`ins_yaw_display.py` 内部 INS 航向处理
-- `core/production/` — **M19** 试产夹具：`recipe.py`（配方）、`fleet.py`（多设备并发）、`fixtures.py`（GW Instek PSW 电源 + 运动平台抽象）、`motion_platform.py`、`power_supply.py`、`result_store.py`（SQLite 落盘）
+- `core/production/` — **M19** 试产与夹具：批次侧 `recipe.py / fleet.py / fixtures.py / power_supply.py / result_store.py`；夹具侧 `fixture_profile.py / fixture_control.py / fixture_session.py / fixture_analysis.py / motion_platform.py / ms6222_protocol.py / ms6222_worker.py`
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 Ed25519 验签（`firmware_package.py`）
 - `core/link_trace.py` — 帧 trace 日志
 - `core/config.py` — `Settings` 类，JSON 存 `~/.satellite_debug_tool/settings.json`
-- `ui/` — PySide6 组件；`MainWindow` 顶层；`live_view / playback_view / log_view / device_view / customer_workspace / production_workspace / map_widget / chart_widget / grouped_chart_widget / attitude_widget / device_view / settings_dialog / update_dialog`
+- `ui/` — PySide6 组件；`MainWindow` 顶层；主要工作区包括 `customer_workspace / live_view / playback_view / log_view / device_view / production_workspace / fixture_debug_workspace`
 - `ui/assets/` — Leaflet 离线地图 bundle + STL 模型
 - `i18n/` — `TranslationManager` + TS/QM 翻译资源（`translations/satellite_debug_tool_zh_CN.{ts,qm}`）
 - `io/` — `DataRecorder`（异步 threading.Thread + queue；支持 SDB v2/v3，文件头内嵌 profile JSON）、`DataImporter`
@@ -86,8 +96,8 @@ Production   Product Service 单播 SUBSCRIBE → 参与设备冻结 → ResultS
 - **每个 Tab/工作区独立 `DataStore` / `ProfileStore`**（M7 引入），切换不污染；CustomerWorkspace 和 LiveView 共享的是同一个 `LiveView` 实例，所以底层 DataStore 实际同一份
 - 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x10`、`0x20..0x2B`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
 - 通用长帧扩容不改变专用上传分片合同：`OTA_DATA` 每片 1..1021 B（UI 通常发送 512 B），Orbit `UPLOAD_CHUNK` 每片 1..1012 B
-- 测试在 `satellite_debug_tool/tests/`（62 个文件），名称和注释多为中文；UI 测试用 `qapp` fixture 复用 QApplication
-- `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_NO_UPDATE_CHECK=1` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
+- 测试在 `satellite_debug_tool/tests/`（69 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
+- `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_UPDATE_CHECK=0` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
 - 字号已固化 `small`（`base_px=13`，`main.py` 调 `S.apply_global_font(app, scale="small", base_px=13)`）；`styles.FONT_SCALES` / `FontScale` API 仅保留兼容 `test_styles.py`，UI 不再暴露
 - 主题三档 `dark / dark_hc / light`，由 `S.palette()` 出语义色键（兼容键 + Mission Console 新语义键），顶栏图标按钮循环切换
 - 离线地图约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮
@@ -102,6 +112,9 @@ Production   Product Service 单播 SUBSCRIBE → 参与设备冻结 → ResultS
 | `tiles/{region}/{z}/{x}/{y}.png` | M8 OSM 离线 tile（按区域分组） |
 | `updates/<tag>/updater.log` | 自动升级日志；升级失败时排查用 |
 | `production_batches/<batch_id>/` | M19-A 工程预览批次产物：数据库 + SDB；正式报告仍待后续里程碑实现 |
+| `fixture_profiles/` | 带 revision 与 SHA-256 的工作站夹具档案 |
+| `fixture_calibrations/` | MS-6222 坐标标定结果 |
+| `fixture_sessions/<session_id>/` | 夹具命令、MS 原始帧、解析结果、事件、指标与 manifest |
 
 ## 构建与发版
 
@@ -125,7 +138,7 @@ Production   Product Service 单播 SUBSCRIBE → 参与设备冻结 → ResultS
 - `doc/DEBUG设备协议接口规范_v2.md` — **协议权威规范**
 - `doc/upper_pc_function_definition_vnext.md` — 当前上位机功能定义与路线
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
-- `doc/M7_*.md` ~ `doc/M19_*` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产）
+- `doc/M7_*.md` ~ `doc/M20_*` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性）
 - `doc/development_log.md` — M1–M6 实施日志
 - `doc/acceptance_log.md` — F-/A- 系列验收跟踪
 - `doc/i18n_terms.md` — 中英术语表

@@ -825,12 +825,6 @@ class GroupedChartWidget(QWidget):
         self._x_origin_ms = None
         self._x_view_max = 0.0
 
-    # ---- 旧 API 兼容（MainWindow 暂未重构时保留） ----
-
-    def set_channels(self, names: List[str]) -> None:
-        """兼容旧 API；新架构按 profile 决定曲线集合，此方法为 no-op。"""
-        return
-
     def set_time_range(self, min_ts: float, max_ts: float) -> None:
         first = next(iter(self._plots.values()), None)
         if first is not None:

@@ -154,8 +154,8 @@ def test_customer_overview_renders_afd01_values_and_empty_components(app, monkey
         StateDefEntry(0, 1, 0, "TRACE_MODE", [StateEnumItem(3, 0, "LOCK")]),
         StateDefEntry(1, 0, 0, "LOCK_FLAG", []),
     ])
-    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.time", lambda: 10.0)
-    monkeypatch.setattr("satellite_debug_tool.core.data.state_store.time.time", lambda: 10.0)
+    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.monotonic", lambda: 10.0)
+    monkeypatch.setattr("satellite_debug_tool.core.data.state_store.time.monotonic", lambda: 10.0)
     live.data.update(DataReport(500, [
         ChannelSample(0, 1.0), ChannelSample(1, 2.0), ChannelSample(2, 3.0),
         ChannelSample(3, 120.0), ChannelSample(4, 35.0), ChannelSample(8, 18.5),
@@ -164,7 +164,7 @@ def test_customer_overview_renders_afd01_values_and_empty_components(app, monkey
     live.states.update("afd01", StateReport(500, [StateSample(0, 3), StateSample(1, 1)]))
     view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
 
-    monkeypatch.setattr("satellite_debug_tool.core.product.legacy_v2.time.time", lambda: 10.5)
+    monkeypatch.setattr("satellite_debug_tool.core.product.legacy_v2.time.monotonic", lambda: 10.5)
     view.refresh()
 
     assert "afd01" in view._identity_label.text()
@@ -296,6 +296,9 @@ def test_product_identity_loads_model_without_profile_ready(app) -> None:
         def update_pointing(self, *_args) -> None:
             pass
 
+        def set_attitude_unavailable(self) -> None:
+            pass
+
     live = _LiveDouble()
     view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
     attitude = _AttitudeDouble()
@@ -399,7 +402,7 @@ def test_customer_overview_splits_compact_state_and_runtime_data(app) -> None:
     ) == (1, 3, 1, 1)
 
 
-def test_customer_overview_does_not_mark_tx_on_when_array_is_offline(app) -> None:
+def test_customer_overview_keeps_tx_state_separate_from_array_health(app) -> None:
     live = _LiveDouble()
     live.products.feed(
         ServiceFastState(
@@ -415,9 +418,76 @@ def test_customer_overview_does_not_mark_tx_on_when_array_is_offline(app) -> Non
 
     view.refresh()
 
-    assert tr("Unavailable") in view._status_values["tx"].text()
-    assert view._status_values["tx"].property("status") == "warn"
+    assert tr("On") in view._status_values["tx"].text()
+    assert view._status_values["tx"].property("status") == "ok"
     assert tr("Offline") in view._component_details["tx_array"].text()
+
+
+def test_stale_success_values_render_as_warning(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceFastState(
+            1, 100, (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5),
+            0, 3, True, 3, 0, True,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ),
+        received_monotonic=10.0,
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    snapshot = live.products.snapshot(now_monotonic=12.0)
+    view._refresh_status(snapshot)
+
+    stale_marker = tr("{value} (stale)", value="VALUE").replace("VALUE", "")
+    for key in ("tracking", "lock", "navigation", "tx"):
+        assert view._status_values[key].property("status") != "ok"
+        assert stale_marker in view._status_values[key].text()
+
+
+def test_identity_only_keeps_legacy_snr_history(app, monkeypatch) -> None:
+    live = _LiveDouble()
+    live.profiles.apply_meta(MetaInfo(2, "0.0.130", "afd01", "AFD01-0001"))
+    live.profiles.apply_channel_define("afd01", 1, [_channel(8, "snr")])
+    monkeypatch.setattr(
+        "satellite_debug_tool.core.data.data_store.time.monotonic",
+        lambda: 10.0,
+    )
+    monkeypatch.setattr(
+        "satellite_debug_tool.core.product.legacy_v2.time.monotonic",
+        lambda: 10.1,
+    )
+    live.data.update(DataReport(500, [ChannelSample(8, 18.5)]))
+    live.products.feed(
+        ServiceIdentity(1, 500, 0x17, "AFD01", "AFD01-0001", "0.0.130", "", 2)
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    times, values = view._snr_curve.getData()
+    assert times.tolist() == pytest.approx([0.5])
+    assert values.tolist() == pytest.approx([18.5])
+
+
+def test_unknown_attitude_uses_unavailable_state(app) -> None:
+    class _AttitudeDouble:
+        def __init__(self) -> None:
+            self.unavailable = False
+
+        def set_attitude_unavailable(self) -> None:
+            self.unavailable = True
+
+        def try_load_device_model(self, _hw_type: str) -> None:
+            pass
+
+    live = _LiveDouble()
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+    attitude = _AttitudeDouble()
+    view._attitude = attitude
+
+    view.refresh()
+
+    assert attitude.unavailable
 
 
 def test_customer_overview_renders_link_detail_and_satellite_modes(app) -> None:

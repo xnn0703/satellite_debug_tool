@@ -251,7 +251,7 @@ class CustomerRfControlView(QWidget):
         service_ready = (
             self._device_online()
             and self._is_afd01()
-            and self._store.service_available
+            and self._store.telemetry_ready
         )
         self._service_state.setText(tr("AFD01 service online") if service_ready else tr("Waiting for AFD01 service"))
         self._service_state.setProperty("online", service_ready)

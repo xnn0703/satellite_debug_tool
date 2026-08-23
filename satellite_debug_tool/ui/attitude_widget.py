@@ -486,11 +486,6 @@ class AttitudeWidget(QWidget):
         self._loaded_model_hw = model_key
         return True
 
-    def set_channel_options(self, names: list[str]) -> None:
-        """旧 API：曾用于刷新 combo 候选项。2026-04-21 combo 已移除，
-        保留签名为 no-op，防止外部调用报错。"""
-        _ = names
-
     # 每个 axis 的匹配模式：(exact_names, contain_patterns)
     # exact：profile 里完全等于这些名字的优先命中；contain：小写 contains 兜底
     _AUTO_BIND_RULES = {
@@ -622,6 +617,8 @@ class AttitudeWidget(QWidget):
         self._roll_ch = roll_ch
         self._pitch_ch = pitch_ch
         self._yaw_ch = yaw_ch
+        self._body.setVisible(True)
+        self._nose_arrow.setVisible(self._loaded_model_hw is None)
 
         # Convert to radians for rotation matrix
         r = np.radians(roll)
@@ -667,6 +664,18 @@ class AttitudeWidget(QWidget):
         self._pitch_val_lbl.setText(f"{pitch:.1f}°")
         self._yaw_val_lbl.setText(f"{yaw:.1f}°")
         # 2026-04-21：combo 已删除，不再需要高亮样式
+
+    def set_attitude_unavailable(self) -> None:
+        """隐藏没有有效姿态依据的机体和波束。"""
+        self._body.setVisible(False)
+        self._nose_arrow.setVisible(False)
+        self._roll_val_lbl.setText("—")
+        self._pitch_val_lbl.setText("—")
+        self._yaw_val_lbl.setText("—")
+        empty = np.empty((0, 3), dtype=np.float32)
+        self._ant_line.setData(pos=empty)
+        self._trail_line.setData(pos=empty)
+        self._scan_trail.clear()
 
     def get_channel_selections(self) -> tuple[str, str, str]:
         """返回 (roll, pitch, yaw) 当前绑定的 DataStore key。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import math
 import socket
 import threading
@@ -43,6 +44,19 @@ class MotionPlatformConfig:
     pitch_sign: int = 1
     yaw_sign: int = 1
     calibration_id: str = ""
+    roll_max_step_deg: Optional[float] = None
+    pitch_max_step_deg: Optional[float] = None
+    yaw_max_step_deg: Optional[float] = None
+    roll_max_frequency_hz: Optional[float] = None
+    pitch_max_frequency_hz: Optional[float] = None
+    yaw_max_frequency_hz: Optional[float] = None
+    roll_max_velocity_deg_s: Optional[float] = None
+    pitch_max_velocity_deg_s: Optional[float] = None
+    yaw_max_velocity_deg_s: Optional[float] = None
+    roll_max_acceleration_deg_s2: Optional[float] = None
+    pitch_max_acceleration_deg_s2: Optional[float] = None
+    yaw_max_acceleration_deg_s2: Optional[float] = None
+    require_periodic_hard_limits: bool = False
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object]) -> "MotionPlatformConfig":
@@ -87,10 +101,10 @@ class MotionPlatformConfig:
 
     def validate(self) -> None:
         try:
-            socket.inet_aton(self.host)
-        except OSError as exc:
+            ipaddress.IPv4Address(self.host)
+        except ipaddress.AddressValueError as exc:
             raise MotionPlatformError("motion-platform host must be an IPv4 address") from exc
-        if not (1 <= self.port <= 65535):
+        if isinstance(self.port, bool) or not isinstance(self.port, int) or not (1 <= self.port <= 65535):
             raise MotionPlatformError("motion-platform port is out of range")
         for name, value in (
             ("roll_abs_limit_deg", self.roll_abs_limit_deg),
@@ -104,16 +118,51 @@ class MotionPlatformConfig:
             raise MotionPlatformError("Z limits must be finite")
         if self.z_min_mm > self.z_max_mm:
             raise MotionPlatformError("z_min_mm cannot exceed z_max_mm")
-        if self.minimum_duration_ms <= 0:
+        if (
+            isinstance(self.minimum_duration_ms, bool)
+            or not isinstance(self.minimum_duration_ms, int)
+            or self.minimum_duration_ms <= 0
+        ):
             raise MotionPlatformError("minimum_duration_ms must be positive")
         if any(sign not in (-1, 1) for sign in (self.roll_sign, self.pitch_sign, self.yaw_sign)):
             raise MotionPlatformError("axis signs must be -1 or 1")
+        for name, value in self._optional_limits().items():
+            if value is not None and (not math.isfinite(value) or value <= 0):
+                raise MotionPlatformError(f"{name} must be positive and finite")
         _validate_pose(self, self.center_pose)
         _validate_pose(self, self.reset_pose)
         if self.center_pose.z_mm != 100.0:
             raise MotionPlatformError("center pose Z must be 100 mm")
         if self.reset_pose.z_mm != 0.0:
             raise MotionPlatformError("reset pose Z must be 0 mm")
+
+    @property
+    def periodic_limits_complete(self) -> bool:
+        return all(
+            value is not None
+            for name, value in self._optional_limits().items()
+            if "frequency" in name or "velocity" in name or "acceleration" in name
+        )
+
+    def axis_step_limit(self, axis: str) -> float:
+        value = getattr(self, f"{axis}_max_step_deg", None)
+        return self.max_step_deg if value is None else float(value)
+
+    def _optional_limits(self) -> dict[str, Optional[float]]:
+        return {
+            "roll_max_step_deg": self.roll_max_step_deg,
+            "pitch_max_step_deg": self.pitch_max_step_deg,
+            "yaw_max_step_deg": self.yaw_max_step_deg,
+            "roll_max_frequency_hz": self.roll_max_frequency_hz,
+            "pitch_max_frequency_hz": self.pitch_max_frequency_hz,
+            "yaw_max_frequency_hz": self.yaw_max_frequency_hz,
+            "roll_max_velocity_deg_s": self.roll_max_velocity_deg_s,
+            "pitch_max_velocity_deg_s": self.pitch_max_velocity_deg_s,
+            "yaw_max_velocity_deg_s": self.yaw_max_velocity_deg_s,
+            "roll_max_acceleration_deg_s2": self.roll_max_acceleration_deg_s2,
+            "pitch_max_acceleration_deg_s2": self.pitch_max_acceleration_deg_s2,
+            "yaw_max_acceleration_deg_s2": self.yaw_max_acceleration_deg_s2,
+        }
 
 
 @dataclass(frozen=True)
@@ -133,6 +182,7 @@ class SineAxis:
     amplitude_deg: float
     frequency_hz: float
     phase_deg: float = 0.0
+    enabled: bool = True
 
     def validate(self) -> None:
         for name, value in (
@@ -142,6 +192,10 @@ class SineAxis:
         ):
             if not math.isfinite(value):
                 raise MotionPlatformError(f"trajectory {name} must be finite")
+        if not self.enabled:
+            return
+        if self.amplitude_deg <= 0:
+            raise MotionPlatformError("trajectory amplitude must be positive")
         if self.frequency_hz <= 0:
             raise MotionPlatformError("trajectory frequency must be positive")
 
@@ -178,6 +232,8 @@ class CombinedSineProfile:
         self.roll.validate()
         self.pitch.validate()
         self.yaw.validate()
+        if not any(axis.enabled for axis in (self.roll, self.pitch, self.yaw)):
+            raise MotionPlatformError("trajectory must enable at least one axis")
 
     def pose_at(self, elapsed_s: float) -> PlatformPose:
         self.validate()
@@ -255,6 +311,14 @@ class LingjingPlatformAdapter:
             return "center_not_confirmed"
         return "safe"
 
+    @property
+    def config(self) -> MotionPlatformConfig:
+        return self._config
+
+    @property
+    def last_pose(self) -> Optional[PlatformPose]:
+        return self._last_pose
+
     def confirm_preflight(
         self,
         calibration_id: str,
@@ -288,13 +352,15 @@ class LingjingPlatformAdapter:
         if int(duration_ms) < self._config.minimum_duration_ms:
             raise MotionPlatformError("A6T duration is shorter than the configured minimum")
         if enforce_step and self._last_pose is not None:
-            delta = max(
-                abs(pose.roll_deg - self._last_pose.roll_deg),
-                abs(pose.pitch_deg - self._last_pose.pitch_deg),
-                abs(pose.yaw_deg - self._last_pose.yaw_deg),
-            )
-            if delta > self._config.max_step_deg:
-                raise MotionPlatformError("A6T angular step exceeds the configured maximum")
+            for axis in ("roll", "pitch", "yaw"):
+                delta = abs(
+                    getattr(pose, f"{axis}_deg")
+                    - getattr(self._last_pose, f"{axis}_deg")
+                )
+                if delta > self._config.axis_step_limit(axis) + 1e-12:
+                    raise MotionPlatformError(
+                        f"A6T angular step for {axis} exceeds the configured maximum"
+                    )
         command_pose = PlatformPose(
             pose.roll_deg * self._config.roll_sign,
             pose.pitch_deg * self._config.pitch_sign,
@@ -378,6 +444,7 @@ class MotionTrajectoryRunner:
         on_send: Optional[Callable[[PlatformSendResult], None]] = None,
     ) -> TrajectoryRunStatistics:
         profile.validate()
+        validate_sine_profile(self._adapter.config, profile)
         stop = stop_event or threading.Event()
         period_ns = profile.sample_period_ms * 1_000_000
         intended = profile.sample_count
@@ -389,12 +456,15 @@ class MotionTrajectoryRunner:
         max_jitter_ns = 0
         max_interval_ns = 0
         previous_send_ns: Optional[int] = None
+        last_completion_ns: Optional[int] = None
 
         while index < intended and not stop.is_set():
             deadline_ns = start_ns + index * period_ns
             now_ns = self._clock_ns()
             if now_ns < deadline_ns:
                 self._sleep((deadline_ns - now_ns) / 1_000_000_000.0)
+                if stop.is_set():
+                    break
                 now_ns = self._clock_ns()
             due_index = min(intended - 1, max(index, (now_ns - start_ns) // period_ns))
             if due_index > index:
@@ -410,6 +480,9 @@ class MotionTrajectoryRunner:
             )
             if result.sent:
                 sent += 1
+                last_completion_ns = (
+                    result.monotonic_ns + profile.sample_period_ms * 1_000_000
+                )
             else:
                 failed += 1
             if previous_send_ns is not None:
@@ -422,6 +495,8 @@ class MotionTrajectoryRunner:
                 on_send(result)
             index += 1
 
+        self._wait_for_sent_command(last_completion_ns)
+
         coverage = sent / intended if intended else 0.0
         return TrajectoryRunStatistics(
             intended_points=intended,
@@ -433,6 +508,216 @@ class MotionTrajectoryRunner:
             coverage_ratio=coverage,
             stopped=stop.is_set(),
         )
+
+    def _wait_for_sent_command(self, completion_ns: Optional[int]) -> None:
+        if completion_ns is None:
+            return
+        remaining_ns = completion_ns - self._clock_ns()
+        if remaining_ns > 0:
+            self._sleep(remaining_ns / 1_000_000_000.0)
+
+
+@dataclass(frozen=True)
+class AbsoluteMoveStatistics:
+    intended_points: int
+    sent_points: int
+    failed_points: int
+    stopped: bool
+    final_pose: PlatformPose
+
+
+class AbsoluteMoveRunner:
+    """Split a logical absolute move into bounded A6T steps."""
+
+    def __init__(
+        self,
+        adapter: LingjingPlatformAdapter,
+        *,
+        clock_ns: Callable[[], int] = time.monotonic_ns,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._adapter = adapter
+        self._clock_ns = clock_ns
+        self._sleep = sleep
+
+    def run_axis(
+        self,
+        axis: str,
+        target_deg: float,
+        *,
+        total_duration_ms: int,
+        stop_event: Optional[threading.Event] = None,
+        on_send: Optional[Callable[[PlatformSendResult], None]] = None,
+    ) -> AbsoluteMoveStatistics:
+        if axis not in {"roll", "pitch", "yaw"}:
+            raise MotionPlatformError("absolute move axis must be roll, pitch, or yaw")
+        current = self._adapter.last_pose
+        if current is None:
+            raise MotionPlatformError("absolute move requires a confirmed logical pose")
+        values = {
+            "roll": current.roll_deg,
+            "pitch": current.pitch_deg,
+            "yaw": current.yaw_deg,
+        }
+        values[axis] = float(target_deg)
+        target = PlatformPose(
+            values["roll"],
+            values["pitch"],
+            values["yaw"],
+            current.x_mm,
+            current.y_mm,
+            current.z_mm,
+        )
+        return self.run_pose(
+            target,
+            total_duration_ms=total_duration_ms,
+            stop_event=stop_event,
+            on_send=on_send,
+        )
+
+    def run_pose(
+        self,
+        target: PlatformPose,
+        *,
+        total_duration_ms: int,
+        stop_event: Optional[threading.Event] = None,
+        on_send: Optional[Callable[[PlatformSendResult], None]] = None,
+    ) -> AbsoluteMoveStatistics:
+        current = self._adapter.last_pose
+        if current is None:
+            raise MotionPlatformError("absolute move requires a confirmed logical pose")
+        _validate_pose(self._adapter.config, target)
+        if isinstance(total_duration_ms, bool) or int(total_duration_ms) <= 0:
+            raise MotionPlatformError("absolute move duration must be positive")
+        ratios = [
+            abs(getattr(target, f"{axis}_deg") - getattr(current, f"{axis}_deg"))
+            / self._adapter.config.axis_step_limit(axis)
+            for axis in ("roll", "pitch", "yaw")
+        ]
+        point_count = max(1, int(math.ceil(max(ratios))))
+        minimum_total = point_count * self._adapter.config.minimum_duration_ms
+        if int(total_duration_ms) < minimum_total:
+            raise MotionPlatformError(
+                "absolute move duration is too short for the configured step limit"
+            )
+        durations = _split_integer_duration(int(total_duration_ms), point_count)
+        stop = stop_event or threading.Event()
+        sent = 0
+        failed = 0
+        start_ns = self._clock_ns()
+        elapsed_ms = 0
+        final_pose = current
+        last_completion_ns: Optional[int] = None
+        for index, duration_ms in enumerate(durations, start=1):
+            if stop.is_set():
+                break
+            deadline_ns = start_ns + elapsed_ms * 1_000_000
+            now_ns = self._clock_ns()
+            if now_ns < deadline_ns:
+                self._sleep((deadline_ns - now_ns) / 1_000_000_000.0)
+            if stop.is_set():
+                break
+            fraction = index / point_count
+            pose = PlatformPose(
+                roll_deg=current.roll_deg + (target.roll_deg - current.roll_deg) * fraction,
+                pitch_deg=current.pitch_deg + (target.pitch_deg - current.pitch_deg) * fraction,
+                yaw_deg=current.yaw_deg + (target.yaw_deg - current.yaw_deg) * fraction,
+                x_mm=current.x_mm + (target.x_mm - current.x_mm) * fraction,
+                y_mm=current.y_mm + (target.y_mm - current.y_mm) * fraction,
+                z_mm=current.z_mm + (target.z_mm - current.z_mm) * fraction,
+            )
+            result = self._adapter.send_pose(pose, duration_ms=duration_ms)
+            if result.sent:
+                sent += 1
+                final_pose = pose
+                last_completion_ns = (
+                    result.monotonic_ns + duration_ms * 1_000_000
+                )
+            else:
+                failed += 1
+            if on_send is not None:
+                on_send(result)
+            elapsed_ms += duration_ms
+        if last_completion_ns is not None:
+            remaining_ns = last_completion_ns - self._clock_ns()
+            if remaining_ns > 0:
+                self._sleep(remaining_ns / 1_000_000_000.0)
+        return AbsoluteMoveStatistics(
+            intended_points=point_count,
+            sent_points=sent,
+            failed_points=failed,
+            stopped=stop.is_set(),
+            final_pose=final_pose,
+        )
+
+
+def validate_sine_profile(
+    config: MotionPlatformConfig,
+    profile: CombinedSineProfile,
+) -> None:
+    profile.validate()
+    config.validate()
+    if profile.sample_period_ms < config.minimum_duration_ms:
+        raise MotionPlatformError("trajectory sample period is shorter than the A6T minimum")
+    if config.require_periodic_hard_limits and not config.periodic_limits_complete:
+        raise MotionPlatformError("periodic motion hard limits are incomplete")
+    if not config.periodic_limits_complete:
+        return
+    axes = {"roll": profile.roll, "pitch": profile.pitch, "yaw": profile.yaw}
+    for name, axis in axes.items():
+        if not axis.enabled:
+            continue
+        angle_limit = getattr(config, f"{name}_abs_limit_deg")
+        frequency_limit = getattr(config, f"{name}_max_frequency_hz")
+        velocity_limit = getattr(config, f"{name}_max_velocity_deg_s")
+        acceleration_limit = getattr(config, f"{name}_max_acceleration_deg_s2")
+        if axis.amplitude_deg > angle_limit + 1e-12:
+            raise MotionPlatformError(f"trajectory {name} amplitude exceeds the hard limit")
+        if axis.frequency_hz > float(frequency_limit) + 1e-12:
+            raise MotionPlatformError(f"trajectory {name} frequency exceeds the hard limit")
+        peak_velocity = 2.0 * math.pi * axis.amplitude_deg * axis.frequency_hz
+        if peak_velocity > float(velocity_limit) + 1e-12:
+            raise MotionPlatformError(f"trajectory {name} peak velocity exceeds the hard limit")
+        peak_acceleration = (
+            (2.0 * math.pi * axis.frequency_hz) ** 2 * axis.amplitude_deg
+        )
+        if peak_acceleration > float(acceleration_limit) + 1e-12:
+            raise MotionPlatformError(
+                f"trajectory {name} peak acceleration exceeds the hard limit"
+            )
+
+    sample_period_s = profile.sample_period_ms / 1000.0
+    for name, axis in axes.items():
+        if not axis.enabled:
+            continue
+        # Exact sine-step bound plus a conservative envelope-step bound. This
+        # keeps validation constant-time even for multi-hour fixture profiles.
+        sine_step = 2.0 * axis.amplitude_deg * abs(
+            math.sin(math.pi * axis.frequency_hz * sample_period_s)
+        )
+        envelope_step = axis.amplitude_deg * max(
+            _envelope_step_bound(sample_period_s, profile.ramp_in_s),
+            _envelope_step_bound(sample_period_s, profile.ramp_out_s),
+        )
+        if sine_step + envelope_step > config.axis_step_limit(name) + 1e-9:
+            raise MotionPlatformError(
+                f"trajectory {name} discrete step exceeds the hard limit"
+            )
+
+
+def _split_integer_duration(total_ms: int, count: int) -> list[int]:
+    base, remainder = divmod(total_ms, count)
+    return [base + (1 if index < remainder else 0) for index in range(count)]
+
+
+def _envelope_step_bound(sample_period_s: float, ramp_duration_s: float) -> float:
+    if ramp_duration_s <= 0.0:
+        return 0.0
+    phase_step = min(
+        math.pi / 2.0,
+        math.pi * sample_period_s / (2.0 * ramp_duration_s),
+    )
+    return abs(math.sin(phase_step))
 
 
 def serialize_a6(pose: PlatformPose) -> bytes:
@@ -509,6 +794,8 @@ def _validate_pose(config: MotionPlatformConfig, pose: PlatformPose) -> None:
 
 
 def _axis_value(axis: SineAxis, elapsed_s: float, envelope: float) -> float:
+    if not axis.enabled:
+        return 0.0
     phase = math.radians(axis.phase_deg)
     return axis.amplitude_deg * envelope * math.sin(
         2.0 * math.pi * axis.frequency_hz * elapsed_s + phase
@@ -516,6 +803,8 @@ def _axis_value(axis: SineAxis, elapsed_s: float, envelope: float) -> float:
 
 
 __all__ = [
+    "AbsoluteMoveRunner",
+    "AbsoluteMoveStatistics",
     "CombinedSineProfile",
     "LingjingPlatformAdapter",
     "MotionPlatformConfig",
@@ -527,4 +816,5 @@ __all__ = [
     "TrajectoryRunStatistics",
     "serialize_a6",
     "serialize_a6t",
+    "validate_sine_profile",
 ]

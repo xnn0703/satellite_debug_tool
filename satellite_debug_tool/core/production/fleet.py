@@ -460,10 +460,10 @@ class DeviceSession(QObject):
         self.last_seen_monotonic_ns = int(datagram.monotonic_ns)
         self.received_datagrams += 1
         self.received_bytes += len(datagram.data)
-        received_wallclock = datagram.wall_time_ns / 1_000_000_000.0
+        received_monotonic = datagram.monotonic_ns / 1_000_000_000.0
         identity_changed = False
         for item in records:
-            self.product_store.feed(item, received_wallclock=received_wallclock)
+            self.product_store.feed(item, received_monotonic=received_monotonic)
             if (
                 isinstance(item, ServiceFastState)
                 and item.valid_mask & (1 << 11)

@@ -94,7 +94,7 @@ def _is_running_from_install_dir(install_dir: Path) -> bool:
 def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
     """把 updater 复制到 OS 临时目录并重新启动。
 
-    若已不在 install_dir 内则 no-op。
+    updater 位于 install_dir 内且为冻结程序时执行搬迁并启动临时副本。
     """
     if not _is_running_from_install_dir(install_dir):
         return
@@ -118,8 +118,8 @@ def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
         log.info("self-relocate onefile: %s -> %s", src_exe, dst_exe)
         shutil.copy2(src_exe, dst_exe)
 
-    # 重启自己：保持原 argv，加 --no-relocate 防止无限递归
-    new_argv = [str(dst_exe)] + argv + ["--no-relocate"]
+    # 临时副本以明确的 relocated 状态启动。
+    new_argv = [str(dst_exe)] + argv + ["--relocated"]
     log.info(f"relaunch: {new_argv}")
     if sys.platform.startswith("win"):
         # DETACHED_PROCESS = 0x00000008
@@ -165,6 +165,7 @@ def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> None:
 # ---------- CLI ----------
 
 def main(argv: Optional[List[str]] = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="satellite_debug_tool updater")
     parser.add_argument("--pid", type=int, required=True,
                         help="PID of the main application to wait for")
@@ -180,15 +181,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Log file path")
     parser.add_argument("--wait-timeout", type=float, default=30.0,
                         help="Seconds to wait for the main process to exit")
-    parser.add_argument("--no-relocate", action="store_true",
-                        help="Internal: updater has already self-relocated")
-    args = parser.parse_args(argv)
+    parser.add_argument("--relocated", action="store_true",
+                        help="Internal: updater is running from its relocated runtime")
+    args = parser.parse_args(arguments)
 
     _setup_logging(args.log)
 
-    # 优先 self-relocate（如果在 install_dir 内运行）
-    if not args.no_relocate:
-        self_relocate_and_relaunch(args.install_dir, sys.argv[1:])
+    # install_dir 中的冻结 updater 先搬迁到临时运行目录。
+    if not args.relocated:
+        self_relocate_and_relaunch(args.install_dir, arguments)
 
     # 等主进程退出
     if not wait_for_pid(args.pid, args.wait_timeout):

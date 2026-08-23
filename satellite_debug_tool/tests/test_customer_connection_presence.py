@@ -10,7 +10,14 @@ from PySide6.QtWidgets import QApplication
 
 from satellite_debug_tool.core.comm import DeviceConnectionPhase
 from satellite_debug_tool.core.config import Settings
-from satellite_debug_tool.core.protocol import CmdType, build_frame
+from satellite_debug_tool.core.protocol import (
+    CmdType,
+    ServiceControlOp,
+    ServiceControlResponse,
+    ServiceFastState,
+    ServiceResultCode,
+    build_frame,
+)
 from satellite_debug_tool.ui.live_view import (
     DISCOVERY_SLOW_INTERVAL_MS,
     LiveView,
@@ -88,6 +95,61 @@ def test_product_discovery_continues_after_three_attempts(
 
     assert _subscription_count(worker.sent) == initial + 12
     assert view._product_subscribe_timer.interval() == DISCOVERY_SLOW_INTERVAL_MS
+    view._on_disconnected()
+
+
+def test_identity_does_not_confirm_product_subscription(
+    app, settings: Settings
+) -> None:
+    view, _worker = _connected_view(settings)
+
+    view._on_data_received(_identity())
+
+    assert view.product_store().service_available
+    assert not view.product_store().telemetry_ready
+    assert not view._product_subscription_confirmed
+    assert view._product_subscribe_timer.isActive()
+    view._on_disconnected()
+
+
+def test_exact_subscribe_response_confirms_product_subscription(
+    app, settings: Settings
+) -> None:
+    view, _worker = _connected_view(settings)
+    request_id = view._product_subscribe_pending_id
+    assert request_id is not None
+
+    view.product_store().feed(ServiceControlResponse(
+        1,
+        request_id,
+        ServiceControlOp.SUBSCRIBE,
+        ServiceResultCode.SUCCESS,
+        0,
+        0,
+        0.0,
+        0.0,
+        0,
+        0,
+        False,
+    ))
+
+    assert view._product_subscription_confirmed
+    assert not view._product_subscribe_timer.isActive()
+    view._on_disconnected()
+
+
+def test_fast_telemetry_confirms_product_subscription(
+    app, settings: Settings
+) -> None:
+    view, _worker = _connected_view(settings)
+
+    view.product_store().feed(ServiceFastState(
+        1, 1, 0, 0, 0, False, 0, 0, False,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ))
+
+    assert view._product_subscription_confirmed
+    assert not view._product_subscribe_timer.isActive()
     view._on_disconnected()
 
 

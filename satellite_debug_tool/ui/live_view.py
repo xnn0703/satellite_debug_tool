@@ -117,7 +117,6 @@ from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
 
 
 DEBUG_ACK_TIMEOUT_MS = 3000
-DEBUG_ACK_MAX_RETRIES = 0
 DEBUG_LATE_ACK_WINDOW_S = 3.0
 DEVICE_ACTIVITY_TIMEOUT_S = 3.0
 DISCOVERY_FAST_ATTEMPTS = 10
@@ -181,6 +180,8 @@ class LiveView(QWidget):
         self._product_store = ProductServiceStore(parent=self)
         self._product_request_id = 0
         self._product_subscribe_attempts = 0
+        self._product_subscribe_pending_id: int | None = None
+        self._product_subscription_confirmed = False
         self._product_subscribe_timer = QTimer(self)
         self._product_subscribe_timer.setInterval(DISCOVERY_FAST_INTERVAL_MS)
         self._product_subscribe_timer.timeout.connect(self._retry_product_subscription)
@@ -207,8 +208,6 @@ class LiveView(QWidget):
         self._active_hw_type: Optional[str] = None
         self._debug_enabled = False
         self._debug_pending_target: bool | None = None
-        self._debug_retry_count = 0
-        self._debug_data_seen_after_request = False
         self._debug_last_requested_target: bool | None = None
         self._debug_last_request_at = 0.0
         self._customer_auto_debug = False
@@ -229,6 +228,7 @@ class LiveView(QWidget):
         self._capture_timer.setSingleShot(True)
         self._capture_timer.timeout.connect(self._on_capture_timeout)
         self._product_store.control_response.connect(self._on_capture_response)
+        self._product_store.control_response.connect(self._on_product_control_response)
         self._frame_times: list[float] = []
         self._theme = "dark"
         self._is_dark_theme = True
@@ -987,7 +987,7 @@ class LiveView(QWidget):
             self._set_device_connection_phase(DeviceConnectionPhase.ONLINE)
             self._try_start_armed_customer_recording()
             self._try_restore_customer_profile()
-            if not self._product_store.service_available:
+            if not self._product_subscription_confirmed:
                 self._start_product_subscription()
             QTimer.singleShot(0, self.probe_orbit_capabilities)
 
@@ -1069,7 +1069,7 @@ class LiveView(QWidget):
         # 优先加载用户覆盖 STL，其次使用包内设备模型，均不可用时保留默认占位
         self._attitude.try_load_device_model(hw_type)
         self.profile_ready.emit(hw_type)
-        if hw_type.lower() == "afd01" and not self._product_store.service_available:
+        if hw_type.lower() == "afd01" and not self._product_subscription_confirmed:
             self._start_product_subscription()
         if self._customer_auto_debug and not self._debug_enabled and self._debug_pending_target is None:
             QTimer.singleShot(0, lambda: self.request_debug_mode(True))
@@ -1079,15 +1079,19 @@ class LiveView(QWidget):
     def _start_product_subscription(self) -> None:
         self._product_subscribe_timer.stop()
         self._product_subscribe_attempts = 0
+        self._product_subscribe_pending_id = None
+        self._product_subscription_confirmed = False
         self._product_subscribe_timer.setInterval(DISCOVERY_FAST_INTERVAL_MS)
         self._send_product_subscription()
-        if self._is_connected and not self._product_store.service_available:
+        if self._is_connected and not self._product_subscription_confirmed:
             self._product_subscribe_timer.start()
 
     def _send_product_subscription(self) -> None:
         self._product_subscribe_attempts += 1
         request_id = self.next_product_request_id()
         sent = self._send_control_frame(build_service_subscribe(request_id, 10))
+        if sent:
+            self._product_subscribe_pending_id = request_id
         trace_message(
             "PRODUCT_SERVICE",
             f"TX SUBSCRIBE request_id={request_id} fast_rate_hz=10 "
@@ -1098,10 +1102,8 @@ class LiveView(QWidget):
         if not self._is_connected:
             self._product_subscribe_timer.stop()
             return
-        if (
-            self._product_store.service_available
-            and self._device_connection_phase == DeviceConnectionPhase.ONLINE
-        ):
+        if self._product_subscription_confirmed or self._product_store.telemetry_ready:
+            self._product_subscription_confirmed = True
             self._product_subscribe_timer.stop()
             return
         self._send_product_subscription()
@@ -1109,10 +1111,8 @@ class LiveView(QWidget):
             self._product_subscribe_timer.setInterval(DISCOVERY_SLOW_INTERVAL_MS)
 
     def _on_product_store_updated(self) -> None:
-        if (
-            self._product_store.service_available
-            and self._device_connection_phase == DeviceConnectionPhase.ONLINE
-        ):
+        if self._product_store.telemetry_ready:
+            self._product_subscription_confirmed = True
             self._product_subscribe_timer.stop()
         self._try_start_armed_customer_recording()
         self._try_restore_customer_profile()
@@ -1359,6 +1359,8 @@ class LiveView(QWidget):
         self._handshake_timer.stop()
         self._product_subscribe_timer.stop()
         self._product_subscribe_attempts = 0
+        self._product_subscribe_pending_id = None
+        self._product_subscription_confirmed = False
         self._capture_timer.stop()
         self._capture_pending_id = None
         self._capture_pending_target = None
@@ -1395,23 +1397,15 @@ class LiveView(QWidget):
             return
         self.request_debug_mode(target)
 
-    def _send_debug_enable(self, target: bool, *, retry: bool = False) -> bool:
+    def _send_debug_enable(self, target: bool) -> bool:
         if self._worker is None:
             return False
         if self._worker.send(build_debug_enable_v2(target)):
             self._debug_pending_target = target
             self._debug_last_requested_target = target
             self._debug_last_request_at = time.monotonic()
-            self._debug_data_seen_after_request = False
-            if retry:
-                self._debug_retry_count += 1
-            else:
-                self._debug_retry_count = 0
             label = "ON" if target else "OFF"
-            _debug_ctrl_log(
-                f"send DEBUG_ENABLE target={1 if target else 0} "
-                f"retry={self._debug_retry_count}"
-            )
+            _debug_ctrl_log(f"send DEBUG_ENABLE target={1 if target else 0}")
             set_translatable_text("Debug: {state}...", self._debug_btn, state=label)
             self._debug_btn.setEnabled(False)
             self._debug_btn.setCheckable(True)
@@ -1472,26 +1466,7 @@ class LiveView(QWidget):
         target = self._debug_pending_target
         if target is None:
             return
-        if self._debug_retry_count < DEBUG_ACK_MAX_RETRIES:
-            label = "ON" if target else "OFF"
-            _debug_ctrl_log(
-                f"ack timeout target={1 if target else 0}, "
-                f"retry_next={self._debug_retry_count + 1}, "
-                f"data_seen={self._debug_data_seen_after_request}"
-            )
-            self.status_message.emit(
-                tr("Debug {state} was not confirmed; retrying", state=label),
-                2000,
-            )
-            self._send_debug_enable(target, retry=True)
-            return
-        _debug_ctrl_log(
-            f"ack timeout final target={1 if target else 0}, "
-            f"data_seen={self._debug_data_seen_after_request}"
-        )
-        if target and self._debug_data_seen_after_request:
-            self._finish_debug_request(True, source="data_report_timeout")
-            return
+        _debug_ctrl_log(f"ack timeout target={1 if target else 0}")
         self._finish_debug_request(False, "Debug command not confirmed")
 
     def _finish_debug_request(
@@ -1520,8 +1495,7 @@ class LiveView(QWidget):
         self._debug_enabled = target
         self._update_debug_button_enabled()
         _debug_ctrl_log(
-            f"debug state confirmed target={1 if target else 0}, "
-            f"source={source}, data_seen={self._debug_data_seen_after_request}"
+            f"debug state confirmed target={1 if target else 0}, source={source}"
         )
         if self._debug_enabled:
             hw = self._profile_store.current_hw_type()
@@ -1574,18 +1548,6 @@ class LiveView(QWidget):
                 self._handshake.feed(rec)
 
             if isinstance(rec, DataReport):
-                if self._debug_pending_target is not None and not self._debug_data_seen_after_request:
-                    pending_target = self._debug_pending_target
-                    self._debug_data_seen_after_request = True
-                    _debug_ctrl_log(
-                        f"rx first DATA_REPORT while pending target="
-                        f"{1 if pending_target else 0}, samples={len(rec.samples)}"
-                    )
-                    if pending_target:
-                        self._finish_debug_request(True, source="data_report")
-                elif self._debug_enabled and not self._debug_data_seen_after_request:
-                    self._debug_data_seen_after_request = True
-                    _debug_ctrl_log(f"rx first DATA_REPORT after debug on, samples={len(rec.samples)}")
                 self._data_store.update(rec)
                 self._frame_count += 1
                 self._frame_times.append(datetime.now().timestamp())
@@ -1628,14 +1590,6 @@ class LiveView(QWidget):
         hw = self._profile_store.current_hw_type()
         if hw is not None and self._is_connected and self._debug_enabled:
             self._state_store.expire_stale(hw, 3.5)
-        if hw is not None:
-            attitude_options = [
-                f"ch_{c.channel_id:02d}"
-                for c in self._profile_store.get_channels(hw)
-            ]
-        else:
-            attitude_options = channels
-        self._attitude.set_channel_options(attitude_options)
 
         existing_names = set(self._channel_panel.channel_names())
         channel_set = set(channels)
@@ -1835,6 +1789,26 @@ class LiveView(QWidget):
             self._customer_recording_path = None
             self._set_customer_recording_state(CustomerRecordingState.IDLE)
             self._restore_debug_after_capture()
+
+    def _on_product_control_response(self, response) -> None:
+        if (
+            self._product_subscribe_pending_id is None
+            or response.request_id != self._product_subscribe_pending_id
+            or response.operation != int(ServiceControlOp.SUBSCRIBE)
+        ):
+            return
+        self._product_subscribe_pending_id = None
+        try:
+            result = ServiceResultCode(response.result_code)
+        except ValueError:
+            result = ServiceResultCode.INTERNAL_ERROR
+        if result is ServiceResultCode.SUCCESS:
+            self._product_subscription_confirmed = True
+            self._product_subscribe_timer.stop()
+            trace_message(
+                "PRODUCT_SERVICE",
+                f"SUBSCRIBE confirmed request_id={response.request_id}",
+            )
 
     def _on_capture_timeout(self) -> None:
         target = self._capture_pending_target

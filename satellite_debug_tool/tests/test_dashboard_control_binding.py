@@ -167,10 +167,10 @@ def test_liveview_debug_click_trace(qapp, monkeypatch, capsys):
     assert "[DBG_UI " in output
     assert "CLICK DEBUG target=1 connected=1 pending=None" in output
     assert "[DBG_CTRL " in output
-    assert "send DEBUG_ENABLE target=1 retry=0" in output
+    assert "send DEBUG_ENABLE target=1" in output
 
 
-def test_liveview_debug_data_report_confirms_on(qapp):
+def test_liveview_debug_data_report_requires_exact_ack(qapp):
     from satellite_debug_tool.core.config import Settings
     from satellite_debug_tool.core.protocol import SubCmd
     from satellite_debug_tool.ui.live_view import LiveView
@@ -188,11 +188,9 @@ def test_liveview_debug_data_report_confirms_on(qapp):
 
     view._on_data_received(_data_report_frame())
 
-    assert view._debug_enabled is True
-    assert view._debug_pending_target is None
-    assert view._debug_btn.isEnabled() is True
-    from satellite_debug_tool.i18n import tr
-    assert view._debug_btn.text() == tr("Debug: {state}", state="ON")
+    assert view._debug_enabled is False
+    assert view._debug_pending_target is True
+    assert view._debug_btn.isEnabled() is False
 
 
 def test_liveview_debug_timeout_does_not_retry(qapp):

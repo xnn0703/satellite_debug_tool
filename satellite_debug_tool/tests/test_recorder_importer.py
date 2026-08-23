@@ -108,8 +108,9 @@ def _build_afd01_state_define_payload() -> bytes:
         ]),
         ("OWN", 0, [
             (0, neutral, "NONE"),
-            (1, info, "INTERNAL_ESKF"),
-            (2, info, "EXTERNAL_INS"),
+            (1, info, "EXTERNAL_INS"),
+            (2, neutral, "RESERVED"),
+            (3, info, "INTERNAL_ESKF"),
         ]),
         ("SUP", 0, [
             (0, info, "INTERNAL"),
@@ -166,7 +167,7 @@ def _build_afd01_state_define_payload() -> bytes:
             payload.extend(enum_bytes)
 
     assert len(states) == 21
-    assert len(payload) == 1159
+    assert len(payload) == 1170
     return bytes(payload)
 
 
@@ -269,13 +270,13 @@ class TestRecorderRoundTrip:
         assert new_store.get_channel("afd01", 0).name == "roll"
 
     @pytest.mark.parametrize("format_version", [SDB_VERSION_V2, SDB_VERSION_V3])
-    def test_afd01_1159_byte_state_define_round_trip(
+    def test_afd01_1170_byte_state_define_round_trip(
         self, tmp_path: Path, format_version: int
     ):
         payload = _build_afd01_state_define_payload()
         frame = build_frame(CmdType.STATE_DEFINE, payload)
-        assert len(payload) == 1159
-        assert len(frame) == 1168
+        assert len(payload) == 1170
+        assert len(frame) == 1179
 
         path = tmp_path / f"afd01-state-v{format_version}.sdb"
         recorder = DataRecorder(path, format_version=format_version)
@@ -292,6 +293,10 @@ class TestRecorderRoundTrip:
         assert len(records[0].states) == 21
         assert records[0].states[0].name == "TRACKING_MODE"
         assert records[0].states[-1].name == "EXIT"
+        assert [item.value for item in records[0].states[14].enums] == [0, 1, 2, 3]
+        assert [item.name for item in records[0].states[14].enums] == [
+            "NONE", "EXTERNAL_INS", "RESERVED", "INTERNAL_ESKF",
+        ]
         assert [item.value for item in records[0].states[10].enums] == [
             0, 1, 16, 17, 34, 50, 53, 55, 56,
         ]

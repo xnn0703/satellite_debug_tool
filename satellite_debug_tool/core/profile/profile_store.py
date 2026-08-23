@@ -35,6 +35,7 @@ from satellite_debug_tool.core.protocol import (
     SubCmd,
 )
 from .cache import ProfileCache, profile_from_dict, profile_to_dict
+from .capabilities import CapabilitySupport
 from .models import DeviceProfile
 from .semantics import (
     CONTROL_SUBCMD_SET_TRACE_MODE,
@@ -165,20 +166,27 @@ class ProfileStore(QObject):
         state = p.get_state(state_id)
         if state is None:
             return None
-        if state_id == 0 or infer_state_role(state.name) == "trace_mode":
+        if infer_state_role(state.name) == "trace_mode":
             return ControlBinding(
                 subcmd=CONTROL_SUBCMD_SET_TRACE_MODE,
                 value_from=CONTROL_VALUE_FROM_ENUM_VALUE,
             )
         return None
 
-    def has_capability(self, hw_type: str, name: str, default: bool = False) -> bool:
+    def capability_status(self, hw_type: str, name: str) -> CapabilitySupport:
+        """返回设备对 capability 的明确声明状态。"""
         p = self._profiles.get(hw_type)
         if p is None:
-            return default
-        if name in p.semantics.capabilities:
-            return bool(p.semantics.capabilities[name])
-        return default
+            return CapabilitySupport.UNKNOWN
+        if name not in p.semantics.capabilities:
+            return CapabilitySupport.UNKNOWN
+        if p.semantics.capabilities[name]:
+            return CapabilitySupport.SUPPORTED
+        return CapabilitySupport.UNSUPPORTED
+
+    def has_capability(self, hw_type: str, name: str) -> bool:
+        """用于非敏感展示功能的布尔便捷读取。"""
+        return self.capability_status(hw_type, name) is CapabilitySupport.SUPPORTED
 
     # ----- 写入：来自 FrameReceiverV2 下发 -----
 

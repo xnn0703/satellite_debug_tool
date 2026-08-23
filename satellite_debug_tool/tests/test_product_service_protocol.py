@@ -221,7 +221,7 @@ def test_service_store_distinguishes_external_ins_na_online_and_stale() -> None:
     store = ProductServiceStore()
     store.feed(
         ServiceNavigationSourceInfo(1, 100, 0x7F, 2, 1, 0, 0, 0, 0x01, 0),
-        received_wallclock=10.0,
+        received_monotonic=10.0,
     )
     store.feed(
         ServiceExternalInsDiagnostics(
@@ -249,9 +249,9 @@ def test_service_store_distinguishes_external_ins_na_online_and_stale() -> None:
             0,
             *([0.0] * 14),
         ),
-        received_wallclock=10.0,
+        received_monotonic=10.0,
     )
-    not_applicable = store.snapshot(now_wallclock=10.1)
+    not_applicable = store.snapshot(now_monotonic=10.1)
     assert not_applicable.navigation_sources.external_ins_supported.value is True
     assert not_applicable.navigation_sources.external_ins_configured.value is False
     assert not_applicable.navigation_sources.external_role_mask.value == 0
@@ -260,7 +260,7 @@ def test_service_store_distinguishes_external_ins_na_online_and_stale() -> None:
 
     store.feed(
         ServiceNavigationSourceInfo(1, 200, 0x7F, 3, 3, 3, 3, 0x07, 0x0F, 0),
-        received_wallclock=20.0,
+        received_monotonic=20.0,
     )
     configured = ServiceExternalInsDiagnostics(
         1,
@@ -300,15 +300,15 @@ def test_service_store_distinguishes_external_ins_na_online_and_stale() -> None:
         0.25,
         0.5,
     )
-    store.feed(configured, received_wallclock=20.0)
-    online = store.snapshot(now_wallclock=20.5)
+    store.feed(configured, received_monotonic=20.0)
+    online = store.snapshot(now_monotonic=20.5)
     assert online.navigation_sources.external_ins_source.value == NavigationSource.BYNAV
     assert online.navigation_sources.external_ins_configured.value is True
     assert online.external_ins.state.value == ExternalInsState.YAW_ALIGNED
     assert online.external_ins.online.value is True
     assert online.external_ins.inspvax_hz.value == pytest.approx(10.0)
 
-    stale = store.snapshot(now_wallclock=23.1)
+    stale = store.snapshot(now_monotonic=23.1)
     assert stale.external_ins.online.availability == Availability.STALE
     assert stale.external_ins.yaw_std_deg.availability == Availability.STALE
 
@@ -317,7 +317,7 @@ def test_service_store_overrides_legacy_and_marks_stale() -> None:
     store = ProductServiceStore()
     store.feed(
         ServiceIdentity(1, 10, 0x17, "afd01", "AFD01-A1B2", "0.0.130", "", 2),
-        received_wallclock=100.0,
+        received_monotonic=100.0,
     )
     store.feed(
         ServiceHardwareIdentity(
@@ -328,23 +328,23 @@ def test_service_store_overrides_legacy_and_marks_stale() -> None:
             bytes.fromhex("4A65A6999E4B"),
             1,
         ),
-        received_wallclock=100.0,
+        received_monotonic=100.0,
     )
     store.feed(
         ServiceFastState(1, 20, 0xFFF, 0, 3, True, 3, 3, False, 1, 2, 3, 4, 5, 6),
-        received_wallclock=100.0,
+        received_monotonic=100.0,
     )
     store.feed(
         ServiceLinkDetail(
             1, 20, 0x3F, True, 18250.0, 28050.0, 2, 0.0, 25544, ""
         ),
-        received_wallclock=100.0,
+        received_monotonic=100.0,
     )
     store.feed(
         ServiceRfLockStatus(1, 20, 0x07, 0x05),
-        received_wallclock=100.0,
+        received_monotonic=100.0,
     )
-    snapshot = store.snapshot(now_wallclock=100.5)
+    snapshot = store.snapshot(now_monotonic=100.5)
     assert snapshot.source == "product_service"
     assert snapshot.identity.serial_number.value == "AFD01-A1B2"
     assert snapshot.identity.device_uid.value == "123456789ABCDEF00BADBEEF"
@@ -361,11 +361,11 @@ def test_service_store_overrides_legacy_and_marks_stale() -> None:
     assert snapshot.operation.tx_pll_locked.value is False
     assert snapshot.operation.rx_pll_locked.value is True
 
-    stale = store.snapshot(now_wallclock=102.0)
+    stale = store.snapshot(now_monotonic=102.0)
     assert stale.operation.snr_db.value == 6
     assert stale.operation.snr_db.availability == Availability.STALE
     assert stale.operation.modem_online.availability == Availability.VALID
-    link_stale = store.snapshot(now_wallclock=104.0)
+    link_stale = store.snapshot(now_monotonic=104.0)
     assert link_stale.operation.modem_online.availability == Availability.STALE
 
 
@@ -373,16 +373,16 @@ def test_rf_lock_status_preserves_partial_and_stale_paths() -> None:
     store = ProductServiceStore()
     store.feed(
         ServiceRfLockStatus(1, 50, 0x01, 0x01),
-        received_wallclock=100.0,
+        received_monotonic=100.0,
     )
 
-    partial = store.snapshot(now_wallclock=100.1).operation
+    partial = store.snapshot(now_monotonic=100.1).operation
     assert partial.clock_pll_locked.value is True
     assert partial.clock_pll_locked.availability == Availability.VALID
     assert partial.tx_pll_locked.availability == Availability.UNSUPPORTED
     assert partial.rx_pll_locked.availability == Availability.UNSUPPORTED
 
-    stale = store.snapshot(now_wallclock=101.1).operation
+    stale = store.snapshot(now_monotonic=101.1).operation
     assert stale.clock_pll_locked.value is True
     assert stale.clock_pll_locked.availability == Availability.STALE
 
@@ -412,6 +412,42 @@ def test_unknown_control_mode_is_not_mapped_to_auto() -> None:
     store.feed(ServiceFastState(1, 20, 0x01, 7, 0, False, 0, 0, False, 0, 0, 0, 0, 0, 0))
 
     assert store.snapshot().operation.control_mode.value == ControlMode.UNKNOWN
+
+
+def test_fast_tx_state_remains_authoritative_after_partial_slow_state() -> None:
+    store = ProductServiceStore()
+    store.feed(
+        ServiceFastState(
+            1, 20, 1 << 5, 0, 0, False, 0, 0, True,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ),
+        received_monotonic=10.0,
+    )
+    store.feed(
+        ServiceSlowState(
+            1, 20, 1 << 0,
+            31.8, 0.0, 0.0, 0.0, 0.0, 0, 0, False,
+        ),
+        received_monotonic=10.0,
+    )
+
+    operation = store.snapshot(now_monotonic=10.1).operation
+
+    assert operation.tx_enabled.value is True
+    assert operation.tx_enabled.availability is Availability.VALID
+
+
+def test_slow_tx_initializes_state_until_fast_tx_field_arrives() -> None:
+    store = ProductServiceStore()
+    store.feed(
+        ServiceSlowState(
+            1, 20, 1 << 7,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, True,
+        ),
+        received_monotonic=10.0,
+    )
+
+    assert store.snapshot(now_monotonic=10.1).operation.tx_enabled.value is True
 
 
 def _fast_snr(timestamp: int, snr_db: float) -> ServiceFastState:

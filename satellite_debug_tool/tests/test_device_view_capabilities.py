@@ -16,7 +16,7 @@ from satellite_debug_tool.core.protocol import (
     RespCode,
     SubCmd,
 )
-from satellite_debug_tool.ui.device_view import DeviceView
+from satellite_debug_tool.ui.device_view import CapabilityUiState, DeviceView
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +55,7 @@ def test_esa01_without_capability_disables_parameters_and_ota(qapp):
     assert not view._factory_reset_btn.isEnabled()
     assert not view._ota_select_btn.isEnabled()
     assert worker.sent == []
-    assert "未声明支持参数管理" in view._para_status_label.text()
+    assert view._para_capability_state is CapabilityUiState.WAITING_PROFILE
     view.deleteLater()
 
 
@@ -72,6 +72,7 @@ def test_esa01_capability_enables_parameters_and_ota(qapp):
         capabilities=[
             ProfileSemanticCapabilityEntry("parameters", True),
             ProfileSemanticCapabilityEntry("ota", True),
+            ProfileSemanticCapabilityEntry("command_response_context", True),
         ],
     ))
 
@@ -91,7 +92,10 @@ def test_read_all_merges_with_pending_para_request(qapp):
     view._on_frame_received(MetaInfo(2, "fw", "esa01", "sn"))
     store.apply_profile_semantics("esa01", ProfileSemanticsReport(
         table_ver=1,
-        capabilities=[ProfileSemanticCapabilityEntry("parameters", True)],
+        capabilities=[
+            ProfileSemanticCapabilityEntry("parameters", True),
+            ProfileSemanticCapabilityEntry("command_response_context", True),
+        ],
     ))
 
     view._para_read_pending = True
@@ -102,7 +106,7 @@ def test_read_all_merges_with_pending_para_request(qapp):
     view.deleteLater()
 
 
-def test_afd01_keeps_legacy_default_enabled(qapp):
+def test_afd01_waits_for_explicit_capability_declaration(qapp):
     store = ProfileStore(cache=None)
     store.apply_meta(MetaInfo(2, "fw", "afd01", "sn"))
     view = DeviceView(profile_store=store)
@@ -110,9 +114,9 @@ def test_afd01_keeps_legacy_default_enabled(qapp):
     view.set_worker(FakeWorker())
     view._on_frame_received(MetaInfo(2, "fw", "afd01", "sn"))
 
-    assert view._read_all_btn.isEnabled()
-    assert view._factory_reset_btn.isEnabled()
-    assert view._ota_select_btn.isEnabled()
+    assert not view._read_all_btn.isEnabled()
+    assert not view._factory_reset_btn.isEnabled()
+    assert not view._ota_select_btn.isEnabled()
     view.deleteLater()
 
 
@@ -126,7 +130,10 @@ def test_para_set_success_requires_readback_confirmation(qapp):
     view._on_frame_received(MetaInfo(2, "fw", "esa01", "sn"))
     store.apply_profile_semantics("esa01", ProfileSemanticsReport(
         table_ver=1,
-        capabilities=[ProfileSemanticCapabilityEntry("parameters", True)],
+        capabilities=[
+            ProfileSemanticCapabilityEntry("parameters", True),
+            ProfileSemanticCapabilityEntry("command_response_context", True),
+        ],
     ))
     view._on_para_table_received(ParaTableReport(table_ver=1, params=[
         ParaEntry("modem_baud", int(ParaType.INT), 0, "921600"),
@@ -146,6 +153,10 @@ def test_para_set_success_requires_readback_confirmation(qapp):
     assert view._pending_request == "para_set"
     assert view._para_table.item(0, 4).text() != "✓ 成功"
 
+    view._on_command_response(CommandResponse(
+        int(RespCode.SUCCESS),
+        "PARA_SET=modem_baud",
+    ))
     view._run_para_set_verify_read()
     assert _frame_data(worker.sent[-1]) == bytes([SubCmd.REQUEST_PARA_TABLE])
 
@@ -177,7 +188,10 @@ def test_proactive_para_table_suppresses_auto_fallback(qapp):
     view._on_frame_received(MetaInfo(2, "fw", "esa01", "sn"))
     store.apply_profile_semantics("esa01", ProfileSemanticsReport(
         table_ver=1,
-        capabilities=[ProfileSemanticCapabilityEntry("parameters", True)],
+        capabilities=[
+            ProfileSemanticCapabilityEntry("parameters", True),
+            ProfileSemanticCapabilityEntry("command_response_context", True),
+        ],
     ))
 
     view._on_para_table_received(ParaTableReport(table_ver=1, params=[]))

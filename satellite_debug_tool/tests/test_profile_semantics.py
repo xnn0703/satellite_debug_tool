@@ -17,6 +17,7 @@ from satellite_debug_tool.core.profile import (
     CONTROL_VALUE_FROM_ENUM_VALUE,
     STATE_ROLE_TRACE_MODE,
     ChannelSemantic,
+    CapabilitySupport,
     ControlBinding,
     DeviceProfile,
     ProfileSemantics,
@@ -134,6 +135,8 @@ def test_profile_store_applies_wire_semantics_and_explicit_readonly_state():
     assert store.find_state_by_role("hw", STATE_ROLE_TRACE_MODE).state_id == 0
     assert store.has_capability("hw", "sample_rate") is True
     assert store.has_capability("hw", "ota") is False
+    assert store.capability_status("hw", "sample_rate") is CapabilitySupport.SUPPORTED
+    assert store.capability_status("hw", "ota") is CapabilitySupport.UNKNOWN
     # 显式声明了 trace_mode 但没有 control，不能再走旧 state_id==0 fallback。
     assert store.get_state_control_binding("hw", 0) is None
 
@@ -158,6 +161,18 @@ def test_explicit_control_binding_can_use_nonzero_state_id():
     assert binding is not None
     assert binding.subcmd == CONTROL_SUBCMD_SET_TRACE_MODE
     assert binding.value_from == CONTROL_VALUE_FROM_ENUM_VALUE
+
+
+def test_state_zero_requires_trace_mode_semantics():
+    store = ProfileStore()
+    store.apply_meta(MetaInfo(2, "fw", "third-party", "sn"))
+    store.apply_state_define(
+        "third-party",
+        1,
+        [StateDefEntry(0, 0, 0, "POWER_READY")],
+    )
+
+    assert store.get_state_control_binding("third-party", 0) is None
 
 
 def test_gnss_motion_role_name_fallback():

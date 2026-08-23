@@ -47,6 +47,7 @@ class Settings:
             "device_port": 4004,
             "local_port": 45679,
             "max_devices": 4,
+            "fixture_profile_id": "",
         },
         # M10 F1/F2：chart UX 持久化
         "chart": {

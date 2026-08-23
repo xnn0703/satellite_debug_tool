@@ -58,8 +58,8 @@ class LegacyV2Projector:
         self._states = state_store
         self._stale_after_s = float(stale_after_s)
 
-    def snapshot(self, *, now_wallclock: Optional[float] = None) -> ProductSnapshot:
-        now = time.time() if now_wallclock is None else float(now_wallclock)
+    def snapshot(self, *, now_monotonic: Optional[float] = None) -> ProductSnapshot:
+        now = time.monotonic() if now_monotonic is None else float(now_monotonic)
         hw = self._profiles.current_hw_type()
         if hw is None:
             return ProductSnapshot(source="legacy_v2")
@@ -146,7 +146,7 @@ class LegacyV2Projector:
         if buf is None:
             return ProductValue.stale()
         latest = buf.get_latest()
-        received = self._data.last_received_wallclock(entry.channel_id)
+        received = self._data.last_received_monotonic(entry.channel_id)
         if latest is None or received is None:
             return ProductValue.stale()
         timestamp, value = latest
@@ -161,7 +161,7 @@ class LegacyV2Projector:
         state = self._states.get(hw, entry.state_id)
         if state is None:
             return ProductValue.stale()
-        if now - state.last_received_wallclock > self._stale_after_s:
+        if now - state.last_received_monotonic > self._stale_after_s:
             return ProductValue.stale(state.value, state.last_change_ms)
         return ProductValue.valid(state.value, state.last_change_ms)
 
@@ -199,7 +199,13 @@ class LegacyV2Projector:
             return ProductValue.unsupported(), ProductValue.unsupported()
         entry = self._profiles.find_state_by_role(hw, STATE_ROLE_TRACE_MODE)
         name = self._enum_name(entry, raw.value).upper()
-        mode = ControlMode.MANUAL if name == "MANUAL" else ControlMode.AUTO
+        mode = {
+            "STANDBY": ControlMode.AUTO,
+            "SCAN_GLOBAL": ControlMode.AUTO,
+            "SCAN_WIDE": ControlMode.AUTO,
+            "LOCK": ControlMode.AUTO,
+            "MANUAL": ControlMode.MANUAL,
+        }.get(name, ControlMode.UNKNOWN)
         phase = {
             "STANDBY": TrackingPhase.STANDBY,
             "SCAN_GLOBAL": TrackingPhase.ACQUIRING,

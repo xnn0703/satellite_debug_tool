@@ -32,19 +32,12 @@ def _subcmd(frame: bytes) -> int:
 
 
 class TestStartSendsRequests:
-    def test_start_sends_only_base_requests(self, sender_sink):
+    def test_start_sends_meta_request_only(self, sender_sink):
         sent, send = sender_sink
         store = ProfileStore()
         hs = Handshake(store, send)
         hs.start()
-        assert len(sent) == 4
-        sub_cmds = [_subcmd(f) for f in sent]
-        assert sub_cmds == [
-            SubCmd.REQUEST_META_INFO,
-            SubCmd.REQUEST_CHANNEL_DEFINE,
-            SubCmd.REQUEST_STATE_DEFINE,
-            SubCmd.REQUEST_EVENT_DEFINE,
-        ]
+        assert [_subcmd(frame) for frame in sent] == [SubCmd.REQUEST_META_INFO]
 
     def test_meta_starts_independent_semantics_request(self, sender_sink):
         sent, send = sender_sink
@@ -55,7 +48,12 @@ class TestStartSendsRequests:
 
         hs.feed(MetaInfo(2, "fw", "esa01", "sn"))
 
-        assert [_subcmd(frame) for frame in sent] == [SubCmd.REQUEST_PROFILE_SEMANTICS]
+        assert [_subcmd(frame) for frame in sent] == [
+            SubCmd.REQUEST_CHANNEL_DEFINE,
+            SubCmd.REQUEST_STATE_DEFINE,
+            SubCmd.REQUEST_EVENT_DEFINE,
+            SubCmd.REQUEST_PROFILE_SEMANTICS,
+        ]
 
     def test_stop_disables(self, sender_sink):
         sent, send = sender_sink
@@ -150,6 +148,43 @@ class TestReadyTransition:
         # 此时 META 尚未到，store 里没 hw_type
         assert store.current_hw_type() is None
 
+    def test_cached_profile_cannot_capture_new_epoch_defines(self, sender_sink):
+        store = ProfileStore()
+        store.apply_meta(MetaInfo(2, "old-fw", "old-hw", "old-sn"))
+        sent, send = sender_sink
+        hs = Handshake(store, send)
+        hs.start()
+        _, ch, _, _ = self._build_records()
+
+        hs.feed(ch)
+
+        assert store.get_channels("old-hw") == []
+        assert not hs.is_ready
+
+    def test_changed_meta_starts_new_profile_epoch(self, sender_sink):
+        sent, send = sender_sink
+        store = ProfileStore()
+        hs = Handshake(store, send)
+        ready_fires: list[str] = []
+        hs.ready.connect(ready_fires.append)
+        hs.start()
+        meta, ch, st, ev = self._build_records()
+        for record in (meta, ch, st, ev):
+            hs.feed(record)
+        assert hs.is_ready
+
+        sent.clear()
+        hs.feed(MetaInfo(2, "new-fw", "new-hw", "new-sn"))
+
+        assert not hs.is_ready
+        assert [_subcmd(frame) for frame in sent] == [
+            SubCmd.REQUEST_CHANNEL_DEFINE,
+            SubCmd.REQUEST_STATE_DEFINE,
+            SubCmd.REQUEST_EVENT_DEFINE,
+            SubCmd.REQUEST_PROFILE_SEMANTICS,
+        ]
+        assert ready_fires == ["afd01"]
+
 
 class TestResendOnTimeout:
     def test_resend_only_missing(self, sender_sink):
@@ -161,16 +196,18 @@ class TestResendOnTimeout:
 
         # 接收 META
         hs.feed(MetaInfo(2, "fw", "afd01", "sn"))
-        # 还没收到三张 DEFINE，tick 100ms 后应重发 3 条
+        # META 后立即发送三张 DEFINE 和 semantics，超时后再重发三张 DEFINE。
         hs.tick(100)
-        assert len(sent) == 4
-        sub_cmds = sorted(_subcmd(f) for f in sent)
-        assert sub_cmds == sorted([
+        sub_cmds = [_subcmd(f) for f in sent]
+        assert sub_cmds == [
             SubCmd.REQUEST_CHANNEL_DEFINE,
             SubCmd.REQUEST_STATE_DEFINE,
             SubCmd.REQUEST_EVENT_DEFINE,
             SubCmd.REQUEST_PROFILE_SEMANTICS,
-        ])
+            SubCmd.REQUEST_CHANNEL_DEFINE,
+            SubCmd.REQUEST_STATE_DEFINE,
+            SubCmd.REQUEST_EVENT_DEFINE,
+        ]
 
     def test_no_resend_when_ready(self, sender_sink):
         sent, send = sender_sink
@@ -236,8 +273,7 @@ class TestResendOnTimeout:
         hs.define_timeout.connect(fires.append)
         hs.start()
         hs.tick(10)
-        # 所有都缺 → 4 类都 emit
-        assert sorted(fires) == sorted(["meta", "channel", "state", "event"])
+        assert fires == ["meta"]
 
 
 class TestHeartbeat:

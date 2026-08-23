@@ -76,8 +76,8 @@ def test_afd01_legacy_projection_maps_customer_runtime_without_fake_serial(monke
     profile = _afd_profile()
     data = DataStore(max_channels=64)
     states = StateStore()
-    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.time", lambda: 100.0)
-    monkeypatch.setattr("satellite_debug_tool.core.data.state_store.time.time", lambda: 100.0)
+    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("satellite_debug_tool.core.data.state_store.time.monotonic", lambda: 100.0)
     data.update(DataReport(1234, [
         ChannelSample(0, 1.0), ChannelSample(1, 2.0), ChannelSample(2, 3.0),
         ChannelSample(3, 120.0), ChannelSample(4, 35.0), ChannelSample(8, 17.5),
@@ -87,7 +87,7 @@ def test_afd01_legacy_projection_maps_customer_runtime_without_fake_serial(monke
         StateSample(0, 3), StateSample(1, 1), StateSample(2, 3), StateSample(12, 3),
     ]))
 
-    snap = LegacyV2Projector(profile, data, states).snapshot(now_wallclock=101.0)
+    snap = LegacyV2Projector(profile, data, states).snapshot(now_monotonic=101.0)
 
     assert snap.identity.model.value == "afd01"
     assert snap.identity.serial_number.availability == Availability.UNSUPPORTED
@@ -103,11 +103,11 @@ def test_projection_marks_supported_but_old_channel_stale(monkeypatch):
     profile = _afd_profile()
     data = DataStore(max_channels=64)
     states = StateStore()
-    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.time", lambda: 10.0)
+    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.monotonic", lambda: 10.0)
     data.update(DataReport(1, [ChannelSample(8, 0.0)]))
 
     snap = LegacyV2Projector(profile, data, states, stale_after_s=3.0).snapshot(
-        now_wallclock=14.0
+        now_monotonic=14.0
     )
 
     assert snap.operation.snr_db.value == 0.0
@@ -118,7 +118,7 @@ def test_legacy_history_uses_device_uptime_seconds_across_rollover(monkeypatch):
     profile = _afd_profile()
     data = DataStore(max_channels=64)
     states = StateStore()
-    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.time", lambda: 10.0)
+    monkeypatch.setattr("satellite_debug_tool.core.data.data_store.time.monotonic", lambda: 10.0)
     data.update(DataReport(0xFFFFFF00, [ChannelSample(8, 10.0)]))
     data.update(DataReport(0x00000100, [ChannelSample(8, 11.0)]))
 
@@ -128,3 +128,18 @@ def test_legacy_history_uses_device_uptime_seconds_across_rollover(monkeypatch):
 
     assert times.tolist() == pytest.approx([0xFFFFFF00 / 1000.0, 0x100000100 / 1000.0])
     assert values.tolist() == pytest.approx([10.0, 11.0])
+
+
+def test_unknown_trace_mode_stays_unknown(monkeypatch):
+    profile = _afd_profile()
+    data = DataStore(max_channels=64)
+    states = StateStore()
+    monkeypatch.setattr(
+        "satellite_debug_tool.core.data.state_store.time.monotonic",
+        lambda: 10.0,
+    )
+    states.update("afd01", StateReport(1, [StateSample(0, 99)]))
+
+    snapshot = LegacyV2Projector(profile, data, states).snapshot(now_monotonic=10.1)
+
+    assert snapshot.operation.control_mode.value == ControlMode.UNKNOWN

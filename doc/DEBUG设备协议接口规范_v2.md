@@ -252,7 +252,8 @@ state[N]:
 
 **注意**：状态字 ID 和含义由**下位机自定**，不同设备型号（afd01 / ufd45 / ...）可以有完全不同的状态字集合。上位机通过 `META_INFO.hw_type` 识别设备类型，按 DEFINE 表动态渲染 UI。附录 §8 给出 afd01 参考实现（**仅作示例，非协议强制**）。
 
-当前 AFD01 `STATE_DEFINE` 序列化后约 1159 字节，属于 1024 字节历史上限无法承载、但在
+当前 AFD01 `STATE_DEFINE` 序列化后为 1170 字节（包含完整 owner wire 枚举），属于 1024 字节
+历史上限无法承载、但在
 1536 字节上限内的典型 DEFINE 长帧；设备 profile 变化后仍必须以实际序列化长度校验。
 
 ### 5.7 `EVENT_DEFINE` (0x07) — 事件定义表
@@ -931,7 +932,7 @@ Device -> COMMAND_RESPONSE(code=0, msg="OK")
 | GNSS_SAT_REPORT       | 约 1 Hz | 最大 663 B/片，最多 2 片 | 最大约 1.3 KB/s |
 | GNSS_SIGNAL_REPORT    | 约 1 Hz | 最大 791 B/片，最多 2 片 | 最大约 1.6 KB/s |
 | CHANNEL_DEFINE（AFD01 31ch） | 0.2 Hz | 约 774 B | 约 0.15 KB/s |
-| STATE_DEFINE（AFD01） | 0.2 Hz | 约 1159 B | 约 0.23 KB/s |
+| STATE_DEFINE（AFD01） | 0.2 Hz | 1170 B | 约 0.23 KB/s |
 | EVENT_DEFINE | 0.2 Hz | 约 500 B | 约 0.10 KB/s |
 | **合计（同时上报两类接收机数据的典型上界；不含按需 OTA/Orbit 上传）** | | | **~13.5 KB/s** |
 

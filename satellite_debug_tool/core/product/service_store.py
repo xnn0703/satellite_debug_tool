@@ -142,6 +142,15 @@ class ProductServiceStore(QObject):
         )
 
     @property
+    def telemetry_ready(self) -> bool:
+        """快速遥测已经到达，可作为订阅生效证据。"""
+        return self._fast is not None
+
+    @property
+    def has_snr_stream(self) -> bool:
+        return bool(self._snr_history)
+
+    @property
     def capabilities_record(self) -> Optional[ServiceCapabilities]:
         return self._capabilities
 
@@ -165,8 +174,12 @@ class ProductServiceStore(QObject):
         self._snr_timestamp.reset()
         self.updated.emit()
 
-    def feed(self, record, *, received_wallclock: Optional[float] = None) -> bool:
-        received = time.time() if received_wallclock is None else float(received_wallclock)
+    def feed(self, record, *, received_monotonic: Optional[float] = None) -> bool:
+        received = (
+            time.monotonic()
+            if received_monotonic is None
+            else float(received_monotonic)
+        )
         key = ""
         if isinstance(record, ServiceIdentity):
             self._identity = record
@@ -218,10 +231,10 @@ class ProductServiceStore(QObject):
         self,
         fallback: Optional[ProductSnapshot] = None,
         *,
-        now_wallclock: Optional[float] = None,
+        now_monotonic: Optional[float] = None,
     ) -> ProductSnapshot:
         base = fallback or ProductSnapshot()
-        now = time.time() if now_wallclock is None else float(now_wallclock)
+        now = time.monotonic() if now_monotonic is None else float(now_monotonic)
         identity = self._identity_snapshot(base.identity)
         operation = self._operation_snapshot(base.operation, now)
         converter, tx_array, rx_array = self._component_snapshot(base, now)
@@ -327,6 +340,9 @@ class ProductServiceStore(QObject):
         slow = self._slow
         if slow is not None:
             stale = self._is_stale("slow", now, 3.0)
+            slow_tx = self._dynamic(
+                slow.valid_mask, 7, slow.tx_enabled, slow.timestamp, stale
+            )
             operation = replace(
                 operation,
                 latitude_deg=self._dynamic(slow.valid_mask, 0, slow.latitude_deg, slow.timestamp, stale),
@@ -344,8 +360,10 @@ class ProductServiceStore(QObject):
                 tx_polarization=self._dynamic(
                     slow.valid_mask, 6, slow.tx_polarization, slow.timestamp, stale
                 ),
-                tx_enabled=self._dynamic(
-                    slow.valid_mask, 7, slow.tx_enabled, slow.timestamp, stale
+                tx_enabled=(
+                    slow_tx
+                    if fast is None or not (fast.valid_mask & (1 << 5))
+                    else operation.tx_enabled
                 ),
             )
         link = self._link_detail

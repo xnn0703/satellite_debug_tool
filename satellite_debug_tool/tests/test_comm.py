@@ -3,11 +3,6 @@ from unittest.mock import Mock, patch
 from satellite_debug_tool.core.comm.base_worker import BaseWorker
 from satellite_debug_tool.core.comm.serial_worker import SerialWorker
 from satellite_debug_tool.core.comm.udp_worker import UdpWorker
-from satellite_debug_tool.core.protocol import build_frame
-
-
-def _oversize_header() -> bytes:
-    return bytes((0xAA, 0x55, 0x0D, 0x11)) + (1537).to_bytes(2, "little")
 
 
 class TestBaseWorker:
@@ -59,11 +54,9 @@ class TestSerialWorker:
         worker.disconnect()
         assert worker._running is False
 
-    def test_receive_max_frame_and_recover_after_1537_byte_header(self):
+    def test_receive_emits_the_exact_raw_read_chunk(self):
         worker = SerialWorker()
-        maximum = build_frame(0x11, b"\xA5" * 1536)
-        recovered = build_frame(0x11, b"recovered")
-        payload = maximum + _oversize_header() + recovered
+        payload = b"serial-noise\xAA\x55partial-frame"
 
         class ReadOnceSerial:
             is_open = True
@@ -83,7 +76,7 @@ class TestSerialWorker:
 
         worker.run()
 
-        assert received == [maximum, recovered]
+        assert received == [payload]
 
 
 class TestUdpWorker:
@@ -118,14 +111,14 @@ class TestUdpWorker:
         assert worker._running is False
         assert worker._sock is None
 
-    def test_receive_max_frame_and_recover_after_1537_byte_header(self):
+    def test_receive_emits_the_exact_raw_datagram(self):
         worker = UdpWorker()
-        maximum = build_frame(0x11, b"\xA5" * 1536)
-        recovered = build_frame(0x11, b"recovered")
-        payload = maximum + _oversize_header() + recovered
+        payload = b"udp-noise\xAA\x55partial-frame"
+        receive_sizes: list[int] = []
 
         class ReceiveOnceSocket:
-            def recvfrom(self, _size: int):
+            def recvfrom(self, size: int):
+                receive_sizes.append(size)
                 worker._running = False
                 return payload, ("192.168.1.12", 4004)
 
@@ -136,7 +129,52 @@ class TestUdpWorker:
 
         worker.run()
 
-        assert received == [maximum, recovered]
+        assert received == [payload]
+        assert receive_sizes == [65535]
+
+    def test_receive_rejects_datagrams_from_other_endpoint(self):
+        worker = UdpWorker()
+        accepted = b"configured-device"
+        calls = iter(
+            (
+                (b"other-device", ("192.168.1.99", 4004)),
+                (accepted, ("192.168.1.12", 4004)),
+            )
+        )
+
+        class ReceiveSocket:
+            def recvfrom(self, _size: int):
+                data, endpoint = next(calls)
+                if data is accepted:
+                    worker._running = False
+                return data, endpoint
+
+        received: list[bytes] = []
+        worker._sock = ReceiveSocket()
+        worker._running = True
+        worker.data_received.connect(received.append)
+
+        worker.run()
+
+        assert received == [accepted]
+        assert worker.rejected_datagram_count == 1
+
+    def test_deliberate_socket_close_does_not_emit_read_error(self):
+        worker = UdpWorker()
+
+        class ClosedSocket:
+            def recvfrom(self, _size: int):
+                worker._running = False
+                raise OSError("socket closed")
+
+        errors: list[str] = []
+        worker._sock = ClosedSocket()
+        worker._running = True
+        worker.error.connect(errors.append)
+
+        worker.run()
+
+        assert errors == []
 
 
 class TestUdpDefaultConfig:

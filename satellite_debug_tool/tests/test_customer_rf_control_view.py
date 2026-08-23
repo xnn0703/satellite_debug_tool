@@ -100,6 +100,25 @@ def test_manual_controls_wait_for_manual_readback(app) -> None:
     assert view._rx_polar.model().item(3).isEnabled()
 
 
+def test_identity_and_capabilities_do_not_claim_control_service_online(app) -> None:
+    live = _LiveDouble()
+    live._products.feed(
+        ServiceIdentity(1, 1, 0x17, "AFD01", "AFD01-TEST", "0.0.130", "", 2)
+    )
+    live._products.feed(
+        ServiceCapabilities(
+            1, 1, 0xFF, 17700.0, 21200.0, 27500.0, 31000.0, 0x0C, 0x03, 0x01
+        )
+    )
+
+    view = CustomerRfControlView(live)
+
+    assert view._service_state.text() == "等待 AFD01 服务"
+    assert not view._service_state.property("online")
+    assert not view._auto_btn.isEnabled()
+    assert not view._manual_btn.isEnabled()
+
+
 def test_mode_request_requires_matching_response_and_readback(app) -> None:
     live = _LiveDouble()
     _seed_service(live, manual=False)

@@ -35,7 +35,7 @@ class DataStore:
         self._max_channels = max_channels
         self._buffer_capacity = buffer_capacity
         self._buffers: Dict[str, ChannelBuffer] = {}
-        self._last_received_wallclock: Dict[str, float] = {}
+        self._last_received_monotonic: Dict[str, float] = {}
         self._frame_count = 0
 
     # ---- 写入 ----
@@ -43,7 +43,7 @@ class DataStore:
     def update(self, report: DataReport) -> None:
         """将一帧 DATA_REPORT 的采样写入对应 channel buffer。"""
         self._frame_count += 1
-        now = time.time()
+        now = time.monotonic()
         for sample in report.samples[: self._max_channels]:
             key = channel_key(sample.channel_id)
             buf = self._buffers.get(key)
@@ -51,7 +51,7 @@ class DataStore:
                 buf = ChannelBuffer(key, self._buffer_capacity)
                 self._buffers[key] = buf
             buf.append(report.timestamp, sample.value)
-            self._last_received_wallclock[key] = now
+            self._last_received_monotonic[key] = now
 
     # ---- 读取 ----
 
@@ -62,9 +62,9 @@ class DataStore:
     def get_channel_by_id(self, channel_id: int) -> ChannelBuffer | None:
         return self._buffers.get(channel_key(channel_id))
 
-    def last_received_wallclock(self, channel_id: int) -> Optional[float]:
-        """返回该通道最近一次由主机接收的 wall clock 秒数。"""
-        return self._last_received_wallclock.get(channel_key(channel_id))
+    def last_received_monotonic(self, channel_id: int) -> Optional[float]:
+        """返回该通道最近一次由主机接收的单调时钟秒数。"""
+        return self._last_received_monotonic.get(channel_key(channel_id))
 
     def get_all_channels(self) -> List[str]:
         """返回当前所有 channel 的内部 key 列表（已按加入顺序）。"""
@@ -74,7 +74,7 @@ class DataStore:
 
     def clear(self) -> None:
         self._buffers.clear()
-        self._last_received_wallclock.clear()
+        self._last_received_monotonic.clear()
         self._frame_count = 0
 
     @property
