@@ -1,5 +1,12 @@
 """Production test-station domain services."""
 
+from .coordinators import (
+    BatchCoordinator,
+    FixtureSessionContext,
+    FixtureSessionCoordinator,
+    FixtureSessionState,
+)
+
 from .fixtures import (
     FixtureAdapter,
     FixtureCoordinator,
@@ -115,6 +122,7 @@ __all__ = [
     "AttitudeComparison",
     "AttemptPhase",
     "AttemptStatus",
+    "BatchCoordinator",
     "BatchStatus",
     "CombinedSineProfile",
     "CALIBRATION_SEQUENCE",
@@ -148,9 +156,12 @@ __all__ = [
     "FixtureProfileError",
     "FixtureProfileStore",
     "FixtureSessionConclusion",
+    "FixtureSessionContext",
+    "FixtureSessionCoordinator",
     "FixtureSessionError",
     "FixtureSessionRecorder",
     "FixtureSessionResult",
+    "FixtureSessionState",
     "GwInstekPswAdapter",
     "LingjingPlatformAdapter",
     "MotionPlatformConfig",

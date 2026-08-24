@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Optional
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -22,40 +21,13 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.product import Availability, ControlMode, ProductSnapshot
-from satellite_debug_tool.core.protocol import (
-    ServiceControlOp,
-    ServiceControlResponse,
-    ServiceResultCode,
-    build_service_apply_rf,
-    build_service_set_control_mode,
-    build_service_set_tx_enable,
+from satellite_debug_tool.core.session import (
+    ProductControlController,
+    ProductControlStatus,
 )
-from satellite_debug_tool.i18n import register_translatable, tr
+from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import styles as S
-
-
-@dataclass
-class _PendingControl:
-    request_id: int
-    operation: ServiceControlOp
-    expected: Any
-    response_received: bool = False
-
-
-def _result_text(result: ServiceResultCode) -> str:
-    if result == ServiceResultCode.INVALID_REQUEST:
-        return tr("Invalid request")
-    if result == ServiceResultCode.OUT_OF_RANGE:
-        return tr("Value outside the device range")
-    if result == ServiceResultCode.STATE_NOT_ALLOWED:
-        return tr("Operation is not allowed in the current mode")
-    if result == ServiceResultCode.NOT_SUPPORTED:
-        return tr("Operation is not supported by this firmware")
-    if result == ServiceResultCode.BUSY:
-        return tr("Device is busy")
-    if result == ServiceResultCode.INTERNAL_ERROR:
-        return tr("Device internal error")
-    return tr("Device rejected the command")
+from satellite_debug_tool.ui.semantic_style import set_semantic_property
 
 
 class CustomerRfControlView(QWidget):
@@ -67,16 +39,17 @@ class CustomerRfControlView(QWidget):
         super().__init__(parent)
         self._live = live_view
         self._store = live_view.product_store()
+        self._controller = ProductControlController(
+            live_view.session_core(),
+            parent=self,
+        )
         self._theme = "dark"
-        self._pending: Optional[_PendingControl] = None
         self._rf_dirty = False
         self._last_snapshot = ProductSnapshot()
-        self._timeout = QTimer(self)
-        self._timeout.setSingleShot(True)
-        self._timeout.timeout.connect(self._on_timeout)
         self._build_ui()
         self._store.updated.connect(self._on_store_updated)
-        self._store.control_response.connect(self._on_control_response)
+        self._controller.pending_changed.connect(lambda _pending: self.refresh())
+        self._controller.status_changed.connect(self._on_control_status)
         self._live.connection_state_changed.connect(lambda _connected: self.refresh())
         phase_signal = getattr(
             self._live, "device_connection_phase_changed", None
@@ -85,6 +58,10 @@ class CustomerRfControlView(QWidget):
             phase_signal.connect(lambda _phase: self.refresh())
         self.refresh()
         register_translatable(self)
+
+    @property
+    def _pending(self):
+        return self._controller.pending
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -235,7 +212,6 @@ class CustomerRfControlView(QWidget):
 
     def _on_store_updated(self) -> None:
         self.refresh()
-        self._check_readback()
 
     def _is_afd01(self) -> bool:
         hw_type = self._live.profile_store().current_hw_type()
@@ -254,8 +230,7 @@ class CustomerRfControlView(QWidget):
             and self._store.telemetry_ready
         )
         self._service_state.setText(tr("AFD01 service online") if service_ready else tr("Waiting for AFD01 service"))
-        self._service_state.setProperty("online", service_ready)
-        self._repolish(self._service_state)
+        set_semantic_property(self._service_state, "online", service_ready)
 
         op = snapshot.operation
         mode_valid = op.control_mode.availability == Availability.VALID and op.control_mode.value is not None
@@ -269,7 +244,7 @@ class CustomerRfControlView(QWidget):
         }.get(actual_mode, tr("Device readback unavailable"))
         self._mode_readback.setText(mode_text)
 
-        pending = self._pending is not None
+        pending = self._controller.pending is not None
         mode_controls = service_ready and mode_valid and not pending
         self._auto_btn.setEnabled(mode_controls)
         self._manual_btn.setEnabled(mode_controls)
@@ -395,25 +370,23 @@ class CustomerRfControlView(QWidget):
         }.get(value, "—")
 
     def _request_mode(self, target: ControlMode) -> None:
-        if self._pending is not None or target == self._last_snapshot.operation.control_mode.value:
+        if (
+            self._controller.pending is not None
+            or target == self._last_snapshot.operation.control_mode.value
+        ):
             self.refresh()
             return
-        request_id = self._live.next_product_request_id()
-        frame = build_service_set_control_mode(request_id, 1 if target == ControlMode.MANUAL else 0)
-        self._begin_request(request_id, ServiceControlOp.SET_CONTROL_MODE, target, frame)
+        self._controller.request_control_mode(target)
 
     def _request_rf(self) -> None:
-        if self._pending is not None:
+        if self._controller.pending is not None:
             return
-        expected = (
+        self._controller.request_rf(
             self._rx_freq.value(),
             self._tx_freq.value(),
             int(self._rx_polar.currentData()),
             int(self._tx_polar.currentData()),
         )
-        request_id = self._live.next_product_request_id()
-        frame = build_service_apply_rf(request_id, *expected)
-        self._begin_request(request_id, ServiceControlOp.APPLY_RF, expected, frame)
 
     def _request_tx(self, checked: bool) -> None:
         actual = bool(self._last_snapshot.operation.tx_enabled.value)
@@ -431,87 +404,46 @@ class CustomerRfControlView(QWidget):
                 with QSignalBlocker(self._tx_enable):
                     self._tx_enable.setChecked(actual)
                 return
-        request_id = self._live.next_product_request_id()
-        frame = build_service_set_tx_enable(request_id, checked)
-        self._begin_request(request_id, ServiceControlOp.SET_TX_ENABLE, bool(checked), frame)
+        self._controller.request_tx_enable(checked)
 
-    def _begin_request(self, request_id: int, operation: ServiceControlOp, expected: Any, frame: bytes) -> None:
-        self._pending = _PendingControl(request_id, operation, expected)
-        if not self._live.send_product_frame(frame):
-            self._pending = None
-            self._transaction_state.setText(tr("Command could not be sent"))
-            self.refresh()
-            return
-        self._transaction_state.setText(tr("Waiting for device response (request {request_id})", request_id=request_id))
-        self._timeout.start(3000)
-        self.refresh()
-
-    def _on_control_response(self, response: ServiceControlResponse) -> None:
-        pending = self._pending
-        if pending is None or response.request_id != pending.request_id or response.operation != int(pending.operation):
-            return
-        try:
-            result = ServiceResultCode(response.result_code)
-        except ValueError:
-            result = ServiceResultCode.INTERNAL_ERROR
-        if result != ServiceResultCode.SUCCESS:
-            self._finish_request(False, _result_text(result))
-            return
-        pending.response_received = True
-        self._transaction_state.setText(tr("Command accepted; waiting for applied-value readback"))
-        self._timeout.start(5000)
-        self._check_readback()
-
-    def _check_readback(self) -> None:
-        pending = self._pending
-        if pending is None or not pending.response_received:
-            return
-        op = self._store.snapshot().operation
-        matched = False
-        if pending.operation == ServiceControlOp.SET_CONTROL_MODE:
-            matched = op.control_mode.availability == Availability.VALID and op.control_mode.value == pending.expected
-        elif pending.operation == ServiceControlOp.APPLY_RF:
-            rx, tx, rx_pol, tx_pol = pending.expected
-            matched = (
-                op.rx_frequency_mhz.availability == Availability.VALID
-                and op.tx_frequency_mhz.availability == Availability.VALID
-                and op.rx_polarization.availability == Availability.VALID
-                and op.tx_polarization.availability == Availability.VALID
-                and abs(float(op.rx_frequency_mhz.value) - rx) <= 0.001
-                and abs(float(op.tx_frequency_mhz.value) - tx) <= 0.001
-                and int(op.rx_polarization.value) == rx_pol
-                and int(op.tx_polarization.value) == tx_pol
-            )
-        elif pending.operation == ServiceControlOp.SET_TX_ENABLE:
-            matched = op.tx_enabled.availability == Availability.VALID and bool(op.tx_enabled.value) == pending.expected
-        if matched:
-            self._rf_dirty = False
-            self._finish_request(True, tr("Applied values confirmed by device"))
-
-    def _on_timeout(self) -> None:
-        pending = self._pending
-        if pending is None:
-            return
-        detail = (
-            tr("Applied-value readback timed out")
-            if pending.response_received
-            else tr("Device response timed out")
-        )
-        self._finish_request(False, detail)
-
-    def _finish_request(self, ok: bool, detail: str) -> None:
-        self._timeout.stop()
-        self._pending = None
+    def _on_control_status(
+        self,
+        status: ProductControlStatus,
+        values: dict[str, Any],
+    ) -> None:
+        messages = {
+            ProductControlStatus.IDLE: tr_source("No pending operation"),
+            ProductControlStatus.SEND_FAILED: tr_source("Command could not be sent"),
+            ProductControlStatus.WAITING_RESPONSE: tr_source("Waiting for device response (request {request_id})"),
+            ProductControlStatus.WAITING_READBACK: tr_source("Command accepted; waiting for applied-value readback"),
+            ProductControlStatus.APPLIED: tr_source("Applied values confirmed by device"),
+            ProductControlStatus.INVALID_REQUEST: tr_source("Invalid request"),
+            ProductControlStatus.OUT_OF_RANGE: tr_source("Value outside the device range"),
+            ProductControlStatus.STATE_NOT_ALLOWED: tr_source("Operation is not allowed in the current mode"),
+            ProductControlStatus.NOT_SUPPORTED: tr_source("Operation is not supported by this firmware"),
+            ProductControlStatus.BUSY: tr_source("Device is busy"),
+            ProductControlStatus.INTERNAL_ERROR: tr_source("Device internal error"),
+            ProductControlStatus.RESPONSE_TIMEOUT: tr_source("Device response timed out"),
+            ProductControlStatus.READBACK_TIMEOUT: tr_source("Applied-value readback timed out"),
+        }
+        source = messages[status]
+        detail = tr(source, **values)
         self._transaction_state.setText(detail)
-        self._transaction_state.setProperty("result", "ok" if ok else "error")
-        self._repolish(self._transaction_state)
-        self.status_message.emit(detail, 3500)
+        if status == ProductControlStatus.APPLIED:
+            self._rf_dirty = False
+        ok = status == ProductControlStatus.APPLIED
+        pending = status in {
+            ProductControlStatus.WAITING_RESPONSE,
+            ProductControlStatus.WAITING_READBACK,
+        }
+        set_semantic_property(
+            self._transaction_state,
+            "result",
+            "" if pending else ("ok" if ok else "error"),
+        )
+        if not pending:
+            self.status_message.emit(detail, 3500)
         self.refresh()
-
-    @staticmethod
-    def _repolish(widget: QWidget) -> None:
-        widget.style().unpolish(widget)
-        widget.style().polish(widget)
 
     def set_theme(self, theme: str, _scale: str = "small") -> None:
         self._theme = theme

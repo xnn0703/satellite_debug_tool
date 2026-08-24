@@ -19,6 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.data import DataStore, GnssStore
+from satellite_debug_tool.core.playback import (
+    PlaybackLoadResult,
+    PlaybackLoadThread,
+    build_customer_playback,
+)
 from satellite_debug_tool.core.product import (
     CUSTOMER_PLAYBACK_HW_TYPE,
     CustomerPlaybackProjector,
@@ -44,6 +49,7 @@ from satellite_debug_tool.i18n import (
 from satellite_debug_tool.io.data_importer import DataImporter, SdbFile
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
+from satellite_debug_tool.ui.semantic_style import set_semantic_property
 from satellite_debug_tool.ui.time_range_control import TimeRangeControl
 
 
@@ -81,7 +87,7 @@ class CustomerPlaybackView(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._theme = "dark"
-        self._data_store = DataStore(max_channels=16, buffer_capacity=None)
+        self._data_store = DataStore(max_channels=16, buffer_capacity=6000)
         self._profile_store = ProfileStore(cache=None)
         self._gnss_store = GnssStore(keep_history=True, parent=self)
         self._current_file: Optional[Path] = None
@@ -93,6 +99,8 @@ class CustomerPlaybackView(QWidget):
         self._total_sec = 0.0
         self._loaded_count = 0
         self._identity_parts: tuple[str, str, str] = ("", "", "")
+        self._series_provider = None
+        self._load_thread: Optional[PlaybackLoadThread] = None
         self._gnss_widget = None
         self._gnss_dock: Optional[QDockWidget] = None
         self._build_ui()
@@ -186,59 +194,72 @@ class CustomerPlaybackView(QWidget):
             tr("SDB files (*.sdb);;All files (*)"),
         )
         if filepath:
-            self.load_file(Path(filepath))
+            self._start_file_load(Path(filepath))
 
     def load_file(self, path: Path) -> bool:
+        """Synchronous compatibility entry used by focused tests and tools."""
+
         self.status_message.emit(tr("Loading {file}...", file=path.name), 0)
         try:
-            sdb = DataImporter.open_sdb(path)
+            result = build_customer_playback(path)
         except Exception as exc:
             self.status_message.emit(tr("Failed to open: {detail}", detail=exc), 5000)
             return False
+        self._apply_load_result(result)
+        return True
 
-        prefer_product_service = any(
-            isinstance(record, (ServiceFastState, ServiceSlowState))
-            for _host_ns, record in sdb.iter_timed_records()
-        )
+    def _start_file_load(self, path: Path) -> None:
+        if self._load_thread is not None and self._load_thread.isRunning():
+            return
+        self.status_message.emit(tr("Loading {file}...", file=path.name), 0)
+        self._open_btn.setEnabled(False)
+        self._clear_btn.setEnabled(False)
+        worker = PlaybackLoadThread(path, customer=True, parent=self)
+        self._load_thread = worker
+        worker.loaded.connect(self._on_load_ready)
+        worker.failed.connect(self._on_load_failed)
+        worker.finished.connect(self._on_load_thread_finished)
+        worker.start()
+
+    def _on_load_ready(self, result: PlaybackLoadResult) -> None:
+        self._apply_load_result(result)
+
+    def _on_load_failed(self, detail: str) -> None:
+        self.status_message.emit(tr("Failed to open: {detail}", detail=detail), 5000)
+        self._open_btn.setEnabled(True)
+        self._clear_btn.setEnabled(self._current_file is not None)
+
+    def _on_load_thread_finished(self) -> None:
+        worker = self.sender()
+        if worker is self._load_thread:
+            self._load_thread = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _apply_load_result(self, result: PlaybackLoadResult) -> None:
+        previous_provider = self._series_provider
+        self._series_provider = result.provider
+        if previous_provider is not None:
+            previous_provider.close()
+
+        sdb = result.sdb
         source_profile, source_hw = self._source_profile(sdb)
-        projector = CustomerPlaybackProjector(
-            source_profile=source_profile,
-            source_hw_type=source_hw,
-            prefer_product_service=prefer_product_service,
-        )
 
-        self._data_store.clear()
+        self._data_store = result.provider.load_window(max_points_per_channel=6000)
         self._gnss_store.clear()
-        first_ts_ms: Optional[float] = None
-        last_ts_ms: Optional[float] = None
-        projected_count = 0
-        latest_identity: Optional[ServiceIdentity] = None
-        for _host_ns, record in sdb.iter_timed_records():
-            report = projector.project(record)
-            if report is not None:
-                self._data_store.update(report)
-                timestamp = float(report.timestamp)
-                first_ts_ms = (
-                    timestamp if first_ts_ms is None else min(first_ts_ms, timestamp)
-                )
-                last_ts_ms = (
-                    timestamp if last_ts_ms is None else max(last_ts_ms, timestamp)
-                )
-                projected_count += 1
-            if isinstance(record, ServiceIdentity):
-                latest_identity = record
-            elif isinstance(record, _GNSS_RECORDS):
-                self._gnss_store.update(record)
+        for record in result.gnss_records:
+            self._gnss_store.update(record)
 
-        self._first_ts_ms = first_ts_ms
-        self._last_ts_ms = last_ts_ms
+        summary = result.provider.summary
+        self._first_ts_ms = summary.first_timestamp_ms
+        self._last_ts_ms = summary.last_timestamp_ms
         self._total_sec = (
             max(0.0, (self._last_ts_ms - self._first_ts_ms) / 1000.0)
             if self._first_ts_ms is not None and self._last_ts_ms is not None
             else 0.0
         )
-        self._loaded_count = projected_count
-        self._current_file = Path(path)
+        self._loaded_count = summary.report_count
+        self._current_file = result.path
         self._loaded_version = sdb.version
         self._loaded_quality = dict(sdb.quality)
         self._metadata_events = tuple(sdb.metadata_events)
@@ -246,14 +267,14 @@ class CustomerPlaybackView(QWidget):
             sdb,
             source_profile,
             source_hw,
-            latest_identity,
+            result.latest_identity,
         )
 
         self._range_ctl.set_total(self._total_sec)
         self._reset_chart()
         self._gnss_btn.setEnabled(self._gnss_store.has_data())
         self._clear_btn.setEnabled(True)
-        set_raw_text(path.name, self._file_label)
+        set_raw_text(result.path.name, self._file_label)
         self._refresh_labels()
         self.status_message.emit(
             tr(
@@ -263,7 +284,7 @@ class CustomerPlaybackView(QWidget):
             ),
             4000,
         )
-        return True
+        self._open_btn.setEnabled(True)
 
     @staticmethod
     def _source_profile(sdb: SdbFile) -> tuple[Optional[ProfileStore], Optional[str]]:
@@ -318,6 +339,18 @@ class CustomerPlaybackView(QWidget):
     def _on_range_changed(self, start_sec: float, end_sec: float) -> None:
         if self._first_ts_ms is None:
             return
+        if self._series_provider is not None:
+            start_ms = self._first_ts_ms + float(start_sec) * 1000.0
+            end_ms = self._first_ts_ms + float(end_sec) * 1000.0
+            self._data_store = self._series_provider.load_window(
+                start_ms,
+                end_ms,
+                max_points_per_channel=6000,
+            )
+            self._chart.clear()
+            self._chart.set_time_origin_ms(0.0)
+            self._chart.set_auto_range(False)
+            self._chart.refresh(self._data_store)
         uptime_origin = self._first_ts_ms / 1000.0
         self._chart.set_x_range_sec(
             uptime_origin + start_sec,
@@ -330,6 +363,9 @@ class CustomerPlaybackView(QWidget):
 
     def clear(self) -> None:
         self._data_store.clear()
+        if self._series_provider is not None:
+            self._series_provider.close()
+            self._series_provider = None
         self._gnss_store.clear()
         self._current_file = None
         self._loaded_version = None
@@ -345,6 +381,20 @@ class CustomerPlaybackView(QWidget):
         self._gnss_btn.setEnabled(False)
         self._clear_btn.setEnabled(False)
         self._refresh_labels()
+
+    def shutdown(self) -> None:
+        worker = self._load_thread
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(5000)
+        self._load_thread = None
+        if self._series_provider is not None:
+            self._series_provider.close()
+            self._series_provider = None
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
+        super().closeEvent(event)
 
     def _refresh_labels(self) -> None:
         if self._current_file is None:
@@ -391,10 +441,10 @@ class CustomerPlaybackView(QWidget):
             self._quality_label.setText(tr("SDB v2 · capture quality unavailable"))
         else:
             self._quality_label.setText("—")
-        self._quality_label.setProperty(
+        set_semantic_property(
+            self._quality_label,
             "complete", complete and dropped == 0 and interruptions == 0
         )
-        self._repolish(self._quality_label)
 
     def _toggle_gnss(self) -> None:
         if not self._gnss_store.has_data():
@@ -410,11 +460,6 @@ class CustomerPlaybackView(QWidget):
             self._gnss_dock.setWidget(self._gnss_widget)
             self._gnss_dock.resize(1180, 730)
         self._gnss_dock.setVisible(not self._gnss_dock.isVisible())
-
-    @staticmethod
-    def _repolish(widget: QWidget) -> None:
-        widget.style().unpolish(widget)
-        widget.style().polish(widget)
 
     def set_theme(self, theme: str, scale: str = "small") -> None:
         self._theme = theme

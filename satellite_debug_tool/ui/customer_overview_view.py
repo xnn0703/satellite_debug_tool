@@ -39,6 +39,10 @@ from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import icons, styles as S
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
 from satellite_debug_tool.ui.beam_polar_widget import BeamPolarWidget, BeamSatelliteMarker
+from satellite_debug_tool.ui.semantic_style import (
+    set_semantic_properties,
+    set_semantic_property,
+)
 
 
 def _control_mode_text(value: ControlMode) -> str:
@@ -102,6 +106,8 @@ def combined_polarization(
     if tx.value is not None:
         entries.append(("TX", tx))
     if not entries:
+        if rx.availability is Availability.PENDING or tx.availability is Availability.PENDING:
+            return ProductValue.pending()
         return ProductValue.unsupported()
 
     if len(entries) == 2 and rx.value == tx.value:
@@ -139,6 +145,8 @@ def pll_lock_summary(
 
     entries = (("clock", clock), ("tx", tx), ("rx", rx))
     if all(value.value is None for _, value in entries):
+        if any(value.availability is Availability.PENDING for _, value in entries):
+            return ProductValue.pending(), "neutral"
         return ProductValue.unsupported(), "neutral"
 
     markers = {
@@ -162,6 +170,14 @@ def pll_lock_summary(
     if all(value.value is True for _, value in entries):
         return ProductValue.valid(text, timestamp), "ok"
     return ProductValue.valid(text, timestamp), "neutral"
+
+
+def _availability_placeholder(value: ProductValue) -> str:
+    if value.availability is Availability.PENDING:
+        return tr("Pending")
+    if value.availability is Availability.UNSUPPORTED:
+        return tr("Not supported")
+    return "—"
 
 
 class _MetricValue(QWidget):
@@ -188,13 +204,11 @@ class _MetricValue(QWidget):
         }.get(density, (10, 8, 10, 8, 3))
         self._layout.setContentsMargins(*margins[:4])
         self._layout.setSpacing(margins[4])
-        self.setProperty("density", density)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        set_semantic_property(self, "density", density)
 
     def set_product_value(self, value: ProductValue, decimals: int = 2) -> None:
         if value.value is None:
-            text = "—"
+            text = _availability_placeholder(value)
         elif isinstance(value.value, bool):
             text = tr("On") if value.value else tr("Off")
         elif isinstance(value.value, float):
@@ -206,9 +220,7 @@ class _MetricValue(QWidget):
         if value.availability == Availability.STALE:
             text = tr("{value} (stale)", value=text)
         self.value.setText(text)
-        self.setProperty("availability", value.availability.value)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        set_semantic_property(self, "availability", value.availability.value)
 
     def retranslate_ui(self) -> None:
         self.title.setText(tr(self._title_source))
@@ -266,6 +278,7 @@ class CustomerOverviewView(QWidget):
         self._orbit_store = orbit_store_getter() if orbit_store_getter is not None else None
         self._last_model = ""
         self._density = ""
+        self._view_active = False
         self._setup_ui(enable_3d)
         self._live.connection_state_changed.connect(self._on_connection_changed)
         phase_signal = getattr(
@@ -289,7 +302,6 @@ class CustomerOverviewView(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(self.refresh)
-        self._timer.start()
         self._apply_theme()
         register_translatable(self)
 
@@ -736,17 +748,11 @@ class CustomerOverviewView(QWidget):
         self._reflow_status(4)
         for item in self._status_values.values():
             item.setFixedHeight(info[6])
-            item.setProperty("density", density)
-            item.style().unpolish(item)
-            item.style().polish(item)
+            set_semantic_property(item, "density", density)
         for item in self._data_values.values():
             item.setFixedHeight(info[6])
-            item.setProperty("density", density)
-            item.style().unpolish(item)
-            item.style().polish(item)
-        self._pll_lock_summary.setProperty("density", density)
-        self._pll_lock_summary.style().unpolish(self._pll_lock_summary)
-        self._pll_lock_summary.style().polish(self._pll_lock_summary)
+            set_semantic_property(item, "density", density)
+        set_semantic_property(self._pll_lock_summary, "density", density)
 
         panel = config["panel"]
         self._model_layout.setContentsMargins(*panel[:4])
@@ -780,9 +786,7 @@ class CustomerOverviewView(QWidget):
             item.layout().setContentsMargins(
                 side_margin, 1, side_margin, 1
             )
-            item.setProperty("density", density)
-            item.style().unpolish(item)
-            item.style().polish(item)
+            set_semantic_property(item, "density", density)
         self._signal_body_layout.setSpacing(
             10 if density == "regular" else 6 if density == "compact" else 4
         )
@@ -807,27 +811,50 @@ class CustomerOverviewView(QWidget):
     @staticmethod
     def _display(value: ProductValue) -> str:
         if value.value is None:
-            return "—"
+            return _availability_placeholder(value)
         text = str(value.value)
         return tr("{value} (stale)", value=text) if value.availability == Availability.STALE else text
 
     def _set_status(self, key: str, title: str, value: str, status: str = "neutral") -> None:
         label = self._status_values[key]
         label.setText(f"{tr(title)}: {value}")
-        label.setProperty("status", status)
-        label.style().unpolish(label)
-        label.style().polish(label)
+        set_semantic_property(label, "status", status)
 
     def refresh(self) -> None:
-        snapshot = self._projector.snapshot()
-        if self._service_store is not None:
-            snapshot = self._service_store.snapshot(snapshot)
+        snapshot_getter = getattr(self._live, "product_snapshot", None)
+        if snapshot_getter is not None:
+            snapshot = snapshot_getter()
+        elif self._service_store is not None and self._service_store.service_available:
+            snapshot = self._service_store.snapshot()
+        else:
+            snapshot = self._projector.snapshot()
         self._refresh_identity(snapshot)
         self._refresh_status(snapshot)
         self._refresh_data_and_beam(snapshot)
         self._refresh_model(snapshot)
         self._refresh_snr(snapshot)
         self._refresh_components(snapshot)
+
+    def activate_view(self) -> None:
+        """Refresh and animate the customer overview while it is visible."""
+        if self._view_active:
+            return
+        self._view_active = True
+        consumer = getattr(self._live, "set_orbit_sky_consumer", None)
+        if consumer is not None and not self._playback_mode:
+            consumer("customer_overview", True)
+        self.refresh()
+        self._timer.start()
+
+    def deactivate_view(self) -> None:
+        """Suspend overview rendering while preserving the shared live session."""
+        if not self._view_active:
+            return
+        self._view_active = False
+        self._timer.stop()
+        consumer = getattr(self._live, "set_orbit_sky_consumer", None)
+        if consumer is not None:
+            consumer("customer_overview", False)
 
     def _refresh_identity(self, snapshot: ProductSnapshot) -> None:
         raw_model = snapshot.identity.model.value
@@ -869,11 +896,19 @@ class CustomerOverviewView(QWidget):
             link_value,
             "ok" if phase == DeviceConnectionPhase.ONLINE else "neutral",
         )
-        mode = "—" if op.control_mode.value is None else _control_mode_text(op.control_mode.value)
+        mode = (
+            _availability_placeholder(op.control_mode)
+            if op.control_mode.value is None
+            else _control_mode_text(op.control_mode.value)
+        )
         if op.control_mode.availability == Availability.STALE:
             mode = tr("{value} (stale)", value=mode)
         self._set_status("mode", "Control mode", mode)
-        tracking = "—" if op.tracking_phase.value is None else _tracking_text(op.tracking_phase.value)
+        tracking = (
+            _availability_placeholder(op.tracking_phase)
+            if op.tracking_phase.value is None
+            else _tracking_text(op.tracking_phase.value)
+        )
         if op.tracking_phase.availability == Availability.STALE:
             tracking = tr("{value} (stale)", value=tracking)
         self._set_status(
@@ -885,7 +920,11 @@ class CustomerOverviewView(QWidget):
                 else "warn"
             ),
         )
-        lock = "—" if op.locked.value is None else tr("Locked") if op.locked.value else tr("Unlocked")
+        lock = (
+            _availability_placeholder(op.locked)
+            if op.locked.value is None
+            else tr("Locked") if op.locked.value else tr("Unlocked")
+        )
         if op.locked.availability is Availability.STALE:
             lock = tr("{value} (stale)", value=lock)
         self._set_status(
@@ -898,7 +937,11 @@ class CustomerOverviewView(QWidget):
                 else "warn"
             ),
         )
-        navigation = "—" if op.navigation.value is None else _navigation_text(op.navigation.value)
+        navigation = (
+            _availability_placeholder(op.navigation)
+            if op.navigation.value is None
+            else _navigation_text(op.navigation.value)
+        )
         if op.navigation.availability == Availability.STALE:
             navigation = tr("{value} (stale)", value=navigation)
         self._set_status(
@@ -911,7 +954,11 @@ class CustomerOverviewView(QWidget):
             ),
         )
         self._set_status("gnss", "GNSS fix", self._display(op.gnss_fix))
-        tx = "—" if op.tx_enabled.value is None else tr("On") if op.tx_enabled.value else tr("Off")
+        tx = (
+            _availability_placeholder(op.tx_enabled)
+            if op.tx_enabled.value is None
+            else tr("On") if op.tx_enabled.value else tr("Off")
+        )
         if op.tx_enabled.availability is Availability.STALE:
             tx = tr("{value} (stale)", value=tx)
         tx_status = (
@@ -923,7 +970,7 @@ class CustomerOverviewView(QWidget):
         )
         self._set_status("tx", "TX", tx, tx_status)
         modem = (
-            "—"
+            _availability_placeholder(op.modem_online)
             if op.modem_online.value is None
             else tr("Online") if op.modem_online.value else tr("Offline")
         )
@@ -1110,24 +1157,12 @@ class CustomerOverviewView(QWidget):
         if answer == QMessageBox.Yes and (action is None or not action(norad_id)):
             self.status_message.emit(tr("Failed to send tracking target request"), 3500)
 
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
-        super().showEvent(event)
-        consumer = getattr(self._live, "set_orbit_sky_consumer", None)
-        if consumer is not None and not self._playback_mode:
-            consumer("customer_overview", True)
-
-    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override
-        consumer = getattr(self._live, "set_orbit_sky_consumer", None)
-        if consumer is not None:
-            consumer("customer_overview", False)
-        super().hideEvent(event)
-
     def _set_data_value(self, key: str, value: ProductValue, decimals: int) -> None:
         title, unit = next(
             (title, unit) for item_key, title, unit in self._DATA_DEFS if item_key == key
         )
         if value.value is None:
-            rendered = "—"
+            rendered = _availability_placeholder(value)
         elif isinstance(value.value, float):
             rendered = f"{value.value:.{decimals}f}"
         else:
@@ -1139,20 +1174,23 @@ class CustomerOverviewView(QWidget):
         label = self._data_values[key]
         label.setText(f"{tr(title)}: {rendered}")
         label.setToolTip(label.text())
-        label.setProperty("availability", value.availability.value)
-        label.style().unpolish(label)
-        label.style().polish(label)
+        set_semantic_property(label, "availability", value.availability.value)
 
     def _set_pll_lock_summary(self, value: ProductValue[str], status: str) -> None:
-        rendered = "—" if value.value is None else str(value.value)
+        rendered = (
+            _availability_placeholder(value)
+            if value.value is None
+            else str(value.value)
+        )
         if value.availability == Availability.STALE:
             rendered = tr("{value} (stale)", value=rendered)
         self._pll_lock_summary.setText(tr("PLL lock: {value}", value=rendered))
         self._pll_lock_summary.setToolTip(self._pll_lock_summary.text())
-        self._pll_lock_summary.setProperty("availability", value.availability.value)
-        self._pll_lock_summary.setProperty("status", status)
-        self._pll_lock_summary.style().unpolish(self._pll_lock_summary)
-        self._pll_lock_summary.style().polish(self._pll_lock_summary)
+        set_semantic_properties(
+            self._pll_lock_summary,
+            availability=value.availability.value,
+            status=status,
+        )
 
     @staticmethod
     def _satellite_summary(op) -> ProductValue[str]:
@@ -1185,6 +1223,8 @@ class CustomerOverviewView(QWidget):
                     text = str(candidate.value)
                     break
         if not text:
+            if mode.availability is Availability.PENDING:
+                return ProductValue.pending()
             return ProductValue.unsupported()
         timestamp = max(
             (item.device_timestamp_ms for item in selected if item.device_timestamp_ms is not None),

@@ -1,171 +1,306 @@
-"""
-.sdb v2/v3 回放读取器。
-
-对外提供两种使用风格：
-
-1. `DataImporter.open_sdb(path)` → `SdbFile`
-   含文件头解析结果（version/timestamp/profile）+ 两个生成器
-   （`iter_records` 返回全部 v2 record；`iter_data_reports` 只返回 DataReport）
-
-2. `DataImporter.read_sdb(path)` → `Iterator[DataReport]`（向后兼容的简化入口）
-
-v1 文件（Magic 正常但 Version==1）会被 **拒绝**，要求用户先转换（暂无脚本）。
-"""
+"""Streaming SDB v2/v3 reader with a rebuildable sparse sidecar index."""
 
 from __future__ import annotations
 
-import json
-import struct
-import warnings
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from itertools import islice
+import json
 from pathlib import Path
-from typing import Iterator, Optional, Union
+import struct
+from typing import Generic, Optional, TypeVar, Union, overload
+import warnings
 
 from satellite_debug_tool.core.protocol import (
     DataReport,
     FrameReceiverV2,
     FrameV2Record,
 )
+from satellite_debug_tool.io.sdb_schema import (
+    SDB_FOOTER,
+    SDB_HEADER_CORE,
+    SDB_HEADER_RESERVED_SIZE,
+    SDB_MAGIC,
+    SDB_PROFILE_LENGTH,
+    SDB_RECORD_CONTROL_TX,
+    SDB_RECORD_GAP,
+    SDB_RECORD_METADATA,
+    SDB_RECORD_RX_CHUNK,
+    SDB_RECORD_SUMMARY,
+    SDB_SUPPORTED_VERSIONS,
+    SDB_VERSION_V2,
+    SDB_VERSION_V3,
+    iter_record_envelopes,
+    read_exact,
+)
 
 
-SDB_MAGIC = b"SDB\x00"
-SDB_FOOTER = b"\xee\xee\xee\xee"
-
-_HEADER_CORE = 4 + 2 + 8      # magic + version + timestamp
-_HEADER_V1_TAIL = 8           # reserved 8
-_HEADER_V2_PROFILE_LEN = 4    # 4B profile_len
-_HEADER_V2_RESERVED = 8
-
-_VERSION_V2 = 0x0002
-_VERSION_V3 = 0x0003
-
-_V3_RECORD_HEADER = struct.Struct("<BQI")
-_V3_RX_CHUNK = 0x01
-_V3_GAP = 0x02
-_V3_CONTROL_TX = 0x03
-_V3_METADATA = 0x04
-_V3_SUMMARY = 0xFE
+_INDEX_SCHEMA = "satellite.sdb-sparse-index"
+_INDEX_VERSION = 1
+_INDEX_STRIDE = 1024
+_STREAM_CHUNK_SIZE = 64 * 1024
 
 
 class SdbFormatError(ValueError):
-    """.sdb 格式错误或版本不支持。"""
+    """The SDB file is malformed or uses an unsupported version."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class SdbRawRecord:
     host_timestamp_ns: int
     data: bytes
 
 
-@dataclass
+@dataclass(frozen=True)
 class SdbControlRecord:
     host_timestamp_ns: int
     data: bytes
 
 
-@dataclass
+@dataclass(frozen=True)
 class SdbGapMarker:
     host_timestamp_ns: int
     dropped_chunks: int
 
 
-@dataclass
+@dataclass(frozen=True)
+class SdbIndexEntry:
+    host_timestamp_ns: int
+    record_offset: int
+
+
+_RecordT = TypeVar("_RecordT", SdbRawRecord, SdbControlRecord, SdbGapMarker)
+
+
+class _TypedRecordSequence(Sequence[_RecordT], Generic[_RecordT]):
+    """Compatibility sequence backed by streaming file iteration."""
+
+    def __init__(self, owner: "SdbFile", record_type: int, count: int) -> None:
+        self._owner = owner
+        self._record_type = int(record_type)
+        self._count = int(count)
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __iter__(self) -> Iterator[_RecordT]:
+        yield from self._owner._iter_typed_records(self._record_type)
+
+    @overload
+    def __getitem__(self, index: int) -> _RecordT: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[_RecordT, ...]: ...
+
+    def __getitem__(self, index: int | slice) -> _RecordT | tuple[_RecordT, ...]:
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self._count)
+            if step > 0:
+                return tuple(islice(self, start, stop, step))
+            return tuple(self[position] for position in range(start, stop, step))
+        normalized = int(index)
+        if normalized < 0:
+            normalized += self._count
+        if normalized < 0 or normalized >= self._count:
+            raise IndexError(index)
+        for current, record in enumerate(self):
+            if current == normalized:
+                return record
+        raise IndexError(index)
+
+
 class SdbFile:
-    """SDB header, timed raw records, capture metadata and quality summary."""
+    """Parsed SDB header plus lazy record views over the source file."""
 
-    version: int
-    timestamp: int
-    profile: Optional[dict]
-    metadata: dict
-    quality: dict
-    raw_records: tuple[SdbRawRecord, ...]
-    control_records: tuple[SdbControlRecord, ...]
-    gap_markers: tuple[SdbGapMarker, ...]
-    metadata_events: tuple[dict, ...]
-    _frame_bytes: bytes = b""
+    def __init__(
+        self,
+        *,
+        path: Path,
+        version: int,
+        timestamp: int,
+        profile: Optional[dict],
+        metadata: dict,
+        quality: dict,
+        data_offset: int,
+        data_end: int,
+        counts: dict[int, int],
+        metadata_events: tuple[dict, ...],
+        sparse_index: tuple[SdbIndexEntry, ...],
+    ) -> None:
+        self.path = Path(path)
+        self.version = int(version)
+        self.timestamp = int(timestamp)
+        self.profile = profile
+        self.metadata = dict(metadata)
+        self.quality = dict(quality)
+        self.metadata_events = tuple(metadata_events)
+        self.sparse_index = tuple(sparse_index)
+        self._data_offset = int(data_offset)
+        self._data_end = int(data_end)
+        self.raw_records: Sequence[SdbRawRecord] = _TypedRecordSequence(
+            self, SDB_RECORD_RX_CHUNK, counts.get(SDB_RECORD_RX_CHUNK, 0)
+        )
+        self.control_records: Sequence[SdbControlRecord] = _TypedRecordSequence(
+            self, SDB_RECORD_CONTROL_TX, counts.get(SDB_RECORD_CONTROL_TX, 0)
+        )
+        self.gap_markers: Sequence[SdbGapMarker] = _TypedRecordSequence(
+            self, SDB_RECORD_GAP, counts.get(SDB_RECORD_GAP, 0)
+        )
 
-    def iter_timed_records(self) -> Iterator[tuple[int, FrameV2Record]]:
+    @property
+    def index_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".sdbi")
+
+    def iter_timed_records(
+        self,
+        *,
+        start_host_timestamp_ns: Optional[int] = None,
+        end_host_timestamp_ns: Optional[int] = None,
+    ) -> Iterator[tuple[int, FrameV2Record]]:
         receiver = FrameReceiverV2()
-        if self.version == _VERSION_V2:
-            for rec in receiver.feed(self._frame_bytes):
-                yield 0, rec
+        if self.version == SDB_VERSION_V2:
+            with self.path.open("rb") as file_object:
+                file_object.seek(self._data_offset)
+                remaining = self._data_end - self._data_offset
+                while remaining > 0:
+                    chunk = file_object.read(min(_STREAM_CHUNK_SIZE, remaining))
+                    if not chunk:
+                        raise SdbFormatError("truncated v2 frame region")
+                    remaining -= len(chunk)
+                    for record in receiver.feed(chunk):
+                        yield 0, record
             return
-        for raw in self.raw_records:
-            for rec in receiver.feed(raw.data):
-                yield raw.host_timestamp_ns, rec
+
+        start_offset = self._seek_offset(start_host_timestamp_ns)
+        for raw in self._iter_typed_records(
+            SDB_RECORD_RX_CHUNK,
+            start_offset=start_offset,
+        ):
+            if start_host_timestamp_ns is not None and raw.host_timestamp_ns < int(
+                start_host_timestamp_ns
+            ):
+                receiver.feed(raw.data)
+                continue
+            if end_host_timestamp_ns is not None and raw.host_timestamp_ns > int(
+                end_host_timestamp_ns
+            ):
+                break
+            for record in receiver.feed(raw.data):
+                yield raw.host_timestamp_ns, record
 
     def iter_records(self) -> Iterator[FrameV2Record]:
-        """解析全部 v2 record（DataReport / StateReport / EventReport / …）。"""
-        for _host_timestamp_ns, rec in self.iter_timed_records():
-            yield rec
+        for _host_timestamp_ns, record in self.iter_timed_records():
+            yield record
 
     def iter_data_reports(self) -> Iterator[DataReport]:
-        """仅返回 DataReport（旧调用点兼容）。"""
-        for rec in self.iter_records():
-            if isinstance(rec, DataReport):
-                yield rec
+        for record in self.iter_records():
+            if isinstance(record, DataReport):
+                yield record
+
+    def _seek_offset(self, host_timestamp_ns: Optional[int]) -> int:
+        if host_timestamp_ns is None or not self.sparse_index:
+            return self._data_offset
+        target = int(host_timestamp_ns)
+        selected = self._data_offset
+        for entry in self.sparse_index:
+            if entry.host_timestamp_ns > target:
+                break
+            selected = entry.record_offset
+        return selected
+
+    def _iter_typed_records(
+        self,
+        record_type: int,
+        *,
+        start_offset: Optional[int] = None,
+    ) -> Iterator:
+        if self.version != SDB_VERSION_V3:
+            return
+        try:
+            with self.path.open("rb") as file_object:
+                for envelope in iter_record_envelopes(
+                    file_object,
+                    start_offset=self._data_offset if start_offset is None else start_offset,
+                    end_offset=self._data_end,
+                ):
+                    if envelope.record_type != int(record_type):
+                        continue
+                    file_object.seek(envelope.payload_offset)
+                    payload = read_exact(
+                        file_object,
+                        envelope.payload_length,
+                        context="v3 record payload",
+                    )
+                    if record_type == SDB_RECORD_RX_CHUNK:
+                        yield SdbRawRecord(envelope.host_timestamp_ns, payload)
+                    elif record_type == SDB_RECORD_CONTROL_TX:
+                        yield SdbControlRecord(envelope.host_timestamp_ns, payload)
+                    elif record_type == SDB_RECORD_GAP:
+                        if len(payload) != 4:
+                            raise SdbFormatError("invalid v3 gap marker")
+                        yield SdbGapMarker(
+                            envelope.host_timestamp_ns,
+                            struct.unpack("<I", payload)[0],
+                        )
+        except EOFError as exc:
+            raise SdbFormatError(str(exc)) from exc
 
 
 class DataImporter:
-    """读取历史录制数据。"""
+    """Open historical recordings without materializing their frame regions."""
 
     @staticmethod
     def open_sdb(filepath: Union[str, Path]) -> SdbFile:
-        """完整解析 .sdb v2/v3 文件。"""
         path = Path(filepath)
-        raw = path.read_bytes()
+        try:
+            file_size = path.stat().st_size
+            with path.open("rb") as file_object:
+                core = read_exact(file_object, SDB_HEADER_CORE.size, context="SDB header")
+                magic, version, timestamp = SDB_HEADER_CORE.unpack(core)
+                if magic != SDB_MAGIC:
+                    raise SdbFormatError("Invalid SDB file format (magic mismatch)")
+                if version not in SDB_SUPPORTED_VERSIONS:
+                    raise SdbFormatError(
+                        f"Unsupported SDB version {version:#x}; v2 and v3 are accepted. "
+                        "Convert v1 files with sdb_v1_convert.py first."
+                    )
+                profile_len = SDB_PROFILE_LENGTH.unpack(
+                    read_exact(
+                        file_object,
+                        SDB_PROFILE_LENGTH.size,
+                        context="profile length",
+                    )
+                )[0]
+                header_object = DataImporter._read_header_json(file_object, profile_len)
+                read_exact(
+                    file_object,
+                    SDB_HEADER_RESERVED_SIZE,
+                    context="reserved header",
+                )
+                data_offset = file_object.tell()
+                footer_present = DataImporter._has_footer(file_object, file_size)
+        except EOFError as exc:
+            raise SdbFormatError(str(exc)) from exc
+        except OSError as exc:
+            raise SdbFormatError(str(exc)) from exc
 
-        if len(raw) < _HEADER_CORE:
-            raise SdbFormatError(f"file too short: {len(raw)}B")
-        if raw[:4] != SDB_MAGIC:
-            raise SdbFormatError("Invalid SDB file format (magic mismatch)")
+        data_end = file_size - len(SDB_FOOTER) if footer_present else file_size
+        if data_offset > data_end:
+            raise SdbFormatError("SDB data region starts beyond the file footer")
 
-        version = struct.unpack("<H", raw[4:6])[0]
-        timestamp = struct.unpack("<Q", raw[6:14])[0]
-
-        if version not in (_VERSION_V2, _VERSION_V3):
-            raise SdbFormatError(
-                f"Unsupported SDB version {version:#x}; v2 and v3 are accepted. "
-                "Convert v1 files with sdb_v1_convert.py first."
-            )
-
-        off = _HEADER_CORE
-        if off + _HEADER_V2_PROFILE_LEN > len(raw):
-            raise SdbFormatError("truncated v2 header (profile_len missing)")
-        profile_len = struct.unpack("<I", raw[off:off + 4])[0]
-        off += 4
-
-        header_object: Optional[dict] = None
-        if profile_len > 0:
-            if off + profile_len > len(raw):
-                raise SdbFormatError("truncated header JSON")
-            header_bytes = raw[off:off + profile_len]
-            off += profile_len
-            try:
-                header_object = json.loads(header_bytes.decode("utf-8"))
-            except Exception as exc:
-                raise SdbFormatError(f"invalid header JSON: {exc}") from exc
-
-        off += _HEADER_V2_RESERVED
-
-        # 帧区：文件尾 4B 是 footer（若存在）
-        frame_end = len(raw)
-        if raw.endswith(SDB_FOOTER):
-            frame_end -= len(SDB_FOOTER)
-        footer_present = raw.endswith(SDB_FOOTER)
-        if version == _VERSION_V2:
-            frame_bytes = b"" if off > frame_end else raw[off:frame_end]
+        if version == SDB_VERSION_V2:
             return SdbFile(
+                path=path,
                 version=version,
                 timestamp=timestamp,
                 profile=header_object,
                 metadata={},
                 quality={"footer_present": footer_present, "complete": footer_present},
-                raw_records=(),
-                control_records=(),
-                gap_markers=(),
+                data_offset=data_offset,
+                data_end=data_end,
+                counts={},
                 metadata_events=(),
-                _frame_bytes=frame_bytes,
+                sparse_index=(),
             )
 
         metadata = header_object if isinstance(header_object, dict) else {}
@@ -174,71 +309,216 @@ class DataImporter:
             raise SdbFormatError("v3 profile must be an object or null")
         session = metadata.get("session")
         session_metadata = session if isinstance(session, dict) else {}
-        raw_records: list[SdbRawRecord] = []
-        controls: list[SdbControlRecord] = []
-        gaps: list[SdbGapMarker] = []
-        metadata_events: list[dict] = []
-        summary: dict = {}
-        cursor = off
-        while cursor < frame_end:
-            if cursor + _V3_RECORD_HEADER.size > frame_end:
-                raise SdbFormatError("truncated v3 record header")
-            record_type, host_ns, payload_len = _V3_RECORD_HEADER.unpack_from(raw, cursor)
-            cursor += _V3_RECORD_HEADER.size
-            if cursor + payload_len > frame_end:
-                raise SdbFormatError("truncated v3 record payload")
-            payload = raw[cursor:cursor + payload_len]
-            cursor += payload_len
-            if record_type == _V3_RX_CHUNK:
-                raw_records.append(SdbRawRecord(host_ns, payload))
-            elif record_type == _V3_CONTROL_TX:
-                controls.append(SdbControlRecord(host_ns, payload))
-            elif record_type == _V3_GAP:
-                if len(payload) != 4:
-                    raise SdbFormatError("invalid v3 gap marker")
-                gaps.append(SdbGapMarker(host_ns, struct.unpack("<I", payload)[0]))
-            elif record_type in (_V3_METADATA, _V3_SUMMARY):
-                try:
-                    decoded = json.loads(payload.decode("utf-8"))
-                except Exception as exc:
-                    raise SdbFormatError(f"invalid v3 JSON record: {exc}") from exc
-                if not isinstance(decoded, dict):
-                    raise SdbFormatError("v3 JSON record must contain an object")
-                if record_type == _V3_SUMMARY:
-                    summary = decoded
-                else:
-                    metadata_events.append(decoded)
-
-        quality = dict(summary)
+        scan = DataImporter._load_or_build_index(
+            path,
+            data_offset=data_offset,
+            data_end=data_end,
+            footer_present=footer_present,
+        )
+        summary = dict(scan["summary"])
+        counts = {int(key): int(value) for key, value in scan["counts"].items()}
+        quality = summary
         quality["footer_present"] = footer_present
-        quality["gap_markers"] = len(gaps)
-        quality["gap_chunks"] = sum(marker.dropped_chunks for marker in gaps)
+        quality["gap_markers"] = counts.get(SDB_RECORD_GAP, 0)
+        quality["gap_chunks"] = int(scan["gap_chunks"])
         quality["complete"] = bool(summary.get("complete", False) and footer_present)
+        sparse_index = tuple(
+            SdbIndexEntry(int(item[0]), int(item[1])) for item in scan["entries"]
+        )
         return SdbFile(
+            path=path,
             version=version,
             timestamp=timestamp,
             profile=profile,
             metadata=session_metadata,
             quality=quality,
-            raw_records=tuple(raw_records),
-            control_records=tuple(controls),
-            gap_markers=tuple(gaps),
-            metadata_events=tuple(metadata_events),
+            data_offset=data_offset,
+            data_end=data_end,
+            counts=counts,
+            metadata_events=tuple(scan["metadata_events"]),
+            sparse_index=sparse_index,
         )
 
-    # ---- 向后兼容入口 ----
+    @staticmethod
+    def _read_header_json(file_object, profile_len: int) -> Optional[dict]:
+        if profile_len == 0:
+            return None
+        try:
+            decoded = json.loads(
+                read_exact(file_object, profile_len, context="header JSON").decode("utf-8")
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SdbFormatError(f"invalid header JSON: {exc}") from exc
+        if not isinstance(decoded, dict):
+            raise SdbFormatError("SDB header JSON must contain an object")
+        return decoded
+
+    @staticmethod
+    def _has_footer(file_object, file_size: int) -> bool:
+        if file_size < len(SDB_FOOTER):
+            return False
+        file_object.seek(file_size - len(SDB_FOOTER))
+        return file_object.read(len(SDB_FOOTER)) == SDB_FOOTER
+
+    @staticmethod
+    def _load_or_build_index(
+        path: Path,
+        *,
+        data_offset: int,
+        data_end: int,
+        footer_present: bool,
+    ) -> dict:
+        source_stat = path.stat()
+        index_path = path.with_suffix(path.suffix + ".sdbi")
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            if DataImporter._index_matches(
+                payload,
+                source_size=source_stat.st_size,
+                source_mtime_ns=source_stat.st_mtime_ns,
+                data_offset=data_offset,
+                data_end=data_end,
+            ):
+                return payload
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+        payload = DataImporter._scan_v3(
+            path,
+            data_offset=data_offset,
+            data_end=data_end,
+        )
+        payload.update(
+            {
+                "schema": _INDEX_SCHEMA,
+                "schema_version": _INDEX_VERSION,
+                "source_size": source_stat.st_size,
+                "source_mtime_ns": source_stat.st_mtime_ns,
+                "data_offset": data_offset,
+                "data_end": data_end,
+                "footer_present": bool(footer_present),
+            }
+        )
+        DataImporter._write_index(index_path, payload)
+        return payload
+
+    @staticmethod
+    def _index_matches(
+        payload: object,
+        *,
+        source_size: int,
+        source_mtime_ns: int,
+        data_offset: int,
+        data_end: int,
+    ) -> bool:
+        return bool(
+            isinstance(payload, dict)
+            and payload.get("schema") == _INDEX_SCHEMA
+            and int(payload.get("schema_version", 0)) == _INDEX_VERSION
+            and int(payload.get("source_size", -1)) == int(source_size)
+            and int(payload.get("source_mtime_ns", -1)) == int(source_mtime_ns)
+            and int(payload.get("data_offset", -1)) == int(data_offset)
+            and int(payload.get("data_end", -1)) == int(data_end)
+            and isinstance(payload.get("counts"), dict)
+            and isinstance(payload.get("entries"), list)
+            and isinstance(payload.get("metadata_events"), list)
+            and isinstance(payload.get("summary"), dict)
+        )
+
+    @staticmethod
+    def _scan_v3(path: Path, *, data_offset: int, data_end: int) -> dict:
+        counts: dict[str, int] = {}
+        entries: list[list[int]] = []
+        metadata_events: list[dict] = []
+        summary: dict = {}
+        gap_chunks = 0
+        ordinal = 0
+        try:
+            with path.open("rb") as file_object:
+                for envelope in iter_record_envelopes(
+                    file_object,
+                    start_offset=data_offset,
+                    end_offset=data_end,
+                ):
+                    key = str(envelope.record_type)
+                    counts[key] = counts.get(key, 0) + 1
+                    if ordinal % _INDEX_STRIDE == 0:
+                        entries.append(
+                            [envelope.host_timestamp_ns, envelope.record_offset]
+                        )
+                    ordinal += 1
+                    if envelope.record_type not in {
+                        SDB_RECORD_GAP,
+                        SDB_RECORD_METADATA,
+                        SDB_RECORD_SUMMARY,
+                    }:
+                        continue
+                    file_object.seek(envelope.payload_offset)
+                    payload = read_exact(
+                        file_object,
+                        envelope.payload_length,
+                        context="v3 indexed payload",
+                    )
+                    if envelope.record_type == SDB_RECORD_GAP:
+                        if len(payload) != 4:
+                            raise SdbFormatError("invalid v3 gap marker")
+                        gap_chunks += struct.unpack("<I", payload)[0]
+                        continue
+                    try:
+                        decoded = json.loads(payload.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise SdbFormatError(f"invalid v3 JSON record: {exc}") from exc
+                    if not isinstance(decoded, dict):
+                        raise SdbFormatError("v3 JSON record must contain an object")
+                    if envelope.record_type == SDB_RECORD_SUMMARY:
+                        summary = decoded
+                    else:
+                        metadata_events.append(decoded)
+        except EOFError as exc:
+            raise SdbFormatError(str(exc)) from exc
+        return {
+            "counts": counts,
+            "entries": entries,
+            "metadata_events": metadata_events,
+            "summary": summary,
+            "gap_chunks": gap_chunks,
+        }
+
+    @staticmethod
+    def _write_index(path: Path, payload: dict) -> None:
+        temp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            temp.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            temp.replace(path)
+        except OSError:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @staticmethod
     def read_sdb(filepath: Union[str, Path]) -> Iterator[DataReport]:
-        """旧接口：只返回 DataReport 迭代器。"""
         return DataImporter.open_sdb(filepath).iter_data_reports()
 
     @staticmethod
     def read_csv(filepath: Union[str, Path]) -> Iterator[DataReport]:
-        """CSV 导入暂未实现（SDB v2 落地后再补；列格式需 profile 驱动）。"""
         warnings.warn(
             "CSV import is not supported in protocol v2 yet.",
             RuntimeWarning,
             stacklevel=2,
         )
         return iter(())
+
+
+__all__ = [
+    "DataImporter",
+    "SdbControlRecord",
+    "SdbFile",
+    "SdbFormatError",
+    "SdbGapMarker",
+    "SdbIndexEntry",
+    "SdbRawRecord",
+]

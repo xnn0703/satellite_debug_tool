@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from enum import Enum
 from typing import Generic, Optional, TypeVar
 
@@ -11,9 +11,22 @@ T = TypeVar("T")
 
 
 class Availability(str, Enum):
+    PENDING = "pending"
     VALID = "valid"
     STALE = "stale"
     UNSUPPORTED = "unsupported"
+
+
+class ProductSource(str, Enum):
+    UNKNOWN = "unknown"
+    PRODUCT_SERVICE = "product_service"
+    LEGACY_V2 = "legacy_v2"
+
+
+class ValueQuality(str, Enum):
+    UNKNOWN = "unknown"
+    MEASURED = "measured"
+    DERIVED = "derived"
 
 
 class ControlMode(str, Enum):
@@ -74,18 +87,60 @@ class ProductValue(Generic[T]):
     value: Optional[T] = None
     availability: Availability = Availability.UNSUPPORTED
     device_timestamp_ms: Optional[int] = None
+    source: ProductSource = ProductSource.UNKNOWN
+    received_monotonic_s: Optional[float] = None
+    quality: ValueQuality = ValueQuality.UNKNOWN
 
     @classmethod
-    def valid(cls, value: T, timestamp_ms: Optional[int] = None) -> "ProductValue[T]":
-        return cls(value=value, availability=Availability.VALID, device_timestamp_ms=timestamp_ms)
+    def pending(cls) -> "ProductValue[T]":
+        return cls(availability=Availability.PENDING)
 
     @classmethod
-    def stale(cls, value: Optional[T] = None, timestamp_ms: Optional[int] = None) -> "ProductValue[T]":
-        return cls(value=value, availability=Availability.STALE, device_timestamp_ms=timestamp_ms)
+    def valid(
+        cls,
+        value: T,
+        timestamp_ms: Optional[int] = None,
+        *,
+        source: ProductSource = ProductSource.UNKNOWN,
+        received_monotonic_s: Optional[float] = None,
+        quality: ValueQuality = ValueQuality.UNKNOWN,
+    ) -> "ProductValue[T]":
+        return cls(
+            value=value,
+            availability=Availability.VALID,
+            device_timestamp_ms=timestamp_ms,
+            source=source,
+            received_monotonic_s=received_monotonic_s,
+            quality=quality,
+        )
+
+    @classmethod
+    def stale(
+        cls,
+        value: Optional[T] = None,
+        timestamp_ms: Optional[int] = None,
+        *,
+        source: ProductSource = ProductSource.UNKNOWN,
+        received_monotonic_s: Optional[float] = None,
+        quality: ValueQuality = ValueQuality.UNKNOWN,
+    ) -> "ProductValue[T]":
+        return cls(
+            value=value,
+            availability=Availability.STALE,
+            device_timestamp_ms=timestamp_ms,
+            source=source,
+            received_monotonic_s=received_monotonic_s,
+            quality=quality,
+        )
 
     @classmethod
     def unsupported(cls) -> "ProductValue[T]":
         return cls()
+
+    def age_s(self, now_monotonic_s: float) -> Optional[float]:
+        if self.received_monotonic_s is None:
+            return None
+        return max(0.0, float(now_monotonic_s) - self.received_monotonic_s)
 
 
 @dataclass(frozen=True)
@@ -216,3 +271,62 @@ class ProductSnapshot:
     navigation_sources: NavigationSourceInfo = field(default_factory=NavigationSourceInfo)
     external_ins: ExternalInsDiagnostics = field(default_factory=ExternalInsDiagnostics)
     source: str = "none"
+
+
+def _map_product_values(value, transform):
+    if isinstance(value, ProductValue):
+        return transform(value)
+    if is_dataclass(value):
+        return replace(
+            value,
+            **{
+                item.name: _map_product_values(getattr(value, item.name), transform)
+                for item in fields(value)
+            },
+        )
+    return value
+
+
+def stamp_snapshot_source(
+    snapshot: ProductSnapshot,
+    source: ProductSource,
+) -> ProductSnapshot:
+    quality = (
+        ValueQuality.MEASURED
+        if source is ProductSource.PRODUCT_SERVICE
+        else ValueQuality.DERIVED
+    )
+
+    def stamp(value: ProductValue) -> ProductValue:
+        return replace(
+            value,
+            source=source,
+            quality=quality if value.quality is ValueQuality.UNKNOWN else value.quality,
+        )
+
+    mapped = _map_product_values(snapshot, stamp)
+    return replace(mapped, source=source.value)
+
+
+def stamp_snapshot_received(snapshot, received_monotonic_s: Optional[float]):
+    """Attach one record's host receipt time to its product-value tree."""
+
+    if received_monotonic_s is None:
+        return snapshot
+
+    def stamp(value: ProductValue) -> ProductValue:
+        if value.device_timestamp_ms is None or value.received_monotonic_s is not None:
+            return value
+        return replace(
+            value,
+            received_monotonic_s=float(received_monotonic_s),
+        )
+
+    return _map_product_values(snapshot, stamp)
+
+
+def pending_product_snapshot() -> ProductSnapshot:
+    def pending(value: ProductValue) -> ProductValue:
+        return replace(value, availability=Availability.PENDING)
+
+    return replace(_map_product_values(ProductSnapshot(), pending), source="pending")

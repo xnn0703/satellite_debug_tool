@@ -33,8 +33,10 @@ from .models import (
     NavigationState,
     OperationalSnapshot,
     ProductSnapshot,
+    ProductSource,
     ProductValue,
     TrackingPhase,
+    stamp_snapshot_source,
 )
 from .timestamps import unwrap_u32_series
 
@@ -62,7 +64,10 @@ class LegacyV2Projector:
         now = time.monotonic() if now_monotonic is None else float(now_monotonic)
         hw = self._profiles.current_hw_type()
         if hw is None:
-            return ProductSnapshot(source="legacy_v2")
+            return stamp_snapshot_source(
+                ProductSnapshot(source="legacy_v2"),
+                ProductSource.LEGACY_V2,
+            )
 
         profile = self._profiles.get_profile(hw)
         meta = None if profile is None else profile.meta
@@ -95,7 +100,10 @@ class LegacyV2Projector:
             latitude_deg=self._channel_value(hw, CHANNEL_ROLE_GPS_LAT, now),
             altitude_m=self._channel_value(hw, CHANNEL_ROLE_GPS_ALT, now),
         )
-        return ProductSnapshot(identity=identity, operation=operation, source="legacy_v2")
+        return stamp_snapshot_source(
+            ProductSnapshot(identity=identity, operation=operation, source="legacy_v2"),
+            ProductSource.LEGACY_V2,
+        )
 
     def channel_history(
         self,
@@ -151,8 +159,16 @@ class LegacyV2Projector:
             return ProductValue.stale()
         timestamp, value = latest
         if now - received > self._stale_after_s:
-            return ProductValue.stale(float(value), int(timestamp))
-        return ProductValue.valid(float(value), int(timestamp))
+            return ProductValue.stale(
+                float(value),
+                int(timestamp),
+                received_monotonic_s=received,
+            )
+        return ProductValue.valid(
+            float(value),
+            int(timestamp),
+            received_monotonic_s=received,
+        )
 
     def _state_value(self, hw: str, role: str, now: float) -> ProductValue[int]:
         entry = self._profiles.find_state_by_role(hw, role)
@@ -162,8 +178,16 @@ class LegacyV2Projector:
         if state is None:
             return ProductValue.stale()
         if now - state.last_received_monotonic > self._stale_after_s:
-            return ProductValue.stale(state.value, state.last_change_ms)
-        return ProductValue.valid(state.value, state.last_change_ms)
+            return ProductValue.stale(
+                state.value,
+                state.last_change_ms,
+                received_monotonic_s=state.last_received_monotonic,
+            )
+        return ProductValue.valid(
+            state.value,
+            state.last_change_ms,
+            received_monotonic_s=state.last_received_monotonic,
+        )
 
     def _bool_state(self, hw: str, role: str, now: float) -> ProductValue[bool]:
         raw = self._state_value(hw, role, now)
@@ -171,8 +195,16 @@ class LegacyV2Projector:
             return ProductValue.unsupported()
         value = None if raw.value is None else bool(raw.value)
         if raw.availability == Availability.STALE:
-            return ProductValue.stale(value, raw.device_timestamp_ms)
-        return ProductValue.valid(bool(value), raw.device_timestamp_ms)
+            return ProductValue.stale(
+                value,
+                raw.device_timestamp_ms,
+                received_monotonic_s=raw.received_monotonic_s,
+            )
+        return ProductValue.valid(
+            bool(value),
+            raw.device_timestamp_ms,
+            received_monotonic_s=raw.received_monotonic_s,
+        )
 
     def _enum_state(self, hw: str, role: str, now: float) -> ProductValue[str]:
         raw = self._state_value(hw, role, now)
@@ -181,8 +213,16 @@ class LegacyV2Projector:
         entry = self._profiles.find_state_by_role(hw, role)
         name = self._enum_name(entry, raw.value)
         if raw.availability == Availability.STALE:
-            return ProductValue.stale(name, raw.device_timestamp_ms)
-        return ProductValue.valid(name, raw.device_timestamp_ms)
+            return ProductValue.stale(
+                name,
+                raw.device_timestamp_ms,
+                received_monotonic_s=raw.received_monotonic_s,
+            )
+        return ProductValue.valid(
+            name,
+            raw.device_timestamp_ms,
+            received_monotonic_s=raw.received_monotonic_s,
+        )
 
     @staticmethod
     def _enum_name(entry: Optional[StateDefEntry], value: Optional[int]) -> str:
@@ -215,12 +255,28 @@ class LegacyV2Projector:
         }.get(name, TrackingPhase.UNKNOWN)
         if raw.availability == Availability.STALE:
             return (
-                ProductValue.stale(mode, raw.device_timestamp_ms),
-                ProductValue.stale(phase, raw.device_timestamp_ms),
+                ProductValue.stale(
+                    mode,
+                    raw.device_timestamp_ms,
+                    received_monotonic_s=raw.received_monotonic_s,
+                ),
+                ProductValue.stale(
+                    phase,
+                    raw.device_timestamp_ms,
+                    received_monotonic_s=raw.received_monotonic_s,
+                ),
             )
         return (
-            ProductValue.valid(mode, raw.device_timestamp_ms),
-            ProductValue.valid(phase, raw.device_timestamp_ms),
+            ProductValue.valid(
+                mode,
+                raw.device_timestamp_ms,
+                received_monotonic_s=raw.received_monotonic_s,
+            ),
+            ProductValue.valid(
+                phase,
+                raw.device_timestamp_ms,
+                received_monotonic_s=raw.received_monotonic_s,
+            ),
         )
 
     def _navigation_state(self, hw: str, now: float) -> ProductValue[NavigationState]:
@@ -259,5 +315,13 @@ class LegacyV2Projector:
     @staticmethod
     def _mapped_state(value, raw: ProductValue[int]):
         if raw.availability == Availability.STALE:
-            return ProductValue.stale(value, raw.device_timestamp_ms)
-        return ProductValue.valid(value, raw.device_timestamp_ms)
+            return ProductValue.stale(
+                value,
+                raw.device_timestamp_ms,
+                received_monotonic_s=raw.received_monotonic_s,
+            )
+        return ProductValue.valid(
+            value,
+            raw.device_timestamp_ms,
+            received_monotonic_s=raw.received_monotonic_s,
+        )

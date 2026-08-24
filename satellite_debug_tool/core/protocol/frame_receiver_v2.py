@@ -22,39 +22,10 @@ from typing import List
 
 from satellite_debug_tool.core.link_trace import FrameTraceLogger, describe_frame
 
-from .codec_v2 import (
-    CodecError,
-    decode_channel_define,
-    decode_command_response,
-    decode_data_report,
-    decode_event_define,
-    decode_event_report,
-    decode_heartbeat,
-    decode_meta_info,
-    decode_para_table_report,
-    decode_profile_semantics,
-    decode_gnss_sky_report,
-    decode_gnss_cnr_report,
-    decode_gnss_sat_report,
-    decode_gnss_signal_report,
-    decode_state_define,
-    decode_state_report,
-    decode_service_capabilities,
-    decode_service_component_health,
-    decode_service_control_response,
-    decode_service_external_ins_diagnostics,
-    decode_service_fast_state,
-    decode_service_hardware_identity,
-    decode_service_identity,
-    decode_service_link_detail,
-    decode_service_navigation_source_info,
-    decode_service_rf_lock_status,
-    decode_service_slow_state,
-    decode_orbit_report,
-)
+from .codec_v2 import CodecError
 from .crc16 import Crc16
+from .domain_registry import decoder_for
 from .frame_v2 import (
-    CmdType,
     DEVICE_TYPE,
     FRAME_FOOTER,
     FRAME_HEADER_0,
@@ -76,38 +47,6 @@ class _State(IntEnum):
     READ_CRC_LO = 7
     READ_CRC_HI = 8
     READ_FOOTER = 9
-
-
-# cmd → decoder 分发表。未列出的 cmd 回退到 RawFrame。
-_DECODERS = {
-    int(CmdType.DATA_REPORT): decode_data_report,
-    int(CmdType.COMMAND_RESPONSE): decode_command_response,
-    int(CmdType.META_INFO): decode_meta_info,
-    int(CmdType.CHANNEL_DEFINE): decode_channel_define,
-    int(CmdType.STATE_DEFINE): decode_state_define,
-    int(CmdType.EVENT_DEFINE): decode_event_define,
-    int(CmdType.STATE_REPORT): decode_state_report,
-    int(CmdType.EVENT_REPORT): decode_event_report,
-    int(CmdType.HEARTBEAT): decode_heartbeat,
-    int(CmdType.PARA_TABLE_REPORT): decode_para_table_report,
-    int(CmdType.PROFILE_SEMANTICS): decode_profile_semantics,
-    int(CmdType.GNSS_SKY_REPORT): decode_gnss_sky_report,
-    int(CmdType.GNSS_CNR_REPORT): decode_gnss_cnr_report,
-    int(CmdType.GNSS_SAT_REPORT): decode_gnss_sat_report,
-    int(CmdType.GNSS_SIGNAL_REPORT): decode_gnss_signal_report,
-    int(CmdType.SERVICE_IDENTITY): decode_service_identity,
-    int(CmdType.SERVICE_HARDWARE_IDENTITY): decode_service_hardware_identity,
-    int(CmdType.SERVICE_NAV_SOURCE_INFO): decode_service_navigation_source_info,
-    int(CmdType.SERVICE_EXTERNAL_INS_DIAGNOSTICS): decode_service_external_ins_diagnostics,
-    int(CmdType.SERVICE_FAST_STATE): decode_service_fast_state,
-    int(CmdType.SERVICE_SLOW_STATE): decode_service_slow_state,
-    int(CmdType.SERVICE_LINK_DETAIL): decode_service_link_detail,
-    int(CmdType.SERVICE_RF_LOCK_STATUS): decode_service_rf_lock_status,
-    int(CmdType.SERVICE_COMPONENT_HEALTH): decode_service_component_health,
-    int(CmdType.SERVICE_CAPABILITIES): decode_service_capabilities,
-    int(CmdType.SERVICE_CONTROL_RESPONSE): decode_service_control_response,
-    int(CmdType.ORBIT_REPORT): decode_orbit_report,
-}
 
 
 class FrameReceiverV2:
@@ -270,7 +209,7 @@ class FrameReceiverV2:
             return None
 
         # 按 cmd 分发
-        decoder = _DECODERS.get(self._cmd_type)
+        decoder = decoder_for(self._cmd_type)
         record = None
         if decoder is None:
             record = RawFrame(cmd_type=self._cmd_type, data=bytes(self._data_buf))

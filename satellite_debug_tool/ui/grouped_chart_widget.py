@@ -336,6 +336,16 @@ class GroupedChartWidget(QWidget):
         if first_plot is not None:
             first_plot.setLabel("bottom", self._time_axis_text(), units="s")
 
+    def set_time_origin_ms(self, timestamp_ms: Optional[float]) -> None:
+        """Set the stable recording origin used by windowed playback queries."""
+
+        if self._device_uptime_axis:
+            self._x_origin_ms = 0.0
+        else:
+            self._x_origin_ms = (
+                None if timestamp_ms is None else float(timestamp_ms)
+            )
+
     def _time_axis_text(self) -> str:
         return tr("Device uptime") if self._device_uptime_axis else tr("Time")
 

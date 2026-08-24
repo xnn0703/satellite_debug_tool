@@ -69,6 +69,7 @@ def test_engineering_session_requires_no_batch_dut_or_reference(
     monkeypatch,
 ) -> None:
     from satellite_debug_tool.core.production import (
+        FixtureCalibration,
         FixtureCalibrationStore,
         FixtureControlLease,
         FixtureProfileStore,
@@ -239,15 +240,24 @@ def test_long_session_analysis_runs_outside_the_ui_thread(
     workspace._measurements.append(
         TimedAttitude(now_ns + 50_000_000, 0.5, 0.0, 0.0)
     )
+    recorder = workspace._recorder
+    assert recorder is not None
+    recorder.record_target(TimedAttitude(now_ns, 0.0, 0.0, 0.0))
+    recorder.record_target(
+        TimedAttitude(now_ns + 100_000_000, 1.0, 0.0, 0.0)
+    )
+    recorder.record_measurement(
+        TimedAttitude(now_ns + 50_000_000, 0.5, 0.0, 0.0)
+    )
     analysis_threads = []
-    original_compare = fixture_ui.compare_attitude_streams
+    original_generate = recorder.generate_comparison_sample
 
-    def traced_compare(*args, **kwargs):
+    def traced_generate(*args, **kwargs):
         analysis_threads.append(threading.get_ident())
         time.sleep(0.1)
-        return original_compare(*args, **kwargs)
+        return original_generate(*args, **kwargs)
 
-    monkeypatch.setattr(fixture_ui, "compare_attitude_streams", traced_compare)
+    monkeypatch.setattr(recorder, "generate_comparison_sample", traced_generate)
     ui_thread = threading.get_ident()
     started = time.monotonic()
     workspace._begin_session_finish(
@@ -383,6 +393,7 @@ def test_metric_finalization_failure_produces_incomplete_result(
     monkeypatch,
 ) -> None:
     from satellite_debug_tool.core.production import (
+        FixtureCalibration,
         FixtureCalibrationStore,
         FixtureControlLease,
         FixtureProfileStore,
@@ -408,10 +419,29 @@ def test_metric_finalization_failure_produces_incomplete_result(
     recorder = workspace._recorder
     assert recorder is not None
 
-    def fail_record_comparisons(*_args, **_kwargs) -> None:
+    workspace._calibration = FixtureCalibration(
+        calibration_id="MS6222-CAL-METRIC-FAILURE",
+        profile_id=workspace.profile.profile_id,
+        profile_sha256=workspace.profile.sha256,
+        created_utc="2026-08-23T00:00:00+00:00",
+        sensor_axis_for_logical=("roll", "pitch", "yaw"),
+        logical_signs=(1, 1, 1),
+        zero_offsets_deg=(0.0, 0.0, 0.0),
+        response_matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        cross_coupling_ratio=(0.0, 0.0, 0.0),
+        static_noise_std_deg=(0.0, 0.0, 0.0),
+        sample_coverage_ratio=1.0,
+        confirmed=True,
+    )
+
+    def fail_generate_comparisons(*_args, **_kwargs) -> None:
         raise RuntimeError("metric evidence disk failed")
 
-    monkeypatch.setattr(recorder, "record_comparisons", fail_record_comparisons)
+    monkeypatch.setattr(
+        recorder,
+        "generate_comparison_sample",
+        fail_generate_comparisons,
+    )
     workspace._begin_session_finish(
         conclusion=FixtureSessionConclusion.INCONCLUSIVE,
         notes="metric finalization",
@@ -442,7 +472,9 @@ def test_leaving_inactive_fixture_page_clears_safety_confirmations(
         _profile()
     )
     workspace = ProductionWorkspace(settings)
+    workspace.activate_view()
     workspace._switch_subpage(1)
+    assert workspace._fixture_debug is not None
     for check in workspace._fixture_debug._safety_checks:
         check.setChecked(True)
     assert all(check.isChecked() for check in workspace._fixture_debug._safety_checks)

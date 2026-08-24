@@ -34,7 +34,10 @@ def evaluate_external_ins(snapshot: ProductSnapshot) -> ExternalInsGate:
     source = sources.external_ins_source
 
     required = (supported, configured, role_mask, source)
-    if any(value.availability == Availability.UNSUPPORTED for value in required):
+    if any(
+        value.availability in {Availability.PENDING, Availability.UNSUPPORTED}
+        for value in required
+    ):
         return ExternalInsGate(ExternalInsApplicability.UNKNOWN, "capability_unknown")
     if supported.value is False:
         return ExternalInsGate(

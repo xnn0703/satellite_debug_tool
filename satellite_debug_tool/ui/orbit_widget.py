@@ -60,7 +60,7 @@ from satellite_debug_tool.core.protocol import (
     build_orbit_upload_end,
     build_orbit_upload_abort,
 )
-from satellite_debug_tool.i18n import register_translatable, tr
+from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import styles as S
 
 
@@ -152,6 +152,10 @@ class OrbitWidget(QWidget):
         self._upload_request_id = 0
         self._upload_offset = 0
         self._refresh_ticks = 0
+        self._status_source = tr_source("Waiting for Orbit capability...")
+        self._status_values: dict[str, object] = {}
+        self._prediction_source = tr_source("No prediction requested")
+        self._prediction_values: dict[str, object] = {}
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(1000)
         self._refresh_timer.timeout.connect(self._on_refresh_tick)
@@ -168,7 +172,8 @@ class OrbitWidget(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
-        self._status = QLabel(tr("Waiting for Orbit capability..."))
+        self._status = QLabel()
+        self._set_status(self._status_source)
         root.addWidget(self._status)
         self._tabs = QTabWidget()
         root.addWidget(self._tabs, 1)
@@ -177,8 +182,8 @@ class OrbitWidget(QWidget):
         self._setup_prediction_tab()
 
     def _setup_catalog_tab(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        self._catalog_tab = QWidget()
+        layout = QVBoxLayout(self._catalog_tab)
         tools = QHBoxLayout()
         self._upload_btn = QPushButton(tr("Upload tle.txt"))
         self._scan_btn = QPushButton(tr("Scan device"))
@@ -202,16 +207,17 @@ class OrbitWidget(QWidget):
         self._catalog_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._catalog_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self._catalog_table, 1)
-        self._tabs.addTab(tab, tr("Catalog"))
+        self._tabs.addTab(self._catalog_tab, tr("Catalog"))
 
     def _setup_current_tab(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        self._current_tab = QWidget()
+        layout = QVBoxLayout(self._current_tab)
         row = QHBoxLayout()
         self._current_refresh_btn = QPushButton(tr("Refresh current positions"))
         self._current_refresh_btn.clicked.connect(self.request_current)
         row.addWidget(self._current_refresh_btn)
-        row.addWidget(QLabel(tr("Minimum elevation")))
+        self._current_min_el_label = QLabel(tr("Minimum elevation"))
+        row.addWidget(self._current_min_el_label)
         self._current_min_el = QDoubleSpinBox()
         self._current_min_el.setRange(-5.0, 90.0)
         self._current_min_el.setValue(0.0)
@@ -233,11 +239,11 @@ class OrbitWidget(QWidget):
         splitter.addWidget(self._current_table)
         splitter.setSizes([380, 760])
         layout.addWidget(splitter, 1)
-        self._tabs.addTab(tab, tr("Current sky"))
+        self._tabs.addTab(self._current_tab, tr("Current sky"))
 
     def _setup_prediction_tab(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        self._prediction_tab = QWidget()
+        layout = QVBoxLayout(self._prediction_tab)
         controls = QHBoxLayout()
         self._target_combo = QComboBox()
         self._target_combo.addItem(tr("All satellites (pass summary)"), 0)
@@ -257,18 +263,22 @@ class OrbitWidget(QWidget):
         self._export_btn = QPushButton(tr("Export CSV/JSON"))
         self._predict_btn.clicked.connect(self._predict)
         self._export_btn.clicked.connect(self._export_prediction)
-        for label, widget in (
-            (tr("Target"), self._target_combo),
-            (tr("Horizon"), self._horizon),
-            (tr("Step"), self._step),
-            (tr("Minimum elevation"), self._prediction_min_el),
+        self._prediction_labels: list[tuple[QLabel, str]] = []
+        for source, widget in (
+            (tr_source("Target"), self._target_combo),
+            (tr_source("Horizon"), self._horizon),
+            (tr_source("Step"), self._step),
+            (tr_source("Minimum elevation"), self._prediction_min_el),
         ):
-            controls.addWidget(QLabel(label))
+            label = QLabel(tr(source))
+            self._prediction_labels.append((label, source))
+            controls.addWidget(label)
             controls.addWidget(widget)
         controls.addWidget(self._predict_btn)
         controls.addWidget(self._export_btn)
         layout.addLayout(controls)
-        self._prediction_summary = QLabel(tr("No prediction requested"))
+        self._prediction_summary = QLabel()
+        self._set_prediction_summary(self._prediction_source)
         layout.addWidget(self._prediction_summary)
         splitter = QSplitter(Qt.Vertical)
         self._prediction_plot = pg.PlotWidget()
@@ -282,11 +292,21 @@ class OrbitWidget(QWidget):
         splitter.addWidget(self._prediction_table)
         splitter.setSizes([330, 300])
         layout.addWidget(splitter, 1)
-        self._tabs.addTab(tab, tr("Prediction"))
+        self._tabs.addTab(self._prediction_tab, tr("Prediction"))
+
+    def _set_status(self, source: str, **values: object) -> None:
+        self._status_source = source
+        self._status_values = dict(values)
+        self._status.setText(tr(source, **values))
+
+    def _set_prediction_summary(self, source: str, **values: object) -> None:
+        self._prediction_source = source
+        self._prediction_values = dict(values)
+        self._prediction_summary.setText(tr(source, **values))
 
     def _request(self, builder: Callable[..., bytes], *args) -> bool:
         if not self._is_connected():
-            self._status.setText(tr("Device is not connected"))
+            self._set_status(tr_source("Device is not connected"))
             return False
         request_id = self._next_request_id()
         return self._send_frame(builder(request_id, *args))
@@ -314,7 +334,7 @@ class OrbitWidget(QWidget):
     @Slot()
     def _scan(self) -> None:
         if self._request(build_orbit_scan):
-            self._status.setText(tr("Device scan requested"))
+            self._set_status(tr_source("Device scan requested"))
 
     @Slot()
     def _predict(self) -> None:
@@ -331,7 +351,7 @@ class OrbitWidget(QWidget):
             self._step.value(),
             self._prediction_min_el.value(),
         ):
-            self._prediction_summary.setText(tr("Prediction submitted..."))
+            self._set_prediction_summary(tr_source("Prediction submitted..."))
 
     @Slot()
     def _select_target(self) -> None:
@@ -370,7 +390,10 @@ class OrbitWidget(QWidget):
         frame = build_orbit_upload_begin(self._upload_request_id, len(data), zlib.crc32(data) & 0xFFFFFFFF)
         if self._send_frame(frame):
             self._upload_timer.start()
-            self._status.setText(tr("Uploading tle.txt: 0%"))
+            self._set_status(
+                tr_source("Uploading tle.txt: {percent}%"),
+                percent=0,
+            )
         else:
             self._reset_upload()
 
@@ -389,7 +412,9 @@ class OrbitWidget(QWidget):
     def _on_upload_timeout(self) -> None:
         if self._upload_request_id != 0 and self._is_connected():
             self._send_frame(build_orbit_upload_abort(self._upload_request_id))
-        self._status.setText(tr("TLE upload timed out and was cancelled."))
+        self._set_status(
+            tr_source("TLE upload timed out and was cancelled.")
+        )
         self._reset_upload()
 
     def _reset_upload(self) -> None:
@@ -401,9 +426,12 @@ class OrbitWidget(QWidget):
     @Slot(object)
     def _on_store_changed(self, report: object) -> None:
         if isinstance(report, OrbitCapabilitiesReport):
-            self._status.setText(
-                tr("Orbit service ready · {count} satellites · {hours} h maximum", count=report.max_catalog_entries,
-                   hours=report.max_horizon_s // 3600)
+            self._set_status(
+                tr_source(
+                    "Orbit service ready · {count} satellites · {hours} h maximum"
+                ),
+                count=report.max_catalog_entries,
+                hours=report.max_horizon_s // 3600,
             )
             self.request_catalog()
             self.request_current()
@@ -419,9 +447,13 @@ class OrbitWidget(QWidget):
         elif isinstance(report, OrbitSkyReport):
             self._render_current()
         elif isinstance(report, OrbitPredictionAccepted):
-            self._prediction_summary.setText(
-                tr("Job {job} · generation {generation} · fixed station · start {start}",
-                   job=report.job_id, generation=report.generation, start=_utc_text(report.start_utc_ms))
+            self._set_prediction_summary(
+                tr_source(
+                    "Job {job} · generation {generation} · fixed station · start {start}"
+                ),
+                job=report.job_id,
+                generation=report.generation,
+                start=_utc_text(report.start_utc_ms),
             )
             self._request(build_orbit_prediction_page, report.job_id, 0)
         elif isinstance(report, OrbitPredictionPage):
@@ -440,30 +472,40 @@ class OrbitWidget(QWidget):
             elif report.operation == OrbitOperation.UPLOAD_CHUNK:
                 self._upload_offset = report.acknowledged_size
                 percent = 100 * self._upload_offset // len(self._upload_data)
-                self._status.setText(tr("Uploading tle.txt: {percent}%", percent=percent))
+                self._set_status(
+                    tr_source("Uploading tle.txt: {percent}%"),
+                    percent=percent,
+                )
                 self._send_upload_chunk(self._upload_offset)
         elif isinstance(report, OrbitStatusReport):
             self._handle_status(report)
 
     def _handle_status(self, report: OrbitStatusReport) -> None:
         if report.status != OrbitStatus.OK:
-            self._status.setText(tr("Orbit request {operation} failed: {status}", operation=report.operation.name,
-                                    status=report.status.name))
+            self._set_status(
+                tr_source("Orbit request {operation} failed: {status}"),
+                operation=report.operation.name,
+                status=report.status.name,
+            )
             if report.request_id == self._upload_request_id:
                 self._reset_upload()
             return
         if report.operation == OrbitOperation.UPLOAD_END and report.request_id == self._upload_request_id:
             self._reset_upload()
-            self._status.setText(tr("tle.txt uploaded; device catalog scan requested"))
+            self._set_status(
+                tr_source("tle.txt uploaded; device catalog scan requested")
+            )
             QTimer.singleShot(250, self.request_catalog)
         elif report.operation == OrbitOperation.SELECT:
-            self._status.setText(tr("Tracking target accepted; TX state was not changed"))
+            self._set_status(
+                tr_source("Tracking target accepted; TX state was not changed")
+            )
         elif report.operation == OrbitOperation.SCAN:
             QTimer.singleShot(200, self.request_catalog)
 
     @Slot()
     def _on_store_cleared(self) -> None:
-        self._status.setText(tr("Orbit data cleared; waiting for device"))
+        self._set_status(tr_source("Orbit data cleared; waiting for device"))
         self._catalog_table.setRowCount(0)
         self._current_table.setRowCount(0)
         self._prediction_table.setRowCount(0)
@@ -600,7 +642,68 @@ class OrbitWidget(QWidget):
         except OSError as exc:
             QMessageBox.warning(self, tr("Export"), str(exc))
             return
-        self._status.setText(tr("Prediction exported to {path}", path=path))
+        self._set_status(
+            tr_source("Prediction exported to {path}"),
+            path=path,
+        )
+
+    def retranslate_ui(self) -> None:
+        self._set_status(self._status_source, **self._status_values)
+        self._set_prediction_summary(
+            self._prediction_source,
+            **self._prediction_values,
+        )
+        self._upload_btn.setText(tr("Upload tle.txt"))
+        self._scan_btn.setText(tr("Scan device"))
+        self._catalog_refresh_btn.setText(tr("Refresh"))
+        self._select_btn.setText(tr("Set tracking target"))
+        self._current_refresh_btn.setText(tr("Refresh current positions"))
+        self._current_min_el_label.setText(tr("Minimum elevation"))
+        self._predict_btn.setText(tr("Predict"))
+        self._export_btn.setText(tr("Export CSV/JSON"))
+        for label, source in self._prediction_labels:
+            label.setText(tr(source))
+        self._tabs.setTabText(self._tabs.indexOf(self._catalog_tab), tr("Catalog"))
+        self._tabs.setTabText(
+            self._tabs.indexOf(self._current_tab),
+            tr("Current sky"),
+        )
+        self._tabs.setTabText(
+            self._tabs.indexOf(self._prediction_tab),
+            tr("Prediction"),
+        )
+        self._catalog_table.setHorizontalHeaderLabels(
+            [
+                tr("NORAD"),
+                tr("Satellite"),
+                tr("TLE epoch"),
+                tr("Age / status"),
+                tr("Source"),
+            ]
+        )
+        self._current_table.setHorizontalHeaderLabels(
+            [
+                tr("NORAD"),
+                tr("Azimuth"),
+                tr("Elevation"),
+                tr("Range km"),
+                tr("Latitude"),
+                tr("Longitude"),
+                tr("Altitude km"),
+                tr("TLE status"),
+            ]
+        )
+        self._prediction_plot.setLabel("left", tr("Angle"), units="deg")
+        self._prediction_plot.setLabel(
+            "bottom",
+            tr("Seconds from start"),
+            units="s",
+        )
+        if self._store.available:
+            self._render_catalog()
+            self._render_current()
+        if self._store.prediction_job is not None:
+            self._render_prediction()
 
     @Slot()
     def _on_refresh_tick(self) -> None:

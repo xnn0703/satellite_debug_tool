@@ -1075,10 +1075,10 @@ def test_live_status_components_share_store_and_debug_off_clears(qapp, tmp_path,
     view = LiveView(settings=Settings())
     assert view._status_strip._states is view._state_store
     assert view._dashboard._states is view._state_store
+    view._debug_controller.apply_confirmed_state(True)
     view._state_store.update("afd01", StateReport(100, [StateSample(2, 3)]))
     assert view._state_store.get_value("afd01", 2) == 3
-    view._debug_enabled = True
-    view._apply_debug_state(False, source="test")
+    view._debug_controller.apply_confirmed_state(False)
     assert view._state_store.get_value("afd01", 2) is None
     view.close()
 

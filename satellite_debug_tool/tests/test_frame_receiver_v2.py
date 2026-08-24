@@ -163,8 +163,14 @@ class TestUnknownCmd:
 
         sat_cmd = int(CmdType.GNSS_SAT_REPORT)
         signal_cmd = int(CmdType.GNSS_SIGNAL_REPORT)
-        monkeypatch.delitem(receiver_module._DECODERS, sat_cmd)
-        monkeypatch.delitem(receiver_module._DECODERS, signal_cmd)
+        registered_decoder = receiver_module.decoder_for
+
+        def decoder_without_extensions(command: int):
+            if command in (sat_cmd, signal_cmd):
+                return None
+            return registered_decoder(command)
+
+        monkeypatch.setattr(receiver_module, "decoder_for", decoder_without_extensions)
 
         r = FrameReceiverV2()
         records = r.feed(

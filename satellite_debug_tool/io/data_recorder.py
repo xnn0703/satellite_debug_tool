@@ -34,18 +34,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-
-SDB_MAGIC = b"SDB\x00"
-SDB_VERSION_V2 = 0x0002
-SDB_VERSION_V3 = 0x0003
-SDB_FOOTER = b"\xee\xee\xee\xee"
-
-SDB_RECORD_RX_CHUNK = 0x01
-SDB_RECORD_GAP = 0x02
-SDB_RECORD_CONTROL_TX = 0x03
-SDB_RECORD_METADATA = 0x04
-SDB_RECORD_SUMMARY = 0xFE
-SDB_V3_RECORD_HEADER = struct.Struct("<BQI")
+from satellite_debug_tool.io.sdb_schema import (
+    SDB_FOOTER,
+    SDB_MAGIC,
+    SDB_RECORD_CONTROL_TX,
+    SDB_RECORD_GAP,
+    SDB_RECORD_METADATA,
+    SDB_RECORD_RX_CHUNK,
+    SDB_RECORD_SUMMARY,
+    SDB_V3_RECORD_HEADER,
+    SDB_VERSION_V2,
+    SDB_VERSION_V3,
+)
 
 # 后台队列容量（每项一帧；10 KB/s × 10s ≈ 100k 帧上限的十分之一足矣）
 _DEFAULT_QUEUE_SIZE = 10_000

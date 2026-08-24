@@ -33,24 +33,28 @@ class ConnectionDialog(QDialog):
         self.tabs.addTab(self.serial_tab, tr("Serial"))
         self.tabs.addTab(self.udp_tab, "UDP")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self._on_ok)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self._buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        self._buttons.accepted.connect(self._on_ok)
+        self._buttons.rejected.connect(self.reject)
+        layout.addWidget(self._buttons)
 
     def _create_serial_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
         port_layout = QHBoxLayout()
-        port_layout.addWidget(QLabel(tr("Port:")))
+        self._serial_port_label = QLabel(tr("Port:"))
+        port_layout.addWidget(self._serial_port_label)
         self.serial_port_combo = QComboBox()
         self.serial_port_combo.addItems(SerialWorker.list_ports())
         port_layout.addWidget(self.serial_port_combo)
         layout.addLayout(port_layout)
 
         baud_layout = QHBoxLayout()
-        baud_layout.addWidget(QLabel(tr("Baud rate:")))
+        self._baudrate_label = QLabel(tr("Baud rate:"))
+        baud_layout.addWidget(self._baudrate_label)
         self.baudrate_combo = QComboBox()
         baudrates = [
             "9600",
@@ -75,13 +79,15 @@ class ConnectionDialog(QDialog):
         layout = QVBoxLayout(widget)
 
         remote_layout = QHBoxLayout()
-        remote_layout.addWidget(QLabel(tr("Remote IP:")))
+        self._remote_ip_label = QLabel(tr("Remote IP:"))
+        remote_layout.addWidget(self._remote_ip_label)
         self.udp_remote_ip = QLineEdit("192.168.1.12")
         remote_layout.addWidget(self.udp_remote_ip)
         layout.addLayout(remote_layout)
 
         remote_port_layout = QHBoxLayout()
-        remote_port_layout.addWidget(QLabel(tr("Remote port:")))
+        self._remote_port_label = QLabel(tr("Remote port:"))
+        remote_port_layout.addWidget(self._remote_port_label)
         self.udp_remote_port = QSpinBox()
         self.udp_remote_port.setRange(1, 65535)
         self.udp_remote_port.setValue(4004)
@@ -89,7 +95,8 @@ class ConnectionDialog(QDialog):
         layout.addLayout(remote_port_layout)
 
         local_port_layout = QHBoxLayout()
-        local_port_layout.addWidget(QLabel(tr("Local port:")))
+        self._local_port_label = QLabel(tr("Local port:"))
+        local_port_layout.addWidget(self._local_port_label)
         self.udp_local_port = QSpinBox()
         self.udp_local_port.setRange(1, 65535)
         self.udp_local_port.setValue(45678)
@@ -101,6 +108,18 @@ class ConnectionDialog(QDialog):
 
     def _on_ok(self):
         self.accept()
+
+    def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("Connection settings"))
+        self.tabs.setTabText(0, tr("Serial"))
+        self.tabs.setTabText(1, "UDP")
+        self._serial_port_label.setText(tr("Port:"))
+        self._baudrate_label.setText(tr("Baud rate:"))
+        self._remote_ip_label.setText(tr("Remote IP:"))
+        self._remote_port_label.setText(tr("Remote port:"))
+        self._local_port_label.setText(tr("Local port:"))
+        self._buttons.button(QDialogButtonBox.Ok).setText(tr("OK"))
+        self._buttons.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
 
     def get_config(self) -> dict:
         if self.tabs.currentIndex() == 0:

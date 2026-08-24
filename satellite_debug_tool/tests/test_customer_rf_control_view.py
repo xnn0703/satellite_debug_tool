@@ -6,7 +6,7 @@ import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
 
-from satellite_debug_tool.core.product import ControlMode, ProductServiceStore
+from satellite_debug_tool.core.product import ControlMode
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.protocol import (
     CmdType,
@@ -18,6 +18,7 @@ from satellite_debug_tool.core.protocol import (
     ServiceIdentity,
     ServiceSlowState,
 )
+from satellite_debug_tool.core.session import DeviceSessionCore
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
 
 
@@ -28,9 +29,10 @@ class _LiveDouble(QObject):
         super().__init__()
         self._profiles = ProfileStore()
         self._profiles.apply_meta(MetaInfo(2, "0.0.130", "afd01", "AFD01-TEST"))
-        self._products = ProductServiceStore()
+        self._session = DeviceSessionCore(profile_store=self._profiles)
+        self._products = self._session.product_store
         self.sent: list[bytes] = []
-        self.request_id = 0
+        self._session.attach_transport(self, self.send_product_frame)
 
     def profile_store(self):
         return self._profiles
@@ -38,12 +40,11 @@ class _LiveDouble(QObject):
     def product_store(self):
         return self._products
 
+    def session_core(self):
+        return self._session
+
     def is_connected(self):
         return True
-
-    def next_product_request_id(self):
-        self.request_id += 1
-        return self.request_id
 
     def send_product_frame(self, frame: bytes):
         self.sent.append(frame)

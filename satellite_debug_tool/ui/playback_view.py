@@ -28,6 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.data import DataStore, EventLog, GnssStore, StateStore
+from satellite_debug_tool.core.playback import (
+    PlaybackLoadResult,
+    PlaybackLoadThread,
+    build_engineering_playback,
+)
 from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_GPS_LAT,
     CHANNEL_ROLE_GPS_LON,
@@ -42,7 +47,6 @@ from satellite_debug_tool.core.protocol import (
     GnssSkyReport,
     StateReport,
 )
-from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.i18n import (
     register_translatable,
     set_raw_text,
@@ -67,7 +71,7 @@ class PlaybackView(QWidget):
         self._settings = settings   # 可选；用于读取 paths.recording_dir 作为打开默认目录
 
         # ---------- 独立的数据/profile 三件套 ----------
-        self._data_store = DataStore(buffer_capacity=None)   # 无界，保留全部
+        self._data_store = DataStore(max_channels=64, buffer_capacity=6000)
         self._profile_store = ProfileStore(cache=None)        # 不写磁盘
         self._state_store = StateStore()
         self._event_log = EventLog()
@@ -81,6 +85,8 @@ class PlaybackView(QWidget):
         self._last_ts_ms: Optional[float] = None
         self._total_sec: float = 0.0
         self._loaded_count: int = 0
+        self._series_provider = None
+        self._load_thread: Optional[PlaybackLoadThread] = None
 
         # ---------- M8: 地图浮窗（懒加载） ----------
         self._map_widget = None
@@ -233,57 +239,88 @@ class PlaybackView(QWidget):
         )
         if not filepath:
             return
-        self._load_file(Path(filepath))
+        self._start_file_load(Path(filepath))
 
     def _load_file(self, path: Path) -> None:
-        """阻塞解析（一次性读全文件 → SdbFile.iter_records）。"""
+        """Synchronous compatibility entry used by focused tests and tools."""
         self.status_message.emit(tr("Loading {file}...", file=path.name), 0)
         try:
-            sdb = DataImporter.open_sdb(path)
+            result = build_engineering_playback(path)
         except Exception as exc:
             self.status_message.emit(tr("Failed to open: {detail}", detail=exc), 5000)
             return
+        self._apply_load_result(result)
+
+    def _start_file_load(self, path: Path) -> None:
+        """Parse and index a recording without blocking the Qt event loop."""
+
+        if self._load_thread is not None and self._load_thread.isRunning():
+            return
+        self.status_message.emit(tr("Loading {file}...", file=path.name), 0)
+        self._open_btn.setEnabled(False)
+        self._clear_btn.setEnabled(False)
+        worker = PlaybackLoadThread(path, customer=False, parent=self)
+        self._load_thread = worker
+        worker.loaded.connect(self._on_load_ready)
+        worker.failed.connect(self._on_load_failed)
+        worker.finished.connect(self._on_load_thread_finished)
+        worker.start()
+
+    def _on_load_ready(self, result: PlaybackLoadResult) -> None:
+        self._apply_load_result(result)
+
+    def _on_load_failed(self, detail: str) -> None:
+        self.status_message.emit(tr("Failed to open: {detail}", detail=detail), 5000)
+        self._open_btn.setEnabled(True)
+        self._clear_btn.setEnabled(self._current_file is not None)
+
+    def _on_load_thread_finished(self) -> None:
+        worker = self.sender()
+        if worker is self._load_thread:
+            self._load_thread = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _apply_load_result(self, result: PlaybackLoadResult) -> None:
+        """Atomically replace the visible playback snapshot."""
+
+        previous_provider = self._series_provider
+        self._series_provider = result.provider
+        if previous_provider is not None:
+            previous_provider.close()
 
         # 1) 清空所有现有数据 + profile
-        self._data_store.clear()
+        self._data_store = result.provider.load_window(max_points_per_channel=6000)
         self._event_log.clear()
         self._state_store.clear()
         self._gnss_store.clear()
+        self._profile_store.clear()
+        self._chart.set_hw_type(None)
         self._first_ts_ms = None
         self._last_ts_ms = None
-        self._loaded_count = 0
+        self._loaded_count = result.provider.summary.report_count
         # 2) 恢复 profile（如有）
-        hw = self._profile_store.current_hw_type()
-        if sdb.profile is not None:
-            new_hw = self._profile_store.import_dict(sdb.profile)
+        hw = result.source_hw_type
+        if result.profile is not None:
+            new_hw = self._profile_store.import_dict(result.profile)
             if new_hw is not None:
                 hw = new_hw
                 self._chart.set_hw_type(hw)
                 self._dashboard.set_hw_type(hw)
 
-        # 3) 灌入帧
-        for rec in sdb.iter_records():
-            if isinstance(rec, DataReport):
-                self._data_store.update(rec)
-                self._loaded_count += 1
-                ts = float(rec.timestamp)
-                if self._first_ts_ms is None or ts < self._first_ts_ms:
-                    self._first_ts_ms = ts
-                if self._last_ts_ms is None or ts > self._last_ts_ms:
-                    self._last_ts_ms = ts
-            elif hw is not None and isinstance(rec, StateReport):
-                self._state_store.update(hw, rec)
-            elif hw is not None and isinstance(rec, EventReport):
-                self._event_log.add(hw, rec, self._profile_store)
-            elif isinstance(rec, (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)):
-                self._gnss_store.update(rec)
-                ts = float(rec.timestamp)
-                if self._first_ts_ms is None or ts < self._first_ts_ms:
-                    self._first_ts_ms = ts
-                if self._last_ts_ms is None or ts > self._last_ts_ms:
-                    self._last_ts_ms = ts
+        # 3) Restore bounded auxiliary snapshots.
+        if hw is not None and result.latest_state is not None:
+            self._state_store.update(hw, result.latest_state)
+        if hw is not None:
+            for record in result.events:
+                self._event_log.add(hw, record, self._profile_store)
+        for record in result.gnss_records:
+            self._gnss_store.update(record)
 
         # 4) 计算总时长 + 推到 TimeRangeControl
+        summary = result.provider.summary
+        self._first_ts_ms = summary.first_timestamp_ms
+        self._last_ts_ms = summary.last_timestamp_ms
         if self._first_ts_ms is not None and self._last_ts_ms is not None:
             self._total_sec = max(0.0, (self._last_ts_ms - self._first_ts_ms) / 1000.0)
         else:
@@ -291,14 +328,23 @@ class PlaybackView(QWidget):
         self._range_ctl.set_total(self._total_sec)
 
         # 5) 推到 chart：先 auto_range 让初始视图显示全部
+        self._chart.clear()
+        self._chart.set_time_origin_ms(self._first_ts_ms)
         self._chart.set_auto_range(True)
         self._chart.refresh(self._data_store)
         self._dashboard.refresh(self._data_store)
+        for record in self._event_log.all():
+            self._chart.add_event_marker(
+                record.timestamp_ms,
+                record.level,
+                name=record.name,
+                event_id=record.event_id,
+            )
         # 之后 _on_range_changed 会切回手动模式（用户选预设/自定义时）
 
         # 6) UI 元信息
-        self._current_file = path
-        set_raw_text(f"📄 {path.name}", self._file_label)
+        self._current_file = result.path
+        set_raw_text(f"📄 {result.path.name}", self._file_label)
         set_translatable_text(
             "Duration: {duration:.1f}s · {count} frame(s)",
             self._total_label,
@@ -328,9 +374,29 @@ class PlaybackView(QWidget):
 
         # M9: 启用"清除"按钮
         self._clear_btn.setEnabled(True)
+        self._open_btn.setEnabled(True)
 
     def _on_range_changed(self, start_sec: float, end_sec: float) -> None:
         """TimeRangeControl 选择新范围。"""
+        if self._series_provider is not None and self._first_ts_ms is not None:
+            start_ms = self._first_ts_ms + float(start_sec) * 1000.0
+            end_ms = self._first_ts_ms + float(end_sec) * 1000.0
+            self._data_store = self._series_provider.load_window(
+                start_ms,
+                end_ms,
+                max_points_per_channel=6000,
+            )
+            self._chart.clear()
+            self._chart.set_time_origin_ms(self._first_ts_ms)
+            self._chart.refresh(self._data_store)
+            self._dashboard.refresh(self._data_store)
+            for record in self._event_log.all():
+                self._chart.add_event_marker(
+                    record.timestamp_ms,
+                    record.level,
+                    name=record.name,
+                    event_id=record.event_id,
+                )
         # 关闭自动范围，使用显式 X 视窗
         self._chart.set_auto_range(False)
         self._chart.set_x_range_sec(start_sec, end_sec)
@@ -368,6 +434,9 @@ class PlaybackView(QWidget):
         """M9：清空所有回放数据 + UI 状态，释放内存。"""
         # 1) 数据三件套
         self._data_store.clear()
+        if self._series_provider is not None:
+            self._series_provider.close()
+            self._series_provider = None
         self._event_log.clear()
         self._state_store.clear()
         self._gnss_store.clear()
@@ -399,6 +468,20 @@ class PlaybackView(QWidget):
         # 7) 自身按钮
         self._clear_btn.setEnabled(False)
         self.status_message.emit(tr("Playback data cleared"), 2000)
+
+    def shutdown(self) -> None:
+        worker = self._load_thread
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(5000)
+        self._load_thread = None
+        if self._series_provider is not None:
+            self._series_provider.close()
+            self._series_provider = None
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
+        super().closeEvent(event)
 
     def _toggle_gnss(self) -> None:
         if self._gnss_dock is None:
@@ -476,8 +559,13 @@ class PlaybackView(QWidget):
         if self._gps_lat_id is None or self._gps_lon_id is None:
             self._map_widget.clear()
             return
-        lat_buf = self._data_store.get_channel_by_id(self._gps_lat_id)
-        lon_buf = self._data_store.get_channel_by_id(self._gps_lon_id)
+        source_store = self._data_store
+        if self._series_provider is not None:
+            source_store = self._series_provider.load_window(
+                max_points_per_channel=10_000
+            )
+        lat_buf = source_store.get_channel_by_id(self._gps_lat_id)
+        lon_buf = source_store.get_channel_by_id(self._gps_lon_id)
         if lat_buf is None or lon_buf is None:
             self._map_widget.clear()
             return

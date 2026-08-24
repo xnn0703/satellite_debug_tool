@@ -14,7 +14,12 @@ import threading
 from typing import Any, Mapping, Optional
 import uuid
 
-from .fixture_analysis import AttitudeComparison
+from .fixture_analysis import (
+    AttitudeComparison,
+    FixtureCalibration,
+    TimedAttitude,
+    iter_attitude_comparisons,
+)
 from .fixture_profile import WorkstationFixtureProfile
 from .motion_platform import PlatformSendResult
 from .ms6222_protocol import Ms6222FrameEnvelope
@@ -42,6 +47,9 @@ class FixtureSessionResult:
 class FixtureSessionRecorder:
     """Append-only recorder with one dedicated file-writer thread."""
 
+    DEFAULT_QUEUE_SIZE = 8192
+    HASH_CHUNK_SIZE = 1024 * 1024
+
     def __init__(
         self,
         profile: WorkstationFixtureProfile,
@@ -49,15 +57,20 @@ class FixtureSessionRecorder:
         operator: str = "",
         root: Optional[Path] = None,
         session_id: Optional[str] = None,
+        queue_size: int = DEFAULT_QUEUE_SIZE,
     ) -> None:
         profile.validate()
+        if int(queue_size) <= 0:
+            raise FixtureSessionError("fixture evidence queue size must be positive")
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         self.session_id = session_id or f"{timestamp}-{uuid.uuid4().hex[:8]}"
         self.root = root or (Path.home() / ".satellite_debug_tool" / "fixture_sessions")
         self.session_dir = self.root / self.session_id
         self.profile = profile
         self.operator = str(operator)
-        self._queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._queue: queue.Queue[tuple[str, Any]] = queue.Queue(
+            maxsize=int(queue_size)
+        )
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
         self._started = False
@@ -69,6 +82,8 @@ class FixtureSessionRecorder:
             "ms_raw": 0,
             "ms_valid": 0,
             "ms_invalid": 0,
+            "targets": 0,
+            "measurements": 0,
             "comparisons": 0,
             "events": 0,
         }
@@ -76,6 +91,14 @@ class FixtureSessionRecorder:
     @property
     def writer_error(self) -> str:
         return self._writer_error
+
+    @property
+    def queue_capacity(self) -> int:
+        return self._queue.maxsize
+
+    @property
+    def pending_writes(self) -> int:
+        return self._queue.qsize()
 
     def start(self) -> Path:
         if self._started:
@@ -155,14 +178,115 @@ class FixtureSessionRecorder:
         self._enqueue("comparison", asdict(comparison))
         self._counts["comparisons"] += 1
 
+    def record_target(self, target: TimedAttitude) -> None:
+        self._enqueue("target", asdict(target))
+        self._counts["targets"] += 1
+
+    def record_measurement(self, measurement: TimedAttitude) -> None:
+        self._enqueue("measurement", asdict(measurement))
+        self._counts["measurements"] += 1
+
     def record_comparisons(
         self,
         comparisons: tuple[AttitudeComparison, ...],
     ) -> None:
-        if not comparisons:
-            return
-        self._enqueue("comparison_batch", comparisons)
-        self._counts["comparisons"] += len(comparisons)
+        for comparison in comparisons:
+            self.record_comparison(comparison)
+
+    def flush(self, *, timeout_s: float = 10.0) -> None:
+        """Wait until all evidence submitted before this call is durable."""
+        if not self._started or self._closed:
+            raise FixtureSessionError("fixture session recorder is not active")
+        if self._writer_error:
+            raise FixtureSessionError(self._writer_error)
+        completed = threading.Event()
+        try:
+            self._queue.put(("flush", completed), timeout=max(0.1, float(timeout_s)))
+        except queue.Full as exc:
+            self._set_writer_error("fixture evidence queue is full")
+            raise FixtureSessionError(self._writer_error) from exc
+        if not completed.wait(timeout=max(0.1, float(timeout_s))):
+            self._set_writer_error("fixture evidence flush timed out")
+            raise FixtureSessionError(self._writer_error)
+        if self._writer_error:
+            raise FixtureSessionError(self._writer_error)
+
+    def load_comparison_sample(
+        self,
+        *,
+        max_samples: int = 120_000,
+    ) -> tuple[AttitudeComparison, ...]:
+        """Load a deterministic bounded sample from the persisted comparison CSV."""
+        if int(max_samples) <= 0:
+            raise FixtureSessionError("comparison sample limit must be positive")
+        self.flush()
+        total = int(self._counts["comparisons"])
+        stride = max(1, (total + int(max_samples) - 1) // int(max_samples))
+        path = self.session_dir / "attitude_comparison.csv"
+        sampled: list[AttitudeComparison] = []
+        last: Optional[AttitudeComparison] = None
+        with path.open("r", encoding="utf-8", newline="") as file_object:
+            for index, row in enumerate(csv.DictReader(file_object)):
+                current = _comparison_from_csv(row)
+                last = current
+                if index % stride == 0:
+                    sampled.append(current)
+        if last is not None and (not sampled or sampled[-1] != last):
+            if len(sampled) >= int(max_samples):
+                sampled[-1] = last
+            else:
+                sampled.append(last)
+        return tuple(sampled)
+
+    def generate_comparison_sample(
+        self,
+        *,
+        calibration: FixtureCalibration,
+        max_target_gap_s: float,
+        max_samples: int = 120_000,
+    ) -> tuple[AttitudeComparison, ...]:
+        """Generate full comparison evidence while retaining a bounded metric sample."""
+        if int(max_samples) <= 0:
+            raise FixtureSessionError("comparison sample limit must be positive")
+        self.flush()
+        sampled: list[AttitudeComparison] = []
+        stride = 1
+        comparison_count = 0
+        latest: Optional[AttitudeComparison] = None
+        for comparison in iter_attitude_comparisons(
+            self._iter_attitudes("target_attitude.csv"),
+            self._iter_attitudes("measurement_attitude.csv"),
+            calibration=calibration,
+            max_target_gap_s=max_target_gap_s,
+        ):
+            self._enqueue("comparison", asdict(comparison), wait=True)
+            self._counts["comparisons"] += 1
+            latest = comparison
+            if comparison_count % stride == 0:
+                sampled.append(comparison)
+            comparison_count += 1
+            if len(sampled) > int(max_samples):
+                sampled = sampled[::2]
+                stride *= 2
+        self.flush()
+        if latest is not None and (not sampled or sampled[-1] != latest):
+            if len(sampled) >= int(max_samples):
+                sampled[-1] = latest
+            else:
+                sampled.append(latest)
+        return tuple(sampled)
+
+    def _iter_attitudes(self, filename: str):
+        path = self.session_dir / filename
+        with path.open("r", encoding="utf-8", newline="") as file_object:
+            for row in csv.DictReader(file_object):
+                yield TimedAttitude(
+                    monotonic_ns=int(row["monotonic_ns"]),
+                    roll_deg=float(row["roll_deg"]),
+                    pitch_deg=float(row["pitch_deg"]),
+                    yaw_deg=float(row["yaw_deg"]),
+                    valid=str(row["valid"]).strip().lower() in {"1", "true"},
+                )
 
     def record_event(
         self,
@@ -230,8 +354,12 @@ class FixtureSessionRecorder:
         if self._closed:
             raise FixtureSessionError("fixture session recorder is already closed")
         self._closed = True
-        self._queue.put(("stop", None))
         thread = self._thread
+        if thread is not None and thread.is_alive():
+            try:
+                self._queue.put(("stop", None), timeout=10.0)
+            except queue.Full:
+                self._set_writer_error("fixture evidence queue did not drain")
         if thread is not None:
             thread.join(timeout=10.0)
             if thread.is_alive():
@@ -265,12 +393,23 @@ class FixtureSessionRecorder:
             file_hashes=hashes,
         )
 
-    def _enqueue(self, kind: str, payload: Any) -> None:
+    def _enqueue(self, kind: str, payload: Any, *, wait: bool = False) -> None:
         if not self._started or self._closed:
             raise FixtureSessionError("fixture session recorder is not active")
         if self._writer_error:
             raise FixtureSessionError(self._writer_error)
-        self._queue.put((kind, payload))
+        try:
+            if wait:
+                self._queue.put((kind, payload), timeout=10.0)
+            else:
+                self._queue.put_nowait((kind, payload))
+        except queue.Full as exc:
+            self._set_writer_error("fixture evidence queue is full")
+            raise FixtureSessionError(self._writer_error) from exc
+
+    def _set_writer_error(self, details: str) -> None:
+        if not self._writer_error:
+            self._writer_error = str(details)
 
     def _writer_main(self) -> None:
         try:
@@ -287,6 +426,12 @@ class FixtureSessionRecorder:
                 (self.session_dir / "attitude_comparison.csv").open(
                     "a", encoding="utf-8", newline="", buffering=1
                 ) as comparison_file,
+                (self.session_dir / "target_attitude.csv").open(
+                    "a", encoding="utf-8", newline="", buffering=1
+                ) as target_file,
+                (self.session_dir / "measurement_attitude.csv").open(
+                    "a", encoding="utf-8", newline="", buffering=1
+                ) as measurement_file,
                 (self.session_dir / "events.jsonl").open(
                     "a", encoding="utf-8", buffering=1
                 ) as event_file,
@@ -309,6 +454,14 @@ class FixtureSessionRecorder:
                     fieldnames=comparison_fields,
                 )
                 comparison_writer.writeheader()
+                attitude_fields = tuple(TimedAttitude.__dataclass_fields__)
+                target_writer = csv.DictWriter(target_file, fieldnames=attitude_fields)
+                measurement_writer = csv.DictWriter(
+                    measurement_file,
+                    fieldnames=attitude_fields,
+                )
+                target_writer.writeheader()
+                measurement_writer.writeheader()
                 self._ready.set()
                 while True:
                     kind, payload = self._queue.get()
@@ -335,13 +488,26 @@ class FixtureSessionRecorder:
                             )
                     elif kind == "comparison":
                         comparison_writer.writerow(payload)
-                    elif kind == "comparison_batch":
-                        for comparison in payload:
-                            comparison_writer.writerow(asdict(comparison))
+                    elif kind == "target":
+                        target_writer.writerow(payload)
+                    elif kind == "measurement":
+                        measurement_writer.writerow(payload)
                     elif kind == "event":
                         _write_json_line(event_file, payload)
+                    elif kind == "flush":
+                        for file_object in (
+                            command_file,
+                            raw_file,
+                            parsed_file,
+                            comparison_file,
+                            target_file,
+                            measurement_file,
+                            event_file,
+                        ):
+                            file_object.flush()
+                        payload.set()
         except Exception as exc:  # keep the incomplete manifest for field recovery
-            self._writer_error = str(exc)
+            self._set_writer_error(str(exc))
             self._ready.set()
 
     def _write_manifest(
@@ -380,13 +546,33 @@ class FixtureSessionRecorder:
         for path in sorted(self.session_dir.iterdir()):
             if not path.is_file() or path.name == "manifest.json":
                 continue
-            hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest = hashlib.sha256()
+            with path.open("rb") as file_object:
+                while chunk := file_object.read(self.HASH_CHUNK_SIZE):
+                    digest.update(chunk)
+            hashes[path.name] = digest.hexdigest()
         return hashes
 
 
 def _write_json_line(file_object, payload: Mapping[str, Any]) -> None:
     file_object.write(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+    )
+
+
+def _comparison_from_csv(row: Mapping[str, str]) -> AttitudeComparison:
+    return AttitudeComparison(
+        monotonic_ns=int(row["monotonic_ns"]),
+        target_roll_deg=float(row["target_roll_deg"]),
+        target_pitch_deg=float(row["target_pitch_deg"]),
+        target_yaw_deg=float(row["target_yaw_deg"]),
+        measured_roll_deg=float(row["measured_roll_deg"]),
+        measured_pitch_deg=float(row["measured_pitch_deg"]),
+        measured_yaw_deg=float(row["measured_yaw_deg"]),
+        error_roll_deg=float(row["error_roll_deg"]),
+        error_pitch_deg=float(row["error_pitch_deg"]),
+        error_yaw_deg=float(row["error_yaw_deg"]),
+        error_angle_deg=float(row["error_angle_deg"]),
     )
 
 

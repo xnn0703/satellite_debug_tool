@@ -417,3 +417,24 @@ def test_popup_stops_refresh_timer_when_hidden(monkeypatch):
     widget.hide()
     app.processEvents()
     assert not widget._refresh_timer.isActive()
+
+
+def test_orbit_widget_predict_uses_selected_controls_once(qapplication_session):
+    sent: list[bytes] = []
+    counter = iter(range(1, 100))
+    widget = OrbitWidget(
+        OrbitStore(),
+        lambda frame: sent.append(frame) or True,
+        counter.__next__,
+        lambda: True,
+    )
+    widget._target_combo.addItem("ISS · 25544", 25544)
+    widget._target_combo.setCurrentIndex(1)
+    widget._horizon.setValue(7200)
+    widget._step.setValue(60)
+    widget._prediction_min_el.setValue(10.0)
+
+    widget._predict()
+
+    assert sent == [build_orbit_predict(1, 25544, 7200, 60, 10.0)]
+    widget.deleteLater()

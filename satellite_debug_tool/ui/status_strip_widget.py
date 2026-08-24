@@ -165,6 +165,24 @@ class StatusStripWidget(QFrame):
         self.set_link_state(connected=False)
         register_translatable(self)
 
+    def retranslate_ui(self) -> None:
+        self._link_chip.setToolTip(
+            tr(
+                "Protocol heartbeat status: OK means the link is healthy; "
+                "-- means no heartbeat for 3 seconds"
+            )
+        )
+        self._recording_chip.setToolTip(
+            tr(
+                "Local .sdb recording status: flashing red means recording; "
+                "gray means idle"
+            )
+        )
+        self._beat_chip.setToolTip(
+            tr("Flashes green for each HEARTBEAT frame received")
+        )
+        self._rebuild_dynamic()
+
     # ---- 让父布局正确分配高度（FlowLayout 是高度跟随宽度的布局） ----
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802 (Qt API)

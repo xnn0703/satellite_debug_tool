@@ -555,7 +555,6 @@ class UpdateDialog(QDialog):
         set_translatable_text(
             source,
             self._lbl_err_detail,
-            context="UpdateDialog",
             **values,
         )
         self._stack.setCurrentIndex(_PAGE_ERROR)

@@ -115,6 +115,18 @@ class TimeRangeControl(QWidget):
         self._apply_theme()
         register_translatable(self)
 
+    def retranslate_ui(self) -> None:
+        self._lbl_prefix.setText(tr("Range:"))
+        current = self._preset_combo.currentData()
+        for index, (preset_id, _value) in enumerate(_PRESETS):
+            self._preset_combo.setItemText(index, _preset_label(preset_id))
+        selected = self._preset_combo.findData(current)
+        if selected >= 0:
+            self._preset_combo.setCurrentIndex(selected)
+        self._lbl_start.setText(tr("Start"))
+        self._lbl_end.setText(tr("End"))
+        self._btn_apply.setText(tr("Apply"))
+
     # ------------------------------------------------------------------ API
 
     def set_total(self, total_sec: float) -> None:

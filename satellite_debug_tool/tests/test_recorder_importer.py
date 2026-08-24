@@ -330,6 +330,52 @@ class TestRecorderRoundTrip:
         assert timed[0][0] == 123_000_000
         assert isinstance(timed[0][1], DataReport)
 
+    def test_v3_uses_lazy_records_sparse_index_and_window_iteration(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ):
+        path = tmp_path / "streaming-v3.sdb"
+        recorder = DataRecorder(path, format_version=SDB_VERSION_V3)
+        assert recorder.start()
+        total = 2050
+        for index in range(total):
+            assert recorder.write_frame(
+                _build_data_report_bytes(index, [(0, float(index))]),
+                host_timestamp_ns=index * 1_000_000,
+            )
+        _wait_recorder_flush(recorder, total)
+        assert recorder.stop()
+
+        monkeypatch.setattr(
+            Path,
+            "read_bytes",
+            lambda _path: (_ for _ in ()).throw(
+                AssertionError("streaming importer must not call Path.read_bytes")
+            ),
+        )
+        sdb = DataImporter.open_sdb(path)
+
+        assert len(sdb.raw_records) == total
+        assert not isinstance(sdb.raw_records, tuple)
+        assert sdb.raw_records[0].host_timestamp_ns == 0
+        assert sdb.raw_records[-1].host_timestamp_ns == (total - 1) * 1_000_000
+        assert sdb.index_path.is_file()
+        assert len(sdb.sparse_index) >= 2
+
+        window = list(
+            sdb.iter_timed_records(
+                start_host_timestamp_ns=1_500_000_000,
+                end_host_timestamp_ns=1_505_000_000,
+            )
+        )
+        assert [host_ns for host_ns, _record in window] == [
+            value * 1_000_000 for value in range(1500, 1506)
+        ]
+        assert [record.timestamp for _host_ns, record in window] == list(
+            range(1500, 1506)
+        )
+
 
 # ============================================================
 # Importer error handling

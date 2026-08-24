@@ -176,7 +176,9 @@ def test_customer_overview_renders_afd01_values_and_empty_components(app, monkey
     assert view._snr_readout.value.text() == "18.50 dB"
     assert "118.800" in view._data_values["longitude"].text()
     assert "LOCK" not in view._status_values["tracking"].text()
-    assert view._component_details["converter"].text() == "— · — · — · —"
+    assert view._component_details["converter"].text() == (
+        f"— · — · — · {tr('Not supported')}"
+    )
 
 
 def test_customer_overview_overlays_array_sky_and_converts_native_beam(app) -> None:
@@ -250,15 +252,15 @@ def test_customer_overview_overlays_array_sky_and_converts_native_beam(app) -> N
     assert view._beam_polar.satellites()[0].active_target
 
 
-def test_customer_overview_requests_sky_only_while_visible_and_confirms_selection(
+def test_customer_overview_requests_sky_only_while_active_and_confirms_selection(
     app, monkeypatch
 ) -> None:
     live = _LiveDouble()
     view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
 
-    view.show()
-    app.processEvents()
+    view.activate_view()
     assert live.sky_consumers[-1] == ("customer_overview", True)
+    assert view._timer.isActive()
 
     monkeypatch.setattr(
         "satellite_debug_tool.ui.customer_overview_view.QMessageBox.question",
@@ -267,9 +269,9 @@ def test_customer_overview_requests_sky_only_while_visible_and_confirms_selectio
     view._on_satellite_clicked(25544)
     assert live.selected_target == 25544
 
-    view.hide()
-    app.processEvents()
+    view.deactivate_view()
     assert live.sky_consumers[-1] == ("customer_overview", False)
+    assert not view._timer.isActive()
 
 
 def test_customer_connection_does_not_enable_engineering_debug(app) -> None:

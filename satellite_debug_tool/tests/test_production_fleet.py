@@ -164,6 +164,18 @@ def test_controller_assigns_four_stable_slots_and_rejects_the_fifth() -> None:
     controller.stop()
 
 
+def test_discovery_datagram_is_decoded_once_before_session_application() -> None:
+    controller = _controller()
+    endpoint = ("192.168.1.12", 4004)
+
+    controller._on_datagram(_datagram(endpoint, _identity("AFD01-ONCE")))
+
+    session = controller.sessions()[0]
+    assert session.serial_number == "AFD01-ONCE"
+    assert session.receiver.frames_ok == 0
+    controller.stop()
+
+
 def test_identified_device_is_promoted_from_discovery_to_capture_rate() -> None:
     controller = _controller()
     sent: list[tuple[tuple[str, int], bytes]] = []

@@ -1,5 +1,6 @@
 from .channel_buffer import ChannelBuffer
 from .data_store import DataStore
+from .telemetry_series_store import TelemetrySeriesStore, TelemetryWindow
 from .state_store import StateStore, StateSnapshot
 from .event_log import EventLog, EventRecord
 from .gnss_store import (
@@ -30,6 +31,7 @@ from .orbit_store import OrbitCatalogSnapshot, OrbitSkySnapshot, OrbitSkyTrailPo
 __all__ = [
     "ChannelBuffer",
     "DataStore",
+    "TelemetrySeriesStore", "TelemetryWindow",
     "StateStore", "StateSnapshot",
     "EventLog", "EventRecord",
     "GnssStore", "GnssSnapshot", "GnssCnrSnapshot", "GnssSatSnapshot", "GnssSignalSnapshot",

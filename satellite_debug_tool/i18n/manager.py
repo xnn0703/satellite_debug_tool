@@ -6,33 +6,19 @@ import logging
 import os
 import re
 import weakref
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import (
     QCoreApplication,
-    QEvent,
     QLibraryInfo,
     QLocale,
     QObject,
-    QTimer,
     QTranslator,
     Signal,
 )
-from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QAbstractButton,
     QApplication,
-    QComboBox,
-    QGroupBox,
-    QLabel,
-    QLineEdit,
-    QMenu,
-    QProgressBar,
-    QTabWidget,
-    QTableWidget,
-    QTreeWidget,
     QWidget,
 )
 
@@ -161,7 +147,6 @@ class TranslationManager(QObject):
         self._effective_locale = LANGUAGE_EN_US
         self._app_translator: Optional[QTranslator] = None
         self._qt_translator: Optional[QTranslator] = None
-        self._reverse_translations: dict[str, str] = {}
         self.apply_preference(self._preference, emit=False)
 
     @property
@@ -192,12 +177,8 @@ class TranslationManager(QObject):
         effective = resolve_effective_locale(normalized)
 
         self._remove_translators()
-        self._reverse_translations = {}
         if effective == LANGUAGE_ZH_CN:
             self._install_chinese_translators()
-            self._reverse_translations = _load_reverse_translations(
-                _TRANSLATIONS_DIR / f"{_APP_TRANSLATION_BASENAME}_zh_CN.ts"
-            )
 
         self._effective_locale = effective
         if emit:
@@ -205,10 +186,6 @@ class TranslationManager(QObject):
             # changing from auto to an explicit preference with the same locale.
             self.language_changed.emit(effective)
         return effective
-
-    def source_for_display(self, text: str) -> str:
-        """Recover the English source for a currently translated static string."""
-        return self._reverse_translations.get(text, text)
 
     def _remove_translators(self) -> None:
         if self._app_translator is not None:
@@ -262,29 +239,12 @@ def effective_locale() -> str:
 
 
 class _UiRetranslator(QObject):
-    """Track source text on one widget tree and reapply it after locale changes."""
+    """Bind locale changes to one widget's explicit retranslation contract."""
 
     def __init__(self, root: QWidget, manager: TranslationManager) -> None:
         super().__init__(root)
         self._root_ref = weakref.ref(root)
-        self._manager = manager
-        self._scan_pending = False
         manager.language_changed.connect(self.retranslate_ui)
-        self.retranslate_ui()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        if event.type() == QEvent.Type.ChildAdded:
-            self._schedule_scan()
-        return False
-
-    def _schedule_scan(self) -> None:
-        if self._scan_pending:
-            return
-        self._scan_pending = True
-        QTimer.singleShot(0, self._run_scheduled_scan)
-
-    def _run_scheduled_scan(self) -> None:
-        self._scan_pending = False
         self.retranslate_ui()
 
     def retranslate_ui(self, _locale: str = "") -> None:
@@ -292,215 +252,15 @@ class _UiRetranslator(QObject):
         if root is None:
             return
         callback = getattr(root, "retranslate_ui", None)
-        if callable(callback):
-            callback()
-        objects: list[QObject] = [root]
-        objects.extend(root.findChildren(QObject))
-        for obj in objects:
-            if isinstance(obj, (QWidget, QAction)):
-                try:
-                    obj.installEventFilter(self)
-                except RuntimeError:
-                    continue
-                self._retranslate_object(obj)
-
-    def _retranslate_object(self, obj: QObject) -> None:
-        if isinstance(obj, QWidget):
-            self._property(
-                obj,
-                "window_title",
-                obj.windowTitle,
-                obj.setWindowTitle,
+        if not callable(callback):
+            raise TypeError(
+                f"{type(root).__name__} must implement retranslate_ui()"
             )
-            self._property(obj, "tooltip", obj.toolTip, obj.setToolTip)
-            self._property(obj, "status_tip", obj.statusTip, obj.setStatusTip)
-            self._property(obj, "whats_this", obj.whatsThis, obj.setWhatsThis)
-            self._property(
-                obj,
-                "accessible_name",
-                obj.accessibleName,
-                obj.setAccessibleName,
-            )
-
-        if isinstance(obj, (QLabel, QAbstractButton)):
-            self._property(obj, "text", obj.text, obj.setText)
-        if isinstance(obj, QGroupBox):
-            self._property(obj, "title", obj.title, obj.setTitle)
-        if isinstance(obj, QLineEdit):
-            self._property(
-                obj,
-                "placeholder",
-                obj.placeholderText,
-                obj.setPlaceholderText,
-            )
-        if isinstance(obj, QProgressBar):
-            self._property(obj, "format", obj.format, obj.setFormat)
-        if isinstance(obj, QAction):
-            self._property(obj, "text", obj.text, obj.setText)
-            self._property(obj, "tooltip", obj.toolTip, obj.setToolTip)
-            self._property(obj, "status_tip", obj.statusTip, obj.setStatusTip)
-        if isinstance(obj, QMenu):
-            self._property(obj, "title", obj.title, obj.setTitle)
-        if isinstance(obj, QTabWidget):
-            self._indexed_texts(
-                obj,
-                "tabs",
-                obj.count,
-                obj.tabText,
-                obj.setTabText,
-            )
-        if isinstance(obj, QComboBox):
-            self._indexed_texts(
-                obj,
-                "combo_items",
-                obj.count,
-                obj.itemText,
-                obj.setItemText,
-            )
-        if isinstance(obj, QTableWidget):
-            self._table_headers(obj)
-        if isinstance(obj, QTreeWidget):
-            self._tree_headers(obj)
-
-    def _property(
-        self,
-        obj: QObject,
-        key: str,
-        getter: Callable[[], str],
-        setter: Callable[[str], None],
-    ) -> None:
-        if key == "text" and bool(getattr(obj, "_i18n_raw_text", False)):
-            return
-        try:
-            current = getter()
-        except RuntimeError:
-            return
-        if not current:
-            return
-
-        attr = f"_i18n_state_{key}"
-        state = getattr(obj, attr, None)
-        if not isinstance(state, dict) or current != state.get("last"):
-            source = self._manager.source_for_display(current)
-            state = {"source": source}
-        values = state.get("values", {})
-        n = state.get("n")
-        rendered = (
-            trn(str(state["source"]), int(n), **values)
-            if n is not None
-            else trc(
-                str(state.get("context", _TRANSLATION_CONTEXT)),
-                str(state["source"]),
-                **values,
-            )
-        )
-        state["last"] = rendered
-        setattr(obj, attr, state)
-        if rendered != current:
-            setter(rendered)
-
-    def _indexed_texts(
-        self,
-        obj: QObject,
-        key: str,
-        count_getter: Callable[[], int],
-        text_getter: Callable[[int], str],
-        text_setter: Callable[[int, str], None],
-    ) -> None:
-        attr = f"_i18n_state_{key}"
-        states = list(getattr(obj, attr, []))
-        count = count_getter()
-        while len(states) < count:
-            states.append({})
-        if len(states) > count:
-            states = states[:count]
-        for index in range(count):
-            current = text_getter(index)
-            if not current:
-                continue
-            state = states[index]
-            if not state or current != state.get("last"):
-                state = {
-                    "source": self._manager.source_for_display(current),
-                }
-            rendered = tr(str(state["source"]))
-            state["last"] = rendered
-            states[index] = state
-            if rendered != current:
-                text_setter(index, rendered)
-        setattr(obj, attr, states)
-
-    def _table_headers(self, table: QTableWidget) -> None:
-        self._item_headers(
-            table,
-            "horizontal_headers",
-            table.columnCount(),
-            table.horizontalHeaderItem,
-        )
-        self._item_headers(
-            table,
-            "vertical_headers",
-            table.rowCount(),
-            table.verticalHeaderItem,
-        )
-
-    def _tree_headers(self, tree: QTreeWidget) -> None:
-        header = tree.headerItem()
-        if header is None:
-            return
-        states = list(getattr(tree, "_i18n_state_tree_headers", []))
-        count = tree.columnCount()
-        while len(states) < count:
-            states.append({})
-        for index in range(count):
-            current = header.text(index)
-            if not current:
-                continue
-            state = states[index]
-            if not state or current != state.get("last"):
-                state = {
-                    "source": self._manager.source_for_display(current),
-                }
-            rendered = tr(str(state["source"]))
-            state["last"] = rendered
-            states[index] = state
-            if rendered != current:
-                header.setText(index, rendered)
-        setattr(tree, "_i18n_state_tree_headers", states[:count])
-
-    def _item_headers(
-        self,
-        owner: QObject,
-        key: str,
-        count: int,
-        item_getter: Callable[[int], Any],
-    ) -> None:
-        attr = f"_i18n_state_{key}"
-        states = list(getattr(owner, attr, []))
-        while len(states) < count:
-            states.append({})
-        for index in range(count):
-            item = item_getter(index)
-            if item is None:
-                continue
-            current = item.text()
-            if not current:
-                continue
-            state = states[index]
-            if not state or current != state.get("last"):
-                state = {
-                    "source": self._manager.source_for_display(current),
-                }
-            rendered = tr(str(state["source"]))
-            state["last"] = rendered
-            states[index] = state
-            if rendered != current:
-                item.setText(rendered)
-        setattr(owner, attr, states[:count])
+        callback()
 
 
 def register_translatable(root: QWidget) -> _UiRetranslator:
-    """Register a widget tree for automatic static-text retranslation."""
+    """Register a widget's explicit stable-key retranslation callback."""
     existing = getattr(root, "_i18n_retranslator", None)
     if isinstance(existing, _UiRetranslator):
         existing.retranslate_ui()
@@ -606,41 +366,6 @@ def set_raw_text(text: str, widget: Any, /) -> str:
     mark_raw_text(widget)
     widget.setText(text)
     return text
-
-
-def _load_reverse_translations(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    try:
-        root = ET.parse(path).getroot()
-    except (OSError, ET.ParseError):
-        _LOG.exception("Unable to parse translation source: %s", path)
-        return {}
-
-    reverse: dict[str, str] = {}
-    ambiguous: set[str] = set()
-    for message in root.findall(".//message"):
-        source = message.findtext("source", default="")
-        translation = message.find("translation")
-        if not source or translation is None:
-            continue
-        values: list[str] = []
-        numerus = translation.findall("numerusform")
-        if numerus:
-            values.extend((node.text or "") for node in numerus)
-        else:
-            values.append(translation.text or "")
-        for value in values:
-            if not value:
-                continue
-            existing = reverse.get(value)
-            if existing is not None and existing != source:
-                ambiguous.add(value)
-            else:
-                reverse[value] = source
-    for value in ambiguous:
-        reverse.pop(value, None)
-    return reverse
 
 
 def translation_placeholders(text: str) -> set[str]:

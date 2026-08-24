@@ -97,8 +97,8 @@ def test_product_subscription_starts_before_profile_handshake_ready(
         and frame[11] == ServiceControlOp.SUBSCRIBE
         for frame in worker.sent
     )
-    assert view._handshake is not None
-    assert not view._handshake.is_ready
+    assert view.session_core().handshake is not None
+    assert not view.session_core().handshake.is_ready
     view._on_disconnected()
 
 
@@ -167,7 +167,11 @@ def test_customer_recording_restores_previous_debug_state(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view, worker = _ready_view(settings)
-    view._debug_enabled = True
+    view.request_debug_mode(True)
+    view._debug_controller.feed_response(
+        CommandResponse(code=RespCode.SUCCESS, msg="DEBUG_ENABLE=1")
+    )
+    worker.sent.clear()
     target = tmp_path / "support_debug_restore.sdb"
     monkeypatch.setattr(
         "satellite_debug_tool.ui.live_view.QFileDialog.getSaveFileName",
@@ -188,9 +192,9 @@ def test_customer_recording_restores_previous_debug_state(
 
     assert worker.sent[-1][6] == SubCmd.DEBUG_ENABLE
     assert worker.sent[-1][7] == 1
-    assert view._debug_pending_target is True
+    assert view._debug_controller.pending_target is True
 
-    view._on_debug_command_response(
+    view._debug_controller.feed_response(
         CommandResponse(code=RespCode.SUCCESS, msg="DEBUG_ENABLE=1")
     )
     assert view.is_debug_enabled()

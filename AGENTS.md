@@ -17,7 +17,7 @@
 python3 -m satellite_debug_tool.main
 python3 -m satellite_debug_tool.main --production   # 解锁批量试产工作区（启动即进）
 
-# 测试（无 editable install 时需要 PYTHONPATH；69 个测试文件，conftest 已设 offscreen + 静默更新）
+# 测试（无 editable install 时需要 PYTHONPATH；73 个测试文件，conftest 已设 offscreen + 静默更新）
 PYTHONPATH=. pytest satellite_debug_tool/tests
 pytest satellite_debug_tool/tests/test_frame_v2.py -v      # 单文件
 pytest satellite_debug_tool/tests -k "crc"                 # 按 pattern
@@ -45,7 +45,9 @@ python3 scripts/update_translations.py check
 | 1 | **Engineering Tabs**（Live / Playback / Log / Device） | `Ctrl+Shift+E` 首次确认后本会话解锁 | 内部诊断、协议解码、设备参数读写、OTA。 |
 | 2 | **Production Workspace**（批量试产） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | 批次测试 / 夹具调试双页面；正式试产放行流程仍在后续里程碑。 |
 
-- 三个工作区共享同一个 `LiveView`（worker、握手、`frame_received` 广播）；切换不重建连接。
+- 客户与工程工作区共享同一个 `DeviceSessionCore`、连接和 Store；试产 Fleet 通过同一个 `SessionRegistry` 取得 endpoint 会话。
+- 默认启动只构建客户总览和 `LiveView` 会话壳；工程 Live 呈现、工程其他 Tab、客户其他页面和试产工作区均在首次访问时构建并复用。
+- `MainWindow` 负责顶层 `activate_view()` / `deactivate_view()`；各工作区只负责当前子页面。隐藏页面停止曲线、3D、表格和夹具绘图，连接、录制、OTA、批次与采集状态继续运行。
 - 设备 OTA / 参数表读写时 `LiveView` 会 `set_device_transaction_active(True)`，期间禁用握手重试。
 - 工程 Tab 内部仍是 `LiveView / PlaybackView / LogView / DeviceView` 四张卡（`QTabWidget`，tabBar 隐藏，顶栏"药丸"接管）。
 
@@ -56,34 +58,38 @@ PySide6 桌面应用，调试相控阵卫星通信终端。基于 **DEBUG v2 协
 ### 数据流
 
 ```
-Live Tab     Device → SerialWorker/UdpWorker → FrameReceiverV2 → records
-                                                       ├→ Handshake 消费 META/DEFINE/HEARTBEAT → ProfileStore (Live)
-                                                       ├→ DataReport → DataStore (ring 30000) → GroupedChart @5Hz
-                                                       ├→ StateReport/EventReport → StateStore/EventLog
-                                                       └→ Service* records (M18) → ProductServiceStore → CustomerWorkspace
+Live/Customer Device → SerialWorker/UdpWorker → DeviceSessionCore
+                                                   ├→ FrameReceiverV2 → domain registry
+                                                   ├→ Handshake → ProfileStore
+                                                   ├→ DataReport → TelemetrySeriesStore (ring 30000)
+                                                   ├→ State/Event/GNSS/Orbit canonical stores
+                                                   └→ Service* → ProductServiceStore → ProductSnapshotResolver
 
-Playback     .sdb v2/v3 → DataImporter → DataStore (无界) + 内嵌 profile
+Engineering Live       DeviceSessionCore stores → first-access presentation → visible timers
+Playback     .sdb v2/v3 → streaming DataImporter → PlaybackSeriesProvider(SQLite) → window DataStore
 Log          .log   → WindTermLogParser → 虚拟 ProfileStore (hw_type="windterm_log") + DataStore (无界, max=128)
-Device       共享 Live worker + frame stream → 参数表 / COMMAND_RESPONSE / OTA 状态机
-Production   Product Service 单播 SUBSCRIBE → 参与设备冻结 → ResultStore + SDB（M19-A）
+Device       DeviceSessionCore + Parameter/Ota controllers → 参数表 / COMMAND_RESPONSE / OTA 状态机
+Production   Fleet + SessionRegistry → BatchCoordinator / FixtureSessionCoordinator → ResultStore + SDB
 ```
 
 ### 包结构（已演进出新模块，AGENTS 要跟得上）
 
-- `core/protocol/` — v2 协议帧编解码（`frame_v2` 常量、`codec_v2` 解码、`frame_receiver_v2` 状态机、`handshake`、`crc16`）
-- `core/product/` — **M18+** AFD01 Product Service 协议（`models.py` 数据类、`service_store.py`、`playback_projection.py`、`recording_state.py`、`timestamps.py`、`legacy_v2.py` 兼容映射）
+- `core/protocol/` — v2 包络、CRC、Handshake 与领域注册表；`domains/{debug,product,orbit}.py` 独占各自命令解码，`FrameReceiverV2` 只做包络解析和领域分发
+- `core/session/` — **M21** `DeviceSessionCore`、`SessionRegistry` 与 Debug/参数/OTA/Product 控制器；一个 endpoint 只有一个权威会话
+- `core/product/` — **M18+** AFD01 Product Service 模型、Store、回放/legacy 投影与整快照来源状态机；每个 `ProductValue` 携带可用性、来源、接收时间和质量
+- `core/playback/` — **M21** 后台 SDB 构建线程与磁盘型 `PlaybackSeriesProvider`，按时间窗口和像素预算查询曲线数据
 - `core/comm/` — QThread worker：`BaseWorker`（QThread 基类）→ `SerialWorker` / `UdpWorker`
-- `core/data/` — `ChannelBuffer`（环形 ndarray 或无界 list）、`DataStore`、`StateStore`、`EventLog`、`gnss_store.py`
+- `core/data/` — `ChannelBuffer`、`DataStore`、`TelemetrySeriesStore`、`StateStore`、`EventLog` 与 GNSS/Orbit Store
 - `core/profile/` — `ProfileStore` + `ProfileCache`，设备 profile 驱动 UI；`semantics.py` 通道语义；`ins_yaw_display.py` 内部 INS 航向处理
-- `core/production/` — **M19** 试产与夹具：批次侧 `recipe.py / fleet.py / fixtures.py / power_supply.py / result_store.py`；夹具侧 `fixture_profile.py / fixture_control.py / fixture_session.py / fixture_analysis.py / motion_platform.py / ms6222_protocol.py / ms6222_worker.py`
+- `core/production/` — **M19/M21** 试产与夹具领域；`BatchCoordinator` / `FixtureSessionCoordinator` 统一状态迁移、资源租约和证据收尾，页面只发意图并呈现类型化状态
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 Ed25519 验签（`firmware_package.py`）
 - `core/link_trace.py` — 帧 trace 日志
 - `core/config.py` — `Settings` 类，JSON 存 `~/.satellite_debug_tool/settings.json`
-- `ui/` — PySide6 组件；`MainWindow` 顶层；主要工作区包括 `customer_workspace / live_view / playback_view / log_view / device_view / production_workspace / fixture_debug_workspace`
+- `ui/` — PySide6 呈现层；`view_lifecycle.py` 定义页面生命周期，`lazy_view_host.py` 提供首次访问构建，`semantic_style.py` 只在语义属性变化时刷新样式
 - `ui/assets/` — Leaflet 离线地图 bundle + STL 模型
 - `i18n/` — `TranslationManager` + TS/QM 翻译资源（`translations/satellite_debug_tool_zh_CN.{ts,qm}`）
-- `io/` — `DataRecorder`（异步 threading.Thread + queue；支持 SDB v2/v3，文件头内嵌 profile JSON）、`DataImporter`
+- `io/` — `DataRecorder`、流式 `DataImporter` 与唯一 `sdb_schema.py`；大型 SDB 在原文件旁生成可重建的稀疏 `.sdbi` 索引
 - `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）、`build_signed_firmware_package.py`（客户 OTA 固件打包工具）
 - `updater/` — 自动升级模块：`ReleaseChecker / Downloader / Applier`，单文件 `updater` 二进制在 PyInstaller 后嵌入 `.app/Contents/MacOS/updater`
 - `platform/macos/{en,zh_CN}.lproj/InfoPlist.strings` — macOS `CFBundleLocalizations` 用的本地化 InfoPlist 字符串
@@ -93,15 +99,19 @@ Production   Product Service 单播 SUBSCRIBE → 参与设备冻结 → ResultS
 - 所有 import 用 `satellite_debug_tool.` 前缀（绝对导入；这是为什么必须 `python3 -m ...`）
 - UI 在 `ui/`，业务在 `core/`，持久化在 `io/`，**试产业务在 `core/production/`，AFD01 产品服务协议在 `core/product/`**
 - worker 线程（`BaseWorker` 子类）**严禁**直接操作 widget；必须 emit Qt 信号，主线程消费
+- 页面构造只建立呈现对象；协议解析、连接代际、参数/OTA 状态机、试产状态迁移和证据收尾属于 `core/`。
+- 高频页面必须实现幂等 `activate_view()` / `deactivate_view()`；隐藏时停止呈现定时器，恢复时先从 Store 即时刷新一次。
+- 新增重量级页面使用 `LazyViewHost` 首次构建并保留实例；首次构建前到达的数据必须由权威 Store 在激活时补齐。
 - **每个 Tab/工作区独立 `DataStore` / `ProfileStore`**（M7 引入），切换不污染；CustomerWorkspace 和 LiveView 共享的是同一个 `LiveView` 实例，所以底层 DataStore 实际同一份
 - 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x10`、`0x20..0x2B`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
 - 通用长帧扩容不改变专用上传分片合同：`OTA_DATA` 每片 1..1021 B（UI 通常发送 512 B），Orbit `UPLOAD_CHUNK` 每片 1..1012 B
-- 测试在 `satellite_debug_tool/tests/`（69 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
+- 测试在 `satellite_debug_tool/tests/`（73 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
 - `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_UPDATE_CHECK=0` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
 - 字号已固化 `small`（`base_px=13`，`main.py` 调 `S.apply_global_font(app, scale="small", base_px=13)`）；`styles.FONT_SCALES` / `FontScale` API 仅保留兼容 `test_styles.py`，UI 不再暴露
 - 主题三档 `dark / dark_hc / light`，由 `S.palette()` 出语义色键（兼容键 + Mission Console 新语义键），顶栏图标按钮循环切换
 - 离线地图约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮
 - **客户工作台 `CustomerWorkspace` 共享 `LiveView` 实例**——改 Customer view 时不要新建自己的 DataStore/ProfileStore，否则与 Live Tab 状态分裂
+- 第一方可翻译复合控件显式实现 `retranslate_ui()`；语言切换使用稳定源键，禁止扫描对象树或根据当前可见文本反查业务状态。
 
 ## 持久化路径（`~/.satellite_debug_tool/`）
 
@@ -138,7 +148,7 @@ Production   Product Service 单播 SUBSCRIBE → 参与设备冻结 → ResultS
 - `doc/DEBUG设备协议接口规范_v2.md` — **协议权威规范**
 - `doc/upper_pc_function_definition_vnext.md` — 当前上位机功能定义与路线
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
-- `doc/M7_*.md` ~ `doc/M20_*` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性）
+- `doc/M7_*.md` ~ `doc/M21_*` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛）
 - `doc/development_log.md` — M1–M6 实施日志
 - `doc/acceptance_log.md` — F-/A- 系列验收跟踪
 - `doc/i18n_terms.md` — 中英术语表

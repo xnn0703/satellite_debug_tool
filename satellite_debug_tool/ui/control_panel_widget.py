@@ -58,26 +58,26 @@ class _ChannelEnableDialog(QDialog):
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(8)
 
-        hint = QLabel(
+        self._hint = QLabel(
             tr(
                 "Only selected DATA_REPORT channels are sampled after "
                 "CONTROL.CHANNEL_ENABLE_MASK is sent."
             )
         )
-        hint.setWordWrap(True)
-        outer.addWidget(hint)
+        self._hint.setWordWrap(True)
+        outer.addWidget(self._hint)
 
         # 全选 / 反选 按钮
         tool = QHBoxLayout()
-        btn_all = QPushButton(tr("Select all"))
-        btn_none = QPushButton(tr("Select none"))
-        btn_invert = QPushButton(tr("Invert selection"))
-        btn_all.clicked.connect(lambda: self._set_all(True))
-        btn_none.clicked.connect(lambda: self._set_all(False))
-        btn_invert.clicked.connect(self._invert)
-        tool.addWidget(btn_all)
-        tool.addWidget(btn_none)
-        tool.addWidget(btn_invert)
+        self._btn_all = QPushButton(tr("Select all"))
+        self._btn_none = QPushButton(tr("Select none"))
+        self._btn_invert = QPushButton(tr("Invert selection"))
+        self._btn_all.clicked.connect(lambda: self._set_all(True))
+        self._btn_none.clicked.connect(lambda: self._set_all(False))
+        self._btn_invert.clicked.connect(self._invert)
+        tool.addWidget(self._btn_all)
+        tool.addWidget(self._btn_none)
+        tool.addWidget(self._btn_invert)
         tool.addStretch(1)
         outer.addLayout(tool)
 
@@ -96,8 +96,12 @@ class _ChannelEnableDialog(QDialog):
             channels = profile_store.get_channels(hw_type)
 
         if not channels:
-            grid.addWidget(QLabel(tr("(CHANNEL_DEFINE has not been received)")), 0, 0)
+            self._empty_label = QLabel(
+                tr("(CHANNEL_DEFINE has not been received)")
+            )
+            grid.addWidget(self._empty_label, 0, 0)
         else:
+            self._empty_label = None
             cols = 2
             for i, ch in enumerate(channels):
                 cb = QCheckBox(
@@ -114,15 +118,33 @@ class _ChannelEnableDialog(QDialog):
         scroll.setWidget(host)
         outer.addWidget(scroll, 1)
 
-        bb = QDialogButtonBox(
+        self._buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self
         )
-        bb.button(QDialogButtonBox.Ok).setText(tr("Apply"))
-        bb.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
-        bb.accepted.connect(self.accept)
-        bb.rejected.connect(self.reject)
-        outer.addWidget(bb)
+        self._buttons.button(QDialogButtonBox.Ok).setText(tr("Apply"))
+        self._buttons.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+        outer.addWidget(self._buttons)
         register_translatable(self)
+
+    def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("Channel enable"))
+        self._hint.setText(
+            tr(
+                "Only selected DATA_REPORT channels are sampled after "
+                "CONTROL.CHANNEL_ENABLE_MASK is sent."
+            )
+        )
+        self._btn_all.setText(tr("Select all"))
+        self._btn_none.setText(tr("Select none"))
+        self._btn_invert.setText(tr("Invert selection"))
+        if self._empty_label is not None:
+            self._empty_label.setText(
+                tr("(CHANNEL_DEFINE has not been received)")
+            )
+        self._buttons.button(QDialogButtonBox.Ok).setText(tr("Apply"))
+        self._buttons.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
 
     def _set_all(self, on: bool) -> None:
         for cb in self._checks.values():
@@ -163,7 +185,8 @@ class ControlPanelWidget(QFrame):
         row.setSpacing(8)
 
         # ---- 采样率 ----
-        row.addWidget(QLabel(tr("Sample rate:")))
+        self._sample_rate_label = QLabel(tr("Sample rate:"))
+        row.addWidget(self._sample_rate_label)
         self._rate_combo = QComboBox()
         for hz in _SAMPLE_RATES:
             self._rate_combo.addItem(f"{hz} Hz", hz)
@@ -177,7 +200,8 @@ class ControlPanelWidget(QFrame):
 
         # ---- 用户标记 ----
         row.addSpacing(10)
-        row.addWidget(QLabel(tr("Marker:")))
+        self._marker_label = QLabel(tr("Marker:"))
+        row.addWidget(self._marker_label)
         self._mark_edit = QLineEdit()
         self._mark_edit.setPlaceholderText(tr("Example: passed intersection A"))
         self._mark_edit.setToolTip(
@@ -218,6 +242,37 @@ class ControlPanelWidget(QFrame):
         self.set_theme("dark", "medium")
         self.set_enabled(False)
         register_translatable(self)
+
+    def retranslate_ui(self) -> None:
+        self._sample_rate_label.setText(tr("Sample rate:"))
+        self._rate_combo.setToolTip(
+            tr("Send CONTROL.SET_SAMPLE_RATE to set the device DATA_REPORT rate")
+        )
+        self._marker_label.setText(tr("Marker:"))
+        self._mark_edit.setPlaceholderText(tr("Example: passed intersection A"))
+        self._mark_edit.setToolTip(
+            tr(
+                "Enter marker text and press Enter, or leave it blank and use the button"
+            )
+        )
+        self._mark_btn.setText(tr("⚑ Add marker"))
+        self._mark_btn.setToolTip(
+            tr(
+                "Send CONTROL.USER_MARK; a marker line appears after the device "
+                "returns EVENT(0xFFFF)"
+            )
+        )
+        self._ch_enable_btn.setText(tr("Channel enable..."))
+        self._ch_enable_btn.setToolTip(
+            tr(
+                "Choose which DATA channels the device samples and reports "
+                "(CONTROL.CHANNEL_ENABLE_MASK)"
+            )
+        )
+        self._reset_btn.setText(tr("Reset statistics"))
+        self._reset_btn.setToolTip(
+            tr("Send CONTROL.RESET_STATS to clear device counters and accumulators")
+        )
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)

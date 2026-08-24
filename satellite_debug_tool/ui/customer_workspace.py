@@ -23,6 +23,8 @@ from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_playback_view import CustomerPlaybackView
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
+from satellite_debug_tool.ui.lazy_view_host import LazyViewHost
+from satellite_debug_tool.ui.view_lifecycle import activate_view, deactivate_view
 
 
 class _ViewportFitScrollArea(QScrollArea):
@@ -91,16 +93,46 @@ class CustomerWorkspace(QWidget):
         super().__init__(parent)
         self._live = live_view
         self._settings = settings
-        self._device = device_view
+        self._device_provider = device_view if callable(device_view) else lambda: device_view
         self._theme = "dark"
         self._page_ids: list[str] = []
         self._nav_buttons: list[QPushButton] = []
+        self._page_views: list[QWidget] = []
+        self._view_active = False
         self._build_ui()
         register_translatable(self)
 
     @property
     def overview(self) -> CustomerOverviewView:
         return self._overview
+
+    @property
+    def rf_control(self) -> CustomerRfControlView:
+        return self._rf_host.ensure_view()
+
+    @property
+    def playback(self) -> CustomerPlaybackView:
+        return self._playback_host.ensure_view()
+
+    @property
+    def maintenance(self) -> CustomerMaintenanceView:
+        return self._maintenance_host.ensure_view()
+
+    def _create_rf_control(self) -> CustomerRfControlView:
+        self._rf_control = CustomerRfControlView(self._live)
+        return self._rf_control
+
+    def _create_playback(self) -> CustomerPlaybackView:
+        self._playback = CustomerPlaybackView(self._settings)
+        return self._playback
+
+    def _create_maintenance(self) -> CustomerMaintenanceView:
+        self._maintenance = CustomerMaintenanceView(
+            self._live,
+            self._device_provider(),
+            self._settings,
+        )
+        return self._maintenance
 
     def _build_ui(self) -> None:
         root = QHBoxLayout(self)
@@ -119,11 +151,12 @@ class CustomerWorkspace(QWidget):
 
         self._stack = QStackedWidget()
         self._overview = CustomerOverviewView(self._live, self._settings)
-        self._rf_control = CustomerRfControlView(self._live)
-        self._playback = CustomerPlaybackView(self._settings)
-        self._maintenance = CustomerMaintenanceView(
-            self._live, self._device, self._settings
-        )
+        self._rf_control: Optional[CustomerRfControlView] = None
+        self._playback: Optional[CustomerPlaybackView] = None
+        self._maintenance: Optional[CustomerMaintenanceView] = None
+        self._rf_host = LazyViewHost(self._create_rf_control)
+        self._playback_host = LazyViewHost(self._create_playback)
+        self._maintenance_host = LazyViewHost(self._create_maintenance)
         overview_scroll = _ViewportFitScrollArea()
         overview_scroll.setObjectName("customerOverviewScroll")
         overview_scroll.setWidgetResizable(True)
@@ -140,13 +173,21 @@ class CustomerWorkspace(QWidget):
         rf_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        rf_scroll.setWidget(self._rf_control)
+        rf_scroll.setWidget(self._rf_host)
 
         pages = (
             overview_scroll,
             rf_scroll,
-            self._playback,
-            self._maintenance,
+            self._playback_host,
+            self._maintenance_host,
+        )
+        self._page_views.extend(
+            (
+                self._overview,
+                self._rf_host,
+                self._playback_host,
+                self._maintenance_host,
+            )
         )
         for index, ((page_id, label, icon_name), page) in enumerate(
             zip(self._PAGE_DEFS, pages)
@@ -167,8 +208,8 @@ class CustomerWorkspace(QWidget):
         root.addWidget(self._sidebar)
         root.addWidget(self._stack, 1)
         self._overview.status_message.connect(self.status_message)
-        self._rf_control.status_message.connect(self.status_message)
-        self._playback.status_message.connect(self.status_message)
+        self._rf_host.status_message.connect(self.status_message)
+        self._playback_host.status_message.connect(self.status_message)
         self.set_page(0)
 
     def set_page(self, page: int | str) -> None:
@@ -179,10 +220,27 @@ class CustomerWorkspace(QWidget):
                 index = 0
         else:
             index = max(0, min(int(page), self._stack.count() - 1))
+        previous = self._stack.currentIndex()
+        if self._view_active and previous != index and 0 <= previous < len(self._page_views):
+            deactivate_view(self._page_views[previous])
         self._stack.setCurrentIndex(index)
+        if self._view_active and previous != index:
+            activate_view(self._page_views[index])
         for button_index, button in enumerate(self._nav_buttons):
             button.setChecked(button_index == index)
         self._refresh_nav_icons()
+
+    def activate_view(self) -> None:
+        if self._view_active:
+            return
+        self._view_active = True
+        activate_view(self._page_views[self._stack.currentIndex()])
+
+    def deactivate_view(self) -> None:
+        if not self._view_active:
+            return
+        self._view_active = False
+        deactivate_view(self._page_views[self._stack.currentIndex()])
 
     def set_theme(self, theme: str, scale: str = "small") -> None:
         self._theme = theme
@@ -202,9 +260,9 @@ class CustomerWorkspace(QWidget):
             f"#customerOverviewScroll {{ background: {pal['bg']}; }}"
         )
         self._overview.set_theme(theme, scale)
-        self._rf_control.set_theme(theme, scale)
-        self._playback.set_theme(theme, scale)
-        self._maintenance.set_theme(theme, scale)
+        self._rf_host.set_theme(theme, scale)
+        self._playback_host.set_theme(theme, scale)
+        self._maintenance_host.set_theme(theme, scale)
         self._refresh_nav_icons()
 
     def _refresh_nav_icons(self) -> None:

@@ -36,10 +36,13 @@ from .models import (
     NavigationSourceInfo,
     OperationalSnapshot,
     ProductSnapshot,
+    ProductSource,
     ProductValue,
     RfCapabilities,
     SatelliteMode,
     TrackingPhase,
+    stamp_snapshot_received,
+    stamp_snapshot_source,
 )
 from .timestamps import U32UptimeUnwrapper
 
@@ -139,6 +142,11 @@ class ProductServiceStore(QObject):
             or self._capabilities is not None
             or self._navigation_source is not None
             or self._external_ins is not None
+            or self._fast is not None
+            or self._slow is not None
+            or self._link_detail is not None
+            or self._rf_lock_status is not None
+            or self._components is not None
         )
 
     @property
@@ -229,11 +237,10 @@ class ProductServiceStore(QObject):
 
     def snapshot(
         self,
-        fallback: Optional[ProductSnapshot] = None,
         *,
         now_monotonic: Optional[float] = None,
     ) -> ProductSnapshot:
-        base = fallback or ProductSnapshot()
+        base = ProductSnapshot()
         now = time.monotonic() if now_monotonic is None else float(now_monotonic)
         identity = self._identity_snapshot(base.identity)
         operation = self._operation_snapshot(base.operation, now)
@@ -242,7 +249,7 @@ class ProductServiceStore(QObject):
         navigation_sources = self._navigation_source_snapshot(base.navigation_sources)
         external_ins = self._external_ins_snapshot(base.external_ins, now)
         source = "product_service" if self.service_available else base.source
-        return ProductSnapshot(
+        snapshot = ProductSnapshot(
             identity=identity,
             operation=operation,
             converter=converter,
@@ -253,6 +260,7 @@ class ProductServiceStore(QObject):
             external_ins=external_ins,
             source=source,
         )
+        return stamp_snapshot_source(snapshot, ProductSource.PRODUCT_SERVICE)
 
     def snr_history(self, *, window_s: float = 300.0) -> tuple[np.ndarray, np.ndarray]:
         if not self._snr_history:
@@ -280,6 +288,10 @@ class ProductServiceStore(QObject):
                     mask, 4, f"v{record.protocol_version}", record.timestamp
                 ),
             )
+            identity = stamp_snapshot_received(
+                identity,
+                self._received.get("identity"),
+            )
         hardware = self._hardware_identity
         if hardware is not None:
             mask = hardware.valid_mask
@@ -288,6 +300,10 @@ class ProductServiceStore(QObject):
                 device_uid=self._static(mask, 0, hardware.device_uid, hardware.timestamp),
                 mac_address=self._static(mask, 1, hardware.mac_text, hardware.timestamp),
                 mac_source=self._static(mask, 2, hardware.mac_source, hardware.timestamp),
+            )
+            identity = stamp_snapshot_received(
+                identity,
+                self._received.get("hardware_identity"),
             )
         return identity
 
@@ -337,6 +353,10 @@ class ProductServiceStore(QObject):
                 beam_el_deg=self._dynamic(fast.valid_mask, 10, fast.beam_el_deg, fast.timestamp, stale),
                 snr_db=self._dynamic(fast.valid_mask, 11, fast.snr_db, fast.timestamp, stale),
             )
+            operation = stamp_snapshot_received(
+                operation,
+                self._received.get("fast"),
+            )
         slow = self._slow
         if slow is not None:
             stale = self._is_stale("slow", now, 3.0)
@@ -365,6 +385,10 @@ class ProductServiceStore(QObject):
                     if fast is None or not (fast.valid_mask & (1 << 5))
                     else operation.tx_enabled
                 ),
+            )
+            operation = stamp_snapshot_received(
+                operation,
+                self._received.get("slow"),
             )
         link = self._link_detail
         if link is not None:
@@ -401,6 +425,10 @@ class ProductServiceStore(QObject):
                     link.valid_mask, 6, link.satellite_name, link.timestamp, stale
                 ),
             )
+            operation = stamp_snapshot_received(
+                operation,
+                self._received.get("link_detail"),
+            )
         rf_lock_status = self._rf_lock_status
         if rf_lock_status is not None:
             stale = self._is_stale("rf_lock_status", now, 1.0)
@@ -428,6 +456,10 @@ class ProductServiceStore(QObject):
                     stale,
                 ),
             )
+            operation = stamp_snapshot_received(
+                operation,
+                self._received.get("rf_lock_status"),
+            )
         return operation
 
     def _component_snapshot(
@@ -437,8 +469,12 @@ class ProductServiceStore(QObject):
         if record is None:
             return fallback.converter, fallback.tx_array, fallback.rx_array
         stale = self._is_stale("components", now, 3.0)
+        received = self._received.get("components")
         return tuple(
-            self._one_component(value, record.timestamp, stale)
+            stamp_snapshot_received(
+                self._one_component(value, record.timestamp, stale),
+                received,
+            )
             for value in (record.converter, record.tx_array, record.rx_array)
         )
 
@@ -462,7 +498,7 @@ class ProductServiceStore(QObject):
         if record is None:
             return fallback
         mask = record.valid_mask
-        return RfCapabilities(
+        capabilities = RfCapabilities(
             rx_frequency_min_mhz=self._static(mask, 0, record.rx_frequency_min_mhz, record.timestamp),
             rx_frequency_max_mhz=self._static(mask, 1, record.rx_frequency_max_mhz, record.timestamp),
             tx_frequency_min_mhz=self._static(mask, 2, record.tx_frequency_min_mhz, record.timestamp),
@@ -478,6 +514,10 @@ class ProductServiceStore(QObject):
                 mask, 7, bool(record.capture_profile_mask & 0x02), record.timestamp
             ),
         )
+        return stamp_snapshot_received(
+            capabilities,
+            self._received.get("capabilities"),
+        )
 
     def _navigation_source_snapshot(
         self, fallback: NavigationSourceInfo
@@ -487,7 +527,7 @@ class ProductServiceStore(QObject):
             return fallback
         mask = record.valid_mask
         flags = record.capability_flags
-        return NavigationSourceInfo(
+        sources = NavigationSourceInfo(
             gnss_source=self._static(
                 mask,
                 0,
@@ -533,6 +573,10 @@ class ProductServiceStore(QObject):
                 mask, 6, record.imu_mount_rotation, record.timestamp
             ),
         )
+        return stamp_snapshot_received(
+            sources,
+            self._received.get("navigation_source"),
+        )
 
     def _external_ins_snapshot(
         self, fallback: ExternalInsDiagnostics, now: float
@@ -544,7 +588,7 @@ class ProductServiceStore(QObject):
         stale = self._is_stale("external_ins", now, 3.0)
         dynamic = self._dynamic
         timestamp = record.timestamp
-        return ExternalInsDiagnostics(
+        diagnostics = ExternalInsDiagnostics(
             source=dynamic(
                 mask,
                 0,
@@ -620,6 +664,10 @@ class ProductServiceStore(QObject):
             differential_age_s=dynamic(
                 mask, 11, record.differential_age_s, timestamp, stale
             ),
+        )
+        return stamp_snapshot_received(
+            diagnostics,
+            self._received.get("external_ins"),
         )
 
     def _is_stale(self, key: str, now: float, threshold: float) -> bool:

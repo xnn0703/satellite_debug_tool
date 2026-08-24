@@ -17,7 +17,6 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from satellite_debug_tool.core.product import ProductServiceStore
 from satellite_debug_tool.core.protocol import (
     FrameReceiverV2,
     ServiceFastState,
@@ -25,6 +24,7 @@ from satellite_debug_tool.core.protocol import (
     ServiceIdentity,
     build_service_subscribe,
 )
+from satellite_debug_tool.core.session import DeviceSessionCore, SessionRegistry
 from satellite_debug_tool.io.data_recorder import DataRecorder, SDB_VERSION_V3
 
 
@@ -307,13 +307,21 @@ class DeviceSession(QObject):
         self,
         endpoint: Endpoint,
         slot: int,
+        *,
+        session_core: Optional[DeviceSessionCore] = None,
+        session_owner: str = "production",
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self.endpoint = (str(endpoint[0]), int(endpoint[1]))
         self.slot = int(slot)
-        self.receiver = FrameReceiverV2()
-        self.product_store = ProductServiceStore(parent=self)
+        self.session_owner = str(session_owner)
+        self.core = session_core or DeviceSessionCore(
+            endpoint=self.endpoint,
+            parent=self,
+        )
+        self.receiver = self.core.receiver
+        self.product_store = self.core.product_store
         self.state = DeviceSessionState.DISCOVERED
         self.identity: Optional[ServiceIdentity] = None
         self.hardware_identity: Optional[ServiceHardwareIdentity] = None
@@ -449,21 +457,50 @@ class DeviceSession(QObject):
     def feed_datagram(self, datagram: FleetDatagram, *, record: bool = True) -> tuple[object, ...]:
         if datagram.endpoint != self.endpoint:
             raise ValueError("datagram endpoint does not match device session")
+        self._record_datagram(datagram, record=record)
+        records = self.core.feed_bytes(
+            datagram.data,
+            received_monotonic=datagram.monotonic_ns / 1_000_000_000.0,
+        )
+        return self._apply_records(datagram, records)
+
+    def feed_decoded_datagram(
+        self,
+        datagram: FleetDatagram,
+        records: tuple[object, ...],
+        *,
+        record: bool = True,
+    ) -> tuple[object, ...]:
+        """Accept a discovery datagram whose envelope was already decoded once."""
+
+        if datagram.endpoint != self.endpoint:
+            raise ValueError("datagram endpoint does not match device session")
+        self._record_datagram(datagram, record=record)
+        self.core.apply_records(
+            records,
+            received_monotonic=datagram.monotonic_ns / 1_000_000_000.0,
+        )
+        return self._apply_records(datagram, records)
+
+    def _record_datagram(self, datagram: FleetDatagram, *, record: bool) -> None:
         if record and self._recorder is not None:
             self._recorder.write_frame(
                 datagram.data,
                 host_timestamp_ns=datagram.wall_time_ns,
             )
-        records = tuple(self.receiver.feed(datagram.data))
+
+    def _apply_records(
+        self,
+        datagram: FleetDatagram,
+        records: tuple[object, ...],
+    ) -> tuple[object, ...]:
         if not records:
             return records
         self.last_seen_monotonic_ns = int(datagram.monotonic_ns)
         self.received_datagrams += 1
         self.received_bytes += len(datagram.data)
-        received_monotonic = datagram.monotonic_ns / 1_000_000_000.0
         identity_changed = False
         for item in records:
-            self.product_store.feed(item, received_monotonic=received_monotonic)
             if (
                 isinstance(item, ServiceFastState)
                 and item.valid_mask & (1 << 11)
@@ -528,6 +565,7 @@ class DeviceSession(QObject):
     ) -> Endpoint:
         old_endpoint = self.endpoint
         self.endpoint = (str(endpoint[0]), int(endpoint[1]))
+        self.core.bind_endpoint(self.endpoint)
         recorder = self._recorder
         if recorder is not None:
             recorder.write_metadata_event(
@@ -595,12 +633,14 @@ class FleetController(QObject):
         device_port: int = 4004,
         max_devices: int = 4,
         hub: Optional[UdpFleetHub] = None,
+        session_registry: Optional[SessionRegistry] = None,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         if max_devices not in range(1, 5):
             raise FleetConfigurationError("max_devices must be between 1 and 4")
         self._max_devices = int(max_devices)
+        self._session_registry = session_registry
         self._hub = hub or UdpFleetHub(
             discovery_cidr=discovery_cidr,
             local_port=local_port,
@@ -727,17 +767,18 @@ class FleetController(QObject):
             return
         self._retired_endpoints.pop(datagram.endpoint, None)
         session = self._sessions.get(datagram.endpoint)
+        decoded_records: tuple[object, ...] | None = None
         if session is None:
             probe = FrameReceiverV2()
-            probe_records = tuple(probe.feed(datagram.data))
+            decoded_records = tuple(probe.feed(datagram.data))
             identity = next(
-                (item for item in probe_records if isinstance(item, ServiceIdentity)),
+                (item for item in decoded_records if isinstance(item, ServiceIdentity)),
                 None,
             )
             hardware_identity = next(
                 (
                     item
-                    for item in probe_records
+                    for item in decoded_records
                     if isinstance(item, ServiceHardwareIdentity)
                 ),
                 None,
@@ -780,6 +821,12 @@ class FleetController(QObject):
                     datagram.endpoint,
                     wall_time_ns=datagram.wall_time_ns,
                 )
+                if self._session_registry is not None:
+                    self._session_registry.rebind(
+                        existing.core,
+                        datagram.endpoint,
+                        owner=existing.session_owner,
+                    )
                 self._sessions.pop(old_endpoint, None)
                 self._sessions[datagram.endpoint] = existing
                 self._serial_for_endpoint.pop(old_endpoint, None)
@@ -803,7 +850,10 @@ class FleetController(QObject):
                 session = self._create_session(datagram)
                 if session is None:
                     return
-        session.feed_datagram(datagram)
+        if decoded_records is None:
+            session.feed_datagram(datagram)
+        else:
+            session.feed_decoded_datagram(datagram, decoded_records)
         if session.state == DeviceSessionState.IDENTIFIED:
             self._subscribe_session(datagram.endpoint)
 
@@ -816,7 +866,22 @@ class FleetController(QObject):
         slot = next(
             value for value in range(1, self._max_devices + 1) if value not in occupied
         )
-        session = DeviceSession(datagram.endpoint, slot, parent=self)
+        owner = f"fleet:{id(self)}:slot:{slot}"
+        core = (
+            self._session_registry.get_or_create(
+                datagram.endpoint,
+                owner=owner,
+            )
+            if self._session_registry is not None
+            else None
+        )
+        session = DeviceSession(
+            datagram.endpoint,
+            slot,
+            session_core=core,
+            session_owner=owner,
+            parent=self,
+        )
         session.identity_changed.connect(
             lambda identity, current=session: self._on_session_identity(
                 current, identity

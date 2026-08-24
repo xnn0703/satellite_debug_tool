@@ -369,6 +369,25 @@ def test_service_store_overrides_legacy_and_marks_stale() -> None:
     assert link_stale.operation.modem_online.availability == Availability.STALE
 
 
+def test_service_fields_keep_their_record_receipt_time_when_timestamps_collide() -> None:
+    store = ProductServiceStore()
+    store.feed(
+        ServiceFastState(1, 20, 0xFFF, 0, 3, True, 3, 3, False, 1, 2, 3, 4, 5, 6),
+        received_monotonic=100.0,
+    )
+    store.feed(
+        ServiceLinkDetail(
+            1, 20, 0x3F, True, 18250.0, 28050.0, 2, 0.0, 25544, ""
+        ),
+        received_monotonic=101.0,
+    )
+
+    operation = store.snapshot(now_monotonic=101.0).operation
+
+    assert operation.snr_db.received_monotonic_s == 100.0
+    assert operation.modem_online.received_monotonic_s == 101.0
+
+
 def test_rf_lock_status_preserves_partial_and_stale_paths() -> None:
     store = ProductServiceStore()
     store.feed(

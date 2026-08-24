@@ -49,10 +49,10 @@ from satellite_debug_tool.core.production import (
     FixtureControlLease,
     FixtureControlWorker,
     FixtureLeaseError,
-    FixtureLeaseHandle,
     FixtureProfileError,
     FixtureProfileStore,
     FixtureSessionConclusion,
+    FixtureSessionCoordinator,
     FixtureSessionRecorder,
     GuidedFixtureCalibration,
     MotionPlatformError,
@@ -87,6 +87,7 @@ class FixtureProfileDialog(QDialog):
         self.setMinimumWidth(860)
         root = QVBoxLayout(self)
         form = QFormLayout()
+        self._profile_form = form
         self._profile_id = QLineEdit(profile.profile_id if profile else "")
         self._host = QLineEdit(profile.host if profile else "192.168.1.50")
         self._port = QSpinBox()
@@ -104,6 +105,7 @@ class FixtureProfileDialog(QDialog):
         root.addLayout(form)
 
         limits_group = QGroupBox(tr("Per-axis hard limits"))
+        self._limits_group = limits_group
         limits = QGridLayout(limits_group)
         headers = (
             tr("Axis"),
@@ -114,8 +116,11 @@ class FixtureProfileDialog(QDialog):
             tr("Acceleration (deg/s²)"),
             tr("Sign"),
         )
+        self._limit_headers: list[QLabel] = []
         for column, header in enumerate(headers):
-            limits.addWidget(QLabel(header), 0, column)
+            label = QLabel(header)
+            self._limit_headers.append(label)
+            limits.addWidget(label, 0, column)
         self._limit_edits: dict[str, tuple[QLineEdit, ...]] = {}
         self._sign_boxes: dict[str, QComboBox] = {}
         for row, axis in enumerate(("roll", "pitch", "yaw"), start=1):
@@ -145,7 +150,9 @@ class FixtureProfileDialog(QDialog):
         root.addWidget(limits_group)
 
         geometry = QGroupBox(tr("Confirmed A6 geometry"))
+        self._geometry_group = geometry
         geometry_form = QFormLayout(geometry)
+        self._geometry_form = geometry_form
         self._center_z = QDoubleSpinBox()
         self._center_z.setRange(0, 1000)
         self._center_z.setDecimals(2)
@@ -170,14 +177,60 @@ class FixtureProfileDialog(QDialog):
         self._error.setObjectName("fixtureProfileError")
         self._error.setWordWrap(True)
         root.addWidget(self._error)
-        buttons = QDialogButtonBox(
+        self._buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self._validate_and_accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        self._buttons.accepted.connect(self._validate_and_accept)
+        self._buttons.rejected.connect(self.reject)
+        root.addWidget(self._buttons)
         register_translatable(self)
+
+    def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("Fixture profile"))
+        for field, source in (
+            (self._profile_id, "Profile ID"),
+            (self._host, "Platform IPv4"),
+            (self._port, "UDP port"),
+            (self._calibration_id, "Calibration ID"),
+            (self._minimum_duration, "Minimum command time (ms)"),
+        ):
+            label = self._profile_form.labelForField(field)
+            if label is not None:
+                label.setText(tr(source))
+        self._limits_group.setTitle(tr("Per-axis hard limits"))
+        for label, source in zip(
+            self._limit_headers,
+            (
+                "Axis",
+                "Angle (deg)",
+                "Step (deg)",
+                "Frequency (Hz)",
+                "Velocity (deg/s)",
+                "Acceleration (deg/s²)",
+                "Sign",
+            ),
+        ):
+            label.setText(tr(source))
+        for edits in self._limit_edits.values():
+            for edit in edits:
+                edit.setPlaceholderText(tr("Required"))
+        self._geometry_group.setTitle(tr("Confirmed A6 geometry"))
+        for field, source in (
+            (self._center_z, "Center Z (mm)"),
+            (self._reset_z, "Reset Z (mm)"),
+            (self._z_min, "Minimum Z (mm)"),
+            (self._z_max, "Maximum Z (mm)"),
+        ):
+            label = self._geometry_form.labelForField(field)
+            if label is not None:
+                label.setText(tr(source))
+        self._buttons.button(QDialogButtonBox.StandardButton.Save).setText(
+            tr("Save")
+        )
+        self._buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
+            tr("Cancel")
+        )
 
     @property
     def result_profile(self) -> Optional[WorkstationFixtureProfile]:
@@ -318,8 +371,6 @@ class _SessionFinalizeThread(QThread):
         recorder: FixtureSessionRecorder,
         conclusion: FixtureSessionConclusion,
         notes: str,
-        targets: tuple[TimedAttitude, ...],
-        measurements: tuple[TimedAttitude, ...],
         calibration: Optional[FixtureCalibration],
         max_target_gap_s: float,
         control_runs: tuple[dict, ...],
@@ -331,8 +382,6 @@ class _SessionFinalizeThread(QThread):
         self._recorder = recorder
         self._conclusion = conclusion
         self._notes = notes
-        self._targets = targets
-        self._measurements = measurements
         self._calibration = calibration
         self._max_target_gap_s = float(max_target_gap_s)
         self._control_runs = control_runs
@@ -362,16 +411,13 @@ class _SessionFinalizeThread(QThread):
                 self._calibration and self._calibration.coordinate_valid
             )
             comparisons = (
-                compare_attitude_streams(
-                    self._targets,
-                    self._measurements,
+                self._recorder.generate_comparison_sample(
                     calibration=self._calibration,
                     max_target_gap_s=self._max_target_gap_s,
                 )
                 if coordinate_valid
                 else ()
             )
-            self._recorder.record_comparisons(comparisons)
             summary = {
                 "timing_mode": "HOST_ARRIVAL_ONLY_NO_PPS",
                 "phase_delay_is_engineering_estimate": True,
@@ -379,6 +425,7 @@ class _SessionFinalizeThread(QThread):
                     self._calibration.calibration_id if self._calibration else ""
                 ),
                 "coordinate_valid": coordinate_valid,
+                "metric_sample_count": len(comparisons),
                 "control_runs": list(self._control_runs),
                 "static_metrics": compute_static_metrics(comparisons),
                 "dynamic_metrics": {
@@ -429,15 +476,17 @@ class FixtureDebugWorkspace(QWidget):
     ) -> None:
         super().__init__(parent)
         self._settings = settings
-        self._lease = lease
         self._profile_store = profile_store or FixtureProfileStore()
         self._calibration_store = calibration_store or FixtureCalibrationStore()
-        self._session_root = session_root
+        self._session_coordinator = FixtureSessionCoordinator(
+            lease,
+            session_root=session_root,
+            parent=self,
+        )
         self._control_sender = control_sender
         self._theme = "dark"
         self._profile: Optional[WorkstationFixtureProfile] = None
         self._calibration: Optional[FixtureCalibration] = None
-        self._lease_handle: Optional[FixtureLeaseHandle] = None
         self._control: Optional[FixtureControlWorker] = None
         self._ms_worker: Optional[Ms6222SerialWorker] = None
         self._ms_connected = False
@@ -447,24 +496,24 @@ class FixtureDebugWorkspace(QWidget):
         self._session_accepting_frames = False
         self._evidence_ready = True
         self._session_origin_ns = time.monotonic_ns()
-        self._targets: deque[TimedAttitude] = deque(maxlen=100000)
-        # INSPVAXB is nominally 100 Hz. Keep more than 60 minutes for final
-        # metrics, while limiting plot-only buffers to the visible five minutes.
-        self._measurements: deque[TimedAttitude] = deque(maxlen=400000)
-        self._display_measurements: deque[TimedAttitude] = deque(maxlen=60000)
-        self._errors: deque[TimedAttitude] = deque(maxlen=60000)
+        self._targets: deque[TimedAttitude] = deque(maxlen=60000)
+        # Calibration needs only a recent capture window. Full measurements and
+        # comparisons are persisted by FixtureSessionRecorder.
+        self._measurements: deque[TimedAttitude] = deque(maxlen=2000)
+        self._display_measurements: deque[TimedAttitude] = deque(maxlen=30000)
+        self._errors: deque[TimedAttitude] = deque(maxlen=30000)
         self._run_summaries: list[dict] = []
         self._latest_ms_stats: Optional[Ms6222WorkerStatistics] = None
         self._latest_ins_quality: Optional[tuple[int, int, int]] = None
         self._guided_calibration: Optional[GuidedFixtureCalibration] = None
         self._calibration_capture_enabled = False
+        self._view_active = False
         self._build_ui()
         self._reload_profiles()
         self._refresh_serial_ports()
         self._plot_timer = QTimer(self)
         self._plot_timer.setInterval(100)
         self._plot_timer.timeout.connect(self._refresh_plot)
-        self._plot_timer.start()
         register_translatable(self)
 
     @property
@@ -473,7 +522,7 @@ class FixtureDebugWorkspace(QWidget):
 
     @property
     def session_active(self) -> bool:
-        return self._recorder is not None and self._lease.held_by(self._lease_handle)
+        return self._session_coordinator.active
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -998,6 +1047,11 @@ class FixtureDebugWorkspace(QWidget):
             valid=solution_valid,
         )
         self._measurements.append(raw)
+        if recorder is not None and self._session_accepting_frames:
+            try:
+                recorder.record_measurement(raw)
+            except Exception as exc:
+                self._fail_evidence(str(exc))
         display = self._calibration.apply(raw) if self._calibration and self._calibration.coordinate_valid else raw
         self._display_measurements.append(display)
         if self._targets and self._calibration and self._calibration.coordinate_valid:
@@ -1048,14 +1102,12 @@ class FixtureDebugWorkspace(QWidget):
             raise FixtureProfileError("no fixture profile is selected")
         if not all(check.isChecked() for check in self._safety_checks):
             raise MotionPlatformError("all motion safety confirmations are required")
-        recorder = FixtureSessionRecorder(
+        context = self._session_coordinator.begin(
             self._profile,
             operator=str(self._settings.get("production.last_operator", "") or ""),
-            root=self._session_root,
         )
-        handle = self._lease.acquire(f"fixture-debug:{recorder.session_id}")
+        recorder = context.recorder
         try:
-            session_dir = recorder.start()
             control = FixtureControlWorker(
                 self._profile,
                 sender=self._control_sender,
@@ -1071,14 +1123,12 @@ class FixtureDebugWorkspace(QWidget):
             control.start()
         except Exception:
             try:
-                recorder.abort(reason="session startup failed")
+                self._session_coordinator.abort(reason="session startup failed")
             except Exception:
                 pass
-            self._lease.release(handle)
             raise
         self._recorder = recorder
         self._control = control
-        self._lease_handle = handle
         self._evidence_ready = True
         self._session_accepting_frames = True
         self._session_origin_ns = time.monotonic_ns()
@@ -1096,8 +1146,9 @@ class FixtureDebugWorkspace(QWidget):
                 center.yaw_deg,
             )
         )
+        recorder.record_target(self._targets[-1])
         self._append_event(
-            tr("Engineering session started: {path}", path=str(session_dir)),
+            tr("Engineering session started: {path}", path=str(context.session_dir)),
             event_type="session_started",
             details={"ms6222_connected": self._ms_connected},
         )
@@ -1108,7 +1159,7 @@ class FixtureDebugWorkspace(QWidget):
         self._profile_reload.setEnabled(False)
         self.active_changed.emit(True)
         self._update_start_gate()
-        return session_dir
+        return context.session_dir
 
     def _set_motion_controls_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -1227,6 +1278,12 @@ class FixtureDebugWorkspace(QWidget):
             self._targets.append(
                 TimedAttitude(completion_ns, pose.roll_deg, pose.pitch_deg, pose.yaw_deg)
             )
+            recorder = self._recorder
+            if recorder is not None and self._session_accepting_frames:
+                try:
+                    recorder.record_target(self._targets[-1])
+                except Exception as exc:
+                    self._fail_evidence(str(exc))
             self._platform_status.setText(
                 tr(
                     "Command sent | {action} | sequence {sequence}",
@@ -1489,13 +1546,22 @@ class FixtureDebugWorkspace(QWidget):
                     )
                     return
             self._session_accepting_frames = False
-            self._extend_target_hold(time.monotonic_ns())
+            effective_abort_reason = abort_reason
+            hold = self._extend_target_hold(time.monotonic_ns())
+            if hold is not None and not effective_abort_reason:
+                try:
+                    recorder.record_target(hold)
+                except Exception as exc:
+                    effective_abort_reason = f"target evidence failed: {exc}"
+            try:
+                self._session_coordinator.begin_finalization()
+            except RuntimeError as exc:
+                self._on_session_finalize_failed(str(exc))
+                return
             finalizer = _SessionFinalizeThread(
                 recorder,
                 conclusion,
                 notes,
-                tuple(self._targets),
-                tuple(self._measurements),
                 self._calibration,
                 max(
                     0.5,
@@ -1503,7 +1569,7 @@ class FixtureDebugWorkspace(QWidget):
                 ),
                 tuple(self._run_summaries),
                 asdict(self._latest_ms_stats) if self._latest_ms_stats else None,
-                abort_reason,
+                effective_abort_reason,
                 parent=self,
             )
             finalizer.completed.connect(self._on_session_finalized)
@@ -1549,6 +1615,7 @@ class FixtureDebugWorkspace(QWidget):
                 tr("Fixture evidence failed; session saved as incomplete."),
                 10000,
             )
+        self._session_coordinator.complete(result)
         self._release_session_state()
 
     def _on_session_finalize_failed(self, details: str) -> None:
@@ -1556,16 +1623,10 @@ class FixtureDebugWorkspace(QWidget):
             tr("Session finalization failed: {details}", details=details)
         )
         self.status_message.emit(details, 10000)
+        self._session_coordinator.finalization_failed()
         self._release_session_state()
 
     def _release_session_state(self) -> None:
-        handle = self._lease_handle
-        self._lease_handle = None
-        if handle is not None:
-            try:
-                self._lease.release(handle)
-            except FixtureLeaseError:
-                pass
         self._control = None
         self._recorder = None
         self._finalizer = None
@@ -1578,6 +1639,7 @@ class FixtureDebugWorkspace(QWidget):
         self._profile_reload.setEnabled(True)
         self._session_end.setEnabled(False)
         self.active_changed.emit(False)
+        self._session_coordinator.reset()
         self._reload_profiles()
         self._update_start_gate()
 
@@ -1594,21 +1656,21 @@ class FixtureDebugWorkspace(QWidget):
             ),
         }
 
-    def _extend_target_hold(self, monotonic_ns: int) -> None:
+    def _extend_target_hold(self, monotonic_ns: int) -> Optional[TimedAttitude]:
         if not self._targets:
-            return
+            return None
         last = self._targets[-1]
         timestamp = int(monotonic_ns)
         if timestamp <= last.monotonic_ns:
-            return
-        self._targets.append(
-            TimedAttitude(
-                timestamp,
-                last.roll_deg,
-                last.pitch_deg,
-                last.yaw_deg,
-            )
+            return None
+        hold = TimedAttitude(
+            timestamp,
+            last.roll_deg,
+            last.pitch_deg,
+            last.yaw_deg,
         )
+        self._targets.append(hold)
+        return hold
 
     def _require_control(self) -> FixtureControlWorker:
         if self._control is None or not self.session_active or not self._evidence_ready:
@@ -1766,8 +1828,23 @@ class FixtureDebugWorkspace(QWidget):
         )
         return answer == QMessageBox.StandardButton.Yes
 
-    def shutdown(self, *, wait: bool = True) -> None:
+    def activate_view(self) -> None:
+        """Refresh plots only while the fixture page is visible."""
+        if self._view_active:
+            return
+        self._view_active = True
+        self._refresh_plot()
+        self._plot_timer.start()
+
+    def deactivate_view(self) -> None:
+        """Stop plot rendering while control and evidence workers continue."""
+        if not self._view_active:
+            return
+        self._view_active = False
         self._plot_timer.stop()
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        self.deactivate_view()
         self._disconnect_ms()
         finalizer = self._finalizer
         if finalizer is not None and wait:
@@ -1784,15 +1861,11 @@ class FixtureDebugWorkspace(QWidget):
                 control.wait(10000)
         if recorder is not None and finalizer is None:
             try:
-                recorder.abort(reason="workspace shutdown", summary=self._engineering_summary())
+                self._session_coordinator.abort(
+                    reason="workspace shutdown",
+                    summary=self._engineering_summary(),
+                )
             except Exception:
-                pass
-        handle = self._lease_handle
-        self._lease_handle = None
-        if handle is not None:
-            try:
-                self._lease.release(handle)
-            except FixtureLeaseError:
                 pass
         self._control = None
         self._recorder = None

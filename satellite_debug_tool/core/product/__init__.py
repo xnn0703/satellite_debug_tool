@@ -9,6 +9,10 @@ from .playback_projection import (
     customer_channel_entries,
 )
 from .service_store import ProductServiceStore
+from .source_resolver import (
+    ProductSnapshotResolver,
+    ProductSourceState,
+)
 from .timestamps import U32UptimeUnwrapper, unwrap_u32_series
 from .models import (
     Availability,
@@ -22,10 +26,15 @@ from .models import (
     NavigationSourceInfo,
     OperationalSnapshot,
     ProductSnapshot,
+    ProductSource,
     ProductValue,
     RfCapabilities,
     SatelliteMode,
     TrackingPhase,
+    ValueQuality,
+    pending_product_snapshot,
+    stamp_snapshot_received,
+    stamp_snapshot_source,
 )
 
 __all__ = [
@@ -45,12 +54,19 @@ __all__ = [
     "NavigationSourceInfo",
     "OperationalSnapshot",
     "ProductSnapshot",
+    "ProductSnapshotResolver",
+    "ProductSource",
+    "ProductSourceState",
     "ProductServiceStore",
     "ProductValue",
     "RfCapabilities",
     "SatelliteMode",
     "TrackingPhase",
+    "ValueQuality",
     "U32UptimeUnwrapper",
     "unwrap_u32_series",
     "customer_channel_entries",
+    "pending_product_snapshot",
+    "stamp_snapshot_received",
+    "stamp_snapshot_source",
 ]

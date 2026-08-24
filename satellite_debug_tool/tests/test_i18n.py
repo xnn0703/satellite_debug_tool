@@ -172,7 +172,8 @@ def test_runtime_switch_preserves_main_window_state(i18n_context, qapp):
     manager.set_preference(LANGUAGE_EN_US)
     window = MainWindow(settings=settings)
     live = window._live
-    device = window._device
+    live.ensure_presentation()
+    device = window._ensure_device_view()
     worker_sentinel = object()
     live._worker = worker_sentinel
     live._is_connected = True
@@ -215,8 +216,8 @@ def test_runtime_switch_preserves_main_window_state(i18n_context, qapp):
     assert live._worker is worker_sentinel
     assert timers == (live._update_timer, live._heavy_timer, live._handshake_timer)
     assert tuple(live._top_splitter.sizes()) == splitter_sizes
-    assert live._update_timer.isActive()
-    assert live._heavy_timer.isActive()
+    assert not live._update_timer.isActive()
+    assert not live._heavy_timer.isActive()
     assert live._channel_panel.is_checked("ch_00") is False
     assert live._data_store.frame_count == 1
     assert device._ota_active is True
@@ -377,6 +378,7 @@ def test_english_major_windows_have_no_first_party_cjk(i18n_context, qapp):
     settings, manager = i18n_context
     manager.set_preference(LANGUAGE_EN_US)
     window = MainWindow(settings=settings)
+    window._live.ensure_presentation()
     qapp.processEvents()
 
     texts = _collect_widget_texts(window)
@@ -432,6 +434,7 @@ def test_minimum_window_right_panel_children_do_not_overlap(i18n_context, qapp):
     manager.set_preference(LANGUAGE_EN_US)
     window = MainWindow(settings=settings)
     window.resize(1024, 600)
+    window.unlock_engineering_for_session()
     window.show()
     qapp.processEvents()
 
@@ -483,7 +486,8 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
     assert overview_scroll.horizontalScrollBar().maximum() == 0
     assert overview_scroll.verticalScrollBar().maximum() == 0
     assert overview._density == "dense"
-    playback_channels = customer._playback._profile_store.get_channels(
+    playback = customer.playback
+    playback_channels = playback._profile_store.get_channels(
         "customer_playback"
     )
     assert {channel.name for channel in playback_channels} >= {
@@ -494,7 +498,7 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
 
     customer.set_page("maintenance")
     qapp.processEvents()
-    component_table = customer._maintenance._component_table
+    component_table = customer.maintenance._component_table
     assert component_table.verticalScrollBar().maximum() == 0
     assert component_table.visualItemRect(component_table.item(2, 0)).height() > 0
 
@@ -506,7 +510,7 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
     assert overview._beam_values["beam_az"].title.text() == "Azimuth"
     assert overview._data_group_title.text() == "Runtime data"
     assert overview._snr_plot.getAxis("bottom").label.toPlainText() == "Device uptime (s)"
-    playback_channels = customer._playback._profile_store.get_channels(
+    playback_channels = playback._profile_store.get_channels(
         "customer_playback"
     )
     assert {channel.name for channel in playback_channels} >= {

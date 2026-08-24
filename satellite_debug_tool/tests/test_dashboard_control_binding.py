@@ -130,21 +130,21 @@ def test_liveview_debug_waits_for_specific_ack(qapp):
     view._on_debug_toggled()
 
     assert _data_of(worker.sent[-1]) == bytes([SubCmd.DEBUG_ENABLE, 1])
-    assert view._debug_enabled is False
-    assert view._debug_pending_target is True
+    assert view.is_debug_enabled() is False
+    assert view._debug_controller.pending_target is True
     assert view._debug_btn.isEnabled() is False
 
     view._on_data_received(_command_response_frame(int(RespCode.SUCCESS), "OK"))
-    assert view._debug_enabled is False
-    assert view._debug_pending_target is True
+    assert view.is_debug_enabled() is False
+    assert view._debug_controller.pending_target is True
 
     view._on_data_received(_command_response_frame(int(RespCode.SUCCESS), "DEBUG_ENABLE=0"))
-    assert view._debug_enabled is False
-    assert view._debug_pending_target is True
+    assert view.is_debug_enabled() is False
+    assert view._debug_controller.pending_target is True
 
     view._on_data_received(_command_response_frame(int(RespCode.SUCCESS), "DEBUG_ENABLE=1"))
-    assert view._debug_enabled is True
-    assert view._debug_pending_target is None
+    assert view.is_debug_enabled() is True
+    assert view._debug_controller.pending_target is None
     assert view._debug_btn.isEnabled() is True
     from satellite_debug_tool.i18n import tr
     assert view._debug_btn.text() == tr("Debug: {state}", state="ON")
@@ -184,12 +184,12 @@ def test_liveview_debug_data_report_requires_exact_ack(qapp):
     view._on_debug_toggled()
 
     assert _data_of(worker.sent[-1]) == bytes([SubCmd.DEBUG_ENABLE, 1])
-    assert view._debug_pending_target is True
+    assert view._debug_controller.pending_target is True
 
     view._on_data_received(_data_report_frame())
 
-    assert view._debug_enabled is False
-    assert view._debug_pending_target is True
+    assert view.is_debug_enabled() is False
+    assert view._debug_controller.pending_target is True
     assert view._debug_btn.isEnabled() is False
 
 
@@ -206,11 +206,11 @@ def test_liveview_debug_timeout_does_not_retry(qapp):
     view._on_debug_toggled()
     assert len(worker.sent) == 1
 
-    view._on_debug_ack_timeout()
+    view._debug_controller._on_timeout()
 
     assert len(worker.sent) == 1
-    assert view._debug_enabled is False
-    assert view._debug_pending_target is None
+    assert view.is_debug_enabled() is False
+    assert view._debug_controller.pending_target is None
     assert view._debug_btn.isEnabled() is True
 
 
@@ -220,15 +220,16 @@ def test_liveview_debug_accepts_recent_late_matching_ack(qapp):
     from satellite_debug_tool.ui.live_view import LiveView
 
     view = LiveView(settings=Settings())
+    worker = _Worker()
+    view._worker = worker
     view._is_connected = True
-    view._debug_enabled = False
-    view._debug_last_requested_target = True
-    view._debug_last_request_at = time.monotonic()
+    view.request_debug_mode(True)
+    view._debug_controller._on_timeout()
 
     view._on_data_received(_command_response_frame(int(RespCode.SUCCESS), "DEBUG_ENABLE=1"))
 
-    assert view._debug_enabled is True
-    assert view._debug_pending_target is None
+    assert view.is_debug_enabled() is True
+    assert view._debug_controller.pending_target is None
     assert view._debug_btn.isEnabled() is True
     from satellite_debug_tool.i18n import tr
     assert view._debug_btn.text() == tr("Debug: {state}", state="ON")
@@ -237,13 +238,18 @@ def test_liveview_debug_accepts_recent_late_matching_ack(qapp):
 def test_liveview_debug_off_requires_exact_ack_even_when_data_arrives(qapp):
     from satellite_debug_tool.core.config import Settings
     from satellite_debug_tool.core.protocol import RespCode, SubCmd
-    from satellite_debug_tool.ui.live_view import DEBUG_ACK_TIMEOUT_MS, LiveView
+    from satellite_debug_tool.core.session.controllers import DEBUG_ACK_TIMEOUT_MS
+    from satellite_debug_tool.ui.live_view import LiveView
 
     view = LiveView(settings=Settings())
     worker = _Worker()
     view._worker = worker
     view._is_connected = True
-    view._debug_enabled = True
+    view.request_debug_mode(True)
+    view._on_data_received(
+        _command_response_frame(int(RespCode.SUCCESS), "DEBUG_ENABLE=1")
+    )
+    worker.sent.clear()
     results: list[tuple[bool, bool, str]] = []
     view.debug_request_finished.connect(lambda target, ok, detail: results.append((target, ok, detail)))
 
@@ -251,11 +257,11 @@ def test_liveview_debug_off_requires_exact_ack_even_when_data_arrives(qapp):
     assert DEBUG_ACK_TIMEOUT_MS == 3000
     assert _data_of(worker.sent[-1]) == bytes([SubCmd.DEBUG_ENABLE, 0])
     view._on_data_received(_data_report_frame())
-    assert view._debug_pending_target is False
+    assert view._debug_controller.pending_target is False
     assert results == []
 
     view._on_data_received(_command_response_frame(int(RespCode.SUCCESS), "DEBUG_ENABLE=0"))
-    assert view._debug_enabled is False
+    assert view.is_debug_enabled() is False
     assert results == [(False, True, "ack")]
 
 
@@ -275,7 +281,7 @@ def test_liveview_device_transaction_locks_only_the_button(qapp):
 
     # Device 仍可通过统一控制入口发命令，不依赖按钮可用状态。
     view.request_debug_mode(True)
-    assert view._debug_pending_target is True
+    assert view._debug_controller.pending_target is True
 
 
 def test_dashboard_rebuilds_when_semantics_changes_control_binding(qapp):

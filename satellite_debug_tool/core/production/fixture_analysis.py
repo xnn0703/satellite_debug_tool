@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -454,18 +453,43 @@ def compare_attitude_streams(
     valid_measurements = sorted(
         (sample for sample in measurements if sample.valid), key=lambda item: item.monotonic_ns
     )
-    if len(valid_targets) < 2 or not valid_measurements:
-        return ()
-    target_times = [sample.monotonic_ns for sample in valid_targets]
+    return tuple(
+        iter_attitude_comparisons(
+            valid_targets,
+            valid_measurements,
+            calibration=calibration,
+            max_target_gap_s=max_target_gap_s,
+        )
+    )
+
+
+def iter_attitude_comparisons(
+    targets: Iterable[TimedAttitude],
+    measurements: Iterable[TimedAttitude],
+    *,
+    calibration: Optional[FixtureCalibration] = None,
+    max_target_gap_s: float = 0.5,
+) -> Iterable[AttitudeComparison]:
+    """Compare ordered streams with constant memory."""
+    target_iterator = (sample for sample in targets if sample.valid)
+    try:
+        left_target = next(target_iterator)
+        right_target = next(target_iterator)
+    except StopIteration:
+        return
     max_gap_ns = int(max_target_gap_s * 1_000_000_000)
-    comparisons = []
-    for raw_measurement in valid_measurements:
-        measurement = calibration.apply(raw_measurement) if calibration else raw_measurement
-        right = bisect_right(target_times, measurement.monotonic_ns)
-        if right == 0 or right >= len(valid_targets):
+    for raw_measurement in measurements:
+        if not raw_measurement.valid:
             continue
-        left_target = valid_targets[right - 1]
-        right_target = valid_targets[right]
+        measurement = calibration.apply(raw_measurement) if calibration else raw_measurement
+        while right_target.monotonic_ns <= measurement.monotonic_ns:
+            left_target = right_target
+            try:
+                right_target = next(target_iterator)
+            except StopIteration:
+                return
+        if measurement.monotonic_ns < left_target.monotonic_ns:
+            continue
         gap_ns = right_target.monotonic_ns - left_target.monotonic_ns
         if gap_ns <= 0 or gap_ns > max_gap_ns:
             continue
@@ -480,22 +504,19 @@ def compare_attitude_streams(
         error_roll, error_pitch, error_yaw, error_angle = quaternion_attitude_error(
             target.values(), measurement.values()
         )
-        comparisons.append(
-            AttitudeComparison(
-                monotonic_ns=measurement.monotonic_ns,
-                target_roll_deg=target.roll_deg,
-                target_pitch_deg=target.pitch_deg,
-                target_yaw_deg=target.yaw_deg,
-                measured_roll_deg=measurement.roll_deg,
-                measured_pitch_deg=measurement.pitch_deg,
-                measured_yaw_deg=measurement.yaw_deg,
-                error_roll_deg=error_roll,
-                error_pitch_deg=error_pitch,
-                error_yaw_deg=error_yaw,
-                error_angle_deg=error_angle,
-            )
+        yield AttitudeComparison(
+            monotonic_ns=measurement.monotonic_ns,
+            target_roll_deg=target.roll_deg,
+            target_pitch_deg=target.pitch_deg,
+            target_yaw_deg=target.yaw_deg,
+            measured_roll_deg=measurement.roll_deg,
+            measured_pitch_deg=measurement.pitch_deg,
+            measured_yaw_deg=measurement.yaw_deg,
+            error_roll_deg=error_roll,
+            error_pitch_deg=error_pitch,
+            error_yaw_deg=error_yaw,
+            error_angle_deg=error_angle,
         )
-    return tuple(comparisons)
 
 
 def quaternion_attitude_error(

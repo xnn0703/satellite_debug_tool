@@ -1,13 +1,8 @@
-"""MainWindow —— 顶层窗口，QTabWidget 容器。
+"""Top-level customer, engineering, and production workspace coordinator.
 
-M7-S4 重构：原 1189 行的 MainWindow 业务主体已抽到 LiveView。此处只保留：
-
-- 顶部全局工具栏：主题切换 combo
-- 中部 QTabWidget：实时 / 回放 / Log 三个 view
-- 底部 QStatusBar：接所有 view 的 status_message 信号
-
-主题切换由 MainWindow 统一广播到三个 view。各 view 间数据互不影响（独立
-DataStore / ProfileStore）。
+MainWindow owns workspace lifecycle and lazy-page hosts.  The shared live
+session remains stable across shortcuts while each presentation runs only when
+its page is active.
 """
 
 from __future__ import annotations
@@ -29,11 +24,13 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool import __version__
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.session import SessionRegistry
 from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.customer_workspace import CustomerWorkspace
 from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
+from satellite_debug_tool.ui.lazy_view_host import LazyViewHost
 from satellite_debug_tool.ui.log_view import LogView
 from satellite_debug_tool.ui.playback_view import PlaybackView
 from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
@@ -42,6 +39,7 @@ from satellite_debug_tool.ui.update_dialog import (
     UpdateDialog,
     silent_background_check,
 )
+from satellite_debug_tool.ui.view_lifecycle import activate_view, deactivate_view
 
 
 class MainWindow(QMainWindow):
@@ -92,51 +90,53 @@ class MainWindow(QMainWindow):
         # ---------- 共享会话 ----------
         # LiveView 始终是唯一设备连接和实时数据拥有者。客户工作台与工程页只做
         # 不同呈现，切换工作区不会重建 worker、握手或 Store。
+        self._session_registry = SessionRegistry(parent=self)
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.North)
         self._tabs.tabBar().hide()   # gbar 药丸接管 tab 切换
         self._tabs.setDocumentMode(True)
-        self._live = LiveView(settings=self._settings)
-        self._playback = PlaybackView(settings=self._settings)
-        self._log = LogView(settings=self._settings)
-        self._device = DeviceView(settings=self._settings, profile_store=self._live.profile_store())
+        self._live = LiveView(
+            settings=self._settings,
+            session_registry=self._session_registry,
+            defer_presentation=True,
+        )
+        self._playback: PlaybackView | None = None
+        self._log: LogView | None = None
+        self._device: DeviceView | None = None
+        self._production: ProductionWorkspace | None = None
+        self._playback_host = LazyViewHost(self._create_playback_view)
+        self._log_host = LazyViewHost(self._create_log_view)
+        self._device_host = LazyViewHost(self._create_device_view)
+        self._production_host = LazyViewHost(self._create_production_workspace)
         self._tabs.addTab(self._live, tr("Live"))
-        self._tabs.addTab(self._playback, tr("Playback"))
-        self._tabs.addTab(self._log, "Log")
-        self._tabs.addTab(self._device, tr("Device"))
+        self._tabs.addTab(self._playback_host, tr("Playback"))
+        self._tabs.addTab(self._log_host, "Log")
+        self._tabs.addTab(self._device_host, tr("Device"))
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._tabs.currentChanged.connect(self._sync_tab_pills)
 
-        # M9: 连接共享 — Live Tab 的 worker 和帧数据广播给 Device Tab
-        self._live.connected_worker_changed.connect(self._device.set_worker)
-        self._live.frame_received.connect(self._device._on_frame_received)
-        self._device.debug_mode_requested.connect(self._live.request_debug_mode)
-        self._live.debug_request_finished.connect(self._device.on_debug_request_finished)
-        self._live.debug_state_changed.connect(self._device.set_debug_state)
-        self._device.device_transaction_active_changed.connect(
-            self._live.set_device_transaction_active
+        self._customer = CustomerWorkspace(
+            self._live,
+            self._settings,
+            self._ensure_device_view,
         )
-        self._device.handshake_retry_pause_changed.connect(
-            self._live.set_handshake_retries_paused
-        )
-
-        self._customer = CustomerWorkspace(self._live, self._settings, self._device)
-        self._production = ProductionWorkspace(self._settings)
         for view in (
             self._customer,
-            self._production,
             self._live,
-            self._playback,
-            self._log,
-            self._device,
+            self._playback_host,
+            self._log_host,
+            self._device_host,
+            self._production_host,
         ):
             view.status_message.connect(self._on_status_message)
 
         self._workspace = QStackedWidget()
+        self._active_workspace_index: int | None = None
+        self._active_engineering_tab_index: int | None = None
         self._workspace.addWidget(self._customer)
         self._workspace.addWidget(self._tabs)
-        self._workspace.addWidget(self._production)
-        self._workspace.currentChanged.connect(self._sync_tab_pills)
+        self._workspace.addWidget(self._production_host)
+        self._workspace.currentChanged.connect(self._on_workspace_changed)
         self.setCentralWidget(self._workspace)
 
         # 工程诊断默认不出现在客户导航中。现场工程师可通过快捷键确认后在
@@ -163,12 +163,50 @@ class MainWindow(QMainWindow):
         except ValueError:
             self._tabs.setCurrentIndex(0)
         self._workspace.setCurrentIndex(0)
-        self._sync_tab_pills(0)
+        self._on_workspace_changed(self._workspace.currentIndex())
 
         # M11：启动后台静默检查更新（settings.update.auto_check 控制）
         self._bg_check_thread = None
         QTimer.singleShot(2000, self._kick_silent_update_check)
         register_translatable(self)
+
+    # ============================ Lazy pages ============================
+
+    def _create_playback_view(self) -> PlaybackView:
+        self._playback = PlaybackView(settings=self._settings)
+        return self._playback
+
+    def _create_log_view(self) -> LogView:
+        self._log = LogView(settings=self._settings)
+        return self._log
+
+    def _create_device_view(self) -> DeviceView:
+        device = DeviceView(
+            settings=self._settings,
+            session_core=self._live.session_core(),
+        )
+        device.debug_mode_requested.connect(self._live.request_debug_mode)
+        self._live.debug_request_finished.connect(device.on_debug_request_finished)
+        self._live.debug_state_changed.connect(device.set_debug_state)
+        device.device_transaction_active_changed.connect(
+            self._live.set_device_transaction_active
+        )
+        device.set_debug_state(self._live.is_debug_enabled())
+        self._device = device
+        return device
+
+    def _create_production_workspace(self) -> ProductionWorkspace:
+        self._production = ProductionWorkspace(
+            self._settings,
+            session_registry=self._session_registry,
+        )
+        return self._production
+
+    def _ensure_device_view(self) -> DeviceView:
+        return self._device_host.ensure_view()
+
+    def _ensure_production_workspace(self) -> ProductionWorkspace:
+        return self._production_host.ensure_view()
 
     # ============================ 全局顶栏 ============================
 
@@ -328,7 +366,7 @@ class MainWindow(QMainWindow):
     def unlock_production_for_session(self) -> None:
         """Expose the production console for this process without persistence."""
         self._production_unlocked = True
-        self._production.activate()
+        self._ensure_production_workspace().activate()
         self._workspace.setCurrentIndex(2)
         self._sync_tab_pills()
 
@@ -413,11 +451,11 @@ class MainWindow(QMainWindow):
         # 广播到 view
         for view in (
             self._customer,
-            self._production,
             self._live,
-            self._playback,
-            self._log,
-            self._device,
+            self._playback_host,
+            self._log_host,
+            self._device_host,
+            self._production_host,
         ):
             if hasattr(view, "set_theme"):
                 view.set_theme(theme, "small")
@@ -483,6 +521,48 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         if sb is not None:
             sb.clearMessage()
+        if (
+            hasattr(self, "_workspace")
+            and self._workspace.currentIndex() == 1
+            and self._active_engineering_tab_index != index
+        ):
+            self._deactivate_engineering_tab()
+            self._activate_engineering_tab(index)
+
+    def _on_workspace_changed(self, index: int) -> None:
+        index = int(index)
+        previous = self._active_workspace_index
+        if previous == index:
+            self._sync_tab_pills(index)
+            return
+        if previous == 0:
+            deactivate_view(self._customer)
+        elif previous == 1:
+            self._deactivate_engineering_tab()
+        elif previous == 2:
+            deactivate_view(self._production_host)
+
+        self._active_workspace_index = index
+        if index == 0:
+            activate_view(self._customer)
+        elif index == 1:
+            self._activate_engineering_tab(self._tabs.currentIndex())
+        elif index == 2:
+            activate_view(self._production_host)
+        self._sync_tab_pills(index)
+
+    def _activate_engineering_tab(self, index: int) -> None:
+        if not 0 <= int(index) < self._tabs.count():
+            return
+        self._active_engineering_tab_index = int(index)
+        activate_view(self._tabs.widget(int(index)))
+
+    def _deactivate_engineering_tab(self) -> None:
+        index = self._active_engineering_tab_index
+        if index is None:
+            return
+        deactivate_view(self._tabs.widget(index))
+        self._active_engineering_tab_index = None
 
     def _on_status_message(self, msg: str, timeout_ms: int):
         sb = self.statusBar()
@@ -502,6 +582,8 @@ class MainWindow(QMainWindow):
             ("Live", "Playback", "Log", "Device"),
         ):
             button.setText(tr(source))
+        for index, source in enumerate(("Live", "Playback", "Log", "Device")):
+            self._tabs.setTabText(index, tr(source))
 
     # ============================ 设置 ============================
 
@@ -540,8 +622,19 @@ class MainWindow(QMainWindow):
             sb.showMessage(msg, 15000)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if not self._production.confirm_shutdown():
+        if self._production is not None and not self._production.confirm_shutdown():
             event.ignore()
             return
-        self._production.shutdown()
+        active = self._active_workspace_index
+        if active == 0:
+            deactivate_view(self._customer)
+        elif active == 1:
+            self._deactivate_engineering_tab()
+        elif active == 2:
+            deactivate_view(self._production_host)
+        self._active_workspace_index = None
+        self._playback_host.shutdown()
+        self._log_host.shutdown()
+        self._device_host.shutdown()
+        self._production_host.shutdown()
         super().closeEvent(event)

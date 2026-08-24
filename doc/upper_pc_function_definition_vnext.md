@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |------|------|
-| 日期 | 2026-08-06 |
+| 日期 | 2026-08-24 |
 | 适用项目 | `satellite_debug_tool` |
 | 适用协议 | DEBUG protocol v2 |
 | 当前定位 | 当前产品功能定义 + 后续优化路线 |
@@ -29,7 +29,7 @@ Satellite Debug Tool 当前是一套同时服务客户操作与内部工程诊�
 4. 工程诊断信息密度和动态扩展能力不退化。
 5. 客户 OTA 只接受授权签名包，发布与回退策略可审计。
 
-当前应用包含两个共享同一设备会话的工作区：
+当前应用包含三个工作区，保持一个可执行程序和一个 endpoint 会话权威源：
 
 | 工作区/页面 | 主要用户 | 用户目标 | 主要输出 |
 |-------------|----------|----------|----------|
@@ -38,12 +38,17 @@ Satellite Debug Tool 当前是一套同时服务客户操作与内部工程诊�
 | 客户 / Playback | 客户/支持人员 | 分析客户可见历史曲线 | 九路受限曲线、设备开机时间轴、质量摘要、GNSS 弹窗 |
 | 客户 / Maintenance | 客户维护人员 | 查看设备清单和升级 | 设备/部件信息、签名 `.sfpkg` OTA |
 | 工程 / Live、Playback、Log、Device | 内部工程人员 | 全量调试与故障分析 | 动态通道、状态、事件、参数和开发 OTA |
+| 试产 / 批次测试、夹具调试 | 生产与测试人员 | 多机证据采集、流程执行和夹具验证 | ResultStore、SDB、夹具会话与工程指标 |
 
-工作区切换不得重连设备、重建 worker 或清空 Store。客户模式不显示模式标识。工程入口默认隐藏，
+客户与工程通过同一个 `DeviceSessionCore` 读取 Profile、遥测、产品、GNSS 和 Orbit Store，试产 Fleet
+通过 `SessionRegistry` 取得 endpoint 会话。工作区切换不重连设备、不清空 Store。客户模式不显示模式标识。工程入口默认隐藏，
 首次按 `Ctrl+Shift+E` 确认后仅在当前进程内开放；后续同一快捷键可在客户与工程工作区之间切换。
 工程工作区只显示原有 `Live / Playback / Log / Device` 四个入口，不显示模式或退出标签，客户页面
-不混入工程导航，解锁状态不持久化。M18 客户功能只实现 AFD01；ESA01 保留已有工程兼容，不属于
+不混入工程导航，解锁状态不持久化。`Ctrl+Shift+P` 以相同方式打开试产工作区。M18 客户功能只实现 AFD01；ESA01 保留已有工程兼容，不属于
 本阶段交付范围。
+
+默认启动只构建客户总览和共享会话。客户其他页面、工程呈现和试产页面首次访问时构建并复用；
+隐藏页面停止曲线、3D、表格与夹具绘图，连接、握手、录制、OTA、批次和 MS-6222 采集按自身业务状态运行。
 
 ## 2. 当前功能基线
 
@@ -73,11 +78,12 @@ Maintenance 不显示任意参数编辑，只接受通过内置 Ed25519 公钥�
 
 ### 2.2 工程 Live
 
-Live 是核心工作台，负责连接真实设备。
+Live 是共享设备会话的工程呈现。连接、解析、Handshake 和 Store 在呈现层创建前即可运行；通道树、
+曲线、Dashboard、3D、状态和事件组件在首次进入工程 Live 时构建，并立即从 Store 恢复最新快照。
 
 已定义能力：
 
-- 串口/UDP 连接，连接后由 `Handshake` 请求 META、CHANNEL_DEFINE、STATE_DEFINE、EVENT_DEFINE。
+- 串口/UDP 连接进入 `DeviceSessionCore`，连接后由其 `Handshake` 请求 META、CHANNEL_DEFINE、STATE_DEFINE、EVENT_DEFINE。
 - `ProfileStore` 根据 `hw_type` 聚合三张表；UI 按 profile 重建。
 - `StatusStrip` 显示链路、录制、心跳和 critical 状态/通道。
 - `Dashboard` 显示 critical KPI 卡片和 critical ENUM 模式按钮。
@@ -88,6 +94,7 @@ Live 是核心工作台，负责连接真实设备。
 - `AttitudeWidget` 自动按 profile 通道名绑定 roll/pitch/yaw/ant_az/ant_el，显示机体、波束、扫描轨迹，并可加载本地 STL。
 - `ControlPanel` 支持采样率、用户标记、通道 enable mask、复位统计。
 - 工程录制保持 `.sdb v2`；客户“全量录制”使用 `.sdb v3`，写盘均为后台线程。
+- Debug、参数、OTA 和 Product 控制各自使用类型化控制器；请求上下文在发送前注册，响应按命令合同闭环。
 
 当前限制：
 
@@ -101,8 +108,8 @@ Live 是核心工作台，负责连接真实设备。
 
 已定义能力：
 
-- 接受 SDB v2/v3；打开时读取 header、profile/session JSON 和记录区。
-- 每个 Playback Tab 有独立 `ProfileStore` 和无界 `DataStore`，不污染 Live。
+- 接受 SDB v2/v3；后台线程流式读取 header、profile/session JSON 和记录区，大文件在原文件旁生成可重建 `.sdbi` 稀疏索引。
+- 每个 Playback Tab 有独立 `ProfileStore` 和磁盘型 `PlaybackSeriesProvider`，仅把当前时间窗口载入有界 `DataStore`，不污染 Live。
 - 回放曲线支持时间窗、事件标记、跳转曲线。
 - 如果 profile 中存在 `gps_lat` / `gps_lon`，可启用地图浮窗显示轨迹。
 - SDB v3 保存每个 RX chunk 的主机时间、控制请求、metadata、gap marker 和质量 summary。
@@ -135,7 +142,7 @@ Log 用于把 WindTerm 文本日志转成可视化曲线。
 
 ### 2.5 工程 Device
 
-Device 是设备管理工作台，复用 Live 的连接和帧广播。
+Device 是设备管理工作台，复用 `DeviceSessionCore` 及参数/OTA 控制器。
 
 已定义能力：
 

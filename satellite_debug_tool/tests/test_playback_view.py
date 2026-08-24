@@ -23,10 +23,10 @@ def qapp():
 
 
 class TestIndependentStores:
-    def test_playback_datastore_is_unbounded(self, qapp):
+    def test_playback_datastore_is_window_bounded(self, qapp):
         from satellite_debug_tool.ui.playback_view import PlaybackView
         pv = PlaybackView()
-        assert pv._data_store._buffer_capacity is None
+        assert pv._data_store._buffer_capacity == 6000
 
     def test_independent_from_live(self, qapp):
         """同时实例化 LiveView 和 PlaybackView，验证 store 三件套都不共享。"""

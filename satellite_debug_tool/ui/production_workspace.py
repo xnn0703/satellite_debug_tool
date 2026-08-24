@@ -32,15 +32,15 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.session import SessionRegistry
 from satellite_debug_tool.core.production import (
     AttemptStatus,
+    BatchCoordinator,
     BatchStatus,
     DeviceSession,
     DeviceSessionState,
     ExternalInsApplicability,
     FixtureControlLease,
-    FixtureLeaseError,
-    FixtureLeaseHandle,
     FleetConfigurationError,
     FleetController,
     ProductionRecipe,
@@ -53,6 +53,8 @@ from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.production_snr_widget import ProductionSnrPanel
 from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+from satellite_debug_tool.ui.lazy_view_host import LazyViewHost
+from satellite_debug_tool.ui.view_lifecycle import activate_view, deactivate_view
 
 
 class ProductionWorkspace(QWidget):
@@ -150,14 +152,14 @@ class ProductionWorkspace(QWidget):
         self,
         settings: Settings,
         parent: Optional[QWidget] = None,
+        *,
+        session_registry: Optional[SessionRegistry] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
+        self._session_registry = session_registry
         self._theme = "dark"
         self._recipe: Optional[ProductionRecipe] = None
-        self._store: Optional[ProductionResultStore] = None
-        self._batch: Optional[dict] = None
-        self._batch_output_dir: Optional[Path] = None
         self._fixture_rows: dict[str, int] = {}
         self._test_rows: dict[str, int] = {}
         self._workflow_default_states: dict[str, bool] = {
@@ -173,9 +175,13 @@ class ProductionWorkspace(QWidget):
         self._ignored_after_start: set[str] = set()
         self._fleet: Optional[FleetController] = None
         self._fixture_control_lease = FixtureControlLease()
-        self._batch_lease_handle: Optional[FixtureLeaseHandle] = None
+        self._batch_coordinator = BatchCoordinator(
+            self._fixture_control_lease,
+            parent=self,
+        )
         self._snr_origin_monotonic_ns = time.monotonic_ns()
         self._snr_panels: dict[int, ProductionSnrPanel] = {}
+        self._view_active = False
         self._build_ui()
         self._configure_fleet()
         self._restore_setup_defaults()
@@ -193,15 +199,27 @@ class ProductionWorkspace(QWidget):
 
     @property
     def result_store(self) -> Optional[ProductionResultStore]:
-        return self._store
+        return self._batch_coordinator.store
 
     @property
     def batch(self) -> Optional[dict]:
-        return None if self._batch is None else dict(self._batch)
+        return self._batch_coordinator.batch
 
     @property
     def batch_output_dir(self) -> Optional[Path]:
-        return self._batch_output_dir
+        return self._batch_coordinator.output_dir
+
+    @property
+    def _store(self):
+        return self._batch_coordinator.store
+
+    @property
+    def _batch(self):
+        return self._batch_coordinator.batch
+
+    @property
+    def _batch_output_dir(self):
+        return self._batch_coordinator.output_dir
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -395,35 +413,54 @@ class ProductionWorkspace(QWidget):
         footer.addWidget(self._abort_button)
         root.addLayout(footer)
         self._subpages.addWidget(self._batch_page)
-        self._fixture_debug = FixtureDebugWorkspace(
-            self._settings,
-            self._fixture_control_lease,
-        )
-        self._fixture_debug.status_message.connect(self.status_message)
-        self._fixture_debug.active_changed.connect(self._on_fixture_debug_active_changed)
-        self._subpages.addWidget(self._fixture_debug)
+        self._fixture_debug: Optional[FixtureDebugWorkspace] = None
+        self._fixture_host = LazyViewHost(self._create_fixture_debug)
+        self._fixture_host.status_message.connect(self.status_message)
+        self._subpages.addWidget(self._fixture_host)
         outer.addWidget(self._subpages, 1)
         self._update_responsive_columns()
 
+    def _create_fixture_debug(self) -> FixtureDebugWorkspace:
+        fixture = FixtureDebugWorkspace(
+            self._settings,
+            self._fixture_control_lease,
+        )
+        fixture.active_changed.connect(self._on_fixture_debug_active_changed)
+        self._fixture_debug = fixture
+        return fixture
+
+    def _ensure_fixture_debug(self) -> FixtureDebugWorkspace:
+        return self._fixture_host.ensure_view()
+
     def _switch_subpage(self, index: int) -> None:
         requested = 0 if int(index) == 0 else 1
-        if requested == 1 and self._batch_lease_handle is not None:
+        if requested == 1 and self._batch_coordinator.lease_active:
             self._batch_page_button.setChecked(True)
             self.status_message.emit(
                 tr("Fixture diagnostics are unavailable while a batch owns fixture control."),
                 6000,
             )
             return
-        if requested == 0 and self._fixture_debug.session_active:
+        if (
+            requested == 0
+            and self._fixture_debug is not None
+            and self._fixture_debug.session_active
+        ):
             self._fixture_page_button.setChecked(True)
             self.status_message.emit(
                 tr("Finish the fixture engineering session before leaving this page."),
                 6000,
             )
             return
-        if requested == 0:
+        if requested == 0 and self._fixture_debug is not None:
             self._fixture_debug.clear_safety_confirmation()
+        previous = self._subpages.currentIndex()
+        if self._view_active and previous != requested:
+            deactivate_view(self._subpages.widget(previous))
         self._subpages.setCurrentIndex(requested)
+        if self._view_active and previous != requested:
+            activate_view(self._subpages.widget(requested))
+        self._sync_visible_refresh()
 
     def _on_fixture_debug_active_changed(self, active: bool) -> None:
         self._batch_page_button.setEnabled(not active)
@@ -587,6 +624,7 @@ class ProductionWorkspace(QWidget):
                 local_port=int(self._settings.get("production.local_port", 45679)),
                 device_port=int(self._settings.get("production.device_port", 4004)),
                 max_devices=int(self._settings.get("production.max_devices", 4)),
+                session_registry=self._session_registry,
                 parent=self,
             )
         except (FleetConfigurationError, TypeError, ValueError) as exc:
@@ -609,13 +647,46 @@ class ProductionWorkspace(QWidget):
         if fleet is None:
             return False
         if fleet.is_running:
+            self._sync_visible_refresh()
             return True
         self._footer_status.setText(tr("Discovering AFD01 devices..."))
         started = fleet.start()
         if started:
-            self._session_refresh_timer.start()
-            self._snr_refresh_timer.start()
+            self._sync_visible_refresh()
         return started
+
+    def activate_view(self) -> None:
+        """Render the active production subpage while keeping fleet state independent."""
+        if self._view_active:
+            return
+        self._view_active = True
+        activate_view(self._subpages.currentWidget())
+        self._sync_visible_refresh()
+
+    def deactivate_view(self) -> None:
+        """Suspend hidden production rendering without stopping discovery or sessions."""
+        if not self._view_active:
+            return
+        self._view_active = False
+        self._session_refresh_timer.stop()
+        self._snr_refresh_timer.stop()
+        deactivate_view(self._subpages.currentWidget())
+
+    def _sync_visible_refresh(self) -> None:
+        fleet = self._fleet
+        if (
+            not self._view_active
+            or self._subpages.currentIndex() != 0
+            or fleet is None
+            or not fleet.is_running
+        ):
+            self._session_refresh_timer.stop()
+            self._snr_refresh_timer.stop()
+            return
+        self._refresh_session_rows()
+        self._refresh_snr_charts()
+        self._session_refresh_timer.start()
+        self._snr_refresh_timer.start()
 
     def _choose_recipe(self) -> None:
         start = self._recipe_edit.text().strip()
@@ -710,22 +781,13 @@ class ProductionWorkspace(QWidget):
                 f"batch output directory already exists and is not empty: {batch_output}"
             )
         batch_output.mkdir(parents=True, exist_ok=True)
-        store = ProductionResultStore(batch_output / "batch.sqlite3")
-        try:
-            self._recipe.write_snapshot(batch_output / "recipe.json")
-            batch = store.create_batch(
-                batch_id,
-                self._recipe,
-                operator=operator,
-                output_dir=batch_output,
-            )
-        except Exception:
-            store.close()
-            raise
-
-        self._store = store
-        self._batch = batch
-        self._batch_output_dir = batch_output
+        self._recipe.write_snapshot(batch_output / "recipe.json")
+        batch = self._batch_coordinator.create(
+            batch_id=batch_id,
+            recipe=self._recipe,
+            operator=operator,
+            output_dir=batch_output,
+        )
         self._settings.set("paths.production_dir", str(Path(output_root).expanduser()))
         self._settings.set("production.last_operator", operator)
         self._settings.set("production.last_recipe", self._recipe_edit.text().strip())
@@ -1119,32 +1181,20 @@ class ProductionWorkspace(QWidget):
         serials = tuple(session.serial_number for session in participants)
         identity_keys = tuple(session.identity_key for session in participants)
         try:
-            lease_handle = self._fixture_control_lease.acquire(
-                f"batch:{self._batch['batch_id']}"
-            )
-        except FixtureLeaseError as exc:
-            raise ResultStoreError(str(exc)) from exc
-        try:
-            batch = self._store.start_batch(
-                self._batch["batch_id"],
+            batch = self._batch_coordinator.start(
                 serials,
                 enabled_tests,
+                freeze_participants=(
+                    lambda: self._fleet.freeze_batch_participants(identity_keys)
+                    if self._fleet is not None
+                    else None
+                ),
             )
-            if self._fleet is not None:
-                self._fleet.freeze_batch_participants(identity_keys)
         except (RuntimeError, ValueError) as exc:
-            self._fixture_control_lease.release(lease_handle)
-            if self._batch.get("status") == BatchStatus.RUNNING.value:
-                batch = self._store.transition_batch(
-                    self._batch["batch_id"], BatchStatus.INCOMPLETE
-                )
-                self._batch = batch
             raise ResultStoreError(
                 f"participant recording freeze failed; batch marked incomplete: {exc}"
             ) from exc
 
-        self._batch_lease_handle = lease_handle
-        self._batch = batch
         self._participant_serials = serials
         self._participant_identity_keys = identity_keys
         self._apply_external_ins_gates(participants)
@@ -1184,9 +1234,8 @@ class ProductionWorkspace(QWidget):
             gate = evaluate_external_ins(session.product_store.snapshot())
             if gate.applicability != ExternalInsApplicability.NOT_APPLICABLE:
                 continue
-            self._store.transition_attempt(
+            self._batch_coordinator.skip_attempt(
                 int(attempt["attempt_id"]),
-                AttemptStatus.SKIPPED,
                 result={
                     "verdict": "not_applicable",
                     "reason": gate.reason,
@@ -1224,32 +1273,9 @@ class ProductionWorkspace(QWidget):
             self.status_message.emit(message, 8000)
 
     def abort_batch(self) -> dict:
-        if (
-            self._store is None
-            or self._batch is None
-            or self._batch.get("status") != BatchStatus.RUNNING.value
-        ):
-            raise ResultStoreError("no running batch can be aborted")
-        for attempt in self._store.list_attempts(self._batch["batch_id"]):
-            if attempt["status"] in {
-                AttemptStatus.PENDING.value,
-                AttemptStatus.WAITING_PREREQUISITE.value,
-                AttemptStatus.ARMED.value,
-                AttemptStatus.RUNNING.value,
-                AttemptStatus.ANALYZING.value,
-            }:
-                self._store.transition_attempt(
-                    int(attempt["attempt_id"]), AttemptStatus.ABORTED
-                )
-        batch = self._store.transition_batch(
-            self._batch["batch_id"], BatchStatus.ABORTED
-        )
-        self._batch = batch
+        batch = self._batch_coordinator.abort()
         if self._fleet is not None:
             self._fleet.finalize_recordings()
-        if self._batch_lease_handle is not None:
-            self._fixture_control_lease.release(self._batch_lease_handle)
-            self._batch_lease_handle = None
         self._fixture_page_button.setEnabled(True)
         self._batch_state.setText(tr("Batch aborted"))
         message = tr("Batch aborted by operator.")
@@ -1319,53 +1345,24 @@ class ProductionWorkspace(QWidget):
         self._record_batch_event("fleet_error", {"details": details})
 
     def _record_batch_event(self, event_type: str, payload: dict) -> None:
-        if self._store is None or self._batch is None:
-            return
         try:
-            self._store.record_event(self._batch["batch_id"], event_type, payload)
+            self._batch_coordinator.record_event(event_type, payload)
         except ResultStoreError:
             return
 
     def shutdown(self) -> None:
-        self._session_refresh_timer.stop()
-        self._snr_refresh_timer.stop()
-        self._fixture_debug.shutdown()
-        if (
-            self._store is not None
-            and self._batch is not None
-            and self._batch.get("status") == BatchStatus.RUNNING.value
-        ):
-            for attempt in self._store.list_attempts(self._batch["batch_id"]):
-                if attempt["status"] in {
-                    AttemptStatus.WAITING_PREREQUISITE.value,
-                    AttemptStatus.ARMED.value,
-                    AttemptStatus.RUNNING.value,
-                    AttemptStatus.ANALYZING.value,
-                }:
-                    self._store.transition_attempt(
-                        int(attempt["attempt_id"]), AttemptStatus.INCOMPLETE
-                    )
-                elif attempt["status"] == AttemptStatus.PENDING.value:
-                    self._store.transition_attempt(
-                        int(attempt["attempt_id"]), AttemptStatus.ABORTED
-                    )
-            self._batch = self._store.transition_batch(
-                self._batch["batch_id"], BatchStatus.INCOMPLETE
-            )
-        if self._batch_lease_handle is not None:
-            try:
-                self._fixture_control_lease.release(self._batch_lease_handle)
-            except FixtureLeaseError:
-                pass
-            self._batch_lease_handle = None
+        self.deactivate_view()
+        self._fixture_host.shutdown()
         if self._fleet is not None:
             self._fleet.stop()
-        if self._store is not None:
-            self._store.close()
-            self._store = None
+        self._batch_coordinator.close()
 
     def confirm_shutdown(self) -> bool:
-        return self._fixture_debug.confirm_shutdown()
+        return (
+            True
+            if self._fixture_debug is None
+            else self._fixture_debug.confirm_shutdown()
+        )
 
     def set_theme(self, theme: str, _scale: str = "small") -> None:
         self._theme = theme
@@ -1381,7 +1378,7 @@ class ProductionWorkspace(QWidget):
         )
         for panel in self._snr_panels.values():
             panel.set_theme(theme)
-        self._fixture_debug.set_theme(theme, _scale)
+        self._fixture_host.set_theme(theme, _scale)
 
     def retranslate_ui(self) -> None:
         self._batch_page_button.setText(tr("Batch test"))
@@ -1425,7 +1422,7 @@ class ProductionWorkspace(QWidget):
         self._render_workflow_default_states()
         for row, (_fixture_id, label) in enumerate(self._FIXTURE_DEFS):
             self._set_item(self._fixture_table, row, 0, tr(label))
-        self._fixture_debug.retranslate_ui()
+        self._fixture_host.retranslate_ui()
         self._update_start_gate()
 
     def closeEvent(self, event) -> None:  # noqa: N802

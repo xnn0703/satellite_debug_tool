@@ -503,7 +503,8 @@ def test_hidden_production_workspace_toggles_without_changing_engineering_tabs(
 
     window.unlock_production_for_session()
     qapp.processEvents()
-    assert window._workspace.currentWidget() is window._production
+    assert window._workspace.currentWidget() is window._production_host
+    assert window._production is not None
     assert not window._tab_pillbar.isVisible()
 
     window._production_shortcut.activated.emit()
@@ -512,7 +513,7 @@ def test_hidden_production_workspace_toggles_without_changing_engineering_tabs(
 
     window._production_shortcut.activated.emit()
     qapp.processEvents()
-    assert window._workspace.currentWidget() is window._production
+    assert window._workspace.currentWidget() is window._production_host
     assert tuple(window._tabs.widget(index) for index in range(4)) == engineering_views
 
     window.close()

@@ -9,6 +9,7 @@ ASCII STL：`facet normal ... outer loop vertex×3 endloop endfacet`。
 """
 from __future__ import annotations
 
+from functools import lru_cache
 import struct
 from pathlib import Path
 from typing import Tuple
@@ -52,12 +53,32 @@ def _load_ascii_stl(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     return verts, faces
 
 
-def load_stl(path) -> Tuple[np.ndarray, np.ndarray]:
-    """加载 STL → (verts (N,3) f4, faces (M,3) u4)。自动判别 binary / ASCII。"""
-    path = Path(path)
+@lru_cache(maxsize=8)
+def _load_stl_cached(
+    path_text: str,
+    _size: int,
+    _mtime_ns: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    path = Path(path_text)
     if _is_binary_stl(path):
-        return _load_binary_stl(path)
-    return _load_ascii_stl(path)
+        verts, faces = _load_binary_stl(path)
+    else:
+        verts, faces = _load_ascii_stl(path)
+    verts.setflags(write=False)
+    faces.setflags(write=False)
+    return verts, faces
+
+
+def load_stl(path) -> Tuple[np.ndarray, np.ndarray]:
+    """Load one process-cached, read-only STL mesh."""
+
+    resolved = Path(path).resolve()
+    stat = resolved.stat()
+    return _load_stl_cached(str(resolved), stat.st_size, stat.st_mtime_ns)
+
+
+def clear_stl_cache() -> None:
+    _load_stl_cached.cache_clear()
 
 
 def normalize_mesh(

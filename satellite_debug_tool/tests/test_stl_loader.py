@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from satellite_debug_tool.ui.stl_loader import (
+    clear_stl_cache,
     load_stl,
     normalize_mesh,
     _is_binary_stl,
@@ -33,6 +34,32 @@ def _write_binary_stl(path) -> None:
             for v in verts:
                 f.write(struct.pack("<3f", *v))
             f.write(struct.pack("<H", 0))   # attr byte count
+
+
+def test_load_stl_reuses_read_only_process_cache(tmp_path, monkeypatch) -> None:
+    from satellite_debug_tool.ui import stl_loader
+
+    path = tmp_path / "cached.stl"
+    _write_binary_stl(path)
+    clear_stl_cache()
+    calls = 0
+    original = stl_loader._load_binary_stl
+
+    def counted(model_path):
+        nonlocal calls
+        calls += 1
+        return original(model_path)
+
+    monkeypatch.setattr(stl_loader, "_load_binary_stl", counted)
+    first = load_stl(path)
+    second = load_stl(path)
+
+    assert calls == 1
+    assert first[0] is second[0]
+    assert first[1] is second[1]
+    assert not first[0].flags.writeable
+    assert not first[1].flags.writeable
+    clear_stl_cache()
 
 
 def _write_ascii_stl(path) -> None:

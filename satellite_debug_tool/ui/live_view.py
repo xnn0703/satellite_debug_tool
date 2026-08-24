@@ -1,13 +1,8 @@
-"""LiveView —— 实时连接 / 数据采集 / 显示 Tab。
+"""Shared live-session facade and lazily constructed engineering presentation.
 
-从 MainWindow 抽出（M7-S4）。原 1189 行 MainWindow 的所有业务逻辑（worker /
-receiver / handshake / data_store / state_store / event_log / 各 widget
-持有 / 录制 / 主题切换分发）全部内化到此类。
-
-MainWindow 现在只剩 QTabWidget 壳：顶部全局主题切换 + 四个 Tab(Live /
-Playback / Log / Device) + 共享 statusbar。LiveView 通过 ``status_message`` 信号把短
-消息上报到 MainWindow statusbar；主题由 MainWindow 调 ``set_theme(theme)``
-广播下来。
+The session core, transport intent, stores, recording, and control state exist as
+soon as the object is created.  Channel, chart, 3D, and diagnostic widgets are
+constructed by :meth:`ensure_presentation` on first engineering-Live access.
 """
 
 from __future__ import annotations
@@ -44,7 +39,7 @@ from satellite_debug_tool.core.comm import (
     UdpWorker,
 )
 from satellite_debug_tool.core.config import Settings
-from satellite_debug_tool.core.data import DataStore, EventLog, EventRecord, GnssStore, OrbitStore, StateStore
+from satellite_debug_tool.core.data import DataStore, EventRecord, StateStore
 from satellite_debug_tool.core.link_trace import trace_message
 from satellite_debug_tool.core.product import (
     CustomerRecordingState,
@@ -59,7 +54,6 @@ from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_YAW,
     CONTROL_SUBCMD_SET_TRACE_MODE,
     CONTROL_VALUE_FROM_ENUM_VALUE,
-    ProfileCache,
     ProfileStore,
     STATE_ROLE_INTERNAL_INS_YAW_REFERENCE,
 )
@@ -67,16 +61,11 @@ from satellite_debug_tool.core.profile.ins_yaw_display import select_attitude_ya
 from satellite_debug_tool.core.protocol import (
     DataReport,
     EventReport,
-    FrameReceiverV2,
     Heartbeat,
     GnssCnrReport,
     GnssSatReport,
     GnssSignalReport,
     GnssSkyReport,
-    CommandResponse,
-    RespCode,
-    ServiceControlOp,
-    ServiceResultCode,
     StateReport,
     ORBIT_FEATURE_SKY_SNAPSHOT,
     OrbitCapabilitiesReport,
@@ -87,15 +76,19 @@ from satellite_debug_tool.core.protocol import (
     build_orbit_capabilities,
     build_orbit_select,
     build_orbit_sky_snapshot,
-    build_debug_enable_v2,
-    build_reset_stats,
-    build_service_set_capture_profile,
-    build_service_subscribe,
-    build_set_sample_rate,
-    build_set_trace_mode,
-    build_user_mark,
 )
-from satellite_debug_tool.core.protocol.handshake import Handshake
+from satellite_debug_tool.core.session import (
+    CaptureProfileController,
+    CaptureProfileResult,
+    DISCOVERY_FAST_ATTEMPTS,
+    DISCOVERY_FAST_INTERVAL_MS,
+    DISCOVERY_SLOW_INTERVAL_MS,
+    DebugController,
+    DebugRequestResult,
+    DeviceSessionCore,
+    ProductSubscriptionController,
+    SessionRegistry,
+)
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.io.data_recorder import DataRecorder, SDB_VERSION_V3
 from satellite_debug_tool.i18n import (
@@ -116,26 +109,8 @@ from satellite_debug_tool.ui.state_panel_widget import StatePanelWidget
 from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
 
 
-DEBUG_ACK_TIMEOUT_MS = 3000
-DEBUG_LATE_ACK_WINDOW_S = 3.0
 DEVICE_ACTIVITY_TIMEOUT_S = 3.0
-DISCOVERY_FAST_ATTEMPTS = 10
-DISCOVERY_FAST_INTERVAL_MS = 1000
-DISCOVERY_SLOW_INTERVAL_MS = 3000
 ORBIT_SKY_REQUEST_TIMEOUT_S = 3.0
-
-
-def _debug_ctrl_log(message: str) -> None:
-    trace_message("DBG_CTRL", message)
-
-
-def _parse_debug_ack_target(message: str) -> bool | None:
-    text = (message or "").strip()
-    if text == "DEBUG_ENABLE=1":
-        return True
-    if text == "DEBUG_ENABLE=0":
-        return False
-    return None
 
 
 class LiveView(QWidget):
@@ -155,19 +130,34 @@ class LiveView(QWidget):
     customer_recording_state_changed = Signal(str, str)
     orbit_capability_changed = Signal(bool)
 
-    def __init__(self, settings: Settings, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        settings: Settings,
+        parent: Optional[QWidget] = None,
+        *,
+        session_registry: Optional[SessionRegistry] = None,
+        defer_presentation: bool = False,
+    ):
         super().__init__(parent)
         self._settings = settings
 
         # ---------- 业务状态（原 MainWindow.__init__）----------
         self._worker = None
-        self._receiver = FrameReceiverV2()
-        self._data_store = DataStore()
-        self._profile_store = ProfileStore(cache=ProfileCache())
-        self._state_store = StateStore()
-        self._event_log = EventLog()
-        self._gnss_store = GnssStore(parent=self)
-        self._orbit_store = OrbitStore(parent=self)
+        self._session_registry = session_registry or SessionRegistry(parent=self)
+        initial_endpoint = (
+            str(settings.get("udp.remote_ip", "192.168.1.12")),
+            int(settings.get("udp.remote_port", 4004)),
+        )
+        self._session_core = self._session_registry.get_or_create(
+            initial_endpoint,
+            owner="interactive",
+        )
+        self._data_store = self._session_core.data_store
+        self._profile_store = self._session_core.profile_store
+        self._state_store = self._session_core.state_store
+        self._event_log = self._session_core.event_log
+        self._gnss_store = self._session_core.gnss_store
+        self._orbit_store = self._session_core.orbit_store
         self._orbit_sky_consumers: set[str] = set()
         self._orbit_sky_request_active = False
         self._orbit_sky_request_id = 0
@@ -177,14 +167,11 @@ class LiveView(QWidget):
         self._orbit_sky_timer = QTimer(self)
         self._orbit_sky_timer.setInterval(1000)
         self._orbit_sky_timer.timeout.connect(self.request_orbit_sky_refresh)
-        self._product_store = ProductServiceStore(parent=self)
-        self._product_request_id = 0
-        self._product_subscribe_attempts = 0
-        self._product_subscribe_pending_id: int | None = None
-        self._product_subscription_confirmed = False
-        self._product_subscribe_timer = QTimer(self)
-        self._product_subscribe_timer.setInterval(DISCOVERY_FAST_INTERVAL_MS)
-        self._product_subscribe_timer.timeout.connect(self._retry_product_subscription)
+        self._product_store = self._session_core.product_store
+        self._product_subscription_controller = ProductSubscriptionController(
+            self._session_core,
+            parent=self,
+        )
         self._product_store.updated.connect(self._on_product_store_updated)
         self._gnss_store.changed.connect(self._on_gnss_store_changed)
         self._gnss_widget = None
@@ -195,7 +182,12 @@ class LiveView(QWidget):
         self._orbit_store.changed.connect(self._on_orbit_store_changed)
         self._event_log.event_added.connect(self._on_event_added_for_chart)
         self._profile_store.profile_changed.connect(self._on_profile_changed_sync)
-        self._handshake: Handshake | None = None
+        self._session_core.record_received.connect(self._on_session_record)
+        self._session_core.activity.connect(self._mark_device_activity)
+        self._session_core.heartbeat_received.connect(self._status_strip_heartbeat)
+        self._session_core.profile_ready.connect(self._on_handshake_ready)
+        self._session_core.link_lost.connect(self._on_link_lost)
+        self._session_core.link_restored.connect(self._on_link_restored)
         self._handshake_timer = QTimer(self)
         self._handshake_timer.setInterval(100)
         self._handshake_timer.timeout.connect(self._on_handshake_tick)
@@ -206,40 +198,92 @@ class LiveView(QWidget):
         self._device_activity_timer.setInterval(250)
         self._device_activity_timer.timeout.connect(self._check_device_activity)
         self._active_hw_type: Optional[str] = None
-        self._debug_enabled = False
-        self._debug_pending_target: bool | None = None
-        self._debug_last_requested_target: bool | None = None
-        self._debug_last_request_at = 0.0
+        self._debug_controller = DebugController(self._session_core, parent=self)
+        self._debug_controller.state_changed.connect(self._on_debug_state_changed)
+        self._debug_controller.pending_changed.connect(self._on_debug_pending_changed)
+        self._debug_controller.request_finished.connect(self._on_debug_request_finished)
         self._customer_auto_debug = False
         self._external_control_locked = False
-        self._debug_ack_timer = QTimer(self)
-        self._debug_ack_timer.setSingleShot(True)
-        self._debug_ack_timer.timeout.connect(self._on_debug_ack_timeout)
         self._recorder = None
         self._is_recording = False
         self._customer_recording = False
         self._customer_recording_state = CustomerRecordingState.IDLE
         self._customer_recording_path: Optional[Path] = None
         self._customer_capture_confirmed = False
-        self._capture_pending_id: int | None = None
-        self._capture_pending_target: bool | None = None
         self._capture_restore_debug = False
-        self._capture_timer = QTimer(self)
-        self._capture_timer.setSingleShot(True)
-        self._capture_timer.timeout.connect(self._on_capture_timeout)
-        self._product_store.control_response.connect(self._on_capture_response)
-        self._product_store.control_response.connect(self._on_product_control_response)
+        self._capture_profile_controller = CaptureProfileController(
+            self._session_core,
+            parent=self,
+        )
+        self._capture_profile_controller.finished.connect(
+            self._on_capture_profile_finished
+        )
         self._frame_times: list[float] = []
+        self._frame_count = 0
+        self._error_count = 0
         self._theme = "dark"
         self._is_dark_theme = True
+        self._view_active = False
+        self._presentation_ready = False
+        self._presentation_build_elapsed_ms: Optional[float] = None
 
+        self._connection_type = str(
+            self._settings.get("general.connection_type", "Serial")
+        )
+        if self._connection_type not in {"Serial", "UDP"}:
+            self._connection_type = "Serial"
+        self._serial_port = str(self._settings.get("serial.last_port", ""))
+        self._serial_baudrate = int(
+            self._settings.get("serial.default_baudrate", "115200")
+        )
+        self._udp_remote_ip = str(
+            self._settings.get("udp.remote_ip", "192.168.1.12")
+        )
+        self._udp_remote_port = int(self._settings.get("udp.remote_port", 4004))
+        self._udp_local_port = int(self._settings.get("udp.local_port", 45678))
+        self._active_connection_config: Optional[dict] = None
+
+        # Rendering timers exist for the lifetime of the view, while the heavy
+        # presentation tree is constructed only when engineering Live opens.
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(100)
+        self._update_timer.timeout.connect(self._update_display)
+        self._heavy_timer = QTimer(self)
+        self._heavy_timer.setInterval(200)
+        self._heavy_timer.timeout.connect(self._update_heavy)
+
+        if not defer_presentation:
+            self.ensure_presentation()
+        register_translatable(self)
+
+    @property
+    def presentation_ready(self) -> bool:
+        return self._presentation_ready
+
+    @property
+    def presentation_build_elapsed_ms(self) -> Optional[float]:
+        return self._presentation_build_elapsed_ms
+
+    def ensure_presentation(self) -> None:
+        """Build the engineering-only widget tree once and bind current state."""
+        if self._presentation_ready:
+            return
+        started = time.perf_counter()
         self._setup_ui()
         self._load_settings()
-        register_translatable(self)
+        self._presentation_ready = True
+        self._presentation_build_elapsed_ms = (
+            time.perf_counter() - started
+        ) * 1000.0
+        self._apply_theme(self._theme)
+        self._sync_presentation_from_state()
 
     def profile_store(self) -> ProfileStore:
         """供 DeviceView 复用 Live 页当前连接的 profile/capability。"""
         return self._profile_store
+
+    def session_core(self) -> DeviceSessionCore:
+        return self._session_core
 
     def data_store(self) -> DataStore:
         return self._data_store
@@ -252,6 +296,37 @@ class LiveView(QWidget):
 
     def product_store(self) -> ProductServiceStore:
         return self._product_store
+
+    @property
+    def _product_subscribe_attempts(self) -> int:
+        return self._product_subscription_controller.attempts
+
+    @property
+    def _product_subscribe_pending_id(self) -> int | None:
+        return self._product_subscription_controller.pending_request_id
+
+    @property
+    def _product_subscription_confirmed(self) -> bool:
+        return self._product_subscription_controller.confirmed
+
+    @property
+    def _product_subscribe_timer(self) -> QTimer:
+        return self._product_subscription_controller.retry_timer
+
+    @property
+    def _capture_pending_id(self) -> int | None:
+        return self._capture_profile_controller.pending_request_id
+
+    @property
+    def _capture_pending_target(self) -> bool | None:
+        return self._capture_profile_controller.pending_target
+
+    @property
+    def _capture_timer(self) -> QTimer:
+        return self._capture_profile_controller.timeout_timer
+
+    def product_snapshot(self):
+        return self._session_core.product_snapshot()
 
     def orbit_store(self) -> OrbitStore:
         return self._orbit_store
@@ -356,14 +431,31 @@ class LiveView(QWidget):
         """Customer workspace UDP connection entry using the shared Live session."""
         if self._is_connected:
             return True
-        index = self._type_combo.findData("UDP")
-        if index >= 0:
-            self._type_combo.setCurrentIndex(index)
-        self._remote_ip.setText(str(remote_ip).strip())
-        self._remote_port.setValue(int(remote_port))
-        self._local_port.setValue(int(local_port))
+        self._connection_type = "UDP"
+        self._udp_remote_ip = str(remote_ip).strip()
+        self._udp_remote_port = int(remote_port)
+        self._udp_local_port = int(local_port)
+        self._settings.set("general.connection_type", self._connection_type)
+        self._settings.set("udp.remote_ip", self._udp_remote_ip)
+        self._settings.set("udp.remote_port", self._udp_remote_port)
+        self._settings.set("udp.local_port", self._udp_local_port)
+        self._settings.save()
+        if self._presentation_ready:
+            index = self._type_combo.findData("UDP")
+            if index >= 0:
+                self._type_combo.setCurrentIndex(index)
+            self._remote_ip.setText(self._udp_remote_ip)
+            self._remote_port.setValue(self._udp_remote_port)
+            self._local_port.setValue(self._udp_local_port)
         self._customer_auto_debug = bool(auto_debug)
-        self._on_connect_clicked()
+        self._connect_transport(
+            {
+                "type": "udp",
+                "remote_ip": self._udp_remote_ip,
+                "remote_port": self._udp_remote_port,
+                "local_port": self._udp_local_port,
+            }
+        )
         return self._is_connected
 
     def disconnect_device(self) -> None:
@@ -383,9 +475,7 @@ class LiveView(QWidget):
             self.status_message.emit(tr("Armed recording cancelled"), 2500)
             return
         if state == CustomerRecordingState.PREPARING:
-            self._capture_timer.stop()
-            self._capture_pending_id = None
-            self._capture_pending_target = None
+            self._capture_profile_controller.reset()
             self._set_customer_recording_state(CustomerRecordingState.RESTORING)
             self._request_capture_profile(False)
             return
@@ -415,36 +505,19 @@ class LiveView(QWidget):
         return self._send_control_frame(build_orbit_capabilities(self.next_product_request_id()))
 
     def next_product_request_id(self) -> int:
-        self._product_request_id = (self._product_request_id + 1) & 0xFFFFFFFF
-        if self._product_request_id == 0:
-            self._product_request_id = 1
-        return self._product_request_id
+        return self._session_core.next_request_id()
 
     def send_product_frame(self, frame: bytes) -> bool:
         return self._send_control_frame(frame)
 
     def is_debug_enabled(self) -> bool:
-        return self._debug_enabled
+        return self._debug_controller.enabled
 
     @Slot(bool)
     def request_debug_mode(self, target: bool) -> None:
         """Live/Device 共用的严格 Debug 控制入口。"""
-        target = bool(target)
-        if not self._is_connected or self._worker is None:
-            self.debug_request_finished.emit(target, False, tr("Device is not connected"))
-            return
-        if self._debug_pending_target is not None:
-            self.debug_request_finished.emit(
-                target,
-                False,
-                tr("Another Debug command is awaiting confirmation"),
-            )
-            return
-        if self._debug_enabled == target:
-            self.debug_request_finished.emit(target, True, "already_confirmed")
-            return
-        if not self._send_debug_enable(target):
-            self.debug_request_finished.emit(target, False, tr("Failed to send Debug command"))
+        self._sync_session_transport()
+        self._debug_controller.request(bool(target))
 
     @Slot(bool)
     def set_device_transaction_active(self, active: bool) -> None:
@@ -454,8 +527,7 @@ class LiveView(QWidget):
 
     @Slot(bool)
     def set_handshake_retries_paused(self, paused: bool) -> None:
-        if self._handshake is not None:
-            self._handshake.set_retry_paused(bool(paused))
+        self._session_core.set_handshake_retries_paused(bool(paused))
 
     # ============================ 主题 / 字号 ============================
 
@@ -463,7 +535,8 @@ class LiveView(QWidget):
         """由 MainWindow 广播：切换主题。M7 字号已固化 small，scale 参数忽略。"""
         self._theme = theme
         self._is_dark_theme = theme != "light"
-        self._apply_theme(theme)
+        if self._presentation_ready:
+            self._apply_theme(theme)
 
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light")
@@ -471,17 +544,18 @@ class LiveView(QWidget):
     # ============================ 初始化 ============================
 
     def _load_settings(self):
-        conn_type = self._settings.get("general.connection_type", "Serial")
-        index = self._type_combo.findData(conn_type)
+        index = self._type_combo.findData(self._connection_type)
         self._type_combo.setCurrentIndex(index if index >= 0 else 0)
-        self._on_type_changed(conn_type)
-        self._baudrate_combo.setCurrentText(
-            self._settings.get("serial.default_baudrate", "115200")
-        )
+        self._on_type_changed(self._connection_type)
+        self._baudrate_combo.setCurrentText(str(self._serial_baudrate))
+        if self._serial_port:
+            port_index = self._port_combo.findData(self._serial_port)
+            if port_index >= 0:
+                self._port_combo.setCurrentIndex(port_index)
         # 主题由 MainWindow 应用到本 view；这里只更新 UDP 字段
-        self._remote_ip.setText(self._settings.get("udp.remote_ip", "192.168.1.12"))
-        self._remote_port.setValue(self._settings.get("udp.remote_port", 4004))
-        self._local_port.setValue(self._settings.get("udp.local_port", 45678))
+        self._remote_ip.setText(self._udp_remote_ip)
+        self._remote_port.setValue(self._udp_remote_port)
+        self._local_port.setValue(self._udp_local_port)
 
     def _setup_ui(self):
         # 整个 LiveView 用 QVBoxLayout：顶部 toolbar + 主区 + 底部 status row
@@ -771,18 +845,6 @@ class LiveView(QWidget):
         # 启动后恢复 splitter 状态（如果有持久化值）
         QTimer.singleShot(0, self._restore_splitter_state)
 
-        # ---------- timers ----------
-        self._update_timer = QTimer()
-        self._update_timer.timeout.connect(self._update_display)
-        self._update_timer.start(100)
-
-        self._heavy_timer = QTimer()
-        self._heavy_timer.timeout.connect(self._update_heavy)
-        self._heavy_timer.start(200)
-
-        self._frame_count = 0
-        self._error_count = 0
-
         # 应用初始按钮 / 输入框 stylesheet（_apply_theme 会做完整刷新）
         self._apply_button_styles_initial()
 
@@ -843,6 +905,7 @@ class LiveView(QWidget):
             self._config_stack.setCurrentIndex(0)
         else:
             self._config_stack.setCurrentIndex(1)
+        self._connection_type = conn_type
         self._settings.set("general.connection_type", conn_type)
         self._settings.save()
 
@@ -863,31 +926,52 @@ class LiveView(QWidget):
             if not port:
                 self.status_message.emit(tr("No serial port is available"), 3000)
                 return
-            baudrate = int(self._baudrate_combo.currentText())
-            config = {"type": "serial", "port": port, "baudrate": baudrate}
-            self._worker = SerialWorker()
-            set_raw_text(f"{port} @ {baudrate}", self._conn_status_label)
+            self._connection_type = "Serial"
+            self._serial_port = str(port)
+            self._serial_baudrate = int(self._baudrate_combo.currentText())
+            config = {
+                "type": "serial",
+                "port": self._serial_port,
+                "baudrate": self._serial_baudrate,
+            }
             self._settings.set(
-                "serial.default_baudrate", self._baudrate_combo.currentText()
+                "serial.default_baudrate", str(self._serial_baudrate)
             )
-            self._settings.set("serial.last_port", port)
+            self._settings.set("serial.last_port", self._serial_port)
             self._settings.save()
         else:
+            self._connection_type = "UDP"
+            self._udp_remote_ip = self._remote_ip.text().strip()
+            self._udp_remote_port = self._remote_port.value()
+            self._udp_local_port = self._local_port.value()
             config = {
                 "type": "udp",
-                "remote_ip": self._remote_ip.text(),
-                "remote_port": self._remote_port.value(),
-                "local_port": self._local_port.value(),
+                "remote_ip": self._udp_remote_ip,
+                "remote_port": self._udp_remote_port,
+                "local_port": self._udp_local_port,
             }
-            self._worker = UdpWorker()
-            set_raw_text(
-                f"UDP {config['remote_ip']}:{config['remote_port']}",
-                self._conn_status_label,
-            )
-            self._settings.set("udp.remote_ip", self._remote_ip.text())
-            self._settings.set("udp.remote_port", self._remote_port.value())
-            self._settings.set("udp.local_port", self._local_port.value())
+            self._settings.set("udp.remote_ip", self._udp_remote_ip)
+            self._settings.set("udp.remote_port", self._udp_remote_port)
+            self._settings.set("udp.local_port", self._udp_local_port)
             self._settings.save()
+        self._settings.set("general.connection_type", self._connection_type)
+        self._settings.save()
+        self._connect_transport(config)
+
+    def _connect_transport(self, config: dict) -> None:
+        """Start one transport from stable connection state."""
+        conn_type = str(config.get("type", ""))
+        if conn_type == "serial":
+            self._worker = SerialWorker()
+            detail = f"{config['port']} @ {config['baudrate']}"
+        elif conn_type == "udp":
+            self._worker = UdpWorker()
+            detail = f"UDP {config['remote_ip']}:{config['remote_port']}"
+        else:
+            raise ValueError(f"unsupported connection type: {conn_type}")
+        self._active_connection_config = dict(config)
+        if self._presentation_ready:
+            set_raw_text(detail, self._conn_status_label)
 
         self._worker.connected.connect(self._on_connected)
         self._worker.disconnected.connect(self._on_disconnected)
@@ -897,22 +981,20 @@ class LiveView(QWidget):
         if self._worker.connect(config):
             self._is_connected = True
         else:
-            set_translatable_text("Connection failed", self._conn_status_label)
-            self._set_conn_state(
-                False,
-                dev="—",
-                detail_source="Connection failed",
-            )
+            if self._presentation_ready:
+                set_translatable_text("Connection failed", self._conn_status_label)
+                self._set_conn_state(
+                    False,
+                    dev="—",
+                    detail_source="Connection failed",
+                )
 
     def _on_disconnect_clicked(self):
         trace_message("DBG_UI", "CLICK DISCONNECT")
-        self._debug_enabled = False
-        self._debug_pending_target = None
-        self._debug_last_requested_target = None
-        self._debug_last_request_at = 0.0
-        self._debug_ack_timer.stop()
-        set_translatable_text("Debug: OFF", self._debug_btn)
-        self._debug_btn.setEnabled(False)
+        self._debug_controller.reset()
+        if self._presentation_ready:
+            set_translatable_text("Debug: OFF", self._debug_btn)
+            self._debug_btn.setEnabled(False)
         if self._worker:
             self._worker.disconnect()
 
@@ -953,23 +1035,25 @@ class LiveView(QWidget):
                 {"event": "device_online", "phase": phase.value}
             )
 
+        self._render_connection_phase()
+        if phase == DeviceConnectionPhase.ONLINE:
+            self.status_message.emit(tr("Device online"), 2500)
+        elif phase == DeviceConnectionPhase.WAITING:
+            self.status_message.emit(tr("Waiting for device..."), 0)
+        elif phase == DeviceConnectionPhase.RECONNECTING:
+            self.status_message.emit(tr("Reconnecting to device..."), 0)
+
+    def _render_connection_phase(self) -> None:
+        if not self._presentation_ready:
+            return
+        phase = self._device_connection_phase
         if phase == DeviceConnectionPhase.ONLINE:
             hardware = self._profile_store.current_hw_type() or "—"
             self._status_strip.set_link_state(connected=True)
-            self._set_conn_state(
-                True,
-                dev=hardware,
-                detail_source="Device online",
-            )
-            self.status_message.emit(tr("Device online"), 2500)
+            self._set_conn_state(True, dev=hardware, detail_source="Device online")
         elif phase == DeviceConnectionPhase.WAITING:
             self._status_strip.set_link_state(connected=False)
-            self._set_conn_state(
-                False,
-                dev="—",
-                detail_source="Waiting for device...",
-            )
-            self.status_message.emit(tr("Waiting for device..."), 0)
+            self._set_conn_state(False, dev="—", detail_source="Waiting for device...")
         elif phase == DeviceConnectionPhase.RECONNECTING:
             self._status_strip.set_link_state(connected=False)
             self._set_conn_state(
@@ -977,7 +1061,9 @@ class LiveView(QWidget):
                 dev=self._profile_store.current_hw_type() or "—",
                 detail_source="Reconnecting to device...",
             )
-            self.status_message.emit(tr("Reconnecting to device..."), 0)
+        else:
+            self._status_strip.set_link_state(connected=False)
+            self._set_conn_state(False, dev="—", detail_source="Disconnected")
 
     def _mark_device_activity(self) -> None:
         if not self._is_connected:
@@ -987,7 +1073,7 @@ class LiveView(QWidget):
             self._set_device_connection_phase(DeviceConnectionPhase.ONLINE)
             self._try_start_armed_customer_recording()
             self._try_restore_customer_profile()
-            if not self._product_subscription_confirmed:
+            if not self._product_subscription_controller.confirmed:
                 self._start_product_subscription()
             QTimer.singleShot(0, self.probe_orbit_capabilities)
 
@@ -1015,39 +1101,51 @@ class LiveView(QWidget):
         self._last_valid_frame_at = None
         self._set_device_connection_phase(DeviceConnectionPhase.WAITING)
         self._device_activity_timer.start()
-        # 新连接必须丢弃上一轮运行态；profile 可以复用，但 state 必须等设备重新上报。
-        self._state_store.clear()
-        self._gnss_store.clear()
-        self._orbit_store.clear()
-        self._connect_btn.setEnabled(False)
-        self._disconnect_btn.setEnabled(True)
-        self._update_debug_button_enabled()
-        self._type_combo.setEnabled(False)
-        self._control_panel.set_enabled(True)
+        if self._presentation_ready:
+            self._connect_btn.setEnabled(False)
+            self._disconnect_btn.setEnabled(True)
+            self._update_debug_button_enabled()
+            self._type_combo.setEnabled(False)
+            self._control_panel.set_enabled(True)
         self.connected_worker_changed.emit(self._worker)
         self.connection_state_changed.emit(True)
 
-        self._receiver.reset()
+        endpoint = self._active_session_endpoint()
+        self._session_registry.register(
+            endpoint,
+            self._session_core,
+            owner="interactive",
+        )
+        self._session_core.begin_connection(
+            endpoint=endpoint,
+            transport=self._worker,
+            sender=self._session_send if self._worker is not None else None,
+            handshake_enabled=self._worker is not None,
+        )
+        self._debug_controller.set_connected(True)
         QTimer.singleShot(0, self.probe_orbit_capabilities)
         # Customer product telemetry is intentionally independent of the
         # dynamic Debug profile handshake. Send its subscription as soon as the
         # transport is usable; profile negotiation continues in parallel.
         self._start_product_subscription()
-        if self._worker is not None:
-            self._handshake = Handshake(self._profile_store, self._worker.send)
-            self._handshake.ready.connect(self._on_handshake_ready)
-            self._handshake.link_lost.connect(self._on_link_lost)
-            self._handshake.link_restored.connect(self._on_link_restored)
-            self._handshake.start()
+        if self._session_core.handshake is not None:
             self._handshake_timer.start()
 
     def _on_handshake_tick(self):
-        if self._handshake is not None:
-            self._handshake.tick(self._handshake_timer.interval())
+        self._session_core.tick(self._handshake_timer.interval())
+
+    def _active_session_endpoint(self) -> tuple[str, int]:
+        config = self._active_connection_config or {}
+        if config.get("type") == "udp":
+            return str(config.get("remote_ip", "")).strip(), int(
+                config.get("remote_port", 0)
+            )
+        port = str(config.get("port", self._serial_port)).strip()
+        return f"serial:{port}", 0
 
     def _on_channel_enable_changed(self, mask: int):
-        from satellite_debug_tool.core.protocol import build_channel_enable_mask
-        if self._send_control_frame(build_channel_enable_mask(mask)):
+        self._sync_session_transport()
+        if self._debug_controller.set_channel_enable_mask(mask):
             self.status_message.emit(
                 tr("Channel enable mask → 0x{mask:016X}", mask=mask),
                 3000,
@@ -1059,61 +1157,72 @@ class LiveView(QWidget):
             self._gnss_store.clear()
             self._active_hw_type = hw_type
         self.status_message.emit(tr("Profile ready: {hardware}", hardware=hw_type), 3000)
+        if self._presentation_ready:
+            self._apply_hardware_to_presentation(hw_type)
+        self.profile_ready.emit(hw_type)
+        if (
+            hw_type.lower() == "afd01"
+            and not self._product_subscription_controller.confirmed
+        ):
+            self._start_product_subscription()
+        if (
+            self._customer_auto_debug
+            and not self._debug_controller.enabled
+            and self._debug_controller.pending_target is None
+        ):
+            QTimer.singleShot(0, lambda: self.request_debug_mode(True))
+
+    def _apply_hardware_to_presentation(self, hw_type: str) -> None:
+        if not self._presentation_ready:
+            return
         set_translatable_text("Device: {hardware}", self._hw_label, hardware=hw_type)
-        self._set_conn_state(True, dev=hw_type, detail=self._conn_status_label.text())
+        self._render_connection_phase()
         self._state_panel.set_hw_type(hw_type)
         self._dashboard.set_hw_type(hw_type)
         self._status_strip.set_hw_type(hw_type)
         self._chart.set_hw_type(hw_type)
         self._control_panel.set_hw_type(hw_type)
-        # 优先加载用户覆盖 STL，其次使用包内设备模型，均不可用时保留默认占位
         self._attitude.try_load_device_model(hw_type)
-        self.profile_ready.emit(hw_type)
-        if hw_type.lower() == "afd01" and not self._product_subscription_confirmed:
-            self._start_product_subscription()
-        if self._customer_auto_debug and not self._debug_enabled and self._debug_pending_target is None:
-            QTimer.singleShot(0, lambda: self.request_debug_mode(True))
+        self._on_profile_changed_sync(hw_type)
+
+    def _sync_presentation_from_state(self) -> None:
+        """Render current session state after first engineering-page construction."""
+        if not self._presentation_ready:
+            return
+        self._connect_btn.setEnabled(not self._is_connected)
+        self._disconnect_btn.setEnabled(self._is_connected)
+        self._type_combo.setEnabled(not self._is_connected)
+        self._control_panel.set_enabled(self._is_connected)
+        self._update_debug_button_enabled()
+        self._render_debug_button()
+        self._render_connection_phase()
+        hardware = self._profile_store.current_hw_type()
+        if hardware:
+            self._apply_hardware_to_presentation(hardware)
+        self._gnss_btn.setEnabled(self._gnss_store.has_data())
+        self._orbit_btn.setEnabled(
+            bool(self._orbit_store.available and self._is_connected)
+        )
+        self._frame_count_label.setText(f"FRM {self._frame_count}")
+        self._error_count_label.setText(f"ERR {self._error_count}")
+        self._render_recording_state()
+        self._update_display()
+        self._update_heavy()
 
     # ----- 命令下发 -----
 
     def _start_product_subscription(self) -> None:
-        self._product_subscribe_timer.stop()
-        self._product_subscribe_attempts = 0
-        self._product_subscribe_pending_id = None
-        self._product_subscription_confirmed = False
-        self._product_subscribe_timer.setInterval(DISCOVERY_FAST_INTERVAL_MS)
-        self._send_product_subscription()
-        if self._is_connected and not self._product_subscription_confirmed:
-            self._product_subscribe_timer.start()
+        self._sync_session_transport()
+        self._product_subscription_controller.start()
 
     def _send_product_subscription(self) -> None:
-        self._product_subscribe_attempts += 1
-        request_id = self.next_product_request_id()
-        sent = self._send_control_frame(build_service_subscribe(request_id, 10))
-        if sent:
-            self._product_subscribe_pending_id = request_id
-        trace_message(
-            "PRODUCT_SERVICE",
-            f"TX SUBSCRIBE request_id={request_id} fast_rate_hz=10 "
-            f"attempt={self._product_subscribe_attempts} result={int(sent)}",
-        )
+        self._sync_session_transport()
+        self._product_subscription_controller.send_now()
 
     def _retry_product_subscription(self) -> None:
-        if not self._is_connected:
-            self._product_subscribe_timer.stop()
-            return
-        if self._product_subscription_confirmed or self._product_store.telemetry_ready:
-            self._product_subscription_confirmed = True
-            self._product_subscribe_timer.stop()
-            return
-        self._send_product_subscription()
-        if self._product_subscribe_attempts >= DISCOVERY_FAST_ATTEMPTS:
-            self._product_subscribe_timer.setInterval(DISCOVERY_SLOW_INTERVAL_MS)
+        self._product_subscription_controller.retry()
 
     def _on_product_store_updated(self) -> None:
-        if self._product_store.telemetry_ready:
-            self._product_subscription_confirmed = True
-            self._product_subscribe_timer.stop()
         self._try_start_armed_customer_recording()
         self._try_restore_customer_profile()
 
@@ -1137,7 +1246,23 @@ class LiveView(QWidget):
         if self._worker is None or not self._is_connected:
             self.status_message.emit(tr("Not connected; command was not sent"), 3000)
             return False
-        sent = bool(self._worker.send(frame))
+        self._sync_session_transport()
+        return self._session_core.send(frame)
+
+    def _sync_session_transport(self) -> None:
+        worker = self._worker
+        if worker is None:
+            self._debug_controller.set_connected(False)
+            return
+        if self._session_core.transport is not worker:
+            self._session_core.attach_transport(worker, self._session_send)
+        self._debug_controller.set_connected(self._is_connected)
+
+    def _session_send(self, frame: bytes) -> bool:
+        worker = self._worker
+        if worker is None:
+            return False
+        sent = bool(worker.send(frame))
         if (
             sent
             and self._recorder is not None
@@ -1147,15 +1272,18 @@ class LiveView(QWidget):
         return sent
 
     def _on_sample_rate_changed(self, hz: int) -> None:
-        if self._send_control_frame(build_set_sample_rate(hz)):
+        self._sync_session_transport()
+        if self._debug_controller.set_sample_rate(hz):
             self.status_message.emit(tr("Requested sample rate: {rate} Hz", rate=hz), 2000)
 
     def _on_user_mark_requested(self, mark_id: int, text: str) -> None:
-        if self._send_control_frame(build_user_mark(mark_id, text)):
+        self._sync_session_transport()
+        if self._debug_controller.send_user_mark(mark_id, text):
             self.status_message.emit(tr("Mark #{mark_id} sent", mark_id=mark_id), 2000)
 
     def _on_reset_stats_requested(self) -> None:
-        if self._send_control_frame(build_reset_stats()):
+        self._sync_session_transport()
+        if self._debug_controller.reset_statistics():
             self.status_message.emit(tr("Requested device statistics reset"), 2000)
 
     def _on_dashboard_mode_requested(self, state_id: int, target_value: int) -> None:
@@ -1180,7 +1308,8 @@ class LiveView(QWidget):
             binding.subcmd == CONTROL_SUBCMD_SET_TRACE_MODE
             and binding.value_from == CONTROL_VALUE_FROM_ENUM_VALUE
         ):
-            if self._send_control_frame(build_set_trace_mode(target_value)):
+            self._sync_session_transport()
+            if self._debug_controller.set_trace_mode(target_value):
                 self.status_message.emit(
                     tr(
                         "Requested mode change (state_id={state_id} → {target_value})",
@@ -1202,6 +1331,8 @@ class LiveView(QWidget):
     # ----- EventLog → Chart -----
 
     def _on_event_added_for_chart(self, record: EventRecord) -> None:
+        if not self._presentation_ready:
+            return
         hw = self._profile_store.current_hw_type()
         if hw is None or record.hw_type != hw:
             return
@@ -1249,6 +1380,8 @@ class LiveView(QWidget):
             self._chart.set_channel_visible(name, self._channel_panel.is_checked(name))
 
     def _on_profile_changed_sync(self, hw_type: str) -> None:
+        if not self._presentation_ready:
+            return
         if hw_type:
             set_translatable_text("Device: {hardware}", self._hw_label, hardware=hw_type)
         # Profile 变化时刷新每条通道在 ChannelPanel 里显示的名字（带 unit）
@@ -1323,16 +1456,18 @@ class LiveView(QWidget):
 
     def _on_link_lost(self):
         self.status_message.emit("Heartbeat timeout (link lost)", 5000)
-        self._status_strip.set_link_state(connected=False)
+        if self._presentation_ready:
+            self._status_strip.set_link_state(connected=False)
 
     def _on_link_restored(self):
         self.status_message.emit("Heartbeat restored", 2000)
-        self._status_strip.set_link_state(connected=True)
+        if self._presentation_ready:
+            self._status_strip.set_link_state(connected=True)
 
     def _on_disconnected(self):
         # M9: 断开前通知设备关闭数据上报
-        if self._debug_enabled and self._worker is not None:
-            self._worker.send(build_debug_enable_v2(False))
+        if self._debug_controller.enabled and self._worker is not None:
+            self._debug_controller.send_shutdown_notice()
         self._is_connected = False
         self._orbit_sky_timer.stop()
         self._last_valid_frame_at = None
@@ -1340,164 +1475,71 @@ class LiveView(QWidget):
         self._set_device_connection_phase(DeviceConnectionPhase.DISCONNECTED)
         self.connected_worker_changed.emit(None)
         self.connection_state_changed.emit(False)
-        self._connect_btn.setEnabled(True)
-        self._disconnect_btn.setEnabled(False)
-        self._debug_btn.setEnabled(False)
-        self._debug_enabled = False
-        self._debug_pending_target = None
-        self._debug_last_requested_target = None
-        self._debug_last_request_at = 0.0
-        self._debug_ack_timer.stop()
-        set_translatable_text("Debug: OFF", self._debug_btn)
-        self.debug_state_changed.emit(False)
-        set_translatable_text("Disconnected", self._conn_status_label)
-        set_translatable_text("Device: {hardware}", self._hw_label, hardware="—")
-        self._set_conn_state(False, dev="—")
-        self._type_combo.setEnabled(True)
-        self._control_panel.set_enabled(False)
-        self._status_strip.set_link_state(connected=False)
+        self._debug_controller.set_connected(False)
+        if self._presentation_ready:
+            self._connect_btn.setEnabled(True)
+            self._disconnect_btn.setEnabled(False)
+            self._debug_btn.setEnabled(False)
+            set_translatable_text("Debug: OFF", self._debug_btn)
+            set_translatable_text("Disconnected", self._conn_status_label)
+            set_translatable_text("Device: {hardware}", self._hw_label, hardware="—")
+            self._set_conn_state(False, dev="—")
+            self._type_combo.setEnabled(True)
+            self._control_panel.set_enabled(False)
+            self._status_strip.set_link_state(connected=False)
         self._handshake_timer.stop()
-        self._product_subscribe_timer.stop()
-        self._product_subscribe_attempts = 0
-        self._product_subscribe_pending_id = None
-        self._product_subscription_confirmed = False
-        self._capture_timer.stop()
-        self._capture_pending_id = None
-        self._capture_pending_target = None
+        self._product_subscription_controller.stop()
+        self._capture_profile_controller.reset()
         self._capture_restore_debug = False
         if self._is_recording:
             self._stop_recording(restore_customer_profile=False)
         elif self._customer_recording_state != CustomerRecordingState.IDLE:
             self._clear_customer_recording_intent()
-        if self._handshake is not None:
-            self._handshake.stop()
-            self._handshake = None
+        self._session_core.end_connection()
         self._gnss_store.clear()
         self._orbit_store.clear()
         self._reset_orbit_sky_request()
         self._state_store.clear()
         self._product_store.clear()
         self._active_hw_type = None
-        self._gnss_btn.setEnabled(False)
-        self._orbit_btn.setEnabled(False)
+        self._active_connection_config = None
+        if self._presentation_ready:
+            self._gnss_btn.setEnabled(False)
+            self._orbit_btn.setEnabled(False)
 
     def _on_debug_toggled(self):
-        target = not self._debug_enabled
+        target = not self._debug_controller.enabled
         trace_message(
             "DBG_UI",
             f"CLICK DEBUG target={1 if target else 0} "
             f"connected={int(self._is_connected)} "
-            f"pending={self._debug_pending_target!r}",
+            f"pending={self._debug_controller.pending_target!r}",
         )
         if not self._worker:
             trace_message("DBG_UI", "CLICK DEBUG ignored reason=no_worker")
             return
-        if self._debug_pending_target is not None:
+        if self._debug_controller.pending_target is not None:
             trace_message("DBG_UI", "CLICK DEBUG ignored reason=request_pending")
             return
         self.request_debug_mode(target)
 
-    def _send_debug_enable(self, target: bool) -> bool:
-        if self._worker is None:
-            return False
-        if self._worker.send(build_debug_enable_v2(target)):
-            self._debug_pending_target = target
-            self._debug_last_requested_target = target
-            self._debug_last_request_at = time.monotonic()
-            label = "ON" if target else "OFF"
-            _debug_ctrl_log(f"send DEBUG_ENABLE target={1 if target else 0}")
-            set_translatable_text("Debug: {state}...", self._debug_btn, state=label)
-            self._debug_btn.setEnabled(False)
-            self._debug_btn.setCheckable(True)
-            self._debug_btn.setChecked(target)
-            self._debug_ack_timer.start(DEBUG_ACK_TIMEOUT_MS)
-            return True
-        else:
-            _debug_ctrl_log(f"send DEBUG_ENABLE target={1 if target else 0} failed")
-            self.status_message.emit(tr("Failed to send Debug command"), 3000)
-            return False
-
-    def _on_debug_command_response(self, resp: CommandResponse) -> None:
-        target = self._debug_pending_target
-        ack_target = _parse_debug_ack_target(resp.msg or "")
-        if target is None:
-            if ack_target is not None:
-                age = time.monotonic() - self._debug_last_request_at
-                _debug_ctrl_log(
-                    f"rx late debug ack target={1 if ack_target else 0} "
-                    f"code={resp.code} msg={resp.msg!r} age={age:.3f}s"
-                )
-                if (
-                    int(resp.code) == int(RespCode.SUCCESS)
-                    and self._debug_last_requested_target == ack_target
-                    and 0.0 <= age <= DEBUG_LATE_ACK_WINDOW_S
-                ):
-                    self._apply_debug_state(ack_target, source="late_ack")
-            return
-        _debug_ctrl_log(
-            f"rx command_response while pending target={1 if target else 0}: "
-            f"code={resp.code} msg={resp.msg!r}"
-        )
-        if ack_target is None:
-            debug_related_error = (
-                "DEBUG_ENABLE" in (resp.msg or "").upper()
-                and int(resp.code) != int(RespCode.SUCCESS)
-            )
-            if debug_related_error:
-                self._finish_debug_request(False, f"Debug command failed: {resp.msg or resp.code}")
-                return
-            _debug_ctrl_log(
-                f"rx non-debug response ignored while pending target={1 if target else 0}: "
-                f"code={resp.code} msg={resp.msg!r}"
-            )
-            return
-        if ack_target != target:
-            _debug_ctrl_log(
-                f"rx stale debug ack target={1 if ack_target else 0} ignored, "
-                f"pending target={1 if target else 0}"
-            )
-            return
-        if int(resp.code) != int(RespCode.SUCCESS):
-            self._finish_debug_request(False, f"Debug command failed: {resp.msg or resp.code}")
-            return
-        self._finish_debug_request(True, source="ack")
-
-    def _on_debug_ack_timeout(self) -> None:
-        target = self._debug_pending_target
-        if target is None:
-            return
-        _debug_ctrl_log(f"ack timeout target={1 if target else 0}")
-        self._finish_debug_request(False, "Debug command not confirmed")
-
-    def _finish_debug_request(
-        self,
-        ok: bool,
-        error: str = "",
-        *,
-        source: str = "ack",
-    ) -> None:
-        target = self._debug_pending_target
-        self._debug_pending_target = None
-        self._debug_ack_timer.stop()
+    @Slot(object)
+    def _on_debug_pending_changed(self, target: object) -> None:
         self._update_debug_button_enabled()
-        if ok and target is not None:
-            self._apply_debug_state(target, source=source)
-            self.debug_request_finished.emit(target, True, source)
+        if not self._presentation_ready:
             return
-        self._render_debug_button()
-        if error:
-            _debug_ctrl_log(f"debug request failed: {error}")
-            self.status_message.emit(error, 3000)
-        if target is not None:
-            self.debug_request_finished.emit(target, False, error or "Debug command not confirmed")
+        if target is None:
+            self._render_debug_button()
+            return
+        label = "ON" if bool(target) else "OFF"
+        set_translatable_text("Debug: {state}...", self._debug_btn, state=label)
+        self._debug_btn.setCheckable(True)
+        self._debug_btn.setChecked(bool(target))
 
-    def _apply_debug_state(self, target: bool, *, source: str) -> None:
-        self._debug_enabled = target
+    @Slot(bool)
+    def _on_debug_state_changed(self, target: bool) -> None:
         self._update_debug_button_enabled()
-        _debug_ctrl_log(
-            f"debug state confirmed target={1 if target else 0}, source={source}"
-        )
-        if self._debug_enabled:
+        if target:
             hw = self._profile_store.current_hw_type()
             self._state_store.clear(hw)
         else:
@@ -1506,71 +1548,88 @@ class LiveView(QWidget):
         self._render_debug_button()
         self.debug_state_changed.emit(target)
 
+    @Slot(bool, bool, str)
+    def _on_debug_request_finished(self, target: bool, ok: bool, result: str) -> None:
+        detail = result
+        if result == DebugRequestResult.NOT_CONNECTED.value:
+            detail = tr("Device is not connected")
+        elif result == DebugRequestResult.BUSY.value:
+            detail = tr("Another Debug command is awaiting confirmation")
+        elif result == DebugRequestResult.SEND_FAILED.value:
+            detail = tr("Failed to send Debug command")
+        elif result == DebugRequestResult.TIMEOUT.value:
+            detail = tr("Debug command not confirmed")
+        elif result.startswith(f"{DebugRequestResult.DEVICE_ERROR.value}:"):
+            raw = result.split(":", 1)[1]
+            detail = tr("Debug command failed: {detail}", detail=raw)
+        if not ok and detail:
+            self.status_message.emit(detail, 3000)
+        self.debug_request_finished.emit(target, ok, detail)
+
     def _update_debug_button_enabled(self) -> None:
+        if not self._presentation_ready:
+            return
         self._debug_btn.setEnabled(
             self._is_connected
             and not self._external_control_locked
-            and self._debug_pending_target is None
+            and self._debug_controller.pending_target is None
         )
 
     def _render_debug_button(self) -> None:
+        if not self._presentation_ready:
+            return
         set_translatable_text(
             "Debug: {state}",
             self._debug_btn,
-            state="ON" if self._debug_enabled else "OFF",
+            state="ON" if self._debug_controller.enabled else "OFF",
         )
         self._debug_btn.setCheckable(True)
-        self._debug_btn.setChecked(self._debug_enabled)
+        self._debug_btn.setChecked(self._debug_controller.enabled)
 
     def _on_error(self, msg: str):
         self._error_count += 1
-        self._error_count_label.setText(f"ERR {self._error_count}")
+        if self._presentation_ready:
+            self._error_count_label.setText(f"ERR {self._error_count}")
         self.status_message.emit(tr("Error: {detail}", detail=msg), 5000)
 
     def _on_data_received(self, data: bytes):
         if self._is_recording and self._recorder:
             self._recorder.write_frame(data)
 
-        records = self._receiver.feed(data)
-        if records:
-            self._mark_device_activity()
-        for rec in records:
-            # M9: 广播给 DeviceView 等外部消费者
-            self.frame_received.emit(rec)
+        self._session_core.feed_bytes(data)
 
-            if self._orbit_store.feed(rec):
-                continue
+    @Slot(object)
+    def _on_session_record(self, record: object) -> None:
+        self.frame_received.emit(record)
+        if isinstance(record, DataReport):
+            self._frame_count += 1
+            self._frame_times.append(datetime.now().timestamp())
 
-            if self._product_store.feed(rec):
-                continue
-
-            if self._handshake is not None:
-                self._handshake.feed(rec)
-
-            if isinstance(rec, DataReport):
-                self._data_store.update(rec)
-                self._frame_count += 1
-                self._frame_times.append(datetime.now().timestamp())
-                continue
-            if isinstance(rec, CommandResponse):
-                self._on_debug_command_response(rec)
-                continue
-            if isinstance(rec, Heartbeat):
-                self._status_strip.pulse_heartbeat()
-                continue
-            if isinstance(rec, (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)):
-                self._gnss_store.update(rec)
-                continue
-
-            hw = self._profile_store.current_hw_type()
-            if hw is None:
-                continue
-            if isinstance(rec, StateReport):
-                self._state_store.update(hw, rec)
-            elif isinstance(rec, EventReport):
-                self._event_log.add(hw, rec, self._profile_store)
+    @Slot()
+    def _status_strip_heartbeat(self) -> None:
+        if self._presentation_ready:
+            self._status_strip.pulse_heartbeat()
 
     # ============================ Timers ============================
+
+    def activate_view(self) -> None:
+        """Start engineering presentation updates without changing the session."""
+        if self._view_active:
+            return
+        self.ensure_presentation()
+        self._view_active = True
+        self._update_display()
+        self._update_heavy()
+        self._update_timer.start()
+        self._heavy_timer.start()
+
+    def deactivate_view(self) -> None:
+        """Suspend hidden engineering rendering and keep device I/O running."""
+        if not self._view_active:
+            return
+        self._view_active = False
+        self._update_timer.stop()
+        self._heavy_timer.stop()
 
     def _update_heavy(self):
         self._chart.refresh(self._data_store)
@@ -1588,7 +1647,7 @@ class LiveView(QWidget):
         self._frame_count_label.setText(f"FRM {self._frame_count}")
 
         hw = self._profile_store.current_hw_type()
-        if hw is not None and self._is_connected and self._debug_enabled:
+        if hw is not None and self._is_connected and self._debug_controller.enabled:
             self._state_store.expire_stale(hw, 3.5)
 
         existing_names = set(self._channel_panel.channel_names())
@@ -1665,9 +1724,7 @@ class LiveView(QWidget):
         self.customer_recording_state_changed.emit(state.value, path)
 
     def _clear_customer_recording_intent(self) -> None:
-        self._capture_timer.stop()
-        self._capture_pending_id = None
-        self._capture_pending_target = None
+        self._capture_profile_controller.reset()
         self._capture_restore_debug = False
         self._customer_capture_confirmed = False
         self._customer_recording_path = None
@@ -1699,7 +1756,7 @@ class LiveView(QWidget):
             return
 
         if state == CustomerRecordingState.ARMED:
-            self._capture_restore_debug = self._debug_enabled
+            self._capture_restore_debug = self._debug_controller.enabled
             self._set_customer_recording_state(CustomerRecordingState.PREPARING)
         self._request_capture_profile(True)
 
@@ -1712,22 +1769,9 @@ class LiveView(QWidget):
             self._request_capture_profile(False)
 
     def _request_capture_profile(self, support_full: bool) -> bool:
-        request_id = self.next_product_request_id()
-        frame = build_service_set_capture_profile(request_id, support_full)
-        self._capture_pending_id = request_id
-        self._capture_pending_target = bool(support_full)
-        if not self._send_control_frame(frame):
-            self._capture_pending_id = None
-            self._capture_pending_target = None
-            self.status_message.emit(tr("Capture profile command could not be sent"), 3500)
-            if support_full and self._customer_recording_state == CustomerRecordingState.PREPARING:
-                self._clear_customer_recording_intent()
-            elif not support_full:
-                self._capture_restore_debug = False
-                self._customer_recording_path = None
-                self._set_customer_recording_state(CustomerRecordingState.IDLE)
+        self._sync_session_transport()
+        if not self._capture_profile_controller.request(support_full):
             return False
-        self._capture_timer.start(3000)
         self.status_message.emit(
             tr("Preparing full support recording...")
             if support_full
@@ -1737,26 +1781,56 @@ class LiveView(QWidget):
         return True
 
     def _on_capture_response(self, response) -> None:
-        if (
-            self._capture_pending_id is None
-            or response.request_id != self._capture_pending_id
-            or response.operation != int(ServiceControlOp.SET_CAPTURE_PROFILE)
-        ):
-            return
-        target = bool(self._capture_pending_target)
-        self._capture_timer.stop()
-        self._capture_pending_id = None
-        self._capture_pending_target = None
-        try:
-            result = ServiceResultCode(response.result_code)
-        except ValueError:
-            result = ServiceResultCode.INTERNAL_ERROR
-        if result != ServiceResultCode.SUCCESS:
-            self.status_message.emit(
-                tr("Device rejected the capture profile ({code})", code=result.name),
-                4500,
-            )
-            if target and self._customer_recording_state == CustomerRecordingState.PREPARING:
+        self._capture_profile_controller.feed_response(response)
+
+    @Slot(bool, bool, str)
+    def _on_capture_profile_finished(
+        self,
+        target: bool,
+        ok: bool,
+        result: str,
+    ) -> None:
+        if not ok:
+            if result == CaptureProfileResult.SEND_FAILED.value:
+                self.status_message.emit(
+                    tr("Capture profile command could not be sent"),
+                    3500,
+                )
+            elif result == CaptureProfileResult.TIMEOUT.value:
+                self.status_message.emit(
+                    tr("Full support recording was not confirmed")
+                    if target
+                    else tr("Customer stream restore was not confirmed"),
+                    4500,
+                )
+                if (
+                    target
+                    and self._customer_recording_state
+                    == CustomerRecordingState.PREPARING
+                ):
+                    self._set_customer_recording_state(
+                        CustomerRecordingState.RESTORING
+                    )
+                    if self.is_device_online():
+                        self._request_capture_profile(False)
+                elif target:
+                    self._customer_capture_confirmed = False
+                else:
+                    self._capture_restore_debug = False
+                    self._customer_recording_path = None
+                    self._set_customer_recording_state(CustomerRecordingState.IDLE)
+                return
+            else:
+                code = result.split(":", 1)[1] if ":" in result else result
+                self.status_message.emit(
+                    tr("Device rejected the capture profile ({code})", code=code),
+                    4500,
+                )
+            if (
+                target
+                and self._customer_recording_state
+                == CustomerRecordingState.PREPARING
+            ):
                 self._clear_customer_recording_intent()
             elif target:
                 self._customer_capture_confirmed = False
@@ -1765,6 +1839,7 @@ class LiveView(QWidget):
                 self._customer_recording_path = None
                 self._set_customer_recording_state(CustomerRecordingState.IDLE)
             return
+
         if target:
             self._customer_capture_confirmed = True
             if self._customer_recording_state == CustomerRecordingState.PREPARING:
@@ -1791,47 +1866,10 @@ class LiveView(QWidget):
             self._restore_debug_after_capture()
 
     def _on_product_control_response(self, response) -> None:
-        if (
-            self._product_subscribe_pending_id is None
-            or response.request_id != self._product_subscribe_pending_id
-            or response.operation != int(ServiceControlOp.SUBSCRIBE)
-        ):
-            return
-        self._product_subscribe_pending_id = None
-        try:
-            result = ServiceResultCode(response.result_code)
-        except ValueError:
-            result = ServiceResultCode.INTERNAL_ERROR
-        if result is ServiceResultCode.SUCCESS:
-            self._product_subscription_confirmed = True
-            self._product_subscribe_timer.stop()
-            trace_message(
-                "PRODUCT_SERVICE",
-                f"SUBSCRIBE confirmed request_id={response.request_id}",
-            )
+        self._product_subscription_controller.feed_response(response)
 
     def _on_capture_timeout(self) -> None:
-        target = self._capture_pending_target
-        self._capture_pending_id = None
-        self._capture_pending_target = None
-        self.status_message.emit(
-            tr("Full support recording was not confirmed")
-            if target
-            else tr("Customer stream restore was not confirmed"),
-            4500,
-        )
-        # The device may have applied support_full even when its ACK was lost.
-        # Returning to customer_live is idempotent and bounds that uncertain state.
-        if target and self._customer_recording_state == CustomerRecordingState.PREPARING:
-            self._set_customer_recording_state(CustomerRecordingState.RESTORING)
-            if self.is_device_online():
-                self._request_capture_profile(False)
-        elif target:
-            self._customer_capture_confirmed = False
-        elif not target:
-            self._capture_restore_debug = False
-            self._customer_recording_path = None
-            self._set_customer_recording_state(CustomerRecordingState.IDLE)
+        self._capture_profile_controller.expire()
 
     def _restore_debug_after_capture(self) -> None:
         restore_debug = self._capture_restore_debug
@@ -1841,8 +1879,8 @@ class LiveView(QWidget):
 
         # A confirmed customer-live profile has set device Debug OFF. Reflect
         # that state before using the normal strict-ACK path to restore Debug ON.
-        if self._debug_enabled:
-            self._apply_debug_state(False, source="capture_profile")
+        if self._debug_controller.enabled:
+            self._debug_controller.apply_confirmed_state(False)
         QTimer.singleShot(0, lambda: self.request_debug_mode(True))
 
     def _recording_profile_dict(self):
@@ -1894,6 +1932,34 @@ class LiveView(QWidget):
             return None
         return Path(filepath)
 
+    def _render_recording_state(self) -> None:
+        if not self._presentation_ready:
+            return
+        self._status_strip.set_recording(self._is_recording)
+        set_translatable_text("Stop" if self._is_recording else "Record", self._record_btn)
+        try:
+            from satellite_debug_tool.ui import icons as _ic
+
+            color_key = "err" if self._is_recording else "text_2"
+            self._record_btn.setIcon(
+                _ic.icon(
+                    "record",
+                    color=S.palette(self._theme)[color_key],
+                    size=14,
+                )
+            )
+        except Exception:
+            pass
+        if self._is_recording:
+            pal = S.palette(self._theme)
+            self._record_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {pal['card_2']}; color: {pal['err']}; "
+                f"border: 1px solid {pal['err']}; border-radius: 5px; padding: 4px 11px; "
+                f"font-weight: 600; }}"
+            )
+        else:
+            self._record_btn.setStyleSheet("")
+
     def _start_recording(
         self,
         *,
@@ -1923,20 +1989,7 @@ class LiveView(QWidget):
         if customer:
             self._customer_recording_path = Path(target)
             self._set_customer_recording_state(CustomerRecordingState.ACTIVE)
-        self._status_strip.set_recording(True)
-        set_translatable_text("Stop", self._record_btn)
-        pal = S.palette(self._theme)
-        try:
-            from satellite_debug_tool.ui import icons as _ic
-
-            self._record_btn.setIcon(_ic.icon("record", color=pal["err"], size=14))
-        except Exception:
-            pass
-        self._record_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {pal['card_2']}; color: {pal['err']}; "
-            f"border: 1px solid {pal['err']}; border-radius: 5px; padding: 4px 11px; "
-            f"font-weight: 600; }}"
-        )
+        self._render_recording_state()
         self.status_message.emit(
             tr(
                 "Recording to {path}{profile_suffix}",
@@ -1956,17 +2009,7 @@ class LiveView(QWidget):
         self._recorder = None
         self._is_recording = False
         self._customer_recording = False
-        self._status_strip.set_recording(False)
-        set_translatable_text("Record", self._record_btn)
-        try:
-            from satellite_debug_tool.ui import icons as _ic
-
-            self._record_btn.setIcon(
-                _ic.icon("record", color=S.palette(self._theme)["text_2"], size=14)
-            )
-        except Exception:
-            pass
-        self._record_btn.setStyleSheet("")
+        self._render_recording_state()
         if stopped:
             message = (
                 tr("Recording stopped with {count} dropped chunk(s)", count=dropped)
@@ -2068,13 +2111,14 @@ class LiveView(QWidget):
         self.status_message.emit(tr("Display cleared"), 2000)
 
     def _on_gnss_store_changed(self) -> None:
-        if self._gnss_store.has_data():
+        if self._presentation_ready and self._gnss_store.has_data():
             self._gnss_btn.setEnabled(True)
 
     @Slot(bool)
     def _on_orbit_capability_changed(self, available: bool) -> None:
         enabled = bool(available and self._is_connected)
-        self._orbit_btn.setEnabled(enabled)
+        if self._presentation_ready:
+            self._orbit_btn.setEnabled(enabled)
         self.orbit_capability_changed.emit(enabled)
         self._sync_orbit_sky_timer()
         if self._orbit_sky_timer.isActive():
@@ -2177,6 +2221,8 @@ class LiveView(QWidget):
 
     def _apply_theme(self, theme: str):
         """统一主题分发（M7：字号固化 small）。"""
+        if not self._presentation_ready:
+            return
         scale = "small"
         pal = S.palette(theme)
         bg, panel, border, text, input_bg = (
@@ -2241,6 +2287,8 @@ class LiveView(QWidget):
 
     def _style_conn_card(self, pal: dict, scale: str) -> None:
         """设备状态卡 + statline 的主题样式 + 当前连接态着色。"""
+        if not self._presentation_ready:
+            return
         mono = S.monospace_family()
         connected = bool(self._is_connected)
         tint = pal["ok"] if connected else pal["err"]
@@ -2277,6 +2325,8 @@ class LiveView(QWidget):
         detail_source: str = "",
     ) -> None:
         """更新设备状态卡显示（dev 名 + 状态文案）+ 重新着色。"""
+        if not self._presentation_ready:
+            return
         set_raw_text(dev or "—", self._cs_dev)
         if detail_source:
             set_translatable_text(detail_source, self._cs_stat)
@@ -2289,6 +2339,8 @@ class LiveView(QWidget):
         self._style_conn_card(S.palette(self._theme), "small")
 
     def retranslate_ui(self) -> None:
+        if not self._presentation_ready:
+            return
         self._render_debug_button()
         set_translatable_text(
             "Stop" if self._is_recording else "REC",

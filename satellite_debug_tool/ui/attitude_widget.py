@@ -569,6 +569,11 @@ class AttitudeWidget(QWidget):
             return
         self._yaw_reference = normalized
 
+        self._render_yaw_reference()
+
+    def _render_yaw_reference(self) -> None:
+        normalized = self._yaw_reference
+
         base = tr("Yaw:").rstrip(":：")
         if normalized == "legacy":
             self._yaw_name_lbl.setText(tr("Yaw:"))
@@ -587,6 +592,21 @@ class AttitudeWidget(QWidget):
                 ),
             }[normalized]
         )
+
+    def retranslate_ui(self) -> None:
+        self._reset_view_btn.setText(tr("Reset view"))
+        self._reset_view_btn.setToolTip(
+            tr(
+                "Restore the 3D camera to its default angle "
+                "(distance={distance:g} / elevation={elevation:g} / azimuth={azimuth:g})",
+                distance=_CAM_DISTANCE,
+                elevation=_CAM_ELEVATION,
+                azimuth=_CAM_AZIMUTH,
+            )
+        )
+        self._roll_name_lbl.setText(tr("Roll:"))
+        self._pitch_name_lbl.setText(tr("Pitch:"))
+        self._render_yaw_reference()
 
     def yaw_reference(self) -> str:
         return self._yaw_reference
