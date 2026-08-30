@@ -39,9 +39,7 @@ from .models import (
     stamp_snapshot_source,
 )
 from .timestamps import unwrap_u32_series
-
-
-_SERIAL_PLACEHOLDERS = {"", "-", "--", "unknown", "afd01-dev"}
+from .identity import verified_identity_text
 
 
 class LegacyV2Projector:
@@ -141,10 +139,8 @@ class LegacyV2Projector:
 
     @staticmethod
     def _serial_value(text: Optional[str]) -> ProductValue[str]:
-        value = "" if text is None else str(text).strip()
-        if value.lower() in _SERIAL_PLACEHOLDERS:
-            return ProductValue.unsupported()
-        return ProductValue.valid(value)
+        value = verified_identity_text(text)
+        return ProductValue.valid(value) if value else ProductValue.unsupported()
 
     def _channel_value(self, hw: str, role: str, now: float) -> ProductValue[float]:
         entry = self._profiles.find_channel_by_role(hw, role)

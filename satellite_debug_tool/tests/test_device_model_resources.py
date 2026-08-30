@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import numpy as np
+from pyqtgraph.opengl import MeshData
+
 from satellite_debug_tool.ui.device_model_resources import (
     device_model_candidates,
     load_first_device_model,
@@ -78,3 +81,61 @@ def test_invalid_user_model_falls_back_to_builtin(tmp_path):
 def test_invalid_model_key_is_rejected(tmp_path):
     assert normalize_model_key("../afd01") == ""
     assert device_model_candidates("../afd01", home=tmp_path) == ()
+
+
+def test_afd01c_does_not_alias_the_afd01_model(tmp_path):
+    candidates = device_model_candidates(
+        "AFD01C",
+        home=tmp_path,
+        builtin_dir=MODELS_DIR,
+    )
+    assert candidates == (
+        tmp_path / ".satellite_debug_tool" / "models" / "afd01c.stl",
+        MODELS_DIR / "afd01c.stl",
+    )
+    assert load_first_device_model(
+        "AFD01C",
+        lambda path: path.read_bytes(),
+        home=tmp_path,
+        builtin_dir=MODELS_DIR,
+    ) is None
+
+
+def test_model_change_clears_stale_mesh_when_target_has_no_model(
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.ui import device_model_resources
+    from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
+
+    mesh = MeshData(
+        vertexes=np.asarray(
+            ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+            dtype=np.float32,
+        ),
+        faces=np.asarray(((0, 1, 2),), dtype=np.uint32),
+    )
+
+    def fake_load(model_key, _loader):
+        if model_key == "afd01":
+            return Path("afd01.stl"), mesh
+        return None
+
+    monkeypatch.setattr(
+        device_model_resources,
+        "load_first_device_model",
+        fake_load,
+    )
+    widget = AttitudeWidget()
+
+    assert widget.try_load_device_model("AFD01")
+    afd01_body = widget._body
+    assert widget._loaded_model_hw == "afd01"
+    assert not widget._nose_arrow.visible()
+
+    assert not widget.try_load_device_model("AFD01C")
+    assert widget._loaded_model_hw is None
+    assert widget._device_verts is None
+    assert widget._device_faces is None
+    assert widget._body is not afd01_body
+    assert widget._nose_arrow.visible()
+    widget.close()

@@ -1,4 +1,4 @@
-"""AFD01 Product Service domain."""
+"""Registered customer Product Service domain."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from ..codec_v2 import (
     build_service_apply_rf,
     build_service_set_capture_profile,
     build_service_set_control_mode,
+    build_service_set_device_mount,
     build_service_set_tx_enable,
     build_service_subscribe,
     decode_service_capabilities,
@@ -18,6 +19,7 @@ from ..codec_v2 import (
     decode_service_hardware_identity,
     decode_service_identity,
     decode_service_link_detail,
+    decode_service_mount_status,
     decode_service_navigation_source_info,
     decode_service_rf_lock_status,
     decode_service_slow_state,
@@ -32,6 +34,7 @@ from ..frame_v2 import (
     ServiceHardwareIdentity,
     ServiceIdentity,
     ServiceLinkDetail,
+    ServiceMountStatus,
     ServiceNavigationSourceInfo,
     ServiceRfLockStatus,
     ServiceSlowState,
@@ -43,6 +46,7 @@ DECODERS = MappingProxyType({
     int(CmdType.SERVICE_HARDWARE_IDENTITY): decode_service_hardware_identity,
     int(CmdType.SERVICE_NAV_SOURCE_INFO): decode_service_navigation_source_info,
     int(CmdType.SERVICE_EXTERNAL_INS_DIAGNOSTICS): decode_service_external_ins_diagnostics,
+    int(CmdType.SERVICE_MOUNT_STATUS): decode_service_mount_status,
     int(CmdType.SERVICE_FAST_STATE): decode_service_fast_state,
     int(CmdType.SERVICE_SLOW_STATE): decode_service_slow_state,
     int(CmdType.SERVICE_LINK_DETAIL): decode_service_link_detail,
@@ -63,12 +67,14 @@ __all__ = [
     "ServiceHardwareIdentity",
     "ServiceIdentity",
     "ServiceLinkDetail",
+    "ServiceMountStatus",
     "ServiceNavigationSourceInfo",
     "ServiceRfLockStatus",
     "ServiceSlowState",
     "build_service_apply_rf",
     "build_service_set_capture_profile",
     "build_service_set_control_mode",
+    "build_service_set_device_mount",
     "build_service_set_tx_enable",
     "build_service_subscribe",
 ]

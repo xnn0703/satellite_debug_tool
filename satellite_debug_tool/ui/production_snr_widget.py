@@ -70,7 +70,7 @@ class ProductionSnrPanel(QFrame):
         self._serial_number = ""
         self._endpoint = "-"
         self._connection = tr("Offline")
-        self._recording = tr("Not armed")
+        self._recording = tr("Batch not created")
         self._current_test = "-"
         self._result = "-"
         self._current_snr_db: Optional[float] = None

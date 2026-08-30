@@ -1,5 +1,9 @@
 # M14 ESA01 Device Tab 接入计划
 
+> 历史里程碑文档。M22 已退出“未声明上下文仍接受通用成功响应”的旧兼容合同；
+> 当前 Device OTA 必须由 Profile 明确声明 `ota` 和 `command_response_context`，
+> BEGIN/DATA/END 均只消费匹配当前操作的响应。当前合同以 `AGENTS.md`、§DEBUG v2 协议和 M22 文档为准。
+
 ## 目标
 
 让上位机 Device Tab 不再默认假设所有设备都支持参数/OTA，而是根据
@@ -11,7 +15,7 @@
 - `Handshake` 主动请求 `REQUEST_PROFILE_SEMANTICS`，但不把语义帧作为 ready
   条件，兼容旧固件。
 - `DeviceView` 接入 Live 页的 `ProfileStore`，按 capability 控制参数管理和
-  OTA 控件。未知设备默认禁用；旧 AFD01 保留默认启用。
+  OTA 控件。未知设备或未声明完整能力的旧固件均默认禁用。
 - 未声明参数能力时不自动发送 `REQUEST_PARA_TABLE`，避免旧 ESA01 固件连接后
   出现无意义超时。
 - Device Tab 在不支持能力时显示明确状态文本。
@@ -54,8 +58,8 @@
 - OTA 不再接管 worker 私有 socket、不重启 QThread、不调用 `processEvents()`；所有帧
   均经 Live worker 的统一发送和接收链路。
 - OTA 期间暂停握手重试、参数请求和其它 Device 控件，并通过 Live 控制接口先关闭 Debug。
-- 新固件严格匹配 `OTA_BEGIN=READY`、`OTA_DATA=<seq>`、
-  `OTA_END=VERIFIED`；旧 AFD01/旧固件继续兼容通用成功响应。
+- 固件必须严格回复 `OTA_BEGIN=READY`、`OTA_DATA=<seq>`、
+  `OTA_END=VERIFIED`；不带操作上下文的响应不作为当前 OTA 证据。
 - 超时固定为：Debug OFF 3 秒，BEGIN 15 秒，DATA 2 秒且最多重试 3 次，
   END 10 秒，重启上线 120 秒。
 
@@ -67,7 +71,8 @@
 
 ## 实施对照
 
-- 计划内握手、参数、严格 Debug ACK、异步 OTA、上下文兼容和同版重连均已落地。
+- 计划内握手、参数、严格 Debug ACK 和异步 OTA 已落地；旧上下文兼容和
+  仅依赖时间隔离窗的同版“成功”判定已在 M22 删除。
 - 为避免 END ACK 后的旧 META 被误认作同版新 app，上位机额外增加 1 秒 META 隔离窗。
 - 上位机自动化与固件四种构建均通过；硬件时延、栈/CPU、真实 OTA 和网络升级矩阵保留为上板验收，
   未用软件测试结果替代硬件结论。

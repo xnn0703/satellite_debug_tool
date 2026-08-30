@@ -31,12 +31,18 @@ def qapp():
     yield app
 
 
-def _identity(serial_number: str, *, model: str = "AFD01", timestamp: int = 1) -> bytes:
+def _identity(
+    serial_number: str,
+    *,
+    model: str = "AFD01",
+    timestamp: int = 1,
+    service_protocol: int = 2,
+) -> bytes:
     payload = struct.pack("<BII", 1, timestamp, 0x17)
     for text in (model, serial_number, "0.0.130", "0.0.3"):
         encoded = text.encode("utf-8")
         payload += bytes([len(encoded)]) + encoded
-    payload += b"\x02"
+    payload += bytes([service_protocol])
     return build_frame(CmdType.SERVICE_IDENTITY, payload)
 
 
@@ -246,6 +252,28 @@ def test_session_keeps_full_snr_samples_on_workstation_timeline() -> None:
     assert session.snr_history(now_monotonic_ns=origin_ns + 6_000_000_000) == ()
 
 
+def test_valid_zero_snr_is_preserved_as_device_evidence() -> None:
+    from satellite_debug_tool.core.production import DeviceSession
+
+    endpoint = ("192.168.1.12", 4004)
+    session = DeviceSession(endpoint, 1)
+    session.feed_datagram(
+        FleetDatagram(
+            endpoint=endpoint,
+            data=_fast_snr(100, 0.0, valid=True),
+            wall_time_ns=1_000_000_000,
+            monotonic_ns=2_000_000_000,
+        )
+    )
+
+    history = session.snr_history(
+        window_s=1.0,
+        now_monotonic_ns=2_000_000_000,
+    )
+    assert len(history) == 1
+    assert history[0].value_db == 0.0
+
+
 def test_duplicate_serial_number_marks_both_sessions_conflicted() -> None:
     controller = _controller()
     conflicts: list[str] = []
@@ -263,6 +291,29 @@ def test_duplicate_serial_number_marks_both_sessions_conflicted() -> None:
         for session in controller.sessions()
     )
     assert "duplicate serial number" in conflicts[0]
+
+    # Repeated identity traffic is only fresh transport evidence.  Neither an
+    # identical record nor the same identity with a newer device timestamp may
+    # erase an already-proven collision.
+    first_endpoint = ("192.168.1.12", 4004)
+    controller._on_datagram(
+        _datagram(first_endpoint, _identity("AFD01-DUP"), 3)
+    )
+    assert all(
+        session.state == DeviceSessionState.CONFLICT
+        for session in controller.sessions()
+    )
+    controller._on_datagram(
+        _datagram(
+            first_endpoint,
+            _identity("AFD01-DUP", timestamp=2),
+            4,
+        )
+    )
+    assert all(
+        session.state == DeviceSessionState.CONFLICT
+        for session in controller.sessions()
+    )
     controller.stop()
 
 
@@ -375,6 +426,94 @@ def test_unsupported_hardware_never_becomes_identified() -> None:
     controller.stop()
 
 
+def test_afd01c_protocol_v8_becomes_identified() -> None:
+    controller = _controller()
+    controller._on_datagram(
+        _datagram(
+            ("192.168.1.12", 4004),
+            _identity(
+                "AFD01C-001",
+                model="AFD01C",
+                service_protocol=8,
+            ),
+        )
+    )
+
+    session = controller.sessions()[0]
+    assert session.state == DeviceSessionState.IDENTIFIED
+    assert session.hardware_type == "AFD01C"
+    assert session.serial_number == "AFD01C-001"
+    controller.stop()
+
+
+def test_supported_afd01c_without_serial_waits_for_identity_configuration() -> None:
+    controller = _controller()
+    controller._on_datagram(
+        _datagram(
+            ("192.168.1.12", 4004),
+            _identity("", model="AFD01C", service_protocol=8),
+        )
+    )
+
+    session = controller.sessions()[0]
+    assert session.state == DeviceSessionState.IDENTITY_PENDING
+    assert session.hardware_type == "AFD01C"
+    assert session.serial_number == ""
+    controller.stop()
+
+
+@pytest.mark.parametrize(
+    "serial_number",
+    ("-", "unknown", "AFD01-dev", "未配置"),
+)
+def test_placeholder_serial_never_becomes_a_production_identity(
+    serial_number: str,
+) -> None:
+    controller = _controller()
+    controller._on_datagram(
+        _datagram(
+            ("192.168.1.12", 4004),
+            _identity(serial_number, model="AFD01", service_protocol=8),
+        )
+    )
+
+    session = controller.sessions()[0]
+    assert session.state is DeviceSessionState.IDENTITY_PENDING
+    assert session.serial_number == ""
+    assert session.identity_key == ""
+    controller.stop()
+
+
+def test_afd01c_requires_product_service_v8() -> None:
+    controller = _controller()
+    controller._on_datagram(
+        _datagram(
+            ("192.168.1.12", 4004),
+            _identity(
+                "AFD01C-OLD",
+                model="AFD01C",
+                service_protocol=7,
+            ),
+        )
+    )
+
+    assert controller.sessions()[0].state == DeviceSessionState.UNSUPPORTED
+    controller.stop()
+
+
+def test_afd01c_without_serial_does_not_hide_unsupported_protocol() -> None:
+    controller = _controller()
+    controller._on_datagram(
+        _datagram(
+            ("192.168.1.12", 4004),
+            _identity("", model="AFD01C", service_protocol=7),
+        )
+    )
+
+    assert controller.sessions()[0].state == DeviceSessionState.UNSUPPORTED
+    controller.stop()
+
+
 def test_prearmed_fleet_records_the_first_valid_device_datagram(
     tmp_path: Path,
 ) -> None:
@@ -398,4 +537,31 @@ def test_prearmed_fleet_records_the_first_valid_device_datagram(
     assert contents.endswith(SDB_FOOTER)
     assert first_frame in contents
     assert session.recording_complete is True
+    controller.stop()
+
+
+def test_fleet_rejects_a_second_batch_with_direct_evidence_reason(
+    tmp_path: Path,
+) -> None:
+    controller = _controller()
+    assert controller.arm_batch_recording("PILOT-001", tmp_path / "PILOT-001")
+
+    with pytest.raises(
+        RuntimeError,
+        match="fleet evidence recording already belongs to another batch",
+    ):
+        controller.arm_batch_recording("PILOT-002", tmp_path / "PILOT-002")
+
+    controller.stop()
+
+
+def test_participant_freeze_requires_created_evidence_recording() -> None:
+    controller = _controller()
+
+    with pytest.raises(
+        RuntimeError,
+        match="batch evidence recording has not been created",
+    ):
+        controller.freeze_batch_participants(("uid:001",))
+
     controller.stop()

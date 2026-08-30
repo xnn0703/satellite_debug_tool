@@ -1,6 +1,7 @@
 """Stable customer-facing product semantics."""
 
 from .legacy_v2 import LegacyV2Projector
+from .identity import verified_device_uid, verified_identity_text
 from .recording_state import CustomerRecordingState
 from .playback_projection import (
     CUSTOMER_PLAYBACK_HW_TYPE,
@@ -9,6 +10,16 @@ from .playback_projection import (
     customer_channel_entries,
 )
 from .service_store import ProductServiceStore
+from .support_policy import (
+    CustomerProductPolicy,
+    CustomerServiceState,
+    customer_product_policy,
+    customer_ota_product_policy,
+    customer_service_state,
+    product_identity_matches,
+    production_product_policy,
+    production_recipe_product_policy,
+)
 from .source_resolver import (
     ProductSnapshotResolver,
     ProductSourceState,
@@ -41,7 +52,9 @@ __all__ = [
     "Availability",
     "ComponentHealth",
     "ControlMode",
+    "CustomerProductPolicy",
     "CustomerRecordingState",
+    "CustomerServiceState",
     "CUSTOMER_PLAYBACK_HW_TYPE",
     "CustomerPlaybackChannel",
     "CustomerPlaybackProjector",
@@ -65,7 +78,15 @@ __all__ = [
     "ValueQuality",
     "U32UptimeUnwrapper",
     "unwrap_u32_series",
+    "verified_device_uid",
+    "verified_identity_text",
     "customer_channel_entries",
+    "customer_product_policy",
+    "customer_ota_product_policy",
+    "customer_service_state",
+    "product_identity_matches",
+    "production_product_policy",
+    "production_recipe_product_policy",
     "pending_product_snapshot",
     "stamp_snapshot_received",
     "stamp_snapshot_source",

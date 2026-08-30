@@ -34,6 +34,13 @@ from .frame_v2 import (
     FRAME_HEADER_1,
     Heartbeat,
     MAX_DATA_LENGTH,
+    MOUNT_STATUS_VALID_ANGLES,
+    MOUNT_STATUS_VALID_CONTRACT,
+    MOUNT_STATUS_VALID_EXPECTED_RBV,
+    MOUNT_STATUS_VALID_IMU_ROTATION,
+    MOUNT_STATUS_VALID_RBV_VERIFIED,
+    MOUNT_STATUS_VALID_READBACK_RBV,
+    MOUNT_STATUS_VALID_RESTART_REQUIRED,
     MetaInfo,
     PROTOCOL_VERSION,
     StateDefEntry,
@@ -66,6 +73,7 @@ from .frame_v2 import (
     ServiceHardwareIdentity,
     ServiceIdentity,
     ServiceLinkDetail,
+    ServiceMountStatus,
     ServiceNavigationSourceInfo,
     ServiceRfLockStatus,
     ServiceSlowState,
@@ -90,6 +98,9 @@ from .frame_v2 import (
 
 class CodecError(ValueError):
     """v2 解码错误。"""
+
+
+OTA_DATA_SEQUENCE_MAX = 0xFFFF
 
 
 # -----------------------------------------------------------------------------
@@ -212,6 +223,8 @@ def build_ota_begin(file_size: int, filename: str) -> bytes:
 
 def build_ota_data(seq: int, chunk: bytes) -> bytes:
     """OTA_DATA: seq(u16) + data(1..1021B)；兼容上限独立于通用 DATA 上限。"""
+    if isinstance(seq, bool) or not isinstance(seq, int) or not (0 <= seq <= OTA_DATA_SEQUENCE_MAX):
+        raise CodecError("OTA sequence must be in u16 range")
     if not chunk or len(chunk) > 1021:
         raise CodecError("OTA chunk must contain 1..1021 bytes")
     return build_control(SubCmd.OTA_DATA, struct.pack("<H", seq) + chunk)
@@ -302,6 +315,31 @@ def build_service_set_capture_profile(request_id: int, support_full: bool) -> by
         request_id,
         ServiceControlOp.SET_CAPTURE_PROFILE,
         bytes([1 if support_full else 0]),
+    )
+
+
+def build_service_set_device_mount(
+    request_id: int,
+    mount_yaw_deg: float,
+    mount_pitch_deg: float,
+    mount_roll_deg: float,
+) -> bytes:
+    """Build one atomic device-to-carrier FRD mount configuration request."""
+
+    values = (float(mount_yaw_deg), float(mount_pitch_deg), float(mount_roll_deg))
+    if not all(math.isfinite(value) for value in values):
+        raise CodecError("service mount angles must be finite")
+    yaw, pitch, roll = values
+    if not (-180.0 <= yaw <= 180.0):
+        raise CodecError("service mount yaw must be in range -180..180 degrees")
+    if not (-90.0 <= pitch <= 90.0):
+        raise CodecError("service mount pitch must be in range -90..90 degrees")
+    if not (-180.0 <= roll <= 180.0):
+        raise CodecError("service mount roll must be in range -180..180 degrees")
+    return _build_service_control(
+        request_id,
+        ServiceControlOp.SET_DEVICE_MOUNT,
+        struct.pack("<fff", yaw, pitch, roll),
     )
 
 
@@ -659,6 +697,49 @@ def decode_service_capabilities(data: bytes) -> ServiceCapabilities:
     values = struct.unpack(fmt, data)
     _require_service_schema(values[0], "SERVICE_CAPABILITIES")
     return ServiceCapabilities(*values)
+
+
+def decode_service_mount_status(data: bytes) -> ServiceMountStatus:
+    """Decode the fixed v8 mount-status wire record without deriving RBV locally."""
+
+    fmt = "<BIII9fBBB"
+    if len(data) != struct.calcsize(fmt):
+        raise CodecError("SERVICE_MOUNT_STATUS invalid length")
+    values = struct.unpack(fmt, data)
+    _require_service_schema(values[0], "SERVICE_MOUNT_STATUS")
+    known_valid_mask = (
+        MOUNT_STATUS_VALID_CONTRACT
+        | MOUNT_STATUS_VALID_ANGLES
+        | MOUNT_STATUS_VALID_EXPECTED_RBV
+        | MOUNT_STATUS_VALID_READBACK_RBV
+        | MOUNT_STATUS_VALID_IMU_ROTATION
+        | MOUNT_STATUS_VALID_RBV_VERIFIED
+        | MOUNT_STATUS_VALID_RESTART_REQUIRED
+    )
+    if values[2] & ~known_valid_mask:
+        raise CodecError("SERVICE_MOUNT_STATUS unknown valid-mask bits")
+    if not all(math.isfinite(value) for value in values[4:13]):
+        raise CodecError("SERVICE_MOUNT_STATUS non-finite angle")
+    if values[14] not in (0, 1) or values[15] not in (0, 1):
+        raise CodecError("SERVICE_MOUNT_STATUS invalid boolean")
+    return ServiceMountStatus(
+        schema=values[0],
+        timestamp=values[1],
+        valid_mask=values[2],
+        mount_contract_id=values[3],
+        mount_yaw_deg=values[4],
+        mount_pitch_deg=values[5],
+        mount_roll_deg=values[6],
+        expected_rbv_x_deg=values[7],
+        expected_rbv_y_deg=values[8],
+        expected_rbv_z_deg=values[9],
+        readback_rbv_x_deg=values[10],
+        readback_rbv_y_deg=values[11],
+        readback_rbv_z_deg=values[12],
+        imu_mount_rotation=values[13],
+        rbv_verified=bool(values[14]),
+        restart_required=bool(values[15]),
+    )
 
 
 def decode_service_control_response(data: bytes) -> ServiceControlResponse:

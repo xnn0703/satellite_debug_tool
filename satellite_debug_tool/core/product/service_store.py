@@ -1,9 +1,9 @@
-"""State store for stable AFD01 product-service protocol records."""
+"""State store for stable customer Product Service protocol records."""
 
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import time
 from typing import Optional
 
@@ -20,6 +20,7 @@ from satellite_debug_tool.core.protocol import (
     ServiceHardwareIdentity,
     ServiceIdentity,
     ServiceLinkDetail,
+    ServiceMountStatus,
     ServiceNavigationSourceInfo,
     ServiceRfLockStatus,
     ServiceSlowState,
@@ -104,6 +105,21 @@ _SNR_MAX_RATE_HZ = 20
 _SNR_HISTORY_CAPACITY = int(_SNR_HISTORY_SECONDS * _SNR_MAX_RATE_HZ) + _SNR_MAX_RATE_HZ
 
 
+@dataclass(frozen=True)
+class ProductTelemetryCursor:
+    """One Product telemetry stream position inside an explicit data epoch.
+
+    ``generation`` proves a record arrived after a captured cursor, while the
+    device timestamp distinguishes a genuinely later measurement from a UDP
+    duplicate or out-of-order record.  ``epoch`` advances only when the session
+    owner clears connection-scoped Product state.
+    """
+
+    epoch: int
+    generation: int
+    timestamp_ms: Optional[int]
+
+
 class ProductServiceStore(QObject):
     """Keep the newest product records and expose one canonical snapshot."""
 
@@ -128,7 +144,15 @@ class ProductServiceStore(QObject):
         self._rf_lock_status: Optional[ServiceRfLockStatus] = None
         self._components: Optional[ServiceComponentHealth] = None
         self._capabilities: Optional[ServiceCapabilities] = None
+        self._mount_status: Optional[ServiceMountStatus] = None
         self._received: dict[str, float] = {}
+        self._telemetry_epoch = 0
+        self._fast_telemetry_generation = 0
+        self._slow_telemetry_generation = 0
+        self._mount_status_generation = 0
+        self._identity_generation = 0
+        self._hardware_identity_generation = 0
+        self._navigation_source_generation = 0
         self._snr_history: deque[tuple[int, float]] = deque(
             maxlen=_SNR_HISTORY_CAPACITY
         )
@@ -147,12 +171,105 @@ class ProductServiceStore(QObject):
             or self._link_detail is not None
             or self._rf_lock_status is not None
             or self._components is not None
+            or self._mount_status is not None
         )
 
     @property
     def telemetry_ready(self) -> bool:
         """快速遥测已经到达，可作为订阅生效证据。"""
         return self._fast is not None
+
+    @property
+    def telemetry_epoch(self) -> int:
+        """Return the connection-scoped Product telemetry epoch."""
+
+        return self._telemetry_epoch
+
+    @property
+    def fast_telemetry_generation(self) -> int:
+        """Monotonic generation of received FAST_STATE telemetry."""
+        return self._fast_telemetry_generation
+
+    @property
+    def fast_telemetry_cursor(self) -> ProductTelemetryCursor:
+        """Return the current FAST_STATE proof position."""
+
+        return ProductTelemetryCursor(
+            self._telemetry_epoch,
+            self._fast_telemetry_generation,
+            None if self._fast is None else int(self._fast.timestamp),
+        )
+
+    @property
+    def slow_telemetry_generation(self) -> int:
+        """Monotonic generation of received SLOW_STATE telemetry."""
+        return self._slow_telemetry_generation
+
+    @property
+    def slow_telemetry_cursor(self) -> ProductTelemetryCursor:
+        """Return the current SLOW_STATE proof position."""
+
+        return ProductTelemetryCursor(
+            self._telemetry_epoch,
+            self._slow_telemetry_generation,
+            None if self._slow is None else int(self._slow.timestamp),
+        )
+
+    @property
+    def mount_status_generation(self) -> int:
+        """Monotonic generation of received mount status records."""
+
+        return self._mount_status_generation
+
+    @property
+    def mount_status_cursor(self) -> ProductTelemetryCursor:
+        """Return the current mount-status proof position."""
+
+        return ProductTelemetryCursor(
+            self._telemetry_epoch,
+            self._mount_status_generation,
+            (
+                None
+                if self._mount_status is None
+                else int(self._mount_status.timestamp)
+            ),
+        )
+
+    @property
+    def identity_generation(self) -> int:
+        """Monotonic generation of product identity records."""
+
+        return self._identity_generation
+
+    @property
+    def hardware_identity_generation(self) -> int:
+        """Monotonic generation of hardware identity records."""
+
+        return self._hardware_identity_generation
+
+    @property
+    def navigation_source_generation(self) -> int:
+        """Monotonic generation of navigation-source configuration records."""
+
+        return self._navigation_source_generation
+
+    @property
+    def service_protocol(self) -> Optional[int]:
+        """Return the device-declared Product Service version when it is valid."""
+        identity = self._identity
+        if identity is None or not (identity.valid_mask & (1 << 4)):
+            return None
+        return int(identity.protocol_version)
+
+    @property
+    def product_identity(self) -> Optional[str]:
+        """Return the device-declared product model when its valid bit is set."""
+
+        identity = self._identity
+        if identity is None or not (identity.valid_mask & (1 << 0)):
+            return None
+        model = identity.model.strip()
+        return model or None
 
     @property
     def has_snr_stream(self) -> bool:
@@ -163,10 +280,17 @@ class ProductServiceStore(QObject):
         return self._capabilities
 
     @property
+    def mount_status_record(self) -> Optional[ServiceMountStatus]:
+        """Return the current connection's authoritative mount status."""
+
+        return self._mount_status
+
+    @property
     def slow_state_record(self) -> Optional[ServiceSlowState]:
         return self._slow
 
     def clear(self) -> None:
+        self._telemetry_epoch += 1
         self._identity = None
         self._hardware_identity = None
         self._navigation_source = None
@@ -177,6 +301,7 @@ class ProductServiceStore(QObject):
         self._rf_lock_status = None
         self._components = None
         self._capabilities = None
+        self._mount_status = None
         self._received.clear()
         self._snr_history.clear()
         self._snr_timestamp.reset()
@@ -191,12 +316,15 @@ class ProductServiceStore(QObject):
         key = ""
         if isinstance(record, ServiceIdentity):
             self._identity = record
+            self._identity_generation += 1
             key = "identity"
         elif isinstance(record, ServiceHardwareIdentity):
             self._hardware_identity = record
+            self._hardware_identity_generation += 1
             key = "hardware_identity"
         elif isinstance(record, ServiceNavigationSourceInfo):
             self._navigation_source = record
+            self._navigation_source_generation += 1
             key = "navigation_source"
         elif isinstance(record, ServiceExternalInsDiagnostics):
             self._external_ins = record
@@ -204,6 +332,7 @@ class ProductServiceStore(QObject):
         elif isinstance(record, ServiceFastState):
             self._fast = record
             key = "fast"
+            self._fast_telemetry_generation += 1
             if record.valid_mask & (1 << 11):
                 timestamp = self._snr_timestamp.add(record.timestamp)
                 if timestamp is not None:
@@ -214,6 +343,7 @@ class ProductServiceStore(QObject):
         elif isinstance(record, ServiceSlowState):
             self._slow = record
             key = "slow"
+            self._slow_telemetry_generation += 1
         elif isinstance(record, ServiceLinkDetail):
             self._link_detail = record
             key = "link_detail"
@@ -226,6 +356,10 @@ class ProductServiceStore(QObject):
         elif isinstance(record, ServiceCapabilities):
             self._capabilities = record
             key = "capabilities"
+        elif isinstance(record, ServiceMountStatus):
+            self._mount_status = record
+            self._mount_status_generation += 1
+            key = "mount_status"
         elif isinstance(record, ServiceControlResponse):
             self.control_response.emit(record)
             return True

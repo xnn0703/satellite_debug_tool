@@ -22,6 +22,7 @@ from satellite_debug_tool.ui.live_view import (
     DISCOVERY_SLOW_INTERVAL_MS,
     LiveView,
 )
+from satellite_debug_tool.core.session import SUBSCRIPTION_KEEPALIVE_INTERVAL_MS
 
 
 class _WorkerDouble:
@@ -123,7 +124,7 @@ def test_exact_subscribe_response_confirms_product_subscription(
         1,
         request_id,
         ServiceControlOp.SUBSCRIBE,
-        ServiceResultCode.SUCCESS,
+        ServiceResultCode.ACCEPTED,
         0,
         0,
         0.0,
@@ -134,8 +135,10 @@ def test_exact_subscribe_response_confirms_product_subscription(
     ))
 
     assert view._product_subscription_confirmed
-    assert not view._product_subscribe_timer.isActive()
+    assert view._product_subscribe_timer.isActive()
+    assert view._product_subscribe_timer.interval() == SUBSCRIPTION_KEEPALIVE_INTERVAL_MS
     view._on_disconnected()
+    assert not view._product_subscribe_timer.isActive()
 
 
 def test_fast_telemetry_confirms_product_subscription(
@@ -149,8 +152,10 @@ def test_fast_telemetry_confirms_product_subscription(
     ))
 
     assert view._product_subscription_confirmed
-    assert not view._product_subscribe_timer.isActive()
+    assert view._product_subscribe_timer.isActive()
+    assert view._product_subscribe_timer.interval() == SUBSCRIPTION_KEEPALIVE_INTERVAL_MS
     view._on_disconnected()
+    assert not view._product_subscribe_timer.isActive()
 
 
 def test_online_timeout_keeps_transport_and_reconnects(

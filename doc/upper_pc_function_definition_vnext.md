@@ -1,4 +1,9 @@
-# 上位机功能定义 vNext
+# 上位机功能定义 vNext（历史路线基线）
+
+> **历史定位（2026-08-30）**：本文最初形成于 M7–M16，并在后续迭代中混入部分 M18 内容，
+> 因此不再作为当前架构、产品注册或交付范围的权威来源。当前工程约定与架构以根目录
+> `AGENTS.md` 为准；AFD01C 当前交付边界见 `M22_AFD01C_upper_pc_adaptation_acceptance.md`。
+> 文内“当前”“下一阶段”和待决项只表示相应段落形成时的历史语境，不得据此覆盖现行代码、协议或里程碑验收。
 
 ## 0. 文档定位
 
@@ -7,10 +12,10 @@
 | 日期 | 2026-08-24 |
 | 适用项目 | `satellite_debug_tool` |
 | 适用协议 | DEBUG protocol v2 |
-| 当前定位 | 当前产品功能定义 + 后续优化路线 |
+| 当前定位 | 已冻结的历史功能定义与优化路线，不作为当前事实入口 |
 | 历史关系 | `optimization_plan.md` 保留为 M1-M6 历史蓝图 |
 
-本文件用于回答两个问题：
+本文件保留当时用于回答的两个问题：
 
 1. 当前上位机到底已经定义成什么产品。
 2. 下一阶段优化应补哪些边界、语义和验收闭环。
@@ -308,7 +313,9 @@ vNext 应补 profile 语义层，方向是协议 v2.x 或 profile cache schema �
 
 | 文档 | 定位 |
 |------|------|
-| `doc/upper_pc_function_definition_vnext.md` | 当前功能定义与后续路线 |
+| `doc/upper_pc_function_definition_vnext.md` | M7–M16 历史功能定义与路线基线 |
+| `AGENTS.md` | 当前工程约定与架构的唯一权威入口 |
+| `doc/M22_AFD01C_upper_pc_adaptation_acceptance.md` | 当前 AFD01C 交付证据与未完成边界 |
 | `doc/optimization_plan.md` | M1-M6 历史优化蓝图 |
 | `doc/acceptance_log.md` | M1-M6 及后续验收状态跟踪 |
 | `doc/M7_plan.md` ~ `doc/M12_plan.md` | 各里程碑局部计划 |
@@ -317,9 +324,9 @@ vNext 应补 profile 语义层，方向是协议 v2.x 或 profile cache schema �
 | `doc/user_manual.md` | 用户操作手册 |
 | `doc/RELEASING.md` | 发版流程 |
 
-## 8. 需要用户决策的问题
+## 8. 历史待决问题
 
-当前没有阻塞本次文档开发的问题。后续进入 M13/M16 前，需要用户确认：
+以下问题记录的是本文形成时的 M13/M16 路线输入，已不代表当前阻塞项；其实际结论应以对应里程碑、现行代码和 `AGENTS.md` 为准：
 
 - profile 语义扩展是否允许同步修改下位机协议/profile。
 - CSV 是否仍是产品需求，还是只保留 SDB v2。

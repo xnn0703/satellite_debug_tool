@@ -11,6 +11,7 @@ from satellite_debug_tool.core.production import (
     ProductionRecipe,
     RecipeValidationError,
 )
+from satellite_debug_tool.core.product import production_recipe_product_policy
 
 
 def valid_recipe(*, duration_s: int = 3600) -> dict:
@@ -99,6 +100,38 @@ def test_recipe_hash_is_independent_of_key_order() -> None:
 def test_short_recipe_is_explicitly_engineering_only() -> None:
     recipe = ProductionRecipe.from_mapping(valid_recipe(duration_s=30))
     assert recipe.engineering_only
+
+
+def test_afd01c_recipe_is_an_explicit_product_contract() -> None:
+    payload = valid_recipe()
+    payload["recipe_id"] = "AFD01C-PILOT-R1"
+    payload["product"] = "afd01c"
+
+    recipe = ProductionRecipe.from_mapping(payload)
+
+    assert recipe.product == "afd01c"
+
+
+def test_recipe_product_is_persisted_as_the_registered_canonical_value() -> None:
+    payload = valid_recipe()
+    payload["recipe_id"] = "AFD01C-PILOT-R1"
+    payload["product"] = "  AFD01C  "
+
+    recipe = ProductionRecipe.from_mapping(payload)
+
+    assert recipe.product == "afd01c"
+    assert recipe.payload["product"] == "afd01c"
+
+    canonical_payload = valid_recipe()
+    canonical_payload["recipe_id"] = "AFD01C-PILOT-R1"
+    canonical_payload["product"] = "afd01c"
+    assert recipe.sha256 == ProductionRecipe.from_mapping(canonical_payload).sha256
+
+
+def test_recipe_products_are_resolved_from_the_registered_policy() -> None:
+    assert production_recipe_product_policy("AFD01") is not None
+    assert production_recipe_product_policy("AFD01C") is not None
+    assert production_recipe_product_policy("ESA01") is None
 
 
 def test_recipe_snapshot_is_canonical_and_immutable(tmp_path: Path) -> None:

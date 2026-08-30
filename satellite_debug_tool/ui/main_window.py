@@ -188,9 +188,6 @@ class MainWindow(QMainWindow):
         device.debug_mode_requested.connect(self._live.request_debug_mode)
         self._live.debug_request_finished.connect(device.on_debug_request_finished)
         self._live.debug_state_changed.connect(device.set_debug_state)
-        device.device_transaction_active_changed.connect(
-            self._live.set_device_transaction_active
-        )
         device.set_debug_state(self._live.is_debug_enabled())
         self._device = device
         return device

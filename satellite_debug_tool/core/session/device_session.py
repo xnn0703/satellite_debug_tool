@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from threading import Lock
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, Signal
@@ -15,12 +17,18 @@ from satellite_debug_tool.core.data import (
     TelemetrySeriesStore,
 )
 from satellite_debug_tool.core.product import (
+    Availability,
+    CustomerServiceState,
     LegacyV2Projector,
     ProductServiceStore,
     ProductSnapshot,
     ProductSnapshotResolver,
+    customer_service_state,
+    verified_device_uid,
+    verified_identity_text,
 )
 from satellite_debug_tool.core.profile import ProfileCache, ProfileStore
+from satellite_debug_tool.core.security import device_firmware_versions_equal
 from satellite_debug_tool.core.protocol import (
     CommandResponse,
     DataReport,
@@ -42,6 +50,91 @@ DeviceEndpoint = tuple[str, int]
 Sender = Callable[[bytes], object]
 
 
+@dataclass(frozen=True)
+class DeviceSessionScope:
+    """Identity facts that authorize one user-confirmed device operation."""
+
+    generation: int
+    endpoint: Optional[DeviceEndpoint]
+    hardware_type: str
+    debug_serial_number: str
+    debug_firmware: str
+    product_identity: str
+    product_serial_number: str
+    product_device_uid: str
+    product_firmware: str
+
+    @property
+    def immutable_identity_facts(self) -> tuple[tuple[str, str], ...]:
+        """Immutable identifiers that were actually proved for this device."""
+
+        facts = (
+            ("debug_serial_number", verified_identity_text(self.debug_serial_number)),
+            ("product_serial_number", verified_identity_text(self.product_serial_number)),
+            ("product_device_uid", verified_device_uid(self.product_device_uid)),
+        )
+        return tuple((name, value) for name, value in facts if value)
+
+    @property
+    def has_immutable_identity(self) -> bool:
+        """Whether at least one immutable identifier can bind an operation."""
+
+        return bool(self.immutable_identity_facts)
+
+    @property
+    def identity_facts_consistent(self) -> bool:
+        """Whether Debug and Product Service agree on the production serial."""
+
+        debug_serial = verified_identity_text(self.debug_serial_number)
+        product_serial = verified_identity_text(self.product_serial_number)
+        return bool(
+            not debug_serial
+            or not product_serial
+            or debug_serial.casefold() == product_serial.casefold()
+        )
+
+    @property
+    def product_identity_facts(self) -> tuple[tuple[str, str], ...]:
+        """Product Service identifiers suitable for cross-reboot operations."""
+
+        return tuple(
+            (name, value)
+            for name, value in self.immutable_identity_facts
+            if name in {"product_serial_number", "product_device_uid"}
+        )
+
+    @property
+    def has_product_identity(self) -> bool:
+        """Whether Product Service proved a serial number or MCU UID."""
+
+        return bool(self.product_identity_facts)
+
+    @property
+    def firmware_facts(self) -> tuple[tuple[str, str], ...]:
+        """Firmware versions captured from each available protocol source."""
+
+        facts = (
+            ("debug_firmware", str(self.debug_firmware).strip()),
+            ("product_firmware", str(self.product_firmware).strip()),
+        )
+        return tuple((name, value) for name, value in facts if value)
+
+    @property
+    def firmware_facts_consistent(self) -> bool:
+        """Whether Debug and Product Service agree when both report firmware."""
+
+        values = tuple(value for _name, value in self.firmware_facts)
+        if len(values) < 2:
+            return True
+        try:
+            return all(
+                device_firmware_versions_equal(values[0], value)
+                for value in values[1:]
+            )
+        except ValueError:
+            return False
+
+
 class DeviceSessionCore(QObject):
     """Own the parser, handshake, stores, and connection generation.
 
@@ -58,6 +151,7 @@ class DeviceSessionCore(QObject):
     link_restored = Signal()
     connection_changed = Signal(bool)
     generation_changed = Signal(int, object)
+    device_transaction_changed = Signal(bool)
 
     def __init__(
         self,
@@ -95,6 +189,8 @@ class DeviceSessionCore(QObject):
         self._sender: Sender | None = None
         self._connected = False
         self._request_id = 0
+        self._device_transaction_lock = Lock()
+        self._device_transaction_owner: object | None = None
 
     @staticmethod
     def normalize_endpoint(endpoint: DeviceEndpoint) -> DeviceEndpoint:
@@ -109,14 +205,25 @@ class DeviceSessionCore(QObject):
         return self._connected
 
     def bind_endpoint(self, endpoint: DeviceEndpoint) -> None:
-        self.endpoint = self.normalize_endpoint(endpoint)
+        normalized = self.normalize_endpoint(endpoint)
+        if self._connected and self.endpoint is not None and normalized != self.endpoint:
+            raise ValueError("connected endpoint changes require begin_connection")
+        self.endpoint = normalized
 
     def attach_transport(
         self,
         transport: object,
         sender: Sender,
     ) -> None:
-        """Attach an already-established transport without starting a new epoch."""
+        """Attach a transport; replacing a live transport starts a new epoch."""
+
+        if self._connected and self.transport is not None and transport is not self.transport:
+            self.begin_connection(
+                transport=transport,
+                sender=sender,
+                handshake_enabled=False,
+            )
+            return
         self.transport = transport
         self._sender = sender
         self._set_connected(True)
@@ -130,10 +237,11 @@ class DeviceSessionCore(QObject):
         handshake_enabled: bool = True,
     ) -> int:
         if endpoint is not None:
-            self.bind_endpoint(endpoint)
+            self.endpoint = self.normalize_endpoint(endpoint)
         self.transport = transport
         self._sender = sender
         self.generation += 1
+        self._clear_device_transaction()
         self.receiver.reset()
         self.clear_runtime_state()
         self.product_snapshot_resolver.reset()
@@ -154,6 +262,7 @@ class DeviceSessionCore(QObject):
         self.transport = None
         self._sender = None
         self._set_connected(False)
+        self._clear_device_transaction()
 
     def reset_stream(self) -> None:
         self.receiver.reset()
@@ -178,6 +287,60 @@ class DeviceSessionCore(QObject):
         sender = self._sender
         return bool(sender(frame)) if sender is not None else False
 
+    @property
+    def device_transaction_active(self) -> bool:
+        """Whether one device-level command transaction currently owns the link."""
+
+        with self._device_transaction_lock:
+            return self._device_transaction_owner is not None
+
+    def device_transaction_available(self, owner: object | None = None) -> bool:
+        """Return whether ``owner`` may synchronously claim the device transaction."""
+
+        with self._device_transaction_lock:
+            current = self._device_transaction_owner
+            return current is None or (owner is not None and current is owner)
+
+    def try_acquire_device_transaction(self, owner: object) -> bool:
+        """Atomically claim the single device transaction for an opaque owner token."""
+
+        if owner is None:
+            raise ValueError("device transaction owner must not be None")
+        changed = False
+        with self._device_transaction_lock:
+            current = self._device_transaction_owner
+            if current is not None and current is not owner:
+                return False
+            if current is None:
+                self._device_transaction_owner = owner
+                changed = True
+        if changed:
+            self.device_transaction_changed.emit(True)
+        return True
+
+    def release_device_transaction(self, owner: object) -> bool:
+        """Release the transaction only when ``owner`` is the current authority."""
+
+        with self._device_transaction_lock:
+            if self._device_transaction_owner is not owner:
+                return False
+            self._device_transaction_owner = None
+        try:
+            self.device_transaction_changed.emit(False)
+        except RuntimeError:
+            # Qt may destroy the session before a child controller's destroyed hook runs.
+            pass
+        return True
+
+    def _clear_device_transaction(self) -> None:
+        """Release every operation lease when its connection authority ends."""
+
+        with self._device_transaction_lock:
+            if self._device_transaction_owner is None:
+                return
+            self._device_transaction_owner = None
+        self.device_transaction_changed.emit(False)
+
     def request_meta_info(self) -> bool:
         """Request the canonical device identity and firmware metadata."""
 
@@ -191,6 +354,56 @@ class DeviceSessionCore(QObject):
 
     def product_snapshot(self) -> ProductSnapshot:
         return self.product_snapshot_resolver.snapshot()
+
+    def customer_service_state(self) -> CustomerServiceState:
+        """Expose the registered Product Service state for customer presentation."""
+        return customer_service_state(
+            hardware_type=self.profile_store.current_hw_type(),
+            product_identity=self.product_store.product_identity,
+            service_protocol=self.product_store.service_protocol,
+            capabilities=self.product_store.capabilities_record,
+            connected=self.connected,
+            telemetry_ready=self.product_store.telemetry_ready,
+        )
+
+    def device_scope(self) -> DeviceSessionScope:
+        """Capture the current connection and every available identity fact."""
+
+        meta = self.meta_info
+        identity = self.product_store.snapshot().identity
+
+        def valid_text(value) -> str:
+            if value.availability != Availability.VALID or value.value is None:
+                return ""
+            return str(value.value).strip()
+
+        hardware = (
+            str(meta.hw_type).strip().lower()
+            if meta is not None and meta.hw_type
+            else str(self.profile_store.current_hw_type() or "").strip().lower()
+        )
+        return DeviceSessionScope(
+            generation=int(self.generation),
+            endpoint=self.endpoint,
+            hardware_type=hardware,
+            debug_serial_number=(
+                str(meta.device_sn).strip() if meta is not None else ""
+            ),
+            debug_firmware=str(meta.fw_ver).strip() if meta is not None else "",
+            product_identity=valid_text(identity.model).lower(),
+            product_serial_number=valid_text(identity.serial_number),
+            product_device_uid=valid_text(identity.device_uid),
+            product_firmware=valid_text(identity.main_firmware),
+        )
+
+    def operation_scope_matches(self, scope: DeviceSessionScope) -> bool:
+        """Prove the same online connection, identity, and firmware facts."""
+
+        return bool(
+            self.connected
+            and isinstance(scope, DeviceSessionScope)
+            and self.device_scope() == scope
+        )
 
     def feed_bytes(
         self,

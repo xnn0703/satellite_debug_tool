@@ -29,12 +29,12 @@ class TestProtocolConstants:
 
     def test_cmd_values_match_spec(self):
         # 规范 §4：通用 Debug/GNSS 使用 0x01–0x10；AFD01 产品服务
-        # 使用独立连续区间 0x20–0x2B，避免与旧设备扩展冲突。
+        # 使用独立连续区间 0x20–0x2C，避免与旧设备扩展冲突。
         debug_values = [int(cmd) for cmd in CmdType if int(cmd) < 0x20]
         service_values = [int(cmd) for cmd in CmdType if 0x20 <= int(cmd) < 0x30]
         orbit_values = [int(cmd) for cmd in CmdType if int(cmd) >= 0x30]
         assert all(0x01 <= value <= 0x10 for value in debug_values)
-        assert service_values == list(range(0x20, 0x2C))
+        assert service_values == list(range(0x20, 0x2D))
         assert orbit_values == [0x30, 0x31]
 
     def test_subcmd_values_match_spec(self):

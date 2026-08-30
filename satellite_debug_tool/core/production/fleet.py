@@ -17,6 +17,12 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from satellite_debug_tool.core.product import (
+    product_identity_matches,
+    production_product_policy,
+    verified_device_uid,
+    verified_identity_text,
+)
 from satellite_debug_tool.core.protocol import (
     FrameReceiverV2,
     ServiceFastState,
@@ -42,6 +48,7 @@ class FleetConfigurationError(ValueError):
 
 class DeviceSessionState(str, Enum):
     DISCOVERED = "discovered"
+    IDENTITY_PENDING = "identity_pending"
     IDENTIFIED = "identified"
     CONFLICT = "conflict"
     UNSUPPORTED = "unsupported"
@@ -73,6 +80,32 @@ class FleetHubStatistics:
     ignored_datagrams: int = 0
     send_failures: int = 0
     receive_failures: int = 0
+
+
+def _production_identity_state(
+    identity: ServiceIdentity,
+) -> DeviceSessionState:
+    """Classify one declared product without conflating support and missing SN."""
+
+    model = identity.model.strip() if identity.valid_mask & (1 << 0) else ""
+    policy = production_product_policy(model)
+    if not product_identity_matches(policy, model):
+        return DeviceSessionState.UNSUPPORTED
+    if (
+        not (identity.valid_mask & (1 << 4))
+        or int(identity.protocol_version) not in policy.supported_service_protocols
+    ):
+        return DeviceSessionState.UNSUPPORTED
+    serial = (
+        verified_identity_text(identity.serial_number)
+        if identity.valid_mask & (1 << 1)
+        else ""
+    )
+    return (
+        DeviceSessionState.IDENTIFIED
+        if serial
+        else DeviceSessionState.IDENTITY_PENDING
+    )
 
 
 class UdpFleetHub(QThread):
@@ -322,7 +355,8 @@ class DeviceSession(QObject):
         )
         self.receiver = self.core.receiver
         self.product_store = self.core.product_store
-        self.state = DeviceSessionState.DISCOVERED
+        self._identity_state = DeviceSessionState.DISCOVERED
+        self._identity_conflict = False
         self.identity: Optional[ServiceIdentity] = None
         self.hardware_identity: Optional[ServiceHardwareIdentity] = None
         self.last_seen_monotonic_ns = 0
@@ -342,7 +376,20 @@ class DeviceSession(QObject):
         identity = self.identity
         if identity is None or not (identity.valid_mask & (1 << 1)):
             return ""
-        return identity.serial_number.strip()
+        return verified_identity_text(identity.serial_number)
+
+    @property
+    def state(self) -> DeviceSessionState:
+        """Return the single reduced production identity state.
+
+        Identity conflicts are session-lifetime evidence.  A later identity
+        report may refresh timestamps or fields, but cannot make that evidence
+        disappear without creating a new session.
+        """
+
+        if self._identity_conflict:
+            return DeviceSessionState.CONFLICT
+        return self._identity_state
 
     @property
     def hardware_type(self) -> str:
@@ -356,7 +403,7 @@ class DeviceSession(QObject):
         identity = self.hardware_identity
         if identity is None or not (identity.valid_mask & (1 << 0)):
             return ""
-        return identity.device_uid
+        return verified_device_uid(identity.device_uid)
 
     @property
     def mac_address(self) -> str:
@@ -426,7 +473,9 @@ class DeviceSession(QObject):
     def arm_recording(self, batch_id: str, output_root: str | Path) -> bool:
         if self.recording_armed:
             if self._recording_batch_id != str(batch_id):
-                raise RuntimeError("session is already recording another batch")
+                raise RuntimeError(
+                    "device evidence recording already belongs to another batch"
+                )
             return True
         root = Path(output_root).expanduser().resolve()
         staging = root / "_staging"
@@ -516,10 +565,7 @@ class DeviceSession(QObject):
             if isinstance(item, ServiceIdentity):
                 changed = item != self.identity
                 self.identity = item
-                if self.hardware_type.lower() == "afd01" and self.serial_number:
-                    self.state = DeviceSessionState.IDENTIFIED
-                else:
-                    self.state = DeviceSessionState.UNSUPPORTED
+                self._identity_state = _production_identity_state(item)
                 if self._recorder is not None:
                     self._recorder.write_metadata_event(
                         {
@@ -580,7 +626,7 @@ class DeviceSession(QObject):
         return old_endpoint
 
     def mark_conflict(self) -> None:
-        self.state = DeviceSessionState.CONFLICT
+        self._identity_conflict = True
         self.updated.emit(self)
 
     def finalize_recording(self) -> Optional[Path]:
@@ -690,14 +736,34 @@ class FleetController(QObject):
         return recordings
 
     def arm_batch_recording(self, batch_id: str, output_root: str | Path) -> bool:
-        if self._recording_batch_id and self._recording_batch_id != str(batch_id):
-            raise RuntimeError("fleet is already armed for another batch")
-        self._recording_batch_id = str(batch_id)
+        normalized_batch_id = str(batch_id)
+        if (
+            self._recording_batch_id
+            and self._recording_batch_id != normalized_batch_id
+        ):
+            raise RuntimeError(
+                "fleet evidence recording already belongs to another batch"
+            )
+        conflicting = tuple(
+            session.serial_number or f"{session.endpoint[0]}:{session.endpoint[1]}"
+            for session in self.sessions()
+            if session.recording_armed
+            and session._recording_batch_id != normalized_batch_id
+        )
+        if conflicting:
+            raise RuntimeError(
+                "device evidence recording already belongs to another batch: "
+                + ", ".join(conflicting)
+            )
+        self._recording_batch_id = normalized_batch_id
         self._recording_root = Path(output_root).expanduser().resolve()
         self._recording_participant_keys = None
         success = True
         for session in self.sessions():
-            success = session.arm_recording(batch_id, self._recording_root) and success
+            success = (
+                session.arm_recording(normalized_batch_id, self._recording_root)
+                and success
+            )
         return success
 
     def freeze_batch_participants(
@@ -707,7 +773,7 @@ class FleetController(QObject):
         """Keep evidence recording only for the frozen batch participants."""
 
         if not self._recording_batch_id or self._recording_root is None:
-            raise RuntimeError("fleet recording is not armed for a batch")
+            raise RuntimeError("batch evidence recording has not been created")
         keys = tuple(str(value).strip() for value in participant_identity_keys)
         if not (1 <= len(keys) <= self._max_devices) or any(not value for value in keys):
             raise ValueError("one to four participant identity keys are required")
@@ -722,13 +788,16 @@ class FleetController(QObject):
         missing = [value for value in keys if value not in sessions_by_key]
         if missing:
             raise RuntimeError("unknown participant identity: " + ", ".join(missing))
-        unarmed = [
+        recording_pending = [
             sessions_by_key[value].serial_number or value
             for value in keys
             if not sessions_by_key[value].recording_armed
         ]
-        if unarmed:
-            raise RuntimeError("participant recording is not armed: " + ", ".join(unarmed))
+        if recording_pending:
+            raise RuntimeError(
+                "participant evidence recording is not ready: "
+                + ", ".join(recording_pending)
+            )
 
         frozen = frozenset(keys)
         excluded_recordings: dict[Endpoint, Optional[Path]] = {}
@@ -786,12 +855,12 @@ class FleetController(QObject):
             if identity is None and hardware_identity is None:
                 return
             serial = (
-                identity.serial_number.strip()
+                verified_identity_text(identity.serial_number)
                 if identity is not None and identity.valid_mask & (1 << 1)
                 else ""
             )
             uid = (
-                hardware_identity.device_uid
+                verified_device_uid(hardware_identity.device_uid)
                 if hardware_identity is not None
                 and hardware_identity.valid_mask & (1 << 0)
                 else ""
@@ -814,7 +883,10 @@ class FleetController(QObject):
             existing = next(iter(candidates), None)
             if (
                 existing is not None
-                and existing.state == DeviceSessionState.IDENTIFIED
+                and existing.state in {
+                    DeviceSessionState.IDENTIFIED,
+                    DeviceSessionState.IDENTITY_PENDING,
+                }
                 and not existing.is_online(now_monotonic_ns=datagram.monotonic_ns)
             ):
                 old_endpoint = existing.rebind_endpoint(
@@ -851,8 +923,10 @@ class FleetController(QObject):
                 if session is None:
                     return
         if decoded_records is None:
+            self._ensure_batch_evidence_recording(session)
             session.feed_datagram(datagram)
         else:
+            self._ensure_batch_evidence_recording(session)
             session.feed_decoded_datagram(datagram, decoded_records)
         if session.state == DeviceSessionState.IDENTIFIED:
             self._subscribe_session(datagram.endpoint)
@@ -895,19 +969,26 @@ class FleetController(QObject):
         session.updated.connect(self.session_updated)
         session.recording_changed.connect(self.session_updated)
         self._sessions[datagram.endpoint] = session
-        if (
-            self._recording_batch_id
-            and self._recording_root is not None
-            and self._recording_participant_keys is None
-        ):
-            if not session.arm_recording(
-                self._recording_batch_id, self._recording_root
-            ):
-                self.error.emit(
-                    f"cannot arm recording for {datagram.endpoint[0]}:{datagram.endpoint[1]}"
-                )
         self.session_added.emit(session)
         return session
+
+    def _ensure_batch_evidence_recording(self, session: DeviceSession) -> bool:
+        """Keep retrying the READY-batch recording prerequisite on live input."""
+
+        if (
+            not self._recording_batch_id
+            or self._recording_root is None
+            or self._recording_participant_keys is not None
+            or session.recording_armed
+        ):
+            return True
+        if session.arm_recording(self._recording_batch_id, self._recording_root):
+            return True
+        self.error.emit(
+            "cannot create evidence recording for "
+            f"{session.endpoint[0]}:{session.endpoint[1]}"
+        )
+        return False
 
     def _subscribe_session(self, endpoint: Endpoint) -> None:
         """Raise only an accepted device from discovery rate to capture rate."""
@@ -930,10 +1011,8 @@ class FleetController(QObject):
         identity: ServiceIdentity,
     ) -> None:
         serial = session.serial_number
-        model = session.hardware_type
         old_serial = self._serial_for_endpoint.get(session.endpoint, "")
-        if model.lower() != "afd01" or not serial:
-            session.state = DeviceSessionState.UNSUPPORTED
+        if session.state != DeviceSessionState.IDENTIFIED:
             self.session_updated.emit(session)
             return
         if old_serial and old_serial != serial:
@@ -958,7 +1037,6 @@ class FleetController(QObject):
             return
         self._serial_for_endpoint[session.endpoint] = serial
         self._sessions_by_serial[serial] = session
-        session.state = DeviceSessionState.IDENTIFIED
         self.session_updated.emit(session)
 
     def _on_session_hardware_identity(

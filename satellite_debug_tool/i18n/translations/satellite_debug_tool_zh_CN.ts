@@ -5,7 +5,7 @@
     <name></name>
     <message>
         <location filename="../../ui/main_window.py" line="111"/>
-        <location filename="../../ui/main_window.py" line="247"/>
+        <location filename="../../ui/main_window.py" line="244"/>
         <source>Live</source>
         <translation>实时</translation>
     </message>
@@ -17,73 +17,79 @@
     <message>
         <location filename="../../ui/customer_workspace.py" line="88"/>
         <location filename="../../ui/main_window.py" line="112"/>
-        <location filename="../../ui/main_window.py" line="248"/>
+        <location filename="../../ui/main_window.py" line="245"/>
         <source>Playback</source>
         <translation>回放</translation>
     </message>
     <message>
+        <location filename="../../ui/customer_workspace.py" line="148"/>
+        <location filename="../../ui/customer_workspace.py" line="288"/>
+        <source>Product operation</source>
+        <translation>产品操作</translation>
+    </message>
+    <message>
         <location filename="../../ui/main_window.py" line="50"/>
-        <location filename="../../ui/main_window.py" line="575"/>
+        <location filename="../../ui/main_window.py" line="572"/>
         <source>SoftHertz Phased-Array Terminal Tool</source>
         <translation>软赫卫星通信相控阵设备调试系统</translation>
     </message>
     <message>
         <location filename="../../ui/main_window.py" line="114"/>
-        <location filename="../../ui/main_window.py" line="250"/>
+        <location filename="../../ui/main_window.py" line="247"/>
         <source>Device</source>
         <translation>设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="233"/>
-        <location filename="../../ui/main_window.py" line="576"/>
+        <location filename="../../ui/main_window.py" line="230"/>
+        <location filename="../../ui/main_window.py" line="573"/>
         <source>SoftHertz</source>
         <translation>软赫 · SoftHertz</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="274"/>
+        <location filename="../../ui/main_window.py" line="271"/>
         <source>Cycle theme: dark → high contrast → light</source>
         <translation>循环切换主题：深色 → 高对比 → 浅色</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="277"/>
+        <location filename="../../ui/main_window.py" line="274"/>
         <location filename="../../ui/update_dialog.py" line="212"/>
         <source>Check for updates</source>
         <translation>检查更新</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="281"/>
+        <location filename="../../ui/main_window.py" line="278"/>
         <source>Check for and download the latest version (startup checks can be configured in Settings)</source>
         <translation>手动检查并下载最新版本（启动检查可在设置中配置）</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="290"/>
+        <location filename="../../ui/main_window.py" line="287"/>
         <source>Configure default folders, updates, and language</source>
         <translation>配置默认目录、更新和语言</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="355"/>
+        <location filename="../../ui/main_window.py" line="352"/>
         <source>Engineering diagnostics</source>
         <translation>工程诊断</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="357"/>
+        <location filename="../../ui/main_window.py" line="354"/>
         <source>Engineering diagnostics expose internal channels and device controls. Open them for this session?</source>
         <translation>工程诊断会显示内部通道和设备控制。是否在本次运行中打开？</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="381"/>
-        <location filename="../../ui/production_workspace.py" line="253"/>
-        <location filename="../../ui/production_workspace.py" line="1386"/>
+        <location filename="../../ui/main_window.py" line="378"/>
+        <location filename="../../ui/production_workspace.py" line="254"/>
+        <location filename="../../ui/production_workspace.py" line="1467"/>
         <source>Production batch test</source>
         <translation>小批试产测试</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="383"/>
+        <location filename="../../ui/main_window.py" line="380"/>
         <source>M19-A is an engineering-preview evidence capture workspace. It does not execute the complete formal production-release workflow. Open it for this session?</source>
         <translation>M19-A 是工程预览版证据采集工作区，不执行完整的正式试产放行流程。是否在本次会话中打开？</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="615"/>
+        <location filename="../../ui/main_window.py" line="612"/>
         <source>New version {latest} is available (current: v{current}). Use Check for updates to install it.</source>
         <translation>发现新版本 {latest}（当前 v{current}）。请使用“检查更新”进行安装。</translation>
     </message>
@@ -371,276 +377,332 @@ Its channels will return to the unassigned list.</source>
         <translation>未设置，使用系统默认</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="69"/>
+        <location filename="../../ui/production_workspace.py" line="70"/>
         <source>Firmware verification</source>
         <translation>固件版本核验</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="75"/>
+        <location filename="../../ui/production_workspace.py" line="76"/>
         <source>Parameter verification</source>
         <translation>参数系统核验</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="81"/>
+        <location filename="../../ui/production_workspace.py" line="82"/>
         <source>Static acquisition</source>
         <translation>静置对星</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="82"/>
+        <location filename="../../ui/production_workspace.py" line="83"/>
         <source>Power and safety</source>
         <translation>电源与安全门禁</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="87"/>
+        <location filename="../../ui/production_workspace.py" line="88"/>
         <source>Locked rocking tracking</source>
         <translation>锁定后摇摆跟踪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="88"/>
-        <location filename="../../ui/production_workspace.py" line="146"/>
+        <location filename="../../ui/production_workspace.py" line="89"/>
+        <location filename="../../ui/production_workspace.py" line="147"/>
         <source>Motion platform</source>
         <translation>摇摆台</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="93"/>
+        <location filename="../../ui/production_workspace.py" line="94"/>
         <source>Power-on while rocking</source>
         <translation>摇摆中上电跟踪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="94"/>
+        <location filename="../../ui/production_workspace.py" line="95"/>
         <source>Power and motion</source>
         <translation>电源与摇摆台</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="99"/>
+        <location filename="../../ui/production_workspace.py" line="100"/>
         <source>Locked driving tracking</source>
         <translation>锁定后行驶跟踪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="100"/>
+        <location filename="../../ui/production_workspace.py" line="101"/>
         <source>Operator gate</source>
         <translation>操作员门禁</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="105"/>
+        <location filename="../../ui/production_workspace.py" line="106"/>
         <source>Power-on while driving</source>
         <translation>行驶中上电跟踪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="106"/>
+        <location filename="../../ui/production_workspace.py" line="107"/>
         <source>Power and operator</source>
         <translation>电源与操作员门禁</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="118"/>
+        <location filename="../../ui/production_workspace.py" line="119"/>
         <source>Static window</source>
         <translation>静态窗口</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="123"/>
+        <location filename="../../ui/production_workspace.py" line="124"/>
         <source>External INS performance summary</source>
         <translation>外部 INS 性能汇总</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="124"/>
+        <location filename="../../ui/production_workspace.py" line="125"/>
         <source>Configured external INS and shared windows</source>
         <translation>已配置外部 INS 及共享窗口</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="129"/>
+        <location filename="../../ui/production_workspace.py" line="130"/>
         <source>Whole-unit navigation summary</source>
         <translation>整机组合导航性能汇总</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="130"/>
+        <location filename="../../ui/production_workspace.py" line="131"/>
         <source>All enabled scenario windows</source>
         <translation>所有已启用工况窗口</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="145"/>
+        <location filename="../../ui/production_workspace.py" line="146"/>
         <source>LAN power supply</source>
         <translation>局域网电源</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="147"/>
+        <location filename="../../ui/production_workspace.py" line="148"/>
         <source>MS-6222 reference</source>
         <translation>MS-6222 姿态参考</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="148"/>
+        <location filename="../../ui/production_workspace.py" line="149"/>
         <source>Vehicle operator gate</source>
         <translation>车辆操作员门禁</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="233"/>
-        <location filename="../../ui/production_workspace.py" line="1384"/>
+        <location filename="../../ui/production_workspace.py" line="234"/>
+        <location filename="../../ui/production_workspace.py" line="1465"/>
         <source>Batch test</source>
         <translation>批次测试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="236"/>
-        <location filename="../../ui/production_workspace.py" line="1385"/>
+        <location filename="../../ui/production_workspace.py" line="237"/>
+        <location filename="../../ui/production_workspace.py" line="1466"/>
         <source>Fixture diagnostics</source>
         <translation>夹具调试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="255"/>
+        <location filename="../../ui/production_workspace.py" line="256"/>
         <source>No batch</source>
         <translation>未创建批次</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="264"/>
-        <location filename="../../ui/production_workspace.py" line="1389"/>
+        <location filename="../../ui/production_workspace.py" line="265"/>
+        <location filename="../../ui/production_workspace.py" line="1470"/>
         <source>M19-A engineering preview: evidence capture only; not approved for formal production release.</source>
         <translation>M19-A 工程预览：仅用于证据采集，尚未批准用于正式试产放行。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="272"/>
-        <location filename="../../ui/production_workspace.py" line="1393"/>
+        <location filename="../../ui/production_workspace.py" line="273"/>
+        <location filename="../../ui/production_workspace.py" line="1474"/>
         <source>Batch setup</source>
         <translation>批次设置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="278"/>
-        <location filename="../../ui/production_workspace.py" line="1394"/>
+        <location filename="../../ui/production_workspace.py" line="279"/>
+        <location filename="../../ui/production_workspace.py" line="1475"/>
         <source>Batch ID</source>
         <translation>批次 ID</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="281"/>
-        <location filename="../../ui/production_workspace.py" line="1395"/>
+        <location filename="../../ui/production_workspace.py" line="282"/>
+        <location filename="../../ui/production_workspace.py" line="1476"/>
         <source>Operator</source>
         <translation>操作员</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="284"/>
-        <location filename="../../ui/production_workspace.py" line="1396"/>
+        <location filename="../../ui/production_workspace.py" line="285"/>
+        <location filename="../../ui/production_workspace.py" line="1477"/>
         <source>Recipe</source>
         <translation>测试配方</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="288"/>
-        <location filename="../../ui/production_workspace.py" line="1398"/>
+        <location filename="../../ui/production_workspace.py" line="289"/>
+        <location filename="../../ui/production_workspace.py" line="1479"/>
         <source>Import recipe...</source>
         <translation>导入配方...</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="290"/>
-        <location filename="../../ui/production_workspace.py" line="1397"/>
+        <location filename="../../ui/production_workspace.py" line="291"/>
+        <location filename="../../ui/production_workspace.py" line="1478"/>
         <source>Output folder</source>
         <translation>输出目录</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="293"/>
-        <location filename="../../ui/production_workspace.py" line="1399"/>
+        <location filename="../../ui/production_workspace.py" line="294"/>
+        <location filename="../../ui/production_workspace.py" line="1480"/>
         <location filename="../../ui/settings_dialog.py" line="203"/>
         <source>Browse...</source>
         <translation>浏览...</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="295"/>
-        <location filename="../../ui/production_workspace.py" line="1400"/>
+        <location filename="../../ui/production_workspace.py" line="296"/>
+        <location filename="../../ui/production_workspace.py" line="1481"/>
         <source>Create batch</source>
         <translation>创建批次</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="299"/>
+        <location filename="../../ui/production_workspace.py" line="300"/>
         <source>No recipe selected</source>
         <translation>未选择配方</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="355"/>
-        <location filename="../../ui/production_workspace.py" line="1402"/>
+        <location filename="../../ui/production_workspace.py" line="356"/>
+        <location filename="../../ui/production_workspace.py" line="1483"/>
         <source>Test workflow</source>
         <translation>测试流程</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="365"/>
-        <location filename="../../ui/production_workspace.py" line="1403"/>
+        <location filename="../../ui/production_workspace.py" line="366"/>
+        <location filename="../../ui/production_workspace.py" line="1484"/>
         <source>Shared fixtures</source>
         <translation>共享夹具</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="383"/>
-        <location filename="../../ui/production_workspace.py" line="1404"/>
+        <location filename="../../ui/production_workspace.py" line="384"/>
+        <location filename="../../ui/production_workspace.py" line="1485"/>
         <source>Batch events</source>
         <translation>批次事件</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="400"/>
+        <location filename="../../ui/production_workspace.py" line="401"/>
         <source>Configure a recipe to create a batch.</source>
         <translation>配置配方后创建批次。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="402"/>
-        <location filename="../../ui/production_workspace.py" line="1405"/>
+        <location filename="../../ui/production_workspace.py" line="403"/>
+        <location filename="../../ui/production_workspace.py" line="1486"/>
         <source>Start batch</source>
         <translation>开始批次</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="405"/>
+        <location filename="../../ui/production_workspace.py" line="406"/>
         <source>All selected device and fixture gates must be ready.</source>
         <translation>所有选中设备和夹具门禁就绪后才能开始。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="440"/>
+        <location filename="../../ui/production_workspace.py" line="441"/>
         <source>Fixture diagnostics are unavailable while a batch owns fixture control.</source>
         <translation>批次占用夹具控制权时不能进入夹具调试。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="451"/>
+        <location filename="../../ui/production_workspace.py" line="452"/>
         <source>Finish the fixture engineering session before leaving this page.</source>
         <translation>请先结束夹具工程会话，再离开此页面。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="488"/>
+        <location filename="../../ui/production_workspace.py" line="489"/>
         <source>Result</source>
         <translation>结果</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1011"/>
+        <location filename="../../ui/production_workspace.py" line="653"/>
+        <source>Discovering supported devices...</source>
+        <translation>正在发现支持的设备...</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="905"/>
+        <source>Serial number pending</source>
+        <translation>序列号待配置</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="908"/>
+        <source>Unsupported device</source>
+        <translation>不支持的设备</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="932"/>
+        <source>Evidence recording active</source>
+        <translation>证据录制中</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="935"/>
+        <source>Evidence recording not ready</source>
+        <translation>证据录制未就绪</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="1042"/>
         <source>Device detected after batch start and not added: {serial}</source>
         <translation>批次开始后检测到设备，未加入本批次：{serial}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1407"/>
-        <source>At least one identified online device with armed recording is required.</source>
-        <translation>至少需要一台已识别、在线且录制已就绪的设备。</translation>
+        <location filename="../../ui/production_workspace.py" line="1141"/>
+        <source>Wait for online devices to report complete identities.</source>
+        <translation>等待在线设备上报完整身份。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="483"/>
+        <location filename="../../ui/production_workspace.py" line="1152"/>
+        <source>Unsupported online device(s): {devices}</source>
+        <translation>存在不支持的在线设备：{devices}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="1156"/>
+        <source>Select a valid recipe first.</source>
+        <translation>请先选择有效配方。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="1168"/>
+        <source>Online device product does not match recipe {product}: {devices}</source>
+        <translation>在线设备产品与配方 {product} 不匹配：{devices}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="1190"/>
+        <source>Evidence recording is not ready for: {devices}</source>
+        <translation>以下设备的证据录制未就绪：{devices}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="1489"/>
+        <source>At least one identified online device with evidence recording ready is required.</source>
+        <translation>至少需要一台身份已确认、在线且证据录制就绪的设备。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="484"/>
         <source>No.</source>
         <translation>序号</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="484"/>
+        <location filename="../../ui/production_workspace.py" line="485"/>
         <source>Test item</source>
         <translation>测试项</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="485"/>
+        <location filename="../../ui/production_workspace.py" line="486"/>
         <source>Prerequisite</source>
         <translation>前置条件</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="487"/>
+        <location filename="../../ui/production_workspace.py" line="488"/>
         <source>Effective duration</source>
         <translation>有效时长</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="517"/>
+        <location filename="../../ui/production_workspace.py" line="518"/>
         <source>Fixture</source>
         <translation>夹具</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="517"/>
+        <location filename="../../ui/production_workspace.py" line="518"/>
         <source>State</source>
         <translation>夹具状态</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="517"/>
+        <location filename="../../ui/production_workspace.py" line="518"/>
         <source>Evidence / note</source>
         <translation>证据 / 备注</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_snr_widget.py" line="73"/>
+        <location filename="../../ui/production_workspace.py" line="934"/>
+        <source>Batch not created</source>
+        <translation>批次尚未创建</translation>
     </message>
     <message>
         <location filename="../../ui/production_snr_widget.py" line="116"/>
@@ -670,298 +732,263 @@ Its channels will return to the unassigned list.</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="177"/>
-        <location filename="../../ui/production_workspace.py" line="571"/>
+        <location filename="../../ui/production_workspace.py" line="572"/>
         <source>Pending</source>
         <translation>待执行</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="83"/>
-        <location filename="../../ui/production_workspace.py" line="89"/>
-        <location filename="../../ui/production_workspace.py" line="95"/>
-        <location filename="../../ui/production_workspace.py" line="101"/>
-        <location filename="../../ui/production_workspace.py" line="107"/>
+        <location filename="../../ui/production_workspace.py" line="84"/>
+        <location filename="../../ui/production_workspace.py" line="90"/>
+        <location filename="../../ui/production_workspace.py" line="96"/>
+        <location filename="../../ui/production_workspace.py" line="102"/>
+        <location filename="../../ui/production_workspace.py" line="108"/>
         <source>At least 60 min</source>
         <translation>至少 60 分钟</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="111"/>
+        <location filename="../../ui/production_workspace.py" line="112"/>
         <source>GNSS performance summary</source>
         <translation>GNSS 性能汇总</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="112"/>
+        <location filename="../../ui/production_workspace.py" line="113"/>
         <source>Static and driving windows</source>
         <translation>静置及行驶窗口</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="113"/>
-        <location filename="../../ui/production_workspace.py" line="119"/>
-        <location filename="../../ui/production_workspace.py" line="125"/>
-        <location filename="../../ui/production_workspace.py" line="131"/>
+        <location filename="../../ui/production_workspace.py" line="114"/>
+        <location filename="../../ui/production_workspace.py" line="120"/>
+        <location filename="../../ui/production_workspace.py" line="126"/>
+        <location filename="../../ui/production_workspace.py" line="132"/>
         <source>Shared windows</source>
         <translation>共享窗口</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="117"/>
+        <location filename="../../ui/production_workspace.py" line="118"/>
         <source>Raw IMU static performance summary</source>
         <translation>原始 IMU 静态性能汇总</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="578"/>
-        <location filename="../../ui/production_workspace.py" line="1263"/>
+        <location filename="../../ui/production_workspace.py" line="579"/>
+        <location filename="../../ui/production_workspace.py" line="1344"/>
         <source>Not applicable</source>
         <translation>不适用</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="584"/>
+        <location filename="../../ui/production_workspace.py" line="585"/>
         <source>Disabled by recipe</source>
         <translation>配方未启用</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="591"/>
+        <location filename="../../ui/production_workspace.py" line="592"/>
         <source>Not configured</source>
         <translation>未配置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="632"/>
+        <location filename="../../ui/production_workspace.py" line="633"/>
         <source>Discovery configuration is invalid: {details}</source>
         <translation>设备探测配置无效：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="652"/>
-        <source>Discovering AFD01 devices...</source>
-        <translation>正在探测 AFD01 设备...</translation>
-    </message>
-    <message>
-        <location filename="../../ui/production_workspace.py" line="699"/>
+        <location filename="../../ui/production_workspace.py" line="700"/>
         <source>Import production recipe</source>
         <translation>导入试产配方</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="701"/>
+        <location filename="../../ui/production_workspace.py" line="702"/>
         <source>Production recipes (*.json);;All files (*)</source>
         <translation>试产配方 (*.json);;所有文件 (*)</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="715"/>
+        <location filename="../../ui/production_workspace.py" line="716"/>
         <source>Invalid recipe: {details}</source>
         <translation>配方无效：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="718"/>
+        <location filename="../../ui/production_workspace.py" line="719"/>
         <source>Correct the recipe before creating a batch.</source>
         <translation>修正配方后再创建批次。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="725"/>
+        <location filename="../../ui/production_workspace.py" line="726"/>
         <source>Engineering only</source>
         <translation>仅限工程调试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="725"/>
+        <location filename="../../ui/production_workspace.py" line="726"/>
         <source>Formal production</source>
         <translation>正式试产</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="728"/>
+        <location filename="../../ui/production_workspace.py" line="729"/>
         <source>Recipe {recipe_id} | SHA-256 {sha} | {scope}</source>
         <translation>配方 {recipe_id} | SHA-256 {sha} | {scope}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="889"/>
-        <location filename="../../ui/production_workspace.py" line="896"/>
+        <location filename="../../ui/production_workspace.py" line="904"/>
+        <location filename="../../ui/production_workspace.py" line="915"/>
         <source>Identifying</source>
         <translation>正在识别</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="891"/>
+        <location filename="../../ui/production_workspace.py" line="907"/>
         <source>Identity conflict</source>
         <translation>设备身份冲突</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="892"/>
-        <source>Unsupported hardware</source>
-        <translation>不支持的硬件</translation>
-    </message>
-    <message>
-        <location filename="../../ui/production_workspace.py" line="899"/>
-        <source>Armed</source>
-        <translation>已武装</translation>
-    </message>
-    <message>
-        <location filename="../../ui/production_snr_widget.py" line="73"/>
-        <location filename="../../ui/production_workspace.py" line="899"/>
-        <source>Not armed</source>
-        <translation>未武装</translation>
-    </message>
-    <message>
-        <location filename="../../ui/production_workspace.py" line="1069"/>
+        <location filename="../../ui/production_workspace.py" line="1100"/>
         <source>Device registered: slot {slot}, {serial}</source>
         <translation>设备已登记：机位 {slot}，{serial}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1077"/>
+        <location filename="../../ui/production_workspace.py" line="1108"/>
         <source>Create a batch before starting.</source>
         <translation>请先创建批次再开始测试。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1079"/>
+        <location filename="../../ui/production_workspace.py" line="1110"/>
         <source>The batch is not in the ready state.</source>
         <translation>批次当前不处于就绪状态。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1082"/>
+        <location filename="../../ui/production_workspace.py" line="1113"/>
         <source>Device discovery is unavailable.</source>
         <translation>设备探测不可用。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1096"/>
-        <source>Wait for online device identity checks to finish.</source>
-        <translation>请等待在线设备完成身份核验。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/production_workspace.py" line="1106"/>
+        <location filename="../../ui/production_workspace.py" line="1182"/>
         <source>At least one identified online device is required.</source>
         <translation>至少需要一台已识别的在线设备。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1114"/>
-        <source>Recording is not armed for: {devices}</source>
-        <translation>以下设备的录制尚未就绪：{devices}</translation>
-    </message>
-    <message>
-        <location filename="../../ui/production_workspace.py" line="1124"/>
+        <location filename="../../ui/production_workspace.py" line="1200"/>
         <source>Device identity is not persisted yet: {devices}</source>
         <translation>以下设备的身份尚未持久化：{devices}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1135"/>
+        <location filename="../../ui/production_workspace.py" line="1216"/>
         <source>Batch participants are frozen.</source>
         <translation>批次参与设备已冻结。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1152"/>
+        <location filename="../../ui/production_workspace.py" line="1233"/>
         <source>{count} device(s) ready. Starting will freeze the participant list.</source>
         <translation>{count} 台设备已就绪。开始后将冻结参与设备名单。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1166"/>
+        <location filename="../../ui/production_workspace.py" line="1247"/>
         <source>Cannot start batch: {details}</source>
         <translation>无法开始批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1201"/>
+        <location filename="../../ui/production_workspace.py" line="1282"/>
         <source>Batch running</source>
         <translation>批次运行中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1203"/>
+        <location filename="../../ui/production_workspace.py" line="1284"/>
         <source>Batch started with {count} participant device(s).</source>
         <translation>批次已启动，共 {count} 台参与设备。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1246"/>
+        <location filename="../../ui/production_workspace.py" line="1327"/>
         <source>External INS test is not applicable to {serial}: {reason}</source>
         <translation>{serial} 不适用外部 INS 测试：{reason}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1264"/>
+        <location filename="../../ui/production_workspace.py" line="1345"/>
         <source>No participant has external INS configured</source>
         <translation>参与设备均未配置外部 INS</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1271"/>
+        <location filename="../../ui/production_workspace.py" line="1352"/>
         <source>Cannot abort batch: {details}</source>
         <translation>无法中止批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1280"/>
+        <location filename="../../ui/production_workspace.py" line="1361"/>
         <source>Batch aborted</source>
         <translation>批次已中止</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1281"/>
+        <location filename="../../ui/production_workspace.py" line="1362"/>
         <source>Batch aborted by operator.</source>
         <translation>操作员已中止批次。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1288"/>
+        <location filename="../../ui/production_workspace.py" line="1131"/>
+        <location filename="../../ui/production_workspace.py" line="1369"/>
         <source>Identity conflict: {details}</source>
         <translation>设备身份冲突：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1300"/>
+        <location filename="../../ui/production_workspace.py" line="1381"/>
         <source>Device endpoint changed: {serial}, {old_endpoint} -&gt; {new_endpoint}</source>
         <translation>设备端点已变更：{serial}，{old_endpoint} -&gt; {new_endpoint}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1323"/>
+        <location filename="../../ui/production_workspace.py" line="1404"/>
         <source>Device capacity exceeded: {endpoint}</source>
         <translation>设备数量超限：{endpoint}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1331"/>
+        <location filename="../../ui/production_workspace.py" line="1412"/>
         <source>Discovering on UDP port {port}</source>
         <translation>正在 UDP 端口 {port} 探测设备</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1333"/>
+        <location filename="../../ui/production_workspace.py" line="1414"/>
         <source>Device discovery stopped</source>
         <translation>设备探测已停止</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1335"/>
+        <location filename="../../ui/production_workspace.py" line="1416"/>
         <source>Device discovery failed</source>
         <translation>设备探测启动失败</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1341"/>
+        <location filename="../../ui/production_workspace.py" line="1422"/>
         <source>Device discovery error: {details}</source>
         <translation>设备探测错误：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="736"/>
+        <location filename="../../ui/production_workspace.py" line="737"/>
         <source>Recipe validated: {recipe_id}</source>
         <translation>配方校验通过：{recipe_id}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="332"/>
-        <location filename="../../ui/production_workspace.py" line="992"/>
+        <location filename="../../ui/production_workspace.py" line="333"/>
+        <location filename="../../ui/production_workspace.py" line="1021"/>
         <source>Device SNR ({count}/4)</source>
         <translation>设备 SNR（{count}/4）</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="743"/>
+        <location filename="../../ui/production_workspace.py" line="745"/>
         <source>Select production output folder</source>
         <translation>选择试产输出目录</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="753"/>
+        <location filename="../../ui/production_workspace.py" line="761"/>
         <source>Cannot create batch: {details}</source>
         <translation>无法创建批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="805"/>
+        <location filename="../../ui/production_workspace.py" line="822"/>
         <source>Batch ready</source>
         <translation>批次已就绪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="807"/>
+        <location filename="../../ui/production_workspace.py" line="824"/>
         <source>Batch ready. Waiting for devices and fixture checks.</source>
         <translation>批次已就绪，正在等待设备和夹具检查。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="809"/>
-        <source>Batch created, but one or more SDB recorders could not be armed.</source>
-        <translation>已创建批次，但一个或多个 SDB 录制器未能武装。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/production_workspace.py" line="811"/>
+        <location filename="../../ui/production_workspace.py" line="826"/>
         <source>Batch created: {batch_id}</source>
         <translation>已创建批次：{batch_id}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="813"/>
+        <location filename="../../ui/production_workspace.py" line="828"/>
         <source>Batch {batch_id} created</source>
         <translation>批次 {batch_id} 已创建</translation>
     </message>
@@ -1146,32 +1173,32 @@ Azimuth/elevation is not valid yet</source>
     </message>
     <message>
         <location filename="../../ui/attitude_widget.py" line="197"/>
-        <location filename="../../ui/attitude_widget.py" line="597"/>
+        <location filename="../../ui/attitude_widget.py" line="630"/>
         <source>Reset view</source>
         <translation>复位视角</translation>
     </message>
     <message>
         <location filename="../../ui/attitude_widget.py" line="200"/>
-        <location filename="../../ui/attitude_widget.py" line="600"/>
+        <location filename="../../ui/attitude_widget.py" line="633"/>
         <source>Restore the 3D camera to its default angle (distance={distance:g} / elevation={elevation:g} / azimuth={azimuth:g})</source>
         <translation>将 3D 相机恢复到默认角度（距离={distance:g} / 仰角={elevation:g} / 方位角={azimuth:g}）</translation>
     </message>
     <message>
         <location filename="../../ui/attitude_widget.py" line="259"/>
-        <location filename="../../ui/attitude_widget.py" line="607"/>
+        <location filename="../../ui/attitude_widget.py" line="640"/>
         <source>Roll:</source>
         <translation>横滚：</translation>
     </message>
     <message>
         <location filename="../../ui/attitude_widget.py" line="260"/>
-        <location filename="../../ui/attitude_widget.py" line="608"/>
+        <location filename="../../ui/attitude_widget.py" line="641"/>
         <source>Pitch:</source>
         <translation>俯仰：</translation>
     </message>
     <message>
         <location filename="../../ui/attitude_widget.py" line="261"/>
-        <location filename="../../ui/attitude_widget.py" line="577"/>
-        <location filename="../../ui/attitude_widget.py" line="579"/>
+        <location filename="../../ui/attitude_widget.py" line="610"/>
+        <location filename="../../ui/attitude_widget.py" line="612"/>
         <source>Yaw:</source>
         <translation>航向：</translation>
     </message>
@@ -1388,7 +1415,7 @@ Azimuth/elevation is not valid yet</source>
     <message>
         <location filename="../../ui/control_panel_widget.py" line="124"/>
         <location filename="../../ui/control_panel_widget.py" line="146"/>
-        <location filename="../../ui/device_view.py" line="665"/>
+        <location filename="../../ui/device_view.py" line="726"/>
         <location filename="../../ui/time_range_control.py" line="107"/>
         <location filename="../../ui/time_range_control.py" line="128"/>
         <source>Apply</source>
@@ -1552,32 +1579,32 @@ group_id：{group_id}  flags：0x{flags:02X}
         <translation>[{hardware}] Profile 中没有关键通道或状态</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="157"/>
+        <location filename="../../ui/device_view.py" line="159"/>
         <source>Device information</source>
         <translation>设备信息</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="163"/>
+        <location filename="../../ui/device_view.py" line="165"/>
         <source>Device type:</source>
         <translation>设备类型：</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="164"/>
+        <location filename="../../ui/device_view.py" line="166"/>
         <source>Firmware version:</source>
         <translation>固件版本：</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="165"/>
+        <location filename="../../ui/device_view.py" line="167"/>
         <source>Serial number:</source>
         <translation>序列号：</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="166"/>
+        <location filename="../../ui/device_view.py" line="168"/>
         <source>Protocol version:</source>
         <translation>协议版本：</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="175"/>
+        <location filename="../../ui/device_view.py" line="177"/>
         <location filename="../../ui/fixture_debug_workspace.py" line="551"/>
         <location filename="../../ui/fixture_debug_workspace.py" line="1757"/>
         <location filename="../../ui/orbit_widget.py" line="190"/>
@@ -1586,123 +1613,165 @@ group_id：{group_id}  flags：0x{flags:02X}
         <translation>刷新</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="183"/>
+        <location filename="../../ui/device_view.py" line="185"/>
         <source>Parameter management</source>
         <translation>参数管理</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="187"/>
+        <location filename="../../ui/device_view.py" line="189"/>
         <source>Read all</source>
         <translation>读取全部</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="189"/>
-        <location filename="../../ui/device_view.py" line="712"/>
+        <location filename="../../ui/device_view.py" line="191"/>
+        <location filename="../../ui/device_view.py" line="773"/>
         <source>Factory reset</source>
         <translation>恢复出厂</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="201"/>
+        <location filename="../../ui/device_view.py" line="203"/>
         <source>Name</source>
         <translation>名称</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="202"/>
+        <location filename="../../ui/device_view.py" line="204"/>
         <source>Type</source>
         <translation>类型</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="203"/>
+        <location filename="../../ui/device_view.py" line="205"/>
         <source>Current value</source>
         <translation>当前值</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="204"/>
+        <location filename="../../ui/device_view.py" line="206"/>
         <source>Action</source>
         <translation>操作</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="88"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="421"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="138"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="993"/>
         <location filename="../../ui/customer_workspace.py" line="89"/>
         <source>Maintenance</source>
         <translation>维护</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="90"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="422"/>
-        <source>Device inventory and authenticated firmware updates.</source>
-        <translation>设备清单与签名固件升级。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="130"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="423"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="182"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="997"/>
         <source>Device components</source>
         <translation>设备组件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="135"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="425"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="187"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="999"/>
         <location filename="../../ui/customer_overview_view.py" line="372"/>
         <location filename="../../ui/customer_overview_view.py" line="1387"/>
-        <location filename="../../ui/device_view.py" line="205"/>
+        <location filename="../../ui/device_view.py" line="207"/>
         <location filename="../../ui/orbit_widget.py" line="595"/>
-        <location filename="../../ui/production_workspace.py" line="486"/>
+        <location filename="../../ui/production_workspace.py" line="487"/>
         <source>Status</source>
         <translation>状态</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="135"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="425"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="187"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="999"/>
         <source>Component</source>
         <translation>组件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="135"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="425"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="187"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="999"/>
         <source>Temperature</source>
         <translation>温度</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="135"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="425"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="187"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="999"/>
         <source>Voltage</source>
         <translation>电压</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="135"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="425"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="187"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="999"/>
         <source>Version</source>
         <translation>版本</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="159"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="427"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="213"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1002"/>
+        <source>Device installation attitude</source>
+        <translation>设备安装姿态</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="217"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1004"/>
+        <source>FRD carrier: +X forward / +Y right / +Z down · ZYX · degrees</source>
+        <translation>FRD 载具坐标：+X 向前 / +Y 向右 / +Z 向下 · ZYX · 度</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="225"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1006"/>
+        <source>Yaw (+ right)</source>
+        <translation>偏航（正值向右）</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="226"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1007"/>
+        <source>Pitch (+ nose up)</source>
+        <translation>俯仰（正值抬头）</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="227"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1008"/>
+        <source>Roll (+ left side up)</source>
+        <translation>横滚（正值左侧抬起）</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="242"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="428"/>
+        <source>Waiting for device mount readback</source>
+        <translation>正在等待设备安装姿态读回</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="246"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="649"/>
+        <source>No pending mount change</source>
+        <translation>当前没有待处理的安装姿态变更</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="250"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1009"/>
+        <source>Save and restart</source>
+        <translation>保存并重启</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="269"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1001"/>
         <source>Signed firmware update</source>
         <translation>签名固件升级</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="163"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="388"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="434"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="273"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="880"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1019"/>
         <source>No signed package selected</source>
         <translation>未选择签名固件包</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="166"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="428"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="276"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1013"/>
         <source>Select package...</source>
         <translation>选择固件包...</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="181"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="429"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="291"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1014"/>
         <source>Install update</source>
         <translation>安装升级</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="196"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="224"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="316"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="344"/>
         <location filename="../../ui/customer_overview_view.py" line="221"/>
         <location filename="../../ui/customer_overview_view.py" line="816"/>
         <location filename="../../ui/customer_overview_view.py" line="905"/>
@@ -1718,450 +1787,670 @@ group_id：{group_id}  flags：0x{flags:02X}
         <translation>{value}（已过期）</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="201"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="321"/>
         <source>Model</source>
         <translation>型号</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="203"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="323"/>
         <source>Serial number</source>
         <translation>序列号</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="205"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="325"/>
         <source>MCU UID</source>
         <translation>MCU UID</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="207"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="327"/>
         <source>MAC address</source>
         <translation>MAC 地址</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="209"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="329"/>
         <source>Main firmware</source>
         <translation>主程序固件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="211"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="331"/>
         <source>Boot firmware</source>
         <translation>引导固件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="212"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="332"/>
         <source>Service protocol</source>
         <translation>服务协议</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="241"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="407"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="411"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="419"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="658"/>
+        <source>Installation attitude is not supported by this firmware</source>
+        <translation>当前固件不支持安装姿态配置</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="425"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="660"/>
+        <source>Waiting for device serial number or unique identifier</source>
+        <translation>等待设备序列号或唯一标识</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="431"/>
+        <source>Device mount contract is unavailable or incompatible</source>
+        <translation>设备安装姿态合同缺失或不兼容</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="435"/>
+        <source>Readback yaw {yaw:.1f}°, pitch {pitch:.1f}°, roll {roll:.1f}°</source>
+        <translation>设备读回航向 {yaw:.1f}°、俯仰 {pitch:.1f}°、横滚 {roll:.1f}°</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="442"/>
+        <source>restart state unavailable</source>
+        <translation>重启状态不可用</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="444"/>
+        <source>restart required</source>
+        <translation>需要重启</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="446"/>
+        <source>active</source>
+        <translation>已生效</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="506"/>
+        <source>expected RBV {x:.1f}/{y:.1f}/{z:.1f}°</source>
+        <translation>期望 RBV {x:.1f}/{y:.1f}/{z:.1f}°</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="521"/>
+        <source>verification unavailable</source>
+        <translation>校验状态不可用</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="523"/>
+        <source>verified</source>
+        <translation>已验证</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="525"/>
+        <source>not verified</source>
+        <translation>未验证</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="527"/>
+        <source>{expected}; readback {x:.1f}/{y:.1f}/{z:.1f}° ({verified})</source>
+        <translation>{expected}；读回 {x:.1f}/{y:.1f}/{z:.1f}°（{verified}）</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="623"/>
+        <source>Save installation attitude</source>
+        <translation>保存安装姿态</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="625"/>
+        <source>Save yaw {yaw:.1f}°, pitch {pitch:.1f}°, roll {roll:.1f}° and restart the device?</source>
+        <translation>是否保存航向 {yaw:.1f}°、俯仰 {pitch:.1f}°、横滚 {roll:.1f}°并重启设备？</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="650"/>
+        <source>Mount command could not be sent</source>
+        <translation>安装姿态指令发送失败</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="651"/>
+        <source>Waiting for mount response (request {request_id})</source>
+        <translation>正在等待安装姿态响应（请求 {request_id}）</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="652"/>
+        <source>Mount accepted; waiting for authoritative readback</source>
+        <translation>安装姿态已接受；正在等待权威读回</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="653"/>
+        <source>Mount saved; waiting for device restart and final readback</source>
+        <translation>安装姿态已保存；正在等待设备重启及最终读回</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="654"/>
+        <source>Installation attitude applied and verified</source>
+        <translation>安装姿态已应用并验证</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="655"/>
+        <source>Invalid mount request</source>
+        <translation>无效的安装姿态请求</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="656"/>
+        <source>Installation angle is outside the supported range</source>
+        <translation>安装角超出支持范围</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="657"/>
+        <source>Mount configuration is not allowed in the current state</source>
+        <translation>当前状态不允许配置安装姿态</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="661"/>
+        <source>Device did not confirm the mount transaction</source>
+        <translation>设备未确认安装姿态事务</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="662"/>
+        <source>Mount response timed out</source>
+        <translation>安装姿态响应超时</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="663"/>
+        <source>Mount readback timed out</source>
+        <translation>安装姿态读回超时</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="664"/>
+        <source>Device restart command could not be sent</source>
+        <translation>设备重启指令发送失败</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="665"/>
+        <source>Device did not return with the requested mount</source>
+        <translation>设备未以请求的安装姿态恢复在线</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="666"/>
+        <source>Mount operation cancelled because the device changed</source>
+        <translation>设备已切换，安装姿态操作已取消</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="696"/>
         <location filename="../../ui/customer_overview_view.py" line="549"/>
         <location filename="../../ui/customer_overview_view.py" line="1390"/>
         <source>Converter</source>
         <translation>变频板</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="242"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="697"/>
         <location filename="../../ui/customer_overview_view.py" line="550"/>
         <location filename="../../ui/customer_overview_view.py" line="1391"/>
         <source>TX array</source>
         <translation>发射阵列</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="243"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="698"/>
         <location filename="../../ui/customer_overview_view.py" line="551"/>
         <location filename="../../ui/customer_overview_view.py" line="1392"/>
         <source>RX array</source>
         <translation>接收阵列</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="249"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="704"/>
         <location filename="../../ui/customer_overview_view.py" line="886"/>
         <location filename="../../ui/customer_overview_view.py" line="975"/>
         <location filename="../../ui/customer_overview_view.py" line="1298"/>
-        <location filename="../../ui/production_workspace.py" line="898"/>
+        <location filename="../../ui/production_workspace.py" line="918"/>
         <source>Online</source>
         <translation>在线</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="249"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="402"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="704"/>
         <location filename="../../ui/customer_overview_view.py" line="892"/>
         <location filename="../../ui/customer_overview_view.py" line="975"/>
         <location filename="../../ui/customer_overview_view.py" line="1298"/>
         <location filename="../../ui/production_snr_widget.py" line="72"/>
-        <location filename="../../ui/production_workspace.py" line="898"/>
+        <location filename="../../ui/production_workspace.py" line="918"/>
         <source>Offline</source>
         <translation>离线</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="265"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="497"/>
+        <source>RBV expectation unavailable</source>
+        <translation>RBV 预期值不可用</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="720"/>
         <source>Select signed firmware package</source>
         <translation>选择签名固件包</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="267"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="722"/>
         <source>Signed firmware package (*.sfpkg)</source>
         <translation>签名固件包 (*.sfpkg)</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="294"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="749"/>
         <source>Package rejected</source>
         <translation>固件包已拒绝</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="314"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="772"/>
         <source>The package is unsigned or its signature is malformed</source>
         <translation>固件包未签名或签名格式异常</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="316"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="774"/>
         <source>The package signature is not trusted</source>
         <translation>固件包签名不受信任</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="318"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="776"/>
         <source>The firmware payload is corrupt</source>
         <translation>固件载荷已损坏</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="320"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="778"/>
         <source>The package is for a different product</source>
         <translation>固件包适用于其他产品</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="322"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="780"/>
         <source>The package does not support this hardware</source>
         <translation>固件包不支持当前硬件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="324"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="782"/>
         <source>The package version is not allowed for this device</source>
         <translation>固件包版本不允许用于当前设备</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="326"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="402"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="784"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="910"/>
         <source>Firmware signature verification is unavailable</source>
         <translation>固件签名验证不可用</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="327"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="785"/>
         <source>The firmware package format is invalid</source>
         <translation>固件包格式无效</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="336"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="797"/>
         <source>Install firmware update</source>
         <translation>安装固件升级</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="338"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="799"/>
         <source>Install signed firmware {target} over {current}? The device will reboot during the update.</source>
         <translation>确定用签名固件 {target} 升级当前版本 {current} 吗？升级期间设备将重启。</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="372"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="846"/>
         <source>Verified {product} {version} · signer {signer} · SHA-256 {digest}</source>
         <translation>已验证 {product} {version} · 签名方 {signer} · SHA-256 {digest}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="400"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="908"/>
         <source>No trusted firmware signing key is installed</source>
         <translation>未安装可信固件签名公钥</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="220"/>
+        <location filename="../../ui/device_view.py" line="222"/>
         <source>Firmware update (OTA)</source>
         <translation>固件升级（OTA）</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="224"/>
-        <location filename="../../ui/device_view.py" line="528"/>
-        <location filename="../../ui/device_view.py" line="790"/>
+        <location filename="../../ui/device_view.py" line="226"/>
+        <location filename="../../ui/device_view.py" line="403"/>
+        <location filename="../../ui/device_view.py" line="562"/>
+        <location filename="../../ui/device_view.py" line="844"/>
         <source>No file selected</source>
         <translation>未选择文件</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="225"/>
+        <location filename="../../ui/device_view.py" line="227"/>
         <source>Select firmware...</source>
         <translation>选择固件...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="232"/>
+        <location filename="../../ui/device_view.py" line="234"/>
         <source>Pause live data for full-speed transfer</source>
         <translation>暂停实时数据（全速传输）</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="234"/>
+        <location filename="../../ui/device_view.py" line="236"/>
         <source>Upload and update</source>
         <translation>上传并升级</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="184"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="430"/>
-        <location filename="../../ui/device_view.py" line="237"/>
-        <location filename="../../ui/production_workspace.py" line="407"/>
-        <location filename="../../ui/production_workspace.py" line="1409"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="294"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="1015"/>
+        <location filename="../../ui/device_view.py" line="239"/>
+        <location filename="../../ui/production_workspace.py" line="408"/>
+        <location filename="../../ui/production_workspace.py" line="1492"/>
         <source>Abort</source>
         <translation>中止</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="178"/>
-        <location filename="../../ui/device_view.py" line="251"/>
-        <location filename="../../ui/device_view.py" line="524"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="288"/>
+        <location filename="../../ui/device_view.py" line="253"/>
+        <location filename="../../ui/device_view.py" line="557"/>
         <source>Idle</source>
         <translation>空闲</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="257"/>
+        <location filename="../../ui/device_view.py" line="259"/>
         <source>Connect a device on the Live tab first</source>
         <translation>请先在“实时”页连接设备</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="601"/>
-        <location filename="../../ui/device_view.py" line="615"/>
-        <location filename="../../ui/live_view.py" line="1247"/>
+        <location filename="../../ui/device_view.py" line="582"/>
+        <source>The selected firmware no longer matches the confirmed package</source>
+        <translation>当前固件选择与已确认的签名包不一致</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="583"/>
+        <source>A device serial number or unique identifier is required for customer OTA</source>
+        <translation>客户 OTA 需要有效的设备序列号或唯一标识</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="585"/>
+        <source>Debug and Product Service report different firmware versions</source>
+        <translation>Debug 与产品服务上报的固件版本不一致</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="586"/>
+        <source>✓ Target firmware {version} confirmed on the same device ({before} → {after})</source>
+        <translation>✓ 已确认同一设备运行目标固件 {version}（{before} → {after}）</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="587"/>
+        <source>Target firmware {target} was not confirmed; device reported {actual}</source>
+        <translation>未确认目标固件 {target}；设备上报 {actual}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="588"/>
+        <source>A different device identity responded after the transfer</source>
+        <translation>传输后收到另一台设备的身份</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="589"/>
+        <source>The returning device identity could not be confirmed</source>
+        <translation>无法确认回机设备身份</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="593"/>
+        <source>Device firmware changed ({before} → {after})</source>
+        <translation>设备固件版本已变化（{before} → {after}）</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="594"/>
+        <source>Firmware {version} was reported, but applying this package was not independently confirmed</source>
+        <translation>设备上报固件 {version}，但未能独立确认该固件包已应用</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="596"/>
+        <source>Device session changed; select the firmware again</source>
+        <translation>设备会话已变化，请重新选择固件</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="662"/>
+        <location filename="../../ui/device_view.py" line="676"/>
+        <location filename="../../ui/live_view.py" line="1242"/>
         <source>Not connected; command was not sent</source>
         <translation>设备未连接，命令未发送</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="455"/>
+        <location filename="../../ui/device_view.py" line="489"/>
         <source>Parameter write is awaiting confirmation; read is deferred</source>
         <translation>参数写入正在等待确认，读取操作已延后</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="448"/>
-        <location filename="../../ui/device_view.py" line="525"/>
+        <location filename="../../ui/device_view.py" line="481"/>
+        <location filename="../../ui/device_view.py" line="558"/>
         <source>Waiting for device Profile and capabilities...</source>
         <translation>等待设备 Profile 和能力声明...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="449"/>
-        <location filename="../../ui/device_view.py" line="526"/>
+        <location filename="../../ui/device_view.py" line="482"/>
+        <location filename="../../ui/device_view.py" line="559"/>
         <source>Waiting for device capability declaration...</source>
         <translation>等待设备能力声明...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="450"/>
+        <location filename="../../ui/device_view.py" line="483"/>
         <source>Parameter management is unavailable in this firmware</source>
         <translation>当前固件不提供参数管理</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="451"/>
-        <source>OTA is active; parameter operations are paused</source>
-        <translation>OTA 正在进行，参数操作已暂停</translation>
-    </message>
-    <message>
-        <location filename="../../ui/device_view.py" line="452"/>
+        <location filename="../../ui/device_view.py" line="486"/>
         <source>Reading parameter table...</source>
         <translation>正在读取参数表...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="453"/>
+        <location filename="../../ui/device_view.py" line="487"/>
         <source>Failed to send parameter-table request</source>
         <translation>参数表请求发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="454"/>
+        <location filename="../../ui/device_view.py" line="488"/>
         <source>Parameter-table read timed out</source>
         <translation>读取参数表超时</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="484"/>
+        <location filename="../../ui/device_view.py" line="519"/>
         <source>Awaiting write confirmation...</source>
         <translation>等待写入确认...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="485"/>
+        <location filename="../../ui/device_view.py" line="520"/>
         <source>Send failed</source>
         <translation>发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="486"/>
+        <location filename="../../ui/device_view.py" line="521"/>
         <source>Waiting for device readback...</source>
         <translation>等待设备回读...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="487"/>
+        <location filename="../../ui/device_view.py" line="523"/>
+        <source>Failed to request device readback</source>
+        <translation>请求设备回读失败</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="525"/>
         <source>✓ Success</source>
         <translation>✓ 成功</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="488"/>
+        <location filename="../../ui/device_view.py" line="526"/>
         <source>Target value was not read back</source>
         <translation>未回读到目标值</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="516"/>
+        <location filename="../../ui/device_view.py" line="528"/>
+        <source>Device session changed; parameter write was cancelled</source>
+        <translation>设备会话已变化，参数写入已取消</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="549"/>
         <source>Transferring... {sequence}/{total} ({percent}%)  {speed:.1f} KB/s  {remaining}s remaining</source>
         <translation>正在传输... {sequence}/{total}（{percent}%）  {speed:.1f} KB/s  剩余 {remaining}s</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="520"/>
+        <location filename="../../ui/device_view.py" line="553"/>
         <source>Transferring... {sequence}/{total} ({percent}%)</source>
         <translation>正在传输... {sequence}/{total}（{percent}%）</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="527"/>
+        <location filename="../../ui/device_view.py" line="560"/>
         <source>OTA is unavailable in this firmware</source>
         <translation>当前固件不提供 OTA 功能</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="529"/>
+        <location filename="../../ui/device_view.py" line="564"/>
+        <source>Firmware image exceeds the OTA protocol limit</source>
+        <translation>固件镜像超过 OTA 协议上限</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="566"/>
         <source>Stopping live data...</source>
         <translation>正在停止实时数据...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="530"/>
+        <location filename="../../ui/device_view.py" line="567"/>
         <source>Failed to stop live data: {detail}</source>
         <translation>停止实时数据失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="531"/>
+        <location filename="../../ui/device_view.py" line="568"/>
         <source>Sending OTA_BEGIN...</source>
         <translation>正在发送 OTA_BEGIN...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="532"/>
+        <location filename="../../ui/device_view.py" line="569"/>
         <source>Failed to send OTA_BEGIN</source>
         <translation>OTA_BEGIN 发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="533"/>
+        <location filename="../../ui/device_view.py" line="570"/>
         <source>OTA_BEGIN rejected: {detail}</source>
         <translation>OTA_BEGIN 被拒绝：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="534"/>
+        <location filename="../../ui/device_view.py" line="571"/>
         <source>ota_begin timed out</source>
         <translation>OTA_BEGIN 超时</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="535"/>
+        <location filename="../../ui/device_view.py" line="572"/>
         <source>Failed to send chunk {sequence}</source>
         <translation>分块 {sequence} 发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="536"/>
+        <location filename="../../ui/device_view.py" line="573"/>
         <source>Chunk {sequence} was not confirmed; retry {retry}/{maximum}</source>
         <translation>分块 {sequence} 未确认，重试 {retry}/{maximum}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="537"/>
+        <location filename="../../ui/device_view.py" line="574"/>
         <source>Chunk {sequence} rejected: {detail}</source>
         <translation>分块 {sequence} 被拒绝：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="538"/>
+        <location filename="../../ui/device_view.py" line="575"/>
         <source>Chunk {sequence} timed out repeatedly</source>
         <translation>分块 {sequence} 连续超时</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="539"/>
+        <location filename="../../ui/device_view.py" line="576"/>
         <source>Verifying...</source>
         <translation>正在校验...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="540"/>
+        <location filename="../../ui/device_view.py" line="577"/>
         <source>Failed to send OTA_END</source>
         <translation>OTA_END 发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="541"/>
+        <location filename="../../ui/device_view.py" line="578"/>
         <source>OTA_END verification failed: {detail}</source>
         <translation>OTA_END 校验失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="542"/>
+        <location filename="../../ui/device_view.py" line="579"/>
         <source>ota_end timed out</source>
         <translation>OTA_END 超时</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="543"/>
+        <location filename="../../ui/device_view.py" line="580"/>
         <source>Device is rebooting ({elapsed}s elapsed; bootloader flashing usually takes about 45s)...</source>
         <translation>设备正在重启（已等待 {elapsed}s；bootloader 刷写通常约需 45s）...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="544"/>
+        <location filename="../../ui/device_view.py" line="581"/>
         <source>Device did not return within 120 s; check the connection</source>
         <translation>设备在 120 s 内未重新上线，请检查连接</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="545"/>
-        <source>✓ Update complete; device is online ({before} → {after})</source>
-        <translation>✓ 升级完成，设备已上线（{before} → {after}）</translation>
+        <location filename="../../ui/device_view.py" line="584"/>
+        <source>Debug and Product Service report different device serial numbers</source>
+        <translation>Debug 与 Product Service 上报的设备序列号不一致</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="546"/>
-        <source>✓ Device is back online (version {version}, unchanged)</source>
-        <translation>✓ 设备已重新上线（版本 {version}，与升级前相同）</translation>
+        <location filename="../../ui/device_view.py" line="591"/>
+        <source>Firmware was not reported again by every captured source</source>
+        <translation>未能从传输前捕获的每个来源重新确认固件版本</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="547"/>
+        <location filename="../../ui/device_view.py" line="595"/>
         <source>Connection lost; OTA aborted</source>
         <translation>连接已断开，OTA 已中止</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="548"/>
+        <location filename="../../ui/device_view.py" line="597"/>
         <source>Aborted by user</source>
         <translation>已由用户中止</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="649"/>
-        <location filename="../../ui/device_view.py" line="787"/>
+        <location filename="../../ui/device_view.py" line="710"/>
+        <location filename="../../ui/device_view.py" line="841"/>
         <source>Restart the device for this change to take effect</source>
         <translation>此更改需要重启设备后生效</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="682"/>
+        <location filename="../../ui/device_view.py" line="743"/>
         <source>Read {count} parameter(s)</source>
         <translation>已读取 {count} 个参数</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="714"/>
+        <location filename="../../ui/device_view.py" line="775"/>
         <source>Restore all parameters to factory defaults?
 This cannot be undone, and some parameters require a restart.</source>
         <translation>将所有参数恢复为出厂默认值？
 此操作无法撤销，部分参数需要重启后生效。</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="735"/>
+        <location filename="../../ui/device_view.py" line="796"/>
         <source>Select firmware file</source>
         <translation>选择固件文件</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="737"/>
+        <location filename="../../ui/device_view.py" line="798"/>
         <source>Firmware (*.bin);;All files (*)</source>
         <translation>固件 (*.bin);;所有文件 (*)</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="309"/>
-        <location filename="../../ui/device_view.py" line="745"/>
-        <location filename="../../ui/device_view.py" line="793"/>
+        <location filename="../../ui/device_view.py" line="397"/>
+        <location filename="../../ui/device_view.py" line="847"/>
         <source>{file}  ({size} bytes)</source>
         <translation>{file}  ({size} 字节)</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="570"/>
+        <location filename="../../ui/device_view.py" line="631"/>
         <source>OTA: {message}</source>
         <translation>OTA：{message}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="489"/>
+        <location filename="../../ui/device_view.py" line="527"/>
         <source>✗ {detail}</source>
         <translation>✗ {detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="456"/>
+        <location filename="../../ui/device_view.py" line="484"/>
+        <source>Device is busy; parameter operation was not started</source>
+        <translation>设备正忙，参数操作未启动</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="485"/>
+        <source>Device session changed; parameter operation was cancelled</source>
+        <translation>设备会话已变化，参数操作已取消</translation>
+    </message>
+    <message>
+        <location filename="../../ui/device_view.py" line="490"/>
         <source>Parameters restored to factory defaults; restart is recommended</source>
         <translation>参数已恢复出厂默认值，建议重启设备</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="457"/>
+        <location filename="../../ui/device_view.py" line="491"/>
         <source>Factory reset failed: {detail}</source>
         <translation>恢复出厂失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="458"/>
+        <location filename="../../ui/device_view.py" line="492"/>
         <source>Factory reset timed out; try again</source>
         <translation>恢复出厂超时，请重试</translation>
     </message>
@@ -2251,17 +2540,17 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="50"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="101"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="472"/>
-        <location filename="../../ui/production_workspace.py" line="70"/>
-        <location filename="../../ui/production_workspace.py" line="76"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="105"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="517"/>
+        <location filename="../../ui/production_workspace.py" line="71"/>
+        <location filename="../../ui/production_workspace.py" line="77"/>
         <source>Automatic</source>
         <translation>自动跟踪</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="51"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="102"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="473"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="106"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="518"/>
         <source>Manual</source>
         <translation>手动跟踪</translation>
     </message>
@@ -2464,6 +2753,12 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>俯仰角</translation>
     </message>
     <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="141"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="995"/>
+        <source>Device inventory, installation attitude, and authenticated firmware updates.</source>
+        <translation>设备信息、安装姿态与可信固件升级。</translation>
+    </message>
+    <message>
         <location filename="../../ui/customer_playback_view.py" line="65"/>
         <source>Yaw</source>
         <translation>航向角</translation>
@@ -2651,18 +2946,18 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>⚑ 用户标记</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1555"/>
+        <location filename="../../ui/live_view.py" line="1550"/>
         <location filename="../../ui/orbit_widget.py" line="309"/>
         <source>Device is not connected</source>
         <translation>设备未连接</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1557"/>
+        <location filename="../../ui/live_view.py" line="1552"/>
         <source>Another Debug command is awaiting confirmation</source>
         <translation>已有 Debug 命令正在等待确认</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1559"/>
+        <location filename="../../ui/live_view.py" line="1554"/>
         <source>Failed to send Debug command</source>
         <translation>Debug 命令发送失败</translation>
     </message>
@@ -2691,7 +2986,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     <message>
         <location filename="../../ui/live_view.py" line="683"/>
         <location filename="../../ui/live_view.py" line="996"/>
-        <location filename="../../ui/live_view.py" line="1483"/>
+        <location filename="../../ui/live_view.py" line="1478"/>
         <source>Debug: OFF</source>
         <translation>Debug：关</translation>
     </message>
@@ -2727,10 +3022,10 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/live_view.py" line="738"/>
-        <location filename="../../ui/live_view.py" line="1178"/>
-        <location filename="../../ui/live_view.py" line="1386"/>
-        <location filename="../../ui/live_view.py" line="1485"/>
-        <location filename="../../ui/live_view.py" line="2350"/>
+        <location filename="../../ui/live_view.py" line="1173"/>
+        <location filename="../../ui/live_view.py" line="1381"/>
+        <location filename="../../ui/live_view.py" line="1480"/>
+        <location filename="../../ui/live_view.py" line="2345"/>
         <source>Device: {hardware}</source>
         <translation>设备：{hardware}</translation>
     </message>
@@ -2761,69 +3056,69 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>Profile 就绪：{hardware}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1277"/>
+        <location filename="../../ui/live_view.py" line="1272"/>
         <source>Requested sample rate: {rate} Hz</source>
         <translation>已请求采样率：{rate} Hz</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1282"/>
+        <location filename="../../ui/live_view.py" line="1277"/>
         <source>Mark #{mark_id} sent</source>
         <translation>标记 #{mark_id} 已发送</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1287"/>
+        <location filename="../../ui/live_view.py" line="1282"/>
         <source>Requested device statistics reset</source>
         <translation>已请求复位设备统计</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1293"/>
+        <location filename="../../ui/live_view.py" line="1288"/>
         <source>Profile handshake is incomplete; mode change was not sent</source>
         <translation>Profile 握手未完成，模式切换未发送</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1301"/>
+        <location filename="../../ui/live_view.py" line="1296"/>
         <source>state_id={state_id} has no control_binding; mode change was not sent</source>
         <translation>state_id={state_id} 没有 control_binding，模式切换未发送</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1315"/>
+        <location filename="../../ui/live_view.py" line="1310"/>
         <source>Requested mode change (state_id={state_id} → {target_value})</source>
         <translation>已请求切换模式（state_id={state_id} → {target_value}）</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1324"/>
+        <location filename="../../ui/live_view.py" line="1319"/>
         <source>control_binding={subcmd}/{value_from} is not supported</source>
         <translation>不支持 control_binding={subcmd}/{value_from}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1484"/>
-        <location filename="../../ui/live_view.py" line="2338"/>
-        <location filename="../../ui/live_view.py" line="2352"/>
+        <location filename="../../ui/live_view.py" line="1479"/>
+        <location filename="../../ui/live_view.py" line="2333"/>
+        <location filename="../../ui/live_view.py" line="2347"/>
         <source>Disconnected</source>
         <translation>已断开</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1535"/>
+        <location filename="../../ui/live_view.py" line="1530"/>
         <source>Debug: {state}...</source>
         <translation>Debug：{state}...</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1561"/>
+        <location filename="../../ui/live_view.py" line="1556"/>
         <source>Debug command not confirmed</source>
         <translation>Debug 指令未确认</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1564"/>
+        <location filename="../../ui/live_view.py" line="1559"/>
         <source>Debug command failed: {detail}</source>
         <translation>Debug 指令失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1582"/>
+        <location filename="../../ui/live_view.py" line="1577"/>
         <source>Debug: {state}</source>
         <translation>Debug：{state}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1593"/>
+        <location filename="../../ui/live_view.py" line="1588"/>
         <source>Error: {detail}</source>
         <translation>错误：{detail}</translation>
     </message>
@@ -2834,12 +3129,12 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>录制</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2017"/>
+        <location filename="../../ui/live_view.py" line="2012"/>
         <source>Recording stopped</source>
         <translation>录制已停止</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1927"/>
+        <location filename="../../ui/live_view.py" line="1922"/>
         <source>Save recording</source>
         <translation>保存录制文件</translation>
     </message>
@@ -2868,8 +3163,8 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/customer_playback_view.py" line="194"/>
-        <location filename="../../ui/live_view.py" line="1929"/>
-        <location filename="../../ui/live_view.py" line="2043"/>
+        <location filename="../../ui/live_view.py" line="1924"/>
+        <location filename="../../ui/live_view.py" line="2038"/>
         <location filename="../../ui/playback_view.py" line="238"/>
         <source>SDB files (*.sdb);;All files (*)</source>
         <translation>SDB 文件 (*.sdb);;所有文件 (*)</translation>
@@ -2916,35 +3211,25 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>GNSS 详情 - 回放</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1939"/>
-        <location filename="../../ui/live_view.py" line="2346"/>
+        <location filename="../../ui/live_view.py" line="1934"/>
+        <location filename="../../ui/live_view.py" line="2341"/>
         <source>Stop</source>
         <translation>停止</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1995"/>
+        <location filename="../../ui/live_view.py" line="1990"/>
         <source>Recording to {path}{profile_suffix}</source>
         <translation>正在录制到 {path}{profile_suffix}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1997"/>
+        <location filename="../../ui/live_view.py" line="1992"/>
         <source> + Profile</source>
         <translation> + Profile</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1984"/>
+        <location filename="../../ui/live_view.py" line="1979"/>
         <source>Failed to start recording</source>
         <translation>启动录制失败</translation>
-    </message>
-    <message>
-        <location filename="../../ui/live_view.py" line="475"/>
-        <source>Armed recording cancelled</source>
-        <translation>已取消预录制</translation>
-    </message>
-    <message>
-        <location filename="../../ui/live_view.py" line="491"/>
-        <source>Recording armed; waiting for device...</source>
-        <translation>已预置录制，正在等待设备...</translation>
     </message>
     <message>
         <location filename="../../ui/live_view.py" line="729"/>
@@ -2957,98 +3242,108 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>设备已上线</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1709"/>
+        <location filename="../../ui/live_view.py" line="1704"/>
         <source>A customer recording operation is already pending</source>
         <translation>已有客户录制操作正在进行</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1749"/>
-        <source>Connected AFD01 firmware does not support full support recording</source>
-        <translation>已连接的 AFD01 固件不支持全量支持录制</translation>
-    </message>
-    <message>
-        <location filename="../../ui/live_view.py" line="1796"/>
+        <location filename="../../ui/live_view.py" line="1791"/>
         <source>Capture profile command could not be sent</source>
         <translation>采集配置命令发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1776"/>
+        <location filename="../../ui/live_view.py" line="1771"/>
         <source>Preparing full support recording...</source>
         <translation>正在准备全量支持录制...</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1778"/>
+        <location filename="../../ui/live_view.py" line="1773"/>
         <source>Restoring customer live stream...</source>
         <translation>正在恢复客户实时数据流...</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1826"/>
+        <location filename="../../ui/live_view.py" line="1821"/>
         <source>Device rejected the capture profile ({code})</source>
         <translation>设备拒绝采集配置（{code}）</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1858"/>
+        <location filename="../../ui/live_view.py" line="1853"/>
         <source>Full support recording resumed</source>
         <translation>全量支持录制已恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1862"/>
+        <location filename="../../ui/live_view.py" line="1857"/>
         <source>Customer live stream restored</source>
         <translation>客户实时数据流已恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1801"/>
+        <location filename="../../ui/live_view.py" line="1796"/>
         <source>Full support recording was not confirmed</source>
         <translation>未确认全量支持录制</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1803"/>
+        <location filename="../../ui/live_view.py" line="481"/>
+        <source>Pending recording request cancelled</source>
+        <translation>等待中的录制请求已取消</translation>
+    </message>
+    <message>
+        <location filename="../../ui/live_view.py" line="497"/>
+        <source>Recording requested; waiting for device...</source>
+        <translation>已请求录制，正在等待设备...</translation>
+    </message>
+    <message>
+        <location filename="../../ui/live_view.py" line="1744"/>
+        <source>Connected device firmware does not support full support recording</source>
+        <translation>已连接的设备固件不支持全量支持录制</translation>
+    </message>
+    <message>
+        <location filename="../../ui/live_view.py" line="1798"/>
         <source>Customer stream restore was not confirmed</source>
         <translation>未确认客户数据流恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2015"/>
+        <location filename="../../ui/live_view.py" line="2010"/>
         <source>Recording stopped with {count} dropped chunk(s)</source>
         <translation>录制已停止，丢失 {count} 个数据块</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2020"/>
+        <location filename="../../ui/live_view.py" line="2015"/>
         <source>Recording stop did not complete cleanly</source>
         <translation>录制停止过程未正常完成</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2041"/>
+        <location filename="../../ui/live_view.py" line="2036"/>
         <source>Import data into Live</source>
         <translation>导入数据到实时页</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2077"/>
+        <location filename="../../ui/live_view.py" line="2072"/>
         <source>Imported {count} DataReport record(s) from {path}</source>
         <translation>已从 {path} 导入 {count} 条 DataReport 记录</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2084"/>
+        <location filename="../../ui/live_view.py" line="2079"/>
         <source>Import failed: {detail}</source>
         <translation>导入失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2111"/>
+        <location filename="../../ui/live_view.py" line="2106"/>
         <source>Display cleared</source>
         <translation>显示已清空</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2186"/>
-        <location filename="../../ui/live_view.py" line="2356"/>
+        <location filename="../../ui/live_view.py" line="2181"/>
+        <location filename="../../ui/live_view.py" line="2351"/>
         <source>GNSS sky plot and signal-level C/N₀ — Live</source>
         <translation>GNSS 天空图与逐信号 C/N₀ — 实时</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2197"/>
+        <location filename="../../ui/live_view.py" line="2192"/>
         <source>The connected firmware does not advertise Orbit/TLE support</source>
         <translation>当前连接的固件未声明 Orbit/TLE 能力</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2213"/>
+        <location filename="../../ui/live_view.py" line="2208"/>
         <source>Satellite catalog and orbit prediction — Live</source>
         <translation>卫星目录与轨道预测 — 实时</translation>
     </message>
@@ -3464,225 +3759,245 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>下载失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="420"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="464"/>
         <source>Invalid request</source>
         <translation>无效请求</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="421"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="465"/>
         <source>Value outside the device range</source>
         <translation>数值超出设备允许范围</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="422"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="466"/>
         <source>Operation is not allowed in the current mode</source>
         <translation>当前模式不允许此操作</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="423"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="467"/>
         <source>Operation is not supported by this firmware</source>
         <translation>当前固件不支持此操作</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="424"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="659"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="468"/>
+        <location filename="../../ui/device_view.py" line="561"/>
         <source>Device is busy</source>
         <translation>设备忙</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="425"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="469"/>
         <source>Device internal error</source>
         <translation>设备内部错误</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="74"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="469"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="78"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="514"/>
         <location filename="../../ui/customer_workspace.py" line="87"/>
         <source>RF control</source>
         <translation>射频控制</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="76"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="470"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="80"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="515"/>
         <source>Manual controls become available after device readback confirms manual mode.</source>
         <translation>设备回读确认手动模式后，才可使用手动控制。</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="82"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="232"/>
-        <source>Waiting for AFD01 service</source>
-        <translation>等待 AFD01 服务</translation>
+        <location filename="../../ui/customer_maintenance_view.py" line="404"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="414"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="422"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="86"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="227"/>
+        <source>Waiting for product service</source>
+        <translation>等待产品服务</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="94"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="471"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="98"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="516"/>
         <source>Tracking mode</source>
         <translation>跟踪模式</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="120"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="474"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="124"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="519"/>
         <source>Frequency and polarization</source>
         <translation>频点与极化</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="132"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="475"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="136"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="520"/>
         <source>RX frequency</source>
         <translation>接收频点</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="133"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="476"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="137"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="521"/>
         <source>TX frequency</source>
         <translation>发射频点</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="134"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="477"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="138"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="522"/>
         <source>RX polarization</source>
         <translation>接收极化</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="135"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="478"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="139"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="523"/>
         <source>TX polarization</source>
         <translation>发射极化</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="156"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="479"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="160"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="524"/>
         <source>Apply RF settings</source>
         <translation>应用射频设置</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="169"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="480"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="173"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="525"/>
         <source>Transmit output</source>
         <translation>发射输出</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="176"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="481"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="180"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="526"/>
         <source>Transmit enabled</source>
         <translation>启用发射</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="182"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="415"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="186"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="459"/>
         <source>No pending operation</source>
         <translation>无待处理操作</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="232"/>
-        <source>AFD01 service online</source>
-        <translation>AFD01 服务在线</translation>
+        <location filename="../../ui/customer_rf_control_view.py" line="227"/>
+        <source>Product service online</source>
+        <translation>产品服务在线</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="242"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="238"/>
         <source>Device readback: automatic</source>
         <translation>设备回读：自动跟踪</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="243"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="239"/>
         <source>Device readback: manual</source>
         <translation>设备回读：手动跟踪</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="244"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="286"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="349"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="504"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="240"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="299"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="384"/>
         <source>Device readback unavailable</source>
         <translation>设备回读不可用</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="283"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="296"/>
         <source>Device readback: enabled</source>
         <translation>设备回读：已启用</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="283"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="296"/>
         <source>Device readback: disabled</source>
         <translation>设备回读：已禁用</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="303"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="322"/>
+        <source>RF control unavailable: device does not support independent RX/TX polarization</source>
+        <translation>射频控制不可用：设备不支持收发独立极化</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_rf_control_view.py" line="324"/>
+        <source>RF control unavailable: independent RX/TX polarization capability is unavailable</source>
+        <translation>射频控制不可用：收发独立极化能力不可用</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_rf_control_view.py" line="325"/>
+        <source>RF control unavailable: waiting for valid device capabilities</source>
+        <translation>射频控制不可用：等待有效的设备能力声明</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_rf_control_view.py" line="338"/>
         <source>Allowed ranges: RX {rx_min:.0f}-{rx_max:.0f} MHz; TX {tx_min:.0f}-{tx_max:.0f} MHz</source>
         <translation>允许范围：接收 {rx_min:.0f}-{rx_max:.0f} MHz；发射 {tx_min:.0f}-{tx_max:.0f} MHz</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="355"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="390"/>
         <source>Readback RX {rx:.3f} MHz {rx_pol}; TX {tx:.3f} MHz {tx_pol}</source>
         <translation>回读：接收 {rx:.3f} MHz {rx_pol}；发射 {tx:.3f} MHz {tx_pol}</translation>
     </message>
     <message>
+        <location filename="../../ui/customer_rf_control_view.py" line="472"/>
+        <source>Operation cancelled because the device session changed</source>
+        <translation>设备会话已变化，操作已取消</translation>
+    </message>
+    <message>
         <location filename="../../ui/customer_overview_view.py" line="90"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="366"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="401"/>
         <source>Vertical</source>
         <translation>垂直极化</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="91"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="367"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="402"/>
         <source>Horizontal</source>
         <translation>水平极化</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="92"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="368"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="403"/>
         <source>Left circular</source>
         <translation>左旋圆极化</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="93"/>
-        <location filename="../../ui/customer_rf_control_view.py" line="369"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="404"/>
         <source>Right circular</source>
         <translation>右旋圆极化</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="398"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="434"/>
         <source>Enable transmit output</source>
         <translation>启用发射输出</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="399"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="435"/>
         <source>Confirm that the RF path and test environment are ready before enabling transmit output.</source>
         <translation>启用发射输出前，请确认射频链路和测试环境已准备就绪。</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="416"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="460"/>
         <source>Command could not be sent</source>
         <translation>命令发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="417"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="461"/>
         <source>Waiting for device response (request {request_id})</source>
         <translation>等待设备响应（请求 {request_id}）</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="418"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="462"/>
         <source>Command accepted; waiting for applied-value readback</source>
         <translation>命令已接受，等待生效值回读</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="419"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="463"/>
         <source>Applied values confirmed by device</source>
         <translation>设备已确认生效值</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="427"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="471"/>
         <source>Applied-value readback timed out</source>
         <translation>生效值回读超时</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_rf_control_view.py" line="426"/>
+        <location filename="../../ui/customer_rf_control_view.py" line="470"/>
         <source>Device response timed out</source>
         <translation>设备响应超时</translation>
-    </message>
-    <message>
-        <location filename="../../ui/customer_workspace.py" line="148"/>
-        <location filename="../../ui/customer_workspace.py" line="277"/>
-        <source>AFD01 operation</source>
-        <translation>AFD01 操作</translation>
     </message>
     <message>
         <location filename="../../ui/orbit_widget.py" line="155"/>
@@ -3914,7 +4229,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>正在上传 tle.txt：{percent}%</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2141"/>
+        <location filename="../../ui/live_view.py" line="2136"/>
         <location filename="../../ui/orbit_widget.py" line="486"/>
         <source>Orbit request {operation} failed: {status}</source>
         <translation>Orbit 请求 {operation} 失败：{status}</translation>
@@ -3925,7 +4240,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>tle.txt 已上传，已请求设备重扫目录</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2138"/>
+        <location filename="../../ui/live_view.py" line="2133"/>
         <location filename="../../ui/orbit_widget.py" line="501"/>
         <source>Tracking target accepted; TX state was not changed</source>
         <translation>设备已接受跟踪目标；发射状态未改变</translation>
@@ -4713,73 +5028,83 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
 <context>
     <name>CustomerMaintenanceView</name>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="277"/>
-        <source>Wait for authoritative AFD01 identity before selecting a package</source>
-        <translation>请等待 AFD01 权威身份信息后再选择固件包</translation>
+        <location filename="../../ui/customer_maintenance_view.py" line="730"/>
+        <source>Wait for authoritative product identity before selecting a package</source>
+        <translation>选择升级包前请等待设备上报权威产品身份</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="280"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="736"/>
         <source>No trusted firmware signing key is installed</source>
         <translation>未安装可信固件签名公钥</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="299"/>
-        <location filename="../../ui/customer_maintenance_view.py" line="348"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="755"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="822"/>
         <source>Device OTA service is not ready</source>
         <translation>设备 OTA 服务尚未就绪</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_maintenance_view.py" line="306"/>
+        <location filename="../../ui/customer_maintenance_view.py" line="764"/>
         <source>Package verified and ready</source>
         <translation>固件包已验证，可以升级</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="817"/>
+        <source>Device session changed; select the firmware again</source>
+        <translation>设备会话已变化，请重新选择固件</translation>
+    </message>
+    <message>
+        <location filename="../../ui/customer_maintenance_view.py" line="869"/>
+        <source>Firmware selection changed; verify the signed package again</source>
+        <translation>固件选择已变化，请重新验证签名包</translation>
     </message>
 </context>
 <context>
     <name>DeviceView</name>
     <message>
-        <location filename="../../ui/device_view.py" line="71"/>
+        <location filename="../../ui/device_view.py" line="73"/>
         <source>Unchanged</source>
         <translation>未修改</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="72"/>
+        <location filename="../../ui/device_view.py" line="74"/>
         <source>Awaiting write confirmation...</source>
         <translation>等待写入确认...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="73"/>
+        <location filename="../../ui/device_view.py" line="75"/>
         <source>Send failed</source>
         <translation>发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="74"/>
+        <location filename="../../ui/device_view.py" line="76"/>
         <source>✓ Success</source>
         <translation>✓ 成功</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="75"/>
+        <location filename="../../ui/device_view.py" line="77"/>
         <source>Waiting for device readback...</source>
         <translation>等待设备回读...</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="76"/>
+        <location filename="../../ui/device_view.py" line="78"/>
         <source>Target value was not read back</source>
         <translation>未回读到目标值</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="77"/>
+        <location filename="../../ui/device_view.py" line="79"/>
         <source>✗ {detail}</source>
         <translation>✗ {detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="78"/>
-        <source>✓ Update complete; device is online ({before} → {after})</source>
-        <translation>✓ 升级完成，设备已上线（{before} → {after}）</translation>
+        <location filename="../../ui/device_view.py" line="80"/>
+        <source>✓ Target firmware {version} confirmed on the same device ({before} → {after})</source>
+        <translation>✓ 已确认同一设备运行目标固件 {version}（{before} → {after}）</translation>
     </message>
     <message>
-        <location filename="../../ui/device_view.py" line="82"/>
-        <source>✓ Device is back online (version {version}, unchanged)</source>
-        <translation>✓ 设备已重新上线（版本 {version}，与升级前相同）</translation>
+        <location filename="../../ui/device_view.py" line="84"/>
+        <source>Firmware {version} was reported, but applying this package was not independently confirmed</source>
+        <translation>设备上报固件 {version}，但未能独立确认该固件包已应用</translation>
     </message>
 </context>
 <context>

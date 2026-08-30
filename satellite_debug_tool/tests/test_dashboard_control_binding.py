@@ -276,12 +276,14 @@ def test_liveview_device_transaction_locks_only_the_button(qapp):
     view._update_debug_button_enabled()
     assert view._debug_btn.isEnabled()
 
-    view.set_device_transaction_active(True)
+    transaction_owner = object()
+    assert view.session_core().try_acquire_device_transaction(transaction_owner)
     assert not view._debug_btn.isEnabled()
 
     # Device 仍可通过统一控制入口发命令，不依赖按钮可用状态。
     view.request_debug_mode(True)
     assert view._debug_controller.pending_target is True
+    assert view.session_core().release_device_transaction(transaction_owner)
 
 
 def test_dashboard_rebuilds_when_semantics_changes_control_binding(qapp):

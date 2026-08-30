@@ -2,13 +2,13 @@
 
 ## 最高优先级：根因修复与肯定式逻辑
 
-- 先定位并证明根因，再修改根因所属的状态源、协议合同或数据流。超时放宽、重复重试、额外轮询、吞异常、硬编码设备特例和 UI 补偿不能替代根因修复。
-- 现有逻辑错误时，直接用单一正确实现替换，并删除被替代的旧分支、临时绕行、重复状态源和失效 fallback。一个业务事实只保留一个权威来源。
-- 条件、状态、API、变量、日志和界面文案使用直接、肯定、可验证的领域语义，例如 `ready`、`valid`、`connected`、`has_reference`。禁止 `not_disabled`、`not_invalid`、`no_error == false` 一类双重否定。
-- 状态描述只陈述证据已经确认的事实。例如 UDP 写入成功表示“指令已发送”；设备回读确认后才表示“平台在线”或“已到位”。
-- 兼容路径只服务于明确的版本合同，并具备独立边界、专项测试和退出条件。未知设备或未知版本使用明确的“待确认”或“不支持”状态。
-- 每次修复都增加一项回归测试：该测试在旧实现上稳定复现故障，在新实现上稳定通过；同时检查相邻入口，确保被替代逻辑已经完整移除。
-- 评审先检查事实来源和状态流，再检查局部条件。发现多条路径表达同一事实时，统一到领域模型或 Store，由界面只负责呈现和发出意图。
+- 根因级修复是默认交付方式：先用稳定复现、调用链和状态证据定位根因，再修改根因所属的状态源、协议合同或数据流。超时放宽、重复重试、额外轮询、吞异常、硬编码设备特例和 UI 补偿只用于定位，不能作为最终修复。
+- 根因属于错误模型时，单一正确模型是唯一交付物：直接替换旧实现，并删除被取代的旧分支、兼容层、临时开关、重复状态源、旁路、失效 fallback 和失效测试。一个业务事实只保留一个权威 owner。
+- 条件、状态、API、变量、注释、日志、计划、验收语句和界面文案只陈述一个直接、肯定、单义、可验证的领域事实，例如 `ready`、`valid`、`connected`、`has_reference`。禁止 `not_disabled`、`not_invalid`、`no_error == false` 一类双重否定。
+- 状态描述只陈述证据已经确认的事实。例如 UDP 写入成功表示“指令已发送”；设备回读确认后才表示“设备在线”“已接受”或“已应用”，物理 RF 仍需独立证据。
+- 兼容迁移只服务于明确的产品版本合同，并同步冻结独立边界、期限、退出条件和专项验收证据。未知设备或未知版本使用明确的“待确认”或“不支持”状态。
+- 每次修复都增加一项回归测试：旧实现稳定复现故障，新实现稳定通过；同时检查相邻入口，证明被替代逻辑已经完整移除。
+- 评审先检查事实来源和状态流，再检查局部条件。发现多条路径表达同一事实时，统一到领域模型或 Store，由界面只负责呈现和发出意图。Review 只有在根因消除、旧模型清除、全链路语义一致且回归证据完整后才算完成。
 
 ## 运行命令
 
@@ -17,7 +17,7 @@
 python3 -m satellite_debug_tool.main
 python3 -m satellite_debug_tool.main --production   # 解锁批量试产工作区（启动即进）
 
-# 测试（无 editable install 时需要 PYTHONPATH；73 个测试文件，conftest 已设 offscreen + 静默更新）
+# 测试（无 editable install 时需要 PYTHONPATH；74 个测试文件，conftest 已设 offscreen + 静默更新）
 PYTHONPATH=. pytest satellite_debug_tool/tests
 pytest satellite_debug_tool/tests/test_frame_v2.py -v      # 单文件
 pytest satellite_debug_tool/tests -k "crc"                 # 按 pattern
@@ -41,19 +41,22 @@ python3 scripts/update_translations.py check
 
 | 索引 | 工作区 | 入口 | 备注 |
 |------|--------|------|------|
-| 0 | **Customer Workspace**（默认） | 直接进 | 面向 AFD01 终端用户：Overview / RF control / Playback / Maintenance。共享 `LiveView` 实例。 |
+| 0 | **Customer Workspace**（默认） | 直接进 | 面向已注册产品（AFD01 / AFD01C / ESA01）：Overview / RF control / Playback / Maintenance。共享 `LiveView` 实例。 |
 | 1 | **Engineering Tabs**（Live / Playback / Log / Device） | `Ctrl+Shift+E` 首次确认后本会话解锁 | 内部诊断、协议解码、设备参数读写、OTA。 |
 | 2 | **Production Workspace**（批量试产） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | 批次测试 / 夹具调试双页面；正式试产放行流程仍在后续里程碑。 |
 
 - 客户与工程工作区共享同一个 `DeviceSessionCore`、连接和 Store；试产 Fleet 通过同一个 `SessionRegistry` 取得 endpoint 会话。
 - 默认启动只构建客户总览和 `LiveView` 会话壳；工程 Live 呈现、工程其他 Tab、客户其他页面和试产工作区均在首次访问时构建并复用。
 - `MainWindow` 负责顶层 `activate_view()` / `deactivate_view()`；各工作区只负责当前子页面。隐藏页面停止曲线、3D、表格和夹具绘图，连接、录制、OTA、批次与采集状态继续运行。
-- 设备 OTA / 参数表读写时 `LiveView` 会 `set_device_transaction_active(True)`，期间禁用握手重试。
+- OTA、参数写入和 Product 控制通过 `DeviceSessionCore` 的单一设备事务租约互斥；控制器在完成、失败、断线或连接代际变化时释放各自 owner。
+- Product Service `result=0` 只表示设备已接受请求；只有更新且匹配的遥测回读才表示状态已应用，物理 RF 证据继续独立。
+- 客户 OTA 使用不可变的已验签 artifact token，绑定包字节、签名 manifest 和当前设备会话；工程 raw BIN 与客户签名包不共用授权，传输期间不允许替换 artifact。
+- `OTA_END=VERIFIED` 只确认字节转移和校验已被设备接受；完成结果还必须证明同 endpoint 返回、本次会话捕获的每项不可变身份都重新匹配，且传输前捕获的每个固件来源都重新回报、相互一致并匹配目标版本。同版本包只能显示“应用未独立确认”。
 - 工程 Tab 内部仍是 `LiveView / PlaybackView / LogView / DeviceView` 四张卡（`QTabWidget`，tabBar 隐藏，顶栏"药丸"接管）。
 
 ## 架构
 
-PySide6 桌面应用，调试相控阵卫星通信终端。基于 **DEBUG v2 协议**（`doc/DEBUG设备协议接口规范_v2.md` 是权威规范）；M18 起加入 AFD01 专用 **Product Service 协议**（cmd 0x20–0x2B），XESA01 Orbit 使用独立 0x30–0x31，envelope 仍兼容 v2。
+PySide6 桌面应用，调试相控阵卫星通信终端。基于 **DEBUG v2 协议**（`doc/DEBUG设备协议接口规范_v2.md` 是权威规范）；M18 起加入已注册产品使用的 **Product Service 协议**（cmd 0x20–0x2C），XESA01 Orbit 使用独立 0x30–0x31，envelope 仍兼容 v2。
 
 ### 数据流
 
@@ -76,7 +79,7 @@ Production   Fleet + SessionRegistry → BatchCoordinator / FixtureSessionCoordi
 
 - `core/protocol/` — v2 包络、CRC、Handshake 与领域注册表；`domains/{debug,product,orbit}.py` 独占各自命令解码，`FrameReceiverV2` 只做包络解析和领域分发
 - `core/session/` — **M21** `DeviceSessionCore`、`SessionRegistry` 与 Debug/参数/OTA/Product 控制器；一个 endpoint 只有一个权威会话
-- `core/product/` — **M18+** AFD01 Product Service 模型、Store、回放/legacy 投影与整快照来源状态机；每个 `ProductValue` 携带可用性、来源、接收时间和质量
+- `core/product/` — **M18+** 客户 Product Service 模型、注册策略、Store、回放/legacy 投影与整快照来源状态机；每个 `ProductValue` 携带可用性、来源、接收时间和质量
 - `core/playback/` — **M21** 后台 SDB 构建线程与磁盘型 `PlaybackSeriesProvider`，按时间窗口和像素预算查询曲线数据
 - `core/comm/` — QThread worker：`BaseWorker`（QThread 基类）→ `SerialWorker` / `UdpWorker`
 - `core/data/` — `ChannelBuffer`、`DataStore`、`TelemetrySeriesStore`、`StateStore`、`EventLog` 与 GNSS/Orbit Store
@@ -97,15 +100,15 @@ Production   Fleet + SessionRegistry → BatchCoordinator / FixtureSessionCoordi
 ### 关键约定
 
 - 所有 import 用 `satellite_debug_tool.` 前缀（绝对导入；这是为什么必须 `python3 -m ...`）
-- UI 在 `ui/`，业务在 `core/`，持久化在 `io/`，**试产业务在 `core/production/`，AFD01 产品服务协议在 `core/product/`**
+- UI 在 `ui/`，业务在 `core/`，持久化在 `io/`，**试产业务在 `core/production/`，客户产品服务领域在 `core/product/`**
 - worker 线程（`BaseWorker` 子类）**严禁**直接操作 widget；必须 emit Qt 信号，主线程消费
 - 页面构造只建立呈现对象；协议解析、连接代际、参数/OTA 状态机、试产状态迁移和证据收尾属于 `core/`。
 - 高频页面必须实现幂等 `activate_view()` / `deactivate_view()`；隐藏时停止呈现定时器，恢复时先从 Store 即时刷新一次。
 - 新增重量级页面使用 `LazyViewHost` 首次构建并保留实例；首次构建前到达的数据必须由权威 Store 在激活时补齐。
 - **每个 Tab/工作区独立 `DataStore` / `ProfileStore`**（M7 引入），切换不污染；CustomerWorkspace 和 LiveView 共享的是同一个 `LiveView` 实例，所以底层 DataStore 实际同一份
-- 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x10`、`0x20..0x2B`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
+- 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x10`、`0x20..0x2C`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
 - 通用长帧扩容不改变专用上传分片合同：`OTA_DATA` 每片 1..1021 B（UI 通常发送 512 B），Orbit `UPLOAD_CHUNK` 每片 1..1012 B
-- 测试在 `satellite_debug_tool/tests/`（73 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
+- 测试在 `satellite_debug_tool/tests/`（74 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
 - `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_UPDATE_CHECK=0` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
 - 字号已固化 `small`（`base_px=13`，`main.py` 调 `S.apply_global_font(app, scale="small", base_px=13)`）；`styles.FONT_SCALES` / `FontScale` API 仅保留兼容 `test_styles.py`，UI 不再暴露
 - 主题三档 `dark / dark_hc / light`，由 `S.palette()` 出语义色键（兼容键 + Mission Console 新语义键），顶栏图标按钮循环切换
@@ -145,14 +148,16 @@ Production   Fleet + SessionRegistry → BatchCoordinator / FixtureSessionCoordi
 
 ## 关键文档（按重要性）
 
+- 本文件（`AGENTS.md`）— **当前工程约定与架构的唯一权威入口**；代码、协议或里程碑演进后同步更新本文件
 - `doc/DEBUG设备协议接口规范_v2.md` — **协议权威规范**
-- `doc/upper_pc_function_definition_vnext.md` — 当前上位机功能定义与路线
+- `doc/M22_AFD01C_upper_pc_adaptation_*.md` — 当前 AFD01C 上位机适配范围、证据与未完成真机边界
+- `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
-- `doc/M7_*.md` ~ `doc/M21_*` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛）
+- `doc/M7_*.md` ~ `doc/M22_*` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配）
 - `doc/development_log.md` — M1–M6 实施日志
 - `doc/acceptance_log.md` — F-/A- 系列验收跟踪
 - `doc/i18n_terms.md` — 中英术语表
-- `doc/user_manual.md` / `doc/user_manual_en.md` — 用户手册
+- `doc/user_manual.md` / `doc/user_manual_en.md` — M16 工程工作区历史操作手册；当前三工作区事实以本文件为准
 - `doc/RELEASING.md` — 发版 SOP（含 tag 重发、hotfix、rc 预发）
 - `doc/AFD01_signed_firmware_package.md` — 客户 OTA 固件包签名格式
 - `BUILDING.md` — 打包可执行文件完整指南

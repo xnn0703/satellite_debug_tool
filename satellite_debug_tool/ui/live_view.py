@@ -188,6 +188,9 @@ class LiveView(QWidget):
         self._session_core.profile_ready.connect(self._on_handshake_ready)
         self._session_core.link_lost.connect(self._on_link_lost)
         self._session_core.link_restored.connect(self._on_link_restored)
+        self._session_core.device_transaction_changed.connect(
+            lambda _active: self._update_debug_button_enabled()
+        )
         self._handshake_timer = QTimer(self)
         self._handshake_timer.setInterval(100)
         self._handshake_timer.timeout.connect(self._on_handshake_tick)
@@ -203,7 +206,6 @@ class LiveView(QWidget):
         self._debug_controller.pending_changed.connect(self._on_debug_pending_changed)
         self._debug_controller.request_finished.connect(self._on_debug_request_finished)
         self._customer_auto_debug = False
-        self._external_control_locked = False
         self._recorder = None
         self._is_recording = False
         self._customer_recording = False
@@ -296,6 +298,10 @@ class LiveView(QWidget):
 
     def product_store(self) -> ProductServiceStore:
         return self._product_store
+
+    def customer_service_state(self):
+        """Return the shared session's registered customer Product Service state."""
+        return self._session_core.customer_service_state()
 
     @property
     def _product_subscribe_attempts(self) -> int:
@@ -472,7 +478,7 @@ class LiveView(QWidget):
             return
         if state == CustomerRecordingState.ARMED:
             self._clear_customer_recording_intent()
-            self.status_message.emit(tr("Armed recording cancelled"), 2500)
+            self.status_message.emit(tr("Pending recording request cancelled"), 2500)
             return
         if state == CustomerRecordingState.PREPARING:
             self._capture_profile_controller.reset()
@@ -488,7 +494,7 @@ class LiveView(QWidget):
         self._customer_recording_path = filepath
         self._set_customer_recording_state(CustomerRecordingState.ARMED)
         self.status_message.emit(
-            tr("Recording armed; waiting for device..."),
+            tr("Recording requested; waiting for device..."),
             0,
         )
         self._try_start_armed_customer_recording()
@@ -518,12 +524,6 @@ class LiveView(QWidget):
         """Live/Device 共用的严格 Debug 控制入口。"""
         self._sync_session_transport()
         self._debug_controller.request(bool(target))
-
-    @Slot(bool)
-    def set_device_transaction_active(self, active: bool) -> None:
-        """设备事务期间锁住 Live 页 Debug 按钮。"""
-        self._external_control_locked = bool(active)
-        self._update_debug_button_enabled()
 
     @Slot(bool)
     def set_handshake_retries_paused(self, paused: bool) -> None:
@@ -1161,11 +1161,6 @@ class LiveView(QWidget):
             self._apply_hardware_to_presentation(hw_type)
         self.profile_ready.emit(hw_type)
         if (
-            hw_type.lower() == "afd01"
-            and not self._product_subscription_controller.confirmed
-        ):
-            self._start_product_subscription()
-        if (
             self._customer_auto_debug
             and not self._debug_controller.enabled
             and self._debug_controller.pending_target is None
@@ -1571,7 +1566,7 @@ class LiveView(QWidget):
             return
         self._debug_btn.setEnabled(
             self._is_connected
-            and not self._external_control_locked
+            and not self._session_core.device_transaction_active
             and self._debug_controller.pending_target is None
         )
 
@@ -1746,7 +1741,7 @@ class LiveView(QWidget):
             if state == CustomerRecordingState.ARMED:
                 self.status_message.emit(
                     tr(
-                        "Connected AFD01 firmware does not support full support recording"
+                        "Connected device firmware does not support full support recording"
                     ),
                     4000,
                 )

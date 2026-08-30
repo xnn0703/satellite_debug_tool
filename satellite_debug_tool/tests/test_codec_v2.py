@@ -14,6 +14,7 @@ from satellite_debug_tool.core.protocol import (
     FRAME_HEADER_1,
     MAX_DATA_LENGTH,
     MAX_FRAME_LENGTH,
+    OTA_DATA_SEQUENCE_MAX,
     PROTOCOL_VERSION,
     SubCmd,
     build_control,
@@ -146,6 +147,14 @@ class TestControlBuilders:
             build_ota_data(0x1234, b"")
         with pytest.raises(CodecError, match="1021"):
             build_ota_data(0x1234, b"\x5A" * 1022)
+
+    def test_ota_sequence_is_exactly_u16(self):
+        frame = build_ota_data(OTA_DATA_SEQUENCE_MAX, b"\x5A")
+        assert self._data_of(frame)[:3] == bytes([SubCmd.OTA_DATA, 0xFF, 0xFF])
+
+        for sequence in (-1, OTA_DATA_SEQUENCE_MAX + 1, True, 1.0):
+            with pytest.raises(CodecError, match="u16"):
+                build_ota_data(sequence, b"\x5A")
 
 
 # -----------------------------------------------------------------------------

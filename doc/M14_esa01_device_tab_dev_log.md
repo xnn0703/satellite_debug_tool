@@ -1,5 +1,8 @@
 # M14 ESA01 Device Tab 开发记录
 
+> 历史记录：下文所载“通用成功响应”和“1 秒旧 META 隔离窗”是 M14 时的旧实现，
+> 已被 M22 的上下文 ACK、不可变 OTA 制品、同设备身份与目标版本证据链取代。
+
 ## 2026-07-14
 
 - 确认上位机协议层已具备 `PROFILE_SEMANTICS`、参数表和 OTA 编解码能力。
@@ -168,9 +171,8 @@
 - Device OTA 已改为纯 Qt 事件状态机 `QUIESCE -> BEGIN -> DATA -> END -> WAIT_REBOOT`：
   - 不再访问 worker 私有 `_sock/_running`，不再重启 QThread，不再调用 `processEvents()`。
   - BEGIN/DATA/END 超时分别为 15s/2s/10s，DATA 最多重试 3 次，重新上线等待 120s。
-  - 新 ESA01 严格匹配 `OTA_BEGIN=READY`、`OTA_DATA=<seq>`、`OTA_END=VERIFIED`；
-    未声明 `command_response_context` 的旧 AFD01 继续接受通用成功响应。
-  - WAIT_REBOOT 增加 1 秒旧 META 隔离窗，同版本镜像可由隔离窗后的 META 正确确认上线。
+  - M14 当时的旧实现曾对旧 AFD01 接受通用成功响应，并使用 1 秒 META 隔离窗判定同版本回机；
+    两者均不能证明当前操作或新启动周期，已在 M22 删除。
 - 参数交互改为主动回表：semantics 后先等待 1.5 秒，未收到才兜底请求一次；手动/自动请求合并。
   新 ESA01 参数写入只接受 `PARA_SET=<name>`，最终以主动参数表读回值确认，不再每秒轮询。
 - 自动化验证：

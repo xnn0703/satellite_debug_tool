@@ -1,5 +1,8 @@
 # M14 ESA01 Device Tab 验收标准
 
+> 历史验收快照。“AFD01 无 capability 保持启用”的兼容准则已于 M22 退出；
+> 当前对未声明 `ota` 和 `command_response_context` 的固件失败关闭。
+
 ## 上位机自动化
 
 - `PYTHONPATH=. pytest satellite_debug_tool/tests -q` 通过。
@@ -8,7 +11,7 @@
   - 未连接时所有设备操作禁用。
   - 连接 ESA01 但无 capability 时，参数/OTA 禁用且不自动读参数。
   - 收到 `parameters=true`、`ota=true` 后，参数/OTA 启用。
-  - AFD01 无 capability 时保持兼容启用。
+  - 未声明 OTA 和响应上下文能力时，参数/OTA 保持禁用。
 
 ## 硬件联调
 

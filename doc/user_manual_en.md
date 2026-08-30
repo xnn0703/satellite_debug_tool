@@ -1,7 +1,13 @@
 # Satellite Debug Tool User Manual
 
-**Applies to**: M16 source builds, planned for v1.1.0, DEBUG protocol v2
-**Supported devices**: AFD01, ESA01, UFD45, and devices with a compatible DEBUG v2 profile
+> **Historical manual**: This document is frozen at the M16 Engineering workspace. It does not cover the
+> Customer or Production workspaces added in M18–M22, or AFD01C product admission. See the repository
+> `AGENTS.md` for the current architecture and `M22_AFD01C_upper_pc_adaptation_acceptance.md` for the
+> software and device-validation boundary.
+
+**Historical version**: M16 source builds, planned for v1.1.0, DEBUG protocol v2
+
+**Engineering DEBUG profile examples**: AFD01, AFD01C, ESA01, UFD45, and compatible DEBUG v2 devices
 
 ## Contents
 
@@ -293,7 +299,9 @@ SATELLITE_DEBUG_LINK_TRACE=1 python3 -m satellite_debug_tool.main
 
 Developer references:
 
+- `AGENTS.md` (current engineering contract and architecture)
 - `doc/DEBUG设备协议接口规范_v2.md`
-- `doc/upper_pc_function_definition_vnext.md`
+- `doc/M22_AFD01C_upper_pc_adaptation_acceptance.md` (current AFD01C delivery boundary)
+- `doc/upper_pc_function_definition_vnext.md` (historical route baseline)
 - `doc/i18n_terms.md`
 - `BUILDING.md`

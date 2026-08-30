@@ -1,7 +1,12 @@
 # 卫星通信终端调试工具 — 用户手册
 
-**适用版本**：M16 源码构建（目标版本 `v1.1.0`，DEBUG protocol v2）
-**适用设备**：AFD01、ESA01、UFD45 及兼容 DEBUG v2 profile 的设备
+> **历史手册**：本文冻结于 M16 工程工作区，只描述当时的 Live / Playback / Log / Device 操作，
+> 不覆盖 M18–M22 新增的客户工作台、试产工作区或 AFD01C 产品准入。当前架构以根目录
+> `AGENTS.md` 为准；AFD01C 软件与真机边界见 `M22_AFD01C_upper_pc_adaptation_acceptance.md`。
+
+**历史适用版本**：M16 源码构建（目标版本 `v1.1.0`，DEBUG protocol v2）
+
+**工程 Debug profile 示例**：AFD01、AFD01C、ESA01、UFD45 及兼容 DEBUG v2 profile 的设备
 
 ---
 
@@ -401,8 +406,10 @@ A: 两个地方：
 
 ## 附录 B：开发者参考
 
+- 当前工程约定与架构：[`AGENTS.md`](../AGENTS.md)
 - 协议规范：[`doc/DEBUG设备协议接口规范_v2.md`](./DEBUG设备协议接口规范_v2.md)
-- 当前功能定义：[`doc/upper_pc_function_definition_vnext.md`](./upper_pc_function_definition_vnext.md)
+- AFD01C 当前交付边界：[`doc/M22_AFD01C_upper_pc_adaptation_acceptance.md`](./M22_AFD01C_upper_pc_adaptation_acceptance.md)
+- 历史路线基线：[`doc/upper_pc_function_definition_vnext.md`](./upper_pc_function_definition_vnext.md)
 - 优化计划：[`doc/optimization_plan.md`](./optimization_plan.md)
 - 开发日志：[`doc/development_log.md`](./development_log.md)
 - 验收日志：[`doc/acceptance_log.md`](./acceptance_log.md)

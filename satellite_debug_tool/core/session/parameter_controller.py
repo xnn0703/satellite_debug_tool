@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from satellite_debug_tool.core.profile import CapabilitySupport
 from satellite_debug_tool.core.protocol import (
+    CodecError,
     CommandResponse,
     MetaInfo,
     ParaTableReport,
@@ -57,9 +58,11 @@ class ParameterStatus(str, Enum):
     WRITE_AWAITING = "write_awaiting"
     WRITE_SEND_FAILED = "write_send_failed"
     WRITE_WAITING_READBACK = "write_waiting_readback"
+    WRITE_READBACK_SEND_FAILED = "write_readback_send_failed"
     WRITE_SUCCESS = "write_success"
     WRITE_NOT_READ_BACK = "write_not_read_back"
     WRITE_ERROR = "write_error"
+    SESSION_CHANGED = "session_changed"
     RESET_SUCCESS = "reset_success"
     RESET_FAILED = "reset_failed"
     RESET_TIMEOUT = "reset_timeout"
@@ -81,11 +84,11 @@ class ParameterController(QObject):
     ) -> None:
         super().__init__(parent)
         self._session = session
+        self._lease_token = object()
         self._connected = session.connected
         self._hardware = session.profile_store.current_hw_type()
         self._capability = ParameterCapabilityState.DISCONNECTED
         self._operation = ParameterOperation.IDLE
-        self._transaction_active = False
         self._read_pending = False
         self._loaded_hardware: Optional[str] = None
         self._auto_read_hardware: Optional[str] = None
@@ -104,8 +107,12 @@ class ParameterController(QObject):
         self._verify_timer.timeout.connect(self._request_verify_table)
 
         session.connection_changed.connect(self.set_connected)
+        session.generation_changed.connect(self._on_generation_changed)
         session.record_received.connect(self.feed_record)
         session.profile_store.profile_changed.connect(self._on_profile_changed)
+        self.destroyed.connect(
+            lambda _obj=None, session=session, token=self._lease_token: session.release_device_transaction(token)
+        )
         self._refresh_capability()
 
     @property
@@ -136,9 +143,6 @@ class ParameterController(QObject):
     def pending_type(self) -> Optional[int]:
         return self._pending_type
 
-    def set_transaction_active(self, active: bool) -> None:
-        self._transaction_active = bool(active)
-
     @Slot(bool)
     def set_connected(self, connected: bool) -> None:
         connected = bool(connected)
@@ -149,7 +153,9 @@ class ParameterController(QObject):
             self._hardware = None
             self._loaded_hardware = None
             self._auto_read_hardware = None
-            self._clear_pending()
+            self._refresh_capability()
+            self._finish_session_change()
+            return
         self._refresh_capability()
 
     @Slot(str)
@@ -157,6 +163,26 @@ class ParameterController(QObject):
         if hardware:
             self._hardware = hardware
         self._refresh_capability()
+
+    @Slot(int, object)
+    def _on_generation_changed(self, _generation: int, _endpoint: object) -> None:
+        self._finish_session_change()
+
+    def _finish_session_change(self) -> None:
+        """Publish one terminal fact for every operation owned by the old link."""
+
+        if self._operation is ParameterOperation.IDLE and not self._read_pending:
+            return
+        name = self._pending_name
+        if name:
+            self.parameter_status_changed.emit(
+                name,
+                ParameterStatus.SESSION_CHANGED,
+                {},
+            )
+        else:
+            self.status_changed.emit(ParameterStatus.SESSION_CHANGED, {})
+        self._clear_pending()
 
     @Slot(object)
     def feed_record(self, record: object) -> None:
@@ -172,9 +198,6 @@ class ParameterController(QObject):
         if not self.supported:
             self._emit_capability_status()
             return False
-        if self._transaction_active:
-            self.status_changed.emit(ParameterStatus.TRANSACTION_ACTIVE, {})
-            return False
         if self._operation in {ParameterOperation.WRITING, ParameterOperation.VERIFYING}:
             if not allow_during_write:
                 self.status_changed.emit(ParameterStatus.READ_DEFERRED, {})
@@ -182,8 +205,21 @@ class ParameterController(QObject):
         if self._read_pending:
             self.status_changed.emit(ParameterStatus.READING, {})
             return True
+        if not self._session.try_acquire_device_transaction(self._lease_token):
+            self.status_changed.emit(ParameterStatus.TRANSACTION_ACTIVE, {})
+            return False
         if not self._session.send(build_request_para_table()):
-            self.status_changed.emit(ParameterStatus.READ_SEND_FAILED, {})
+            if self._operation is ParameterOperation.VERIFYING:
+                if self._pending_name:
+                    self.parameter_status_changed.emit(
+                        self._pending_name,
+                        ParameterStatus.WRITE_READBACK_SEND_FAILED,
+                        {},
+                    )
+                self._clear_pending()
+            else:
+                self._session.release_device_transaction(self._lease_token)
+                self.status_changed.emit(ParameterStatus.READ_SEND_FAILED, {})
             return False
         self._read_pending = True
         if self._operation is ParameterOperation.IDLE:
@@ -193,10 +229,22 @@ class ParameterController(QObject):
         return True
 
     def write(self, name: str, para_type: int, value: str) -> bool:
-        if not self.supported or self._transaction_active:
+        if not self.supported:
             self._emit_capability_status()
             return False
         if self._operation is not ParameterOperation.IDLE:
+            return False
+        try:
+            frame = build_para_set(str(name), str(value))
+        except CodecError:
+            self.parameter_status_changed.emit(
+                str(name),
+                ParameterStatus.WRITE_SEND_FAILED,
+                {},
+            )
+            return False
+        if not self._session.try_acquire_device_transaction(self._lease_token):
+            self.status_changed.emit(ParameterStatus.TRANSACTION_ACTIVE, {})
             return False
         self._pending_name = str(name)
         self._pending_value = str(value)
@@ -207,7 +255,7 @@ class ParameterController(QObject):
             ParameterStatus.WRITE_AWAITING,
             {},
         )
-        if not self._session.send(build_para_set(self._pending_name, self._pending_value)):
+        if not self._session.send(frame):
             self.parameter_status_changed.emit(
                 self._pending_name,
                 ParameterStatus.WRITE_SEND_FAILED,
@@ -219,12 +267,16 @@ class ParameterController(QObject):
         return True
 
     def reset_parameters(self) -> bool:
-        if not self.supported or self._transaction_active:
+        if not self.supported:
             self._emit_capability_status()
             return False
         if self._operation is not ParameterOperation.IDLE:
             return False
+        if not self._session.try_acquire_device_transaction(self._lease_token):
+            self.status_changed.emit(ParameterStatus.TRANSACTION_ACTIVE, {})
+            return False
         if not self._session.send(build_para_reset()):
+            self._session.release_device_transaction(self._lease_token)
             self.status_changed.emit(ParameterStatus.RESET_FAILED, {"detail": "send_failed"})
             return False
         self._set_operation(ParameterOperation.RESETTING)
@@ -310,6 +362,7 @@ class ParameterController(QObject):
             self._verify_write(report)
         elif self._operation is ParameterOperation.READING:
             self._set_operation(ParameterOperation.IDLE)
+            self._session.release_device_transaction(self._lease_token)
             self.status_changed.emit(ParameterStatus.IDLE, {})
 
     def _verify_write(self, report: ParaTableReport) -> None:
@@ -336,12 +389,13 @@ class ParameterController(QObject):
             return
         self.parameter_status_changed.emit(
             name,
-            ParameterStatus.WRITE_WAITING_READBACK,
+            ParameterStatus.WRITE_NOT_READ_BACK,
             {},
         )
+        self._clear_pending()
 
     def _apply_response(self, response: CommandResponse) -> None:
-        if self._operation in {ParameterOperation.WRITING, ParameterOperation.VERIFYING}:
+        if self._operation is ParameterOperation.WRITING:
             self._apply_write_response(response)
         elif self._operation is ParameterOperation.RESETTING:
             self._apply_reset_response(response)
@@ -351,9 +405,9 @@ class ParameterController(QObject):
         if not name:
             return
         expected = f"PARA_SET={name}"
+        if (response.msg or "").strip() != expected:
+            return
         if int(response.code) == int(RespCode.SUCCESS):
-            if (response.msg or "").strip() != expected:
-                return
             self._response_timer.stop()
             self._set_operation(ParameterOperation.VERIFYING)
             self.parameter_status_changed.emit(
@@ -373,16 +427,21 @@ class ParameterController(QObject):
         self._clear_pending()
 
     def _apply_reset_response(self, response: CommandResponse) -> None:
+        context = (response.msg or "").strip()
+        if not context.startswith("PARA_RESET="):
+            return
         if int(response.code) == int(RespCode.SUCCESS):
-            if (response.msg or "").strip() != "PARA_RESET=OK":
+            if context != "PARA_RESET=OK":
                 return
             self._response_timer.stop()
             self._set_operation(ParameterOperation.IDLE)
+            self._session.release_device_transaction(self._lease_token)
             self.status_changed.emit(ParameterStatus.RESET_SUCCESS, {})
             QTimer.singleShot(500, self.request_table)
             return
         self._response_timer.stop()
         self._set_operation(ParameterOperation.IDLE)
+        self._session.release_device_transaction(self._lease_token)
         self.status_changed.emit(
             ParameterStatus.RESET_FAILED,
             {"detail": response.msg or str(response.code)},
@@ -405,6 +464,7 @@ class ParameterController(QObject):
             self._clear_pending()
         elif self._operation is ParameterOperation.RESETTING:
             self._set_operation(ParameterOperation.IDLE)
+            self._session.release_device_transaction(self._lease_token)
             self.status_changed.emit(ParameterStatus.RESET_TIMEOUT, {})
 
     @Slot()
@@ -416,11 +476,13 @@ class ParameterController(QObject):
             if self._pending_name:
                 self.parameter_status_changed.emit(
                     self._pending_name,
-                    ParameterStatus.WRITE_WAITING_READBACK,
+                    ParameterStatus.WRITE_NOT_READ_BACK,
                     {},
                 )
+            self._clear_pending()
             return
         self._set_operation(ParameterOperation.IDLE)
+        self._session.release_device_transaction(self._lease_token)
         self.status_changed.emit(ParameterStatus.READ_TIMEOUT, {})
 
     def _clear_pending(self) -> None:
@@ -432,6 +494,7 @@ class ParameterController(QObject):
         self._pending_value = None
         self._pending_type = None
         self._set_operation(ParameterOperation.IDLE)
+        self._session.release_device_transaction(self._lease_token)
 
     def _set_operation(self, operation: ParameterOperation) -> None:
         if self._operation is operation:

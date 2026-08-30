@@ -1,4 +1,4 @@
-"""Guarded AFD01 RF controls backed by product-service readback."""
+"""Guarded product RF controls backed by product-service readback."""
 
 from __future__ import annotations
 
@@ -45,11 +45,15 @@ class CustomerRfControlView(QWidget):
         )
         self._theme = "dark"
         self._rf_dirty = False
+        self._view_active = False
         self._last_snapshot = ProductSnapshot()
         self._build_ui()
         self._store.updated.connect(self._on_store_updated)
         self._controller.pending_changed.connect(lambda _pending: self.refresh())
         self._controller.status_changed.connect(self._on_control_status)
+        live_view.session_core().device_transaction_changed.connect(
+            lambda _active: self.refresh()
+        )
         self._live.connection_state_changed.connect(lambda _connected: self.refresh())
         phase_signal = getattr(
             self._live, "device_connection_phase_changed", None
@@ -79,7 +83,7 @@ class CustomerRfControlView(QWidget):
         title_col.addWidget(self._title)
         title_col.addWidget(self._subtitle)
         header.addLayout(title_col, 1)
-        self._service_state = QLabel(tr("Waiting for AFD01 service"))
+        self._service_state = QLabel(tr("Waiting for product service"))
         self._service_state.setObjectName("customerServiceState")
         header.addWidget(self._service_state)
         root.addLayout(header)
@@ -211,25 +215,17 @@ class CustomerRfControlView(QWidget):
         self._rf_dirty = True
 
     def _on_store_updated(self) -> None:
-        self.refresh()
-
-    def _is_afd01(self) -> bool:
-        hw_type = self._live.profile_store().current_hw_type()
-        return isinstance(hw_type, str) and hw_type.lower() == "afd01"
-
-    def _device_online(self) -> bool:
-        checker = getattr(self._live, "is_device_online", None)
-        return bool(checker()) if checker is not None else bool(self._live.is_connected())
+        if self._view_active:
+            self.refresh()
 
     def refresh(self) -> None:
         snapshot = self._store.snapshot()
         self._last_snapshot = snapshot
-        service_ready = (
-            self._device_online()
-            and self._is_afd01()
-            and self._store.telemetry_ready
+        service_state = self._live.customer_service_state()
+        service_ready = service_state.customer_service_ready
+        self._service_state.setText(
+            tr("Product service online") if service_ready else tr("Waiting for product service")
         )
-        self._service_state.setText(tr("AFD01 service online") if service_ready else tr("Waiting for AFD01 service"))
         set_semantic_property(self._service_state, "online", service_ready)
 
         op = snapshot.operation
@@ -245,7 +241,10 @@ class CustomerRfControlView(QWidget):
         self._mode_readback.setText(mode_text)
 
         pending = self._controller.pending is not None
-        mode_controls = service_ready and mode_valid and not pending
+        transaction_available = self._controller.transaction_available
+        mode_controls = (
+            service_ready and mode_valid and not pending and transaction_available
+        )
         self._auto_btn.setEnabled(mode_controls)
         self._manual_btn.setEnabled(mode_controls)
         manual_confirmed = mode_valid and actual_mode == ControlMode.MANUAL
@@ -259,21 +258,35 @@ class CustomerRfControlView(QWidget):
                 caps.tx_frequency_min_mhz,
                 caps.tx_frequency_max_mhz,
                 caps.polarization_mask,
+                caps.independent_polarization,
             )
+        )
+        independent_polarization_supported = (
+            caps.independent_polarization.availability == Availability.VALID
+            and bool(caps.independent_polarization.value)
         )
         if cap_values_valid:
             self._set_frequency_ranges(snapshot)
             self._set_polarization_mask(int(caps.polarization_mask.value))
-        can_edit_rf = service_ready and manual_confirmed and cap_values_valid and not pending
+        if not independent_polarization_supported:
+            self._range_hint.setText(self._rf_control_unavailable_reason(caps))
+        can_edit_rf = (
+            service_state.rf_control_ready
+            and manual_confirmed
+            and cap_values_valid
+            and not pending
+            and transaction_available
+        )
         for widget in (self._rx_freq, self._tx_freq, self._rx_polar, self._tx_polar, self._apply_rf_btn):
             widget.setEnabled(can_edit_rf)
 
         can_tx = (
-            service_ready
+            service_state.rf_control_ready
             and manual_confirmed
             and caps.tx_control.availability == Availability.VALID
             and bool(caps.tx_control.value)
             and not pending
+            and transaction_available
         )
         self._tx_enable.setEnabled(can_tx)
         if op.tx_enabled.value is not None:
@@ -288,6 +301,28 @@ class CustomerRfControlView(QWidget):
         self._refresh_rf_readback(snapshot)
         if not self._rf_dirty and not pending:
             self._load_rf_inputs(snapshot)
+
+    def activate_view(self) -> None:
+        """Render the latest Store snapshot when the page becomes visible."""
+
+        if self._view_active:
+            return
+        self._view_active = True
+        self.refresh()
+
+    def deactivate_view(self) -> None:
+        """Stop high-frequency Store-driven presentation while hidden."""
+
+        self._view_active = False
+
+    @staticmethod
+    def _rf_control_unavailable_reason(caps) -> str:
+        independent = caps.independent_polarization
+        if independent.availability == Availability.VALID and not independent.value:
+            return tr("RF control unavailable: device does not support independent RX/TX polarization")
+        if independent.availability != Availability.VALID:
+            return tr("RF control unavailable: independent RX/TX polarization capability is unavailable")
+        return tr("RF control unavailable: waiting for valid device capabilities")
 
     def _set_frequency_ranges(self, snapshot: ProductSnapshot) -> None:
         caps = snapshot.rf_capabilities
@@ -392,6 +427,7 @@ class CustomerRfControlView(QWidget):
         actual = bool(self._last_snapshot.operation.tx_enabled.value)
         if checked == actual:
             return
+        confirmed_scope = self._live.session_core().device_scope()
         if checked:
             answer = QMessageBox.warning(
                 self,
@@ -404,7 +440,15 @@ class CustomerRfControlView(QWidget):
                 with QSignalBlocker(self._tx_enable):
                     self._tx_enable.setChecked(actual)
                 return
-        self._controller.request_tx_enable(checked)
+        accepted = self._controller.request_tx_enable(
+            checked,
+            confirmed_scope=confirmed_scope,
+        )
+        if not accepted:
+            current = self._store.snapshot().operation.tx_enabled.value
+            with QSignalBlocker(self._tx_enable):
+                self._tx_enable.setChecked(bool(current))
+            self.refresh()
 
     def _on_control_status(
         self,
@@ -425,6 +469,7 @@ class CustomerRfControlView(QWidget):
             ProductControlStatus.INTERNAL_ERROR: tr_source("Device internal error"),
             ProductControlStatus.RESPONSE_TIMEOUT: tr_source("Device response timed out"),
             ProductControlStatus.READBACK_TIMEOUT: tr_source("Applied-value readback timed out"),
+            ProductControlStatus.SESSION_CHANGED: tr_source("Operation cancelled because the device session changed"),
         }
         source = messages[status]
         detail = tr(source, **values)

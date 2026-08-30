@@ -7,9 +7,9 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
-| 最近修订 | 2026-08-20（1536 B 长帧、AFD01 DEFINE 容量与固定上传分片口径） |
-| 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / ufd45，后续新型号无需改协议） |
-| 适用上位机 | satellite_debug_tool ≥ v2.0 |
+| 最近修订 | 2026-08-30（0x2C 安装姿态读回与 AFD01 / AFD01C / ESA01 产品注册合同） |
+| 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / afd01c / esa01 / ufd45，后续新型号无需改协议） |
+| 适用上位机 | 实现 DEBUG protocol v2 及相应产品扩展的 `satellite_debug_tool` |
 
 ---
 
@@ -31,7 +31,8 @@
 
 > **协议与具体设备完全解耦**。通道、状态字、事件的 ID、名称、单位、分组、枚举值——
 > **全部**由下位机通过 DEFINE 帧自描述。协议规范只定义**编码格式**，不规定"哪个 ID 必须是什么含义"。
-> 这样 afd01 / ufd45 / 未来新型号各自发各自的表，上位机零改动即可适配。
+> 这样 afd01 / afd01c / esa01 / ufd45 / 未来新型号各自发各自的表，上位机可按自描述 Debug profile 呈现。
+> 客户 Product Service、OTA 和试产准入仍必须使用显式注册的产品身份、协议版本和能力合同，不能从 Debug profile 名称推断。
 
 **兼容性**：v2 **完全取代 v1**，上下位机同步切换（本项目决定放弃 v1 兼容层以简化代码路径）。设备启动即发 `META_INFO`，上位机校验 `protocol_ver == 0x02`，否则断连并提示升级固件。
 
@@ -41,7 +42,7 @@
 
 同 v1：
 
-- **UDP**（推荐，afd01/ufd45 当前实现）：端口 4004
+- **UDP**（当前已登记设备的常用实现）：端口 4004
 - **串口**：115200 bps，8N1
 - 字节序：**小端（Little Endian）**
 
@@ -59,8 +60,8 @@
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
 
-`*` 命令空间分段分配：通用 Debug/GNSS 为 `0x01..0x10`，AFD01 Product Service 为
-`0x20..0x2B`，XESA01 Orbit 为 `0x30..0x31`；中间保留值不因图中范围而成为有效命令。
+`*` 命令空间分段分配：通用 Debug/GNSS 为 `0x01..0x10`，Product Service（AFD01 / AFD01C / ESA01）为
+`0x20..0x2C`，XESA01 Orbit 为 `0x30..0x31`；中间保留值不因图中范围而成为有效命令。
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
 
@@ -90,18 +91,19 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x0E | `GNSS_CNR_REPORT`   | D→H | RANGECMPB 逐信号 C/N₀ 分片 | 约 1 Hz |
 | 0x0F | `GNSS_SAT_REPORT`   | D→H | MG902 NAV-SAT 分片 | 约 1 Hz |
 | 0x10 | `GNSS_SIGNAL_REPORT`| D→H | MG902 NAV-SIG 分片 | 约 1 Hz |
-| 0x20 | `SERVICE_IDENTITY` | D→H | AFD01 产品身份 | 接入时 + 0.2 Hz |
-| 0x21 | `SERVICE_FAST_STATE` | D→H | AFD01 客户实时状态 | 默认 10 Hz，可配 1~20 Hz |
-| 0x22 | `SERVICE_SLOW_STATE` | D→H | AFD01 位置/RF 回读 | 1 Hz |
-| 0x23 | `SERVICE_COMPONENT_HEALTH` | D→H | AFD01 部件健康 | 1 Hz |
-| 0x24 | `SERVICE_CAPABILITIES` | D→H | AFD01 控制能力 | 接入时 + 0.2 Hz |
-| 0x25 | `SERVICE_CONTROL_REQUEST` | H→D | AFD01 类型化客户控制 | 按需 |
+| 0x20 | `SERVICE_IDENTITY` | D→H | 产品身份 | 接入时 + 0.2 Hz |
+| 0x21 | `SERVICE_FAST_STATE` | D→H | 客户实时状态 | 默认 10 Hz，可配 1~20 Hz |
+| 0x22 | `SERVICE_SLOW_STATE` | D→H | 位置/RF 回读 | 1 Hz |
+| 0x23 | `SERVICE_COMPONENT_HEALTH` | D→H | 部件健康 | 1 Hz |
+| 0x24 | `SERVICE_CAPABILITIES` | D→H | 控制能力 | 接入时 + 0.2 Hz |
+| 0x25 | `SERVICE_CONTROL_REQUEST` | H→D | 类型化客户控制 | 按需 |
 | 0x26 | `SERVICE_CONTROL_RESPONSE` | D→H | 带 request_id 的精确响应 | 按需 |
-| 0x27 | `SERVICE_LINK_DETAIL` | D→H | AFD01 Modem、本振和卫星信息 | 1 Hz |
-| 0x28 | `SERVICE_RF_LOCK_STATUS` | D→H | AFD01 时钟/收发本振锁定 | 与快速状态同频 |
-| 0x29 | `SERVICE_HARDWARE_IDENTITY` | D→H | AFD01 MCU UID 与实际 MAC | 接入时 + 0.2 Hz |
-| 0x2A | `SERVICE_NAV_SOURCE_INFO` | D→H | AFD01 导航源角色与外部 INS 能力 | 接入时 + 0.2 Hz |
+| 0x27 | `SERVICE_LINK_DETAIL` | D→H | Modem、本振和卫星信息 | 1 Hz |
+| 0x28 | `SERVICE_RF_LOCK_STATUS` | D→H | 时钟/收发本振锁定 | 与快速状态同频 |
+| 0x29 | `SERVICE_HARDWARE_IDENTITY` | D→H | MCU UID 与实际 MAC | 接入时 + 0.2 Hz |
+| 0x2A | `SERVICE_NAV_SOURCE_INFO` | D→H | 导航源角色与外部 INS 能力 | 接入时 + 0.2 Hz |
 | 0x2B | `SERVICE_EXTERNAL_INS_DIAGNOSTICS` | D→H | 已配置外部 INS 的类型化诊断 | 1 Hz |
+| 0x2C | `SERVICE_MOUNT_STATUS` | D→H | 设备安装姿态、期望/读回 RBV | 接入时 + 1 Hz |
 | 0x30 | `ORBIT_REQUEST` | H→D | XESA01 TLE 目录、预测、选星和上传请求 | 按需 |
 | 0x31 | `ORBIT_REPORT` | D→H | 带 request_id 的 Orbit 分页响应/确认 | 按需 |
 
@@ -138,6 +140,10 @@ code     uint8      响应码（见 §6）
 msg[]    utf8       可选，最长 63 字节
 ```
 
+当 Profile 声明 `command_response_context` 能力时，参数响应在成功和失败时都必须
+携带可归属上下文：`PARA_SET=<name>` 或 `PARA_RESET=<result>`。上位机只消费与
+当前参数事务匹配的响应；Debug、OTA、其他参数或无上下文响应不能结束当前事务。
+
 ### 5.3 `CONTROL` (0x03) — 上位机控制（H→D）
 
 **v2 扩展为子命令结构**：
@@ -173,6 +179,13 @@ payload   bytes      长度由 sub_cmd 决定
 
 `OTA_DATA` 的 payload 为 2 B 序号加 1..1021 B 数据块；当前上位机通常按 512 B 分片，最后一片可更短。
 1021 B 是独立于 `MAX_DATA_LENGTH=1536` 的兼容上限，不得因长帧能力自动增大。
+`seq` 是 `u16`，单次传输最多 65536 片；按当前 512 B 分片时，上位机允许的镜像上限为
+33,554,432 B。选包阶段必须拒绝超限镜像，编码层必须拒绝超出 `0..65535` 的序号。
+
+Device OTA 的 `COMMAND_RESPONSE` 上下文分别为 `OTA_BEGIN=...`、`OTA_DATA=<seq>` 和
+`OTA_END=...`。上位机只消费当前阶段且序号匹配的响应；迟到的参数、Debug 或其他
+OTA 阶段响应不能结束当前事务。`OTA_END=VERIFIED` 只证明传输镜像已在设备端通过
+完整性校验；上位机仍必须将回机身份与目标固件版本分别确认。
 
 ### 5.4 `META_INFO` (0x04) — 元信息
 
@@ -473,11 +486,13 @@ signal[N]:
   `LOCK` 与 `USED` 是两个独立维度，未参与解算的锁定信号仍应显示 C/N0。
 - 旧上位机把 0x0F/0x10 当 RawFrame 忽略；新上位机继续兼容 0x0D/0x0E 和旧 SDB。
 
-### 5.16 AFD01 产品服务扩展 (0x20~0x2B)
+### 5.16 产品服务扩展 (0x20~0x2C)
 
 **用途**：为客户工作台提供稳定的产品语义。该扩展复用 v2 帧包络，但不依赖动态
-`CHANNEL_DEFINE/STATE_DEFINE` 名称；工程 Debug 与产品服务可以同时存在。M18 只规定并实现
-AFD01，其他设备收到 0x25 可返回不支持，不能靠同名 Debug 字段猜测产品能力。
+`CHANNEL_DEFINE/STATE_DEFINE` 名称；工程 Debug 与产品服务可以同时存在。AFD01、AFD01C 与 ESA01 是
+当前正式登记的客户产品：AFD01 兼容 service protocol 2~8，AFD01C 只使用 protocol 8，ESA01 使用完整的 protocol 6。
+其他 `hw_type` 不支持客户 Product Service，收到 0x25 必须明确返回不支持，不能靠同名 Debug
+字段猜测产品能力。能力差异必须由 `valid_mask`、极化掩码和 feature flags 明确声明。
 
 所有多字节整数和 `float32` 均为小端。每个产品服务 payload 首字节为 `schema`，当前固定为
 `1`；接收端必须拒绝未知 schema，不能按 schema 1 强行解析。遥测帧的 `timestamp_ms` 是设备
@@ -499,8 +514,10 @@ service_protocol    u8
 
 AFD01 序列号由参数 `DeviceType` 与 10 位生产后缀 `dev_sn` 组合，例如
 `AFD01-202607N001`。未写入合法后缀时 bit1=0 且字符串为空，不得用 MCU UID 冒充生产 SN。
-当前未取得 boot 版本时 bit3=0，空字符串不得当成有效版本。AFD01 当前
-`service_protocol=6`；版本 6 表示支持可选的 0x2A/0x2B，版本 5 表示支持可选的 0x29，
+当前未取得 boot 版本时 bit3=0，空字符串不得当成有效版本。AFD01 与 AFD01C 当前使用
+`service_protocol=8`，ESA01 使用 `service_protocol=6`；ESA01 无权威生产 SN 时必须清除 bit1
+并发送空字符串。版本 8 表示支持 operation 5 和可选的 0x2C；版本 7 明确控制响应是
+accepted 证据、完成必须等待后续读回；版本 6 表示支持可选的 0x2A/0x2B，版本 5 表示支持可选的 0x29，
 版本 4 表示支持可选的 0x28，版本 3 表示
 支持可选的 0x27，版本 2 仅包含 0x20~0x26。该字段不改变外层 Debug v2 的
 `META_INFO.protocol_ver`。
@@ -538,7 +555,7 @@ tx_enabled                             u8
 `NO_FIX/STALE` 时允许保留 payload 数值，但不得置有效位。
 
 产品服务极化枚举固定为 `0=VERTICAL, 1=HORIZONTAL, 2=LEFT_CIRCULAR,
-3=RIGHT_CIRCULAR`。AFD01 阵面只声明并接受 2/3；设备端负责与内部阵面枚举转换，禁止把产品
+3=RIGHT_CIRCULAR`。AFD01、AFD01C 与 ESA01/503 阵面当前只声明并接受 2/3；设备端负责与内部阵面枚举转换，禁止把产品
 服务值 2/3 直接写入阵面驱动。
 
 #### 5.16.4 `SERVICE_COMPONENT_HEALTH` (0x23)
@@ -565,9 +582,14 @@ polarization_mask, feature_flags, capture_profile_mask u8, u8, u8
 ```
 
 `valid_mask` bit0..7 对应四个频率边界、极化掩码、独立极化能力、发射控制能力、全量录制能力。
-`polarization_mask` 的 bit 位置等于极化枚举值；AFD01 当前为 `0x0C`。`feature_flags.bit0` 表示
-收发极化可独立设置，bit1 表示支持发射控制。`capture_profile_mask.bit0=customer_live`，
+`polarization_mask` 的 bit 位置等于极化枚举值；AFD01、AFD01C 与 ESA01/503 当前均为 `0x0C`。
+ESA01/503 当前声明的 RX 范围为 17700~21200 MHz，TX 范围为 27500~31000 MHz。
+`feature_flags.bit0` 表示
+收发极化可独立设置，bit1 表示支持发射控制，bit2 表示支持设备安装姿态原子配置与0x2C读回。
+`capture_profile_mask.bit0=customer_live`，
 bit1=`support_full`。
+客户 RF 控制只有在 bit0..5 均有效且 `feature_flags.bit0=1` 时才可启用；bit5 缺失或 bit0 为
+0 时，上位机必须保持 RF 控制禁用并说明该设备未声明可独立设置收发极化。
 
 #### 5.16.6 `SERVICE_CONTROL_REQUEST/RESPONSE` (0x25/0x26)
 
@@ -587,8 +609,17 @@ payload       bytes
 | 2 | `APPLY_RF` | `rx_freq f32 + tx_freq f32 + rx_polar u8 + tx_polar u8`，原子应用 |
 | 3 | `SET_TX_ENABLE` | `enabled u8`，0/1 |
 | 4 | `SET_CAPTURE_PROFILE` | `profile u8`，0=customer_live / 1=support_full |
+| 5 | `SET_DEVICE_MOUNT` | `mount_yaw f32 + mount_pitch f32 + mount_roll f32`，单位度；总 DATA 长度固定18 B |
 
-除 `SUBSCRIBE` 外，AFD01 射频和发射控制只允许在已确认的 MANUAL 模式执行。切换到
+`SUBSCRIBE` 是上位机的 Product Service 发现与保活请求：连接后立即发送一次，确认后每 1000 ms
+使用新的 `request_id` 幂等重发，断开后停止。未收到保活时是否执行发射 fail-close 属于具体产品和
+固件版本的安全合同，不是本通用包络能够证明的事实；只有产品合同明确声明且设备回读确认后，
+上位机才能显示对应状态。停止发送 `SUBSCRIBE` 本身不能作为发射已关闭的证据。发现阶段的快速/
+慢速重试仅用于尚未确认的设备，不替代已确认会话的 1 s 保活。
+
+产品射频和发射控制只允许在已确认的 MANUAL 模式执行；安装姿态配置不要求 MANUAL，但必须与
+OTA、参数写入等设备事务互斥。三个安装角一次性校验和持久化，不允许逐轴部分成功：yaw/roll范围
+`[-180,180]`，pitch范围`[-90,90]`，所有值必须有限。切换到
 `support_full` 会打开动态 Debug 数据用于全量 SDB；恢复 `customer_live` 会关闭动态 Debug。
 上位机必须记住录制前 Debug 状态，并在 customer_live 响应成功后通过严格 Debug ACK 流程恢复。
 
@@ -601,11 +632,14 @@ rx_frequency, tx_frequency                            float32, float32
 rx_polarization, tx_polarization, tx_enabled           u8, u8, u8
 ```
 
-`applied_mask` bit0..6 依次表示 mode、RX 频点、TX 频点、RX 极化、TX 极化、TX 使能、录制配置。
-响应携带发送时的设备读回快照；上位机必须同时匹配 `request_id + operation`，并等待后续遥测与
-目标值一致后才显示成功，不能接受无上下文 `OK`。
+`applied_mask` bit0..7 依次表示 mode、RX 频点、TX 频点、RX 极化、TX 极化、TX 使能、录制配置、
+安装姿态请求已原子持久化。安装姿态 bit7 的语义是 `PERSISTED`，只证明 FRAM 事务完成，不证明
+外部 INS RBV 已应用或设备姿态已切换。
+`result_code=0` 只证明设备已接受该请求，不能表示控制完成。响应携带发送时的设备读回快照；
+上位机必须同时匹配 `request_id + operation`，并等待后续 Product telemetry 与目标值一致后才显示
+成功，不能接受无上下文 `OK` 或只依据请求值/响应快照显示完成。
 
-产品服务结果码独立于 §6 的通用 Debug 响应码：`0=SUCCESS, 1=INVALID_REQUEST,
+产品服务结果码独立于 §6 的通用 Debug 响应码：`0=ACCEPTED, 1=INVALID_REQUEST,
 2=OUT_OF_RANGE, 3=STATE_NOT_ALLOWED, 4=NOT_SUPPORTED, 5=BUSY, 6=INTERNAL_ERROR`。
 
 #### 5.16.7 `SERVICE_LINK_DETAIL` (0x27)
@@ -664,6 +698,7 @@ mac_source                             u8
 #### 5.16.10 `SERVICE_NAV_SOURCE_INFO` (0x2A)
 
 该帧声明设备实际配置的导航来源角色，是试产流程判断外部 INS 是否适用的唯一产品服务依据。
+字段名保持通用外部 INS 语义；`BYNAV` 只是当前已实现的来源枚举值，不得把通用配置事实改名为供应商专用字段。
 不得根据动态通道名称或最终整机姿态反推外部模块是否安装。
 
 ```text
@@ -678,7 +713,8 @@ imu_mount_rotation                     u8
 ```
 
 `valid_mask.bit0..6` 依次对应 GNSS 源、IMU 源、姿态源、外部 INS 源、外部角色掩码、能力标志和
-IMU 安装旋转。来源枚举固定为 `0=NONE, 1=ICM42688, 2=MG902, 3=BYNAV, 4=TRACE,
+内部原始 IMU 安装旋转。`imu_mount_rotation` 只描述当前选用的板载原始 IMU 到设备 body 的诊断事实，
+不得用于推算外部 INS 的 RBV，也不得替代设备相对载具的三个安装角。来源枚举固定为 `0=NONE, 1=ICM42688, 2=MG902, 3=BYNAV, 4=TRACE,
 5=IAM20680, 6=MS6222, 7=DEBUG_ORACLE`；未知值必须保留为 UNKNOWN，不得映射成 NONE。
 
 `external_role_mask.bit0=GNSS, bit1=IMU, bit2=ATTITUDE`。`capability_flags` 定义为：
@@ -722,6 +758,42 @@ bit8=姿态标准差，bit9=位置标准差，bit10=速度标准差，bit11=解�
 未配置外部 INS 时仅 bit0 可有效，其余字段不得以 0 冒充测量值。当前设备端没有权威的外部模块
 型号、模块固件版本和配置哈希来源，因此本 schema 不上报这些字段；后续取得稳定来源后必须通过
 新 schema 或独立可选记录扩展，禁止伪造占位值。
+
+#### 5.16.12 `SERVICE_MOUNT_STATUS` (0x2C)
+
+该帧只由声明`service_protocol>=8`且`feature_flags.bit2=1`的设备发送。旧上位机按未知帧忽略。
+
+```text
+schema, timestamp_ms, valid_mask       u8, u32, u32
+mount_contract_id                      u32
+mount_yaw, mount_pitch, mount_roll     float32 x3, deg
+expected_rbv_x/y/z                     float32 x3, deg
+readback_rbv_x/y/z                     float32 x3, deg
+imu_mount_rotation                     u8
+rbv_verified                           u8
+restart_required                       u8
+```
+
+固定格式为`<BIII9fBBB>`，DATA长度52 B。`valid_mask`定义：bit0=contract、bit1=三个配置角、
+bit2=期望RBV、bit3=读回RBV、bit4=`imu_mount_rotation`、bit5=`rbv_verified`、
+bit6=`restart_required`。接收端必须拒绝未定义的`valid_mask`位、9个float中任一非有限值，
+以及不为0/1的`rbv_verified`/`restart_required`。
+
+`mount_contract_id=0x31445246`（小端字节文本`FRD1`）表示设备与载具均使用FRD：X前、Y右、Z下；
+三个安装角表示设备相对载具的yaw-pitch-roll，旋转顺序为ZYX。数值0是合法配置，不表示未配置。
+设备端以已配置的外部 INS 相对设备旋转`ext_ins_rot`和这三个安装角计算`expected_rbv`，并以模块读回填充
+`readback_rbv`；上位机不得自行复算或用`imu_mount_rotation`替代其中任一输入。后者仅为内部原始 IMU
+诊断字段，保留在本帧是为了与导航源信息交叉核对。上位机必须同时验证bit0、合同ID和bit1，不能把未知合同按FRD1显示。
+
+operation 5成功后，设备发布带新角度且`restart_required=1`的新0x2C；上位机只有收到该新读回后才
+发送通用`DEVICE_REBOOT`。设备重启后再次发布同一角度且`restart_required=0`，上位机才能显示完成。
+整个事务必须绑定发起时可用的`SERVICE_IDENTITY.serial_number`和
+`SERVICE_HARDWARE_IDENTITY.device_uid`；相同网络端点在重启窗口内换成另一台设备时，旧事务必须失败关闭。
+重启后的完成判断必须使用同一设备新收到的0x2A导航配置事实；未收到或字段无效时继续等待，不得沿用重启前判断。
+当`SERVICE_NAV_SOURCE_INFO`同时证明`capability_flags.bit1=1`、`external_ins_source=BYNAV`且
+`external_role_mask.bit2=1`时，还必须等待bit5有效且`rbv_verified=1`。不得使用当前动态
+`attitude_source`代替这三个稳定配置事实；其他配置不要求RBV验证。请求、ACK或重启指令发送成功均不能单独
+作为安装姿态已应用证据。
 
 ### 5.17 XESA01 Orbit/TLE 扩展 (0x30~0x31)
 

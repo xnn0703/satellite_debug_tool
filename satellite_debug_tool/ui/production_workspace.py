@@ -1,4 +1,4 @@
-"""Batch-production workspace for AFD01 pilot builds."""
+"""Batch-production workspace for registered product recipes."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.product import production_product_policy
 from satellite_debug_tool.core.session import SessionRegistry
 from satellite_debug_tool.core.production import (
     AttemptStatus,
@@ -604,7 +605,7 @@ class ProductionWorkspace(QWidget):
         )
 
     def _restore_setup_defaults(self) -> None:
-        self._batch_id_edit.setText(datetime.now().strftime("AFD01-%Y%m%d-%H%M"))
+        self._batch_id_edit.setText(datetime.now().strftime("BATCH-%Y%m%d-%H%M"))
         self._operator_edit.setText(str(self._settings.get("production.last_operator", "")))
         output = str(
             self._settings.get("paths.production_dir", "")
@@ -649,7 +650,7 @@ class ProductionWorkspace(QWidget):
         if fleet.is_running:
             self._sync_visible_refresh()
             return True
-        self._footer_status.setText(tr("Discovering AFD01 devices..."))
+        self._footer_status.setText(tr("Discovering supported devices..."))
         started = fleet.start()
         if started:
             self._sync_visible_refresh()
@@ -734,6 +735,7 @@ class ProductionWorkspace(QWidget):
         self._recipe_edit.setToolTip(self._recipe_status.text())
         self._footer_status.setText(self._recipe_status.text())
         self.append_event(tr("Recipe validated: {recipe_id}", recipe_id=recipe.recipe_id))
+        self._refresh_session_rows()
         return True
 
     def _choose_output_dir(self) -> None:
@@ -749,7 +751,13 @@ class ProductionWorkspace(QWidget):
     def _on_create_batch(self) -> None:
         try:
             self.create_batch()
-        except (RecipeValidationError, ResultStoreError, OSError, ValueError) as exc:
+        except (
+            RecipeValidationError,
+            ResultStoreError,
+            RuntimeError,
+            OSError,
+            ValueError,
+        ) as exc:
             message = tr("Cannot create batch: {details}", details=str(exc))
             self._footer_status.setText(message)
             self.status_message.emit(message, 8000)
@@ -780,24 +788,33 @@ class ProductionWorkspace(QWidget):
             raise ResultStoreError(
                 f"batch output directory already exists and is not empty: {batch_output}"
             )
-        batch_output.mkdir(parents=True, exist_ok=True)
-        self._recipe.write_snapshot(batch_output / "recipe.json")
-        batch = self._batch_coordinator.create(
-            batch_id=batch_id,
-            recipe=self._recipe,
-            operator=operator,
-            output_dir=batch_output,
-        )
         self._settings.set("paths.production_dir", str(Path(output_root).expanduser()))
         self._settings.set("production.last_operator", operator)
         self._settings.set("production.last_recipe", self._recipe_edit.text().strip())
         self._settings.save()
-        recording_ready = True
+        batch_output.mkdir(parents=True, exist_ok=True)
         fleet = self._fleet
         if fleet is not None:
             fleet.clear_snr_histories()
             self._snr_origin_monotonic_ns = time.monotonic_ns()
-            recording_ready = fleet.arm_batch_recording(batch_id, batch_output)
+            if not fleet.arm_batch_recording(batch_id, batch_output):
+                fleet.finalize_recordings()
+                raise RuntimeError(
+                    "evidence recording could not be created for one or more devices"
+                )
+        try:
+            self._recipe.write_snapshot(batch_output / "recipe.json")
+            batch = self._batch_coordinator.create(
+                batch_id=batch_id,
+                recipe=self._recipe,
+                operator=operator,
+                output_dir=batch_output,
+            )
+        except Exception:
+            if fleet is not None:
+                fleet.finalize_recordings()
+            raise
+        if fleet is not None:
             for session in fleet.sessions():
                 self._register_session(session)
                 self._on_session_updated(session)
@@ -805,8 +822,6 @@ class ProductionWorkspace(QWidget):
         self._batch_state.setText(tr("Batch ready"))
         self._footer_status.setText(
             tr("Batch ready. Waiting for devices and fixture checks.")
-            if recording_ready
-            else tr("Batch created, but one or more SDB recorders could not be armed.")
         )
         self.append_event(tr("Batch created: {batch_id}", batch_id=batch_id))
         self.batch_created.emit(batch_id)
@@ -887,16 +902,21 @@ class ProductionWorkspace(QWidget):
     def _on_session_updated(self, session: DeviceSession) -> None:
         state_result = {
             DeviceSessionState.DISCOVERED: tr("Identifying"),
+            DeviceSessionState.IDENTITY_PENDING: tr("Serial number pending"),
             DeviceSessionState.IDENTIFIED: "-",
             DeviceSessionState.CONFLICT: tr("Identity conflict"),
-            DeviceSessionState.UNSUPPORTED: tr("Unsupported hardware"),
+            DeviceSessionState.UNSUPPORTED: tr("Unsupported device"),
         }[session.state]
         self.update_device_slot(
             session.slot,
-            serial_number=session.serial_number or tr("Identifying"),
+            serial_number=(
+                session.serial_number
+                or session.hardware_type
+                or tr("Identifying")
+            ),
             endpoint=f"{session.endpoint[0]}:{session.endpoint[1]}",
             connection=tr("Online") if session.is_online() else tr("Offline"),
-            recording=tr("Armed") if session.recording_armed else tr("Not armed"),
+            recording=self._recording_status_text(session),
             result=state_result,
         )
         if session.state == DeviceSessionState.IDENTIFIED:
@@ -904,6 +924,15 @@ class ProductionWorkspace(QWidget):
         if self._batch is not None and self._batch.get("status") == BatchStatus.RUNNING.value:
             self._apply_external_ins_gates((session,))
         self._update_start_gate()
+
+    def _recording_status_text(self, session: DeviceSession) -> str:
+        """Describe the evidence state with its actual workflow cause."""
+
+        if session.recording_armed:
+            return tr("Evidence recording active")
+        if self._batch is None:
+            return tr("Batch not created")
+        return tr("Evidence recording not ready")
 
     def _refresh_session_rows(self) -> None:
         fleet = self._fleet
@@ -996,8 +1025,10 @@ class ProductionWorkspace(QWidget):
         if (
             store is None
             or self._batch is None
+            or self._recipe is None
             or session.state != DeviceSessionState.IDENTIFIED
             or not session.serial_number
+            or self._session_recipe_product(session) != self._recipe.product
         ):
             return
         if (
@@ -1087,13 +1118,57 @@ class ProductionWorkspace(QWidget):
             for session in fleet.sessions()
             if session.is_online(now_monotonic_ns=now_ns)
         )
-        unresolved = tuple(
+        conflicted = tuple(
             session
             for session in online
-            if session.state != DeviceSessionState.IDENTIFIED
+            if session.state == DeviceSessionState.CONFLICT
         )
-        if unresolved:
-            return (), tr("Wait for online device identity checks to finish.")
+        if conflicted:
+            details = ", ".join(
+                f"{session.endpoint[0]}:{session.endpoint[1]}"
+                for session in conflicted
+            )
+            return (), tr("Identity conflict: {details}", details=details)
+        pending_identity = tuple(
+            session
+            for session in online
+            if session.state in {
+                DeviceSessionState.DISCOVERED,
+                DeviceSessionState.IDENTITY_PENDING,
+            }
+        )
+        if pending_identity:
+            return (), tr("Wait for online devices to report complete identities.")
+        unsupported = tuple(
+            session
+            for session in online
+            if session.state == DeviceSessionState.UNSUPPORTED
+        )
+        if unsupported:
+            models = ", ".join(
+                sorted({session.hardware_type or "?" for session in unsupported})
+            )
+            return (), tr(
+                "Unsupported online device(s): {devices}",
+                devices=models,
+            )
+        if self._recipe is None:
+            return (), tr("Select a valid recipe first.")
+        mismatched = tuple(
+            session
+            for session in online
+            if session.state == DeviceSessionState.IDENTIFIED
+            and self._session_recipe_product(session) != self._recipe.product
+        )
+        if mismatched:
+            models = ", ".join(
+                sorted({session.hardware_type or "?" for session in mismatched})
+            )
+            return (), tr(
+                "Online device product does not match recipe {product}: {devices}",
+                product=self._recipe.product.upper(),
+                devices=models,
+            )
 
         participants = tuple(
             session
@@ -1101,18 +1176,19 @@ class ProductionWorkspace(QWidget):
             if session.state == DeviceSessionState.IDENTIFIED
             and session.serial_number
             and session.identity_key
+            and self._session_recipe_product(session) == self._recipe.product
         )
         if not participants:
             return (), tr("At least one identified online device is required.")
-        unarmed = tuple(
+        recording_pending = tuple(
             session.serial_number
             for session in participants
             if not session.recording_armed
         )
-        if unarmed:
+        if recording_pending:
             return (), tr(
-                "Recording is not armed for: {devices}",
-                devices=", ".join(unarmed),
+                "Evidence recording is not ready for: {devices}",
+                devices=", ".join(recording_pending),
             )
         unregistered = tuple(
             session.serial_number
@@ -1125,6 +1201,11 @@ class ProductionWorkspace(QWidget):
                 devices=", ".join(unregistered),
             )
         return tuple(sorted(participants, key=lambda value: value.slot)), ""
+
+    @staticmethod
+    def _session_recipe_product(session: DeviceSession) -> str:
+        policy = production_product_policy(session.hardware_type)
+        return "" if policy is None else str(policy.production_recipe_product or "")
 
     def _update_start_gate(self) -> None:
         if not hasattr(self, "_start_button"):
@@ -1404,7 +1485,9 @@ class ProductionWorkspace(QWidget):
         self._events_group.setTitle(tr("Batch events"))
         self._start_button.setText(tr("Start batch"))
         self._start_button.setToolTip(
-            tr("At least one identified online device with armed recording is required.")
+            tr(
+                "At least one identified online device with evidence recording ready is required."
+            )
         )
         self._abort_button.setText(tr("Abort"))
         self._set_workflow_headers()

@@ -448,10 +448,41 @@ class AttitudeWidget(QWidget):
         except Exception:
             pass
 
+    def clear_device_model(self) -> None:
+        """Clear a device-specific mesh and restore the explicit placeholder."""
+
+        if (
+            self._loaded_model_hw is None
+            and self._device_verts is None
+            and self._device_faces is None
+        ):
+            self._nose_arrow.setVisible(True)
+            return
+        previous_transform = None
+        if self._body is not None:
+            try:
+                previous_transform = self._body.transform()
+            except Exception:
+                previous_transform = None
+            self._gl_view.removeItem(self._body)
+        self._loaded_model_hw = None
+        self._device_verts = None
+        self._device_faces = None
+        self._body = self._create_aircraft()
+        self._aircraft = self._body
+        self._gl_view.addItem(self._body)
+        self._nose_arrow.setVisible(True)
+        try:
+            self._aircraft.setTransform(
+                previous_transform or self._nose_arrow.transform()
+            )
+        except Exception:
+            pass
+
     def try_load_device_model(self, hw_type: str) -> bool:
         """按用户覆盖、包内资源顺序加载设备 STL。
 
-        找到并加载成功返回 True；否则保持默认占位长方体返回 False。
+        找到并加载成功返回 True；否则清除旧设备模型并恢复占位长方体。
         用户可在 ~/.satellite_debug_tool/models/<hw_type>.stl 覆盖内置模型。
         """
         from satellite_debug_tool.ui.device_model_resources import (
@@ -461,6 +492,7 @@ class AttitudeWidget(QWidget):
 
         model_key = normalize_model_key(hw_type)
         if not model_key:
+            self.clear_device_model()
             return False
         if getattr(self, "_loaded_model_hw", None) == model_key:
             return True   # 同一设备已加载，幂等
@@ -480,6 +512,7 @@ class AttitudeWidget(QWidget):
 
         loaded = load_first_device_model(model_key, _load_mesh)
         if loaded is None:
+            self.clear_device_model()
             return False
         _, mesh_data = loaded
         self.set_body_model(mesh_data, draw_edges=False)

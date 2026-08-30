@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Tuple
 
+from satellite_debug_tool.core.product import production_recipe_product_policy
+
 
 _RECIPE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_RECIPE_BYTES = 1024 * 1024
@@ -62,12 +64,24 @@ class ProductionRecipe:
         if errors:
             raise RecipeValidationError(errors)
 
+        product_policy = production_recipe_product_policy(normalized["product"])
+        if product_policy is None or product_policy.production_recipe_product is None:
+            raise RecipeValidationError(("product must name a registered production product",))
+        normalized["product"] = product_policy.production_recipe_product
+        canonical = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
         minimum_observation_s = int(
             normalized["duration_policy"]["minimum_effective_observation_s"]
         )
         return cls(
             recipe_id=str(normalized["recipe_id"]),
-            product=str(normalized["product"]).lower(),
+            product=str(normalized["product"]),
             schema_version=int(normalized["schema_version"]),
             sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
             engineering_only=minimum_observation_s < _FORMAL_MINIMUM_OBSERVATION_S,
@@ -101,8 +115,8 @@ def _validate_recipe(payload: dict[str, Any]) -> list[str]:
         errors.append("recipe_id must use 1-64 letters, digits, '.', '_' or '-'")
 
     product = payload.get("product")
-    if not isinstance(product, str) or product.lower() != "afd01":
-        errors.append("product must be 'afd01' for M19 v1")
+    if not isinstance(product, str) or production_recipe_product_policy(product) is None:
+        errors.append("product must name a registered production product")
 
     for key in ("expected", "fixtures", "tests", "duration_policy"):
         if not isinstance(payload.get(key), dict):

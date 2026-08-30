@@ -1,10 +1,12 @@
-"""Golden vectors for the stable AFD01 product-service protocol."""
+"""Golden vectors for the registered customer Product Service protocol."""
 
 from __future__ import annotations
 
 import struct
 
 import pytest
+
+import satellite_debug_tool.core.protocol as protocol
 
 from satellite_debug_tool.core.product import (
     Availability,
@@ -27,14 +29,18 @@ from satellite_debug_tool.core.protocol import (
     ServiceHardwareIdentity,
     ServiceIdentity,
     ServiceLinkDetail,
+    ServiceMountStatus,
     ServiceNavigationSourceInfo,
     ServiceRfLockStatus,
     ServiceSlowState,
+    SERVICE_PERSISTED_DEVICE_MOUNT,
     build_frame,
     build_service_apply_rf,
     build_service_set_capture_profile,
     build_service_set_control_mode,
+    build_service_set_device_mount,
     build_service_subscribe,
+    decode_service_mount_status,
 )
 
 
@@ -159,6 +165,156 @@ def test_service_control_builders_include_context() -> None:
 
     capture = build_service_set_capture_profile(8, True)
     assert capture[6:13] == struct.pack("<BIBB", 1, 8, 4, 1)
+
+    mount = build_service_set_device_mount(9, 12.5, -3.0, 1.5)
+    assert mount[6:24] == struct.pack("<BIBfff", 1, 9, 5, 12.5, -3.0, 1.5)
+    assert len(mount[6:-3]) == 18
+
+
+def test_service_mount_status_decodes_the_fixed_frd1_contract() -> None:
+    payload = struct.pack(
+        "<BIII9fBBB",
+        1,
+        2500,
+        0x7F,
+        0x31445246,
+        12.5,
+        -3.0,
+        1.5,
+        0.0,
+        180.0,
+        -90.0,
+        0.0,
+        180.0,
+        -90.0,
+        2,
+        1,
+        0,
+    )
+
+    status = _decode(CmdType.SERVICE_MOUNT_STATUS, payload)
+
+    assert isinstance(status, ServiceMountStatus)
+    assert status.mount_contract_id == 0x31445246
+    assert status.mount_yaw_deg == pytest.approx(12.5)
+    assert status.expected_rbv_z_deg == pytest.approx(-90.0)
+    assert status.rbv_verified is True
+    assert status.restart_required is False
+    assert SERVICE_PERSISTED_DEVICE_MOUNT == 1 << 7
+    assert not hasattr(protocol, "SERVICE_APPLIED_DEVICE_MOUNT")
+
+
+def _mount_status_payload(
+    *,
+    valid_mask: int = 0x7F,
+    angles: tuple[float, ...] = (12.5, -3.0, 1.5, 0.0, 180.0, -90.0, 0.0, 180.0, -90.0),
+    rbv_verified: int = 1,
+    restart_required: int = 0,
+) -> bytes:
+    return struct.pack(
+        "<BIII9fBBB",
+        1,
+        2500,
+        valid_mask,
+        0x31445246,
+        *angles,
+        2,
+        rbv_verified,
+        restart_required,
+    )
+
+
+@pytest.mark.parametrize("index", range(9))
+def test_service_mount_status_rejects_each_non_finite_float(index: int) -> None:
+    angles = [12.5, -3.0, 1.5, 0.0, 180.0, -90.0, 0.0, 180.0, -90.0]
+    angles[index] = float("nan")
+
+    with pytest.raises(CodecError, match="non-finite"):
+        decode_service_mount_status(_mount_status_payload(angles=tuple(angles)))
+
+
+def test_service_mount_status_rejects_infinite_float() -> None:
+    angles = (float("inf"), -3.0, 1.5, 0.0, 180.0, -90.0, 0.0, 180.0, -90.0)
+
+    with pytest.raises(CodecError, match="non-finite"):
+        decode_service_mount_status(_mount_status_payload(angles=angles))
+
+
+def test_service_mount_status_rejects_unknown_valid_mask_bits() -> None:
+    with pytest.raises(CodecError, match="valid-mask"):
+        decode_service_mount_status(_mount_status_payload(valid_mask=0x80))
+
+
+@pytest.mark.parametrize(
+    ("rbv_verified", "restart_required"),
+    ((2, 0), (0, 2)),
+)
+def test_service_mount_status_rejects_non_boolean_flags(
+    rbv_verified: int,
+    restart_required: int,
+) -> None:
+    with pytest.raises(CodecError, match="boolean"):
+        decode_service_mount_status(
+            _mount_status_payload(
+                rbv_verified=rbv_verified,
+                restart_required=restart_required,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "angles",
+    (
+        (181.0, 0.0, 0.0),
+        (0.0, 91.0, 0.0),
+        (0.0, 0.0, -181.0),
+        (float("nan"), 0.0, 0.0),
+    ),
+)
+def test_service_mount_builder_rejects_out_of_range_angles(angles) -> None:
+    with pytest.raises(CodecError):
+        build_service_set_device_mount(1, *angles)
+
+
+def test_telemetry_generation_does_not_reuse_a_cleared_connection_waterline() -> None:
+    store = ProductServiceStore()
+    fast = ServiceFastState(
+        1, 1, 0xFFF, 0, 0, False, 3, 3, False,
+        0.0, 0.0, 0.0, 0.0, 0.0, 15.0,
+    )
+    store.feed(fast)
+    assert store.fast_telemetry_generation == 1
+    assert store.fast_telemetry_cursor.epoch == 0
+    assert store.fast_telemetry_cursor.timestamp_ms == 1
+
+    store.clear()
+    assert store.fast_telemetry_cursor.epoch == 1
+    assert store.fast_telemetry_cursor.generation == 1
+    assert store.fast_telemetry_cursor.timestamp_ms is None
+    store.feed(fast)
+
+    assert store.fast_telemetry_generation == 2
+    assert store.fast_telemetry_cursor.epoch == 1
+    assert store.fast_telemetry_cursor.timestamp_ms == 1
+
+    mount = ServiceMountStatus(
+        1, 1, 0x7F, 0x31445246,
+        0.0, 0.0, 0.0,
+        0.0, 180.0, -90.0,
+        0.0, 180.0, -90.0,
+        0, True, False,
+    )
+    store.feed(mount)
+    assert store.mount_status_generation == 1
+    assert store.mount_status_cursor.epoch == 1
+    assert store.mount_status_cursor.timestamp_ms == 1
+    store.clear()
+    assert store.mount_status_record is None
+    assert store.mount_status_cursor.epoch == 2
+    assert store.mount_status_cursor.generation == 1
+    assert store.mount_status_cursor.timestamp_ms is None
+    store.feed(mount)
+    assert store.mount_status_generation == 2
 
 
 def test_navigation_source_and_external_ins_diagnostics_decode() -> None:

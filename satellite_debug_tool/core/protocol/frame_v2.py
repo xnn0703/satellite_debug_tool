@@ -45,6 +45,20 @@ DATA_REPORT_MAX_CHANNELS = 64
 # EVENT_REPORT payload 上限（§5.9）
 EVENT_PAYLOAD_MAX = 200
 
+# Product Service v8 device-mount capability, persistence proof and status masks.
+# ``imu_mount_rotation`` remains an internal raw-IMU diagnostic.  It is never
+# an input to the device-side external-INS RBV calculation.
+SERVICE_FEATURE_DEVICE_MOUNT = 1 << 2
+SERVICE_PERSISTED_DEVICE_MOUNT = 1 << 7
+MOUNT_CONTRACT_FRD1 = 0x31445246
+MOUNT_STATUS_VALID_CONTRACT = 1 << 0
+MOUNT_STATUS_VALID_ANGLES = 1 << 1
+MOUNT_STATUS_VALID_EXPECTED_RBV = 1 << 2
+MOUNT_STATUS_VALID_READBACK_RBV = 1 << 3
+MOUNT_STATUS_VALID_IMU_ROTATION = 1 << 4  # Internal raw-IMU diagnostic only.
+MOUNT_STATUS_VALID_RBV_VERIFIED = 1 << 5
+MOUNT_STATUS_VALID_RESTART_REQUIRED = 1 << 6
+
 
 class CmdType(IntEnum):
     """顶层命令类型，见规范 §4。"""
@@ -65,7 +79,7 @@ class CmdType(IntEnum):
     GNSS_CNR_REPORT = 0x0E
     GNSS_SAT_REPORT = 0x0F
     GNSS_SIGNAL_REPORT = 0x10
-    # M18: stable AFD01 product-service records. The envelope stays compatible
+    # M18: stable customer product-service records. The envelope stays compatible
     # with Debug v2 while customer UI no longer depends on dynamic channel names.
     SERVICE_IDENTITY = 0x20
     SERVICE_FAST_STATE = 0x21
@@ -79,6 +93,7 @@ class CmdType(IntEnum):
     SERVICE_HARDWARE_IDENTITY = 0x29
     SERVICE_NAV_SOURCE_INFO = 0x2A
     SERVICE_EXTERNAL_INS_DIAGNOSTICS = 0x2B
+    SERVICE_MOUNT_STATUS = 0x2C
     # XESA01 Orbit/TLE service. It uses the Debug v2 envelope but remains
     # independent from continuous engineering telemetry and product service.
     ORBIT_REQUEST = 0x30
@@ -168,10 +183,11 @@ class ServiceControlOp(IntEnum):
     APPLY_RF = 2
     SET_TX_ENABLE = 3
     SET_CAPTURE_PROFILE = 4
+    SET_DEVICE_MOUNT = 5
 
 
 class ServiceResultCode(IntEnum):
-    SUCCESS = 0
+    ACCEPTED = 0
     INVALID_REQUEST = 1
     OUT_OF_RANGE = 2
     STATE_NOT_ALLOWED = 3
@@ -637,6 +653,13 @@ class ServiceHardwareIdentity:
 
 @dataclass(frozen=True)
 class ServiceNavigationSourceInfo:
+    """Configured navigation roles and the internal raw-IMU mount diagnostic.
+
+    ``imu_mount_rotation`` describes only the selected board IMU raw-frame to
+    device-body rotation.  It must not be used to infer external-INS RBV or
+    device-to-carrier installation attitude.
+    """
+
     schema: int
     timestamp: int
     valid_mask: int
@@ -651,6 +674,8 @@ class ServiceNavigationSourceInfo:
 
 @dataclass(frozen=True)
 class ServiceExternalInsDiagnostics:
+    """External INS raw diagnostics; Bynav attitude is carrier FRD, not device FRD."""
+
     schema: int
     timestamp: int
     valid_mask: int
@@ -775,6 +800,34 @@ class ServiceCapabilities:
     polarization_mask: int
     feature_flags: int
     capture_profile_mask: int
+
+
+@dataclass(frozen=True)
+class ServiceMountStatus:
+    """Authoritative mount angles and device-calculated external-INS RBV state.
+
+    The device derives expected RBV from its configured ``ext_ins_rot`` and
+    ``mount_yaw/pitch/roll``, then reports the external-module readback.  The
+    retained ``imu_mount_rotation`` byte is an internal raw-IMU diagnostic;
+    it is not an RBV calculation input.
+    """
+
+    schema: int
+    timestamp: int
+    valid_mask: int
+    mount_contract_id: int
+    mount_yaw_deg: float
+    mount_pitch_deg: float
+    mount_roll_deg: float
+    expected_rbv_x_deg: float
+    expected_rbv_y_deg: float
+    expected_rbv_z_deg: float
+    readback_rbv_x_deg: float
+    readback_rbv_y_deg: float
+    readback_rbv_z_deg: float
+    imu_mount_rotation: int
+    rbv_verified: bool
+    restart_required: bool
 
 
 @dataclass(frozen=True)
@@ -926,7 +979,7 @@ FrameV2Record = Union[
     ServiceLinkDetail,
     ServiceRfLockStatus,
     ServiceComponentHealth,
-    ServiceCapabilities,
+    ServiceCapabilities, ServiceMountStatus,
     ServiceControlResponse,
     OrbitStatusReport,
     OrbitCapabilitiesReport,
@@ -958,6 +1011,12 @@ __all__ = [
     "CHANNEL_ID_MAX", "STATE_ID_MAX",
     "EVENT_ID_MIN", "EVENT_ID_MAX", "EVENT_ID_USER_MARK",
     "DATA_REPORT_MAX_CHANNELS", "EVENT_PAYLOAD_MAX",
+    "SERVICE_FEATURE_DEVICE_MOUNT", "SERVICE_PERSISTED_DEVICE_MOUNT",
+    "MOUNT_CONTRACT_FRD1",
+    "MOUNT_STATUS_VALID_CONTRACT", "MOUNT_STATUS_VALID_ANGLES",
+    "MOUNT_STATUS_VALID_EXPECTED_RBV", "MOUNT_STATUS_VALID_READBACK_RBV",
+    "MOUNT_STATUS_VALID_IMU_ROTATION", "MOUNT_STATUS_VALID_RBV_VERIFIED",
+    "MOUNT_STATUS_VALID_RESTART_REQUIRED",
     "CHANNEL_FLAG_DEFAULT_VISIBLE", "CHANNEL_FLAG_CRITICAL",
     "STATE_FLAG_CRITICAL", "STATE_FLAG_INVERSE",
     "PARA_FLAG_REQUIRES_REBOOT", "PARA_FLAG_READ_ONLY",
@@ -984,7 +1043,7 @@ __all__ = [
     "ServiceFastState", "ServiceSlowState", "ServiceLinkDetail",
     "ServiceRfLockStatus",
     "ServiceComponentValue", "ServiceComponentHealth",
-    "ServiceCapabilities", "ServiceControlResponse",
+    "ServiceCapabilities", "ServiceMountStatus", "ServiceControlResponse",
     "OrbitReportHeader", "OrbitStatusReport", "OrbitCapabilitiesReport",
     "OrbitCatalogEntry", "OrbitCatalogReport",
     "OrbitCurrentSample", "OrbitCurrentReport", "OrbitSkySample", "OrbitSkyReport",

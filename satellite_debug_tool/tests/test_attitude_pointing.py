@@ -261,3 +261,50 @@ class TestMeshTransformZeroAttitude:
         M = P_NED_NWU @ np.eye(3) @ P_NED_NWU
         top_world = M @ np.array([0.0, 0.0, 1.0])
         np.testing.assert_array_almost_equal(top_world, [0.0, 0.0, 1.0])
+
+    @pytest.mark.parametrize(
+        "yaw_deg, expected_nose",
+        [
+            (0.0, (1.0, 0.0, 0.0)),
+            (90.0, (0.0, -1.0, 0.0)),
+            (-90.0, (0.0, 1.0, 0.0)),
+            (180.0, (-1.0, 0.0, 0.0)),
+        ],
+    )
+    def test_mount_yaw_preview_keeps_nose_direction_labels(
+        self,
+        yaw_deg,
+        expected_nose,
+    ):
+        """Mount yaw labels follow FRD: positive yaw turns the nose right/east."""
+
+        rotation = _R_body2geo(yaw_deg, 0.0, 0.0)
+        mesh_transform = P_NED_NWU @ rotation @ P_NED_NWU
+        nose_world = mesh_transform @ np.array([1.0, 0.0, 0.0])
+        np.testing.assert_array_almost_equal(nose_world, expected_nose)
+
+    @pytest.mark.parametrize(
+        "pitch_deg, expected_vertical_sign",
+        [(15.0, 1), (-15.0, -1)],
+    )
+    def test_mount_pitch_preview_sign(self, pitch_deg, expected_vertical_sign):
+        """Positive FRD pitch raises the rendered nose; negative pitch lowers it."""
+
+        rotation = _R_body2geo(0.0, pitch_deg, 0.0)
+        mesh_transform = P_NED_NWU @ rotation @ P_NED_NWU
+        nose_world = mesh_transform @ np.array([1.0, 0.0, 0.0])
+        assert np.sign(nose_world[2]) == expected_vertical_sign
+
+    @pytest.mark.parametrize(
+        "roll_deg, expected_left_vertical_sign",
+        [(15.0, 1), (-15.0, -1)],
+    )
+    def test_mount_roll_preview_sign(self, roll_deg, expected_left_vertical_sign):
+        """Positive FRD roll raises the rendered left wing and lowers the right wing."""
+
+        rotation = _R_body2geo(0.0, 0.0, roll_deg)
+        mesh_transform = P_NED_NWU @ rotation @ P_NED_NWU
+        left_world = mesh_transform @ np.array([0.0, 1.0, 0.0])
+        right_world = mesh_transform @ np.array([0.0, -1.0, 0.0])
+        assert np.sign(left_world[2]) == expected_left_vertical_sign
+        assert np.sign(right_world[2]) == -expected_left_vertical_sign

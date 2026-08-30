@@ -32,9 +32,18 @@ def settings(tmp_path: Path, monkeypatch):
     return value
 
 
-def _write_recipe(path: Path, *, duration_s: int = 3600) -> Path:
+def _write_recipe(
+    path: Path,
+    *,
+    duration_s: int = 3600,
+    product: str = "afd01",
+) -> Path:
+    payload = valid_recipe(duration_s=duration_s)
+    payload["product"] = product
+    if product == "afd01c":
+        payload["recipe_id"] = "AFD01C-PILOT-R1"
     path.write_text(
-        json.dumps(valid_recipe(duration_s=duration_s), ensure_ascii=False),
+        json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
     return path
@@ -150,6 +159,7 @@ def test_identified_session_is_registered_and_recording_armed(
     tmp_path: Path,
 ) -> None:
     from satellite_debug_tool.core.production import FleetDatagram
+    from satellite_debug_tool.i18n import tr
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
     from satellite_debug_tool.tests.test_production_fleet import _identity
 
@@ -174,6 +184,316 @@ def test_identified_session_is_registered_and_recording_armed(
     assert devices[0]["serial_number"] == "AFD01-UI-001"
     assert workspace._snr_panels[1].serial_number == "AFD01-UI-001"
     assert workspace._fleet.sessions()[0].recording_armed
+    assert tr("Evidence recording active") in (
+        workspace._snr_panels[1]._connection_label.full_text
+    )
+    workspace.close()
+
+
+def test_afd01c_recipe_registers_matching_device(
+    qapp,
+    settings,
+    tmp_path: Path,
+) -> None:
+    import time
+
+    from satellite_debug_tool.core.production import FleetDatagram
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+    from satellite_debug_tool.tests.test_production_fleet import _identity
+
+    workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(
+        _write_recipe(tmp_path / "afd01c.json", product="afd01c")
+    )
+    workspace._batch_id_edit.setText("PILOT-AFD01C")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+    workspace.create_batch()
+    workspace._fleet._on_datagram(
+        FleetDatagram(
+            endpoint=("127.0.0.1", 4004),
+            data=_identity(
+                "AFD01C-UI-001",
+                model="AFD01C",
+                service_protocol=8,
+            ),
+            wall_time_ns=time.time_ns(),
+            monotonic_ns=time.monotonic_ns(),
+        )
+    )
+    qapp.processEvents()
+
+    devices = workspace.result_store.list_devices("PILOT-AFD01C")
+    assert [(item["serial_number"], item["hardware_type"]) for item in devices] == [
+        ("AFD01C-UI-001", "AFD01C")
+    ]
+    assert workspace._start_button.isEnabled()
+    workspace.close()
+
+
+def test_recipe_product_mismatch_blocks_batch_start(
+    qapp,
+    settings,
+    tmp_path: Path,
+) -> None:
+    import time
+
+    from satellite_debug_tool.core.production import FleetDatagram
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+    from satellite_debug_tool.tests.test_production_fleet import _identity
+
+    workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(
+        _write_recipe(tmp_path / "afd01c.json", product="afd01c")
+    )
+    workspace._batch_id_edit.setText("PILOT-MISMATCH")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+    workspace.create_batch()
+    workspace._fleet._on_datagram(
+        FleetDatagram(
+            endpoint=("127.0.0.1", 4004),
+            data=_identity("AFD01-WRONG-RECIPE"),
+            wall_time_ns=time.time_ns(),
+            monotonic_ns=time.monotonic_ns(),
+        )
+    )
+    qapp.processEvents()
+
+    assert not workspace._start_button.isEnabled()
+    assert "AFD01C" in workspace._start_button.toolTip()
+    assert "AFD01" in workspace._start_button.toolTip()
+    assert workspace.result_store.list_devices("PILOT-MISMATCH") == []
+    workspace.close()
+
+
+def test_online_identity_conflict_blocks_batch_start(
+    qapp,
+    settings,
+    tmp_path: Path,
+) -> None:
+    import time
+
+    from satellite_debug_tool.core.production import FleetDatagram
+    from satellite_debug_tool.i18n import tr
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+    from satellite_debug_tool.tests.test_production_fleet import _identity
+
+    workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
+    workspace._batch_id_edit.setText("PILOT-CONFLICT")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+    workspace.create_batch()
+    now_ns = time.monotonic_ns()
+    for index, endpoint in enumerate(
+        (("127.0.0.1", 4004), ("127.0.0.2", 4004)),
+        start=1,
+    ):
+        workspace._fleet._on_datagram(
+            FleetDatagram(
+                endpoint=endpoint,
+                data=_identity("AFD01-DUPLICATE"),
+                wall_time_ns=time.time_ns(),
+                monotonic_ns=now_ns + index,
+            )
+        )
+    qapp.processEvents()
+
+    participants, reason = workspace._evaluate_start_gate()
+    assert participants == ()
+    assert reason.startswith(tr("Identity conflict"))
+    assert "127.0.0.1:4004" in reason
+    assert "127.0.0.2:4004" in reason
+    assert not workspace._start_button.isEnabled()
+    workspace.close()
+
+
+def test_supported_afd01c_without_sn_is_not_reported_as_unsupported(
+    qapp,
+    settings,
+) -> None:
+    import time
+
+    from satellite_debug_tool.core.production import DeviceSessionState, FleetDatagram
+    from satellite_debug_tool.i18n import tr
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+    from satellite_debug_tool.tests.test_production_fleet import _identity
+
+    workspace = ProductionWorkspace(settings)
+    workspace._fleet._on_datagram(
+        FleetDatagram(
+            endpoint=("127.0.0.1", 4004),
+            data=_identity("", model="AFD01C", service_protocol=8),
+            wall_time_ns=time.time_ns(),
+            monotonic_ns=time.monotonic_ns(),
+        )
+    )
+    qapp.processEvents()
+
+    session = workspace._fleet.sessions()[0]
+    assert session.state == DeviceSessionState.IDENTITY_PENDING
+    assert workspace._snr_panels[1].serial_number == "AFD01C"
+    assert workspace._snr_panels[1]._test_label.full_text == tr(
+        "Test: {test} | Result: {result}",
+        test="-",
+        result=tr("Serial number pending"),
+    )
+    assert tr("Batch not created") in (
+        workspace._snr_panels[1]._connection_label.full_text
+    )
+    workspace.close()
+
+
+def test_batch_creation_reports_evidence_recorder_start_failure(
+    qapp,
+    settings,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.i18n import tr
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
+    workspace._batch_id_edit.setText("PILOT-RECORDING-FAIL")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+    monkeypatch.setattr(
+        workspace._fleet,
+        "arm_batch_recording",
+        lambda _batch_id, _output: False,
+    )
+
+    workspace._on_create_batch()
+
+    assert workspace._footer_status.text() == tr(
+        "Cannot create batch: {details}",
+        details="evidence recording could not be created for one or more devices",
+    )
+    assert workspace.batch is None
+    database = tmp_path / "output" / "PILOT-RECORDING-FAIL" / "batch.sqlite3"
+    assert not database.exists()
+    workspace.close()
+
+
+def test_late_device_recording_failure_retries_before_batch_start(
+    qapp,
+    settings,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import time
+
+    from satellite_debug_tool.core.production import FleetDatagram
+    from satellite_debug_tool.io.data_recorder import DataRecorder
+    from satellite_debug_tool.tests.test_production_fleet import _identity
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
+    workspace._batch_id_edit.setText("PILOT-LATE-RECORDING-RETRY")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+    workspace.create_batch()
+
+    original_start = DataRecorder.start
+    attempts = 0
+
+    def flaky_start(recorder: DataRecorder) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return False
+        return original_start(recorder)
+
+    monkeypatch.setattr(DataRecorder, "start", flaky_start)
+    endpoint = ("127.0.0.1", 4004)
+    first = FleetDatagram(
+        endpoint=endpoint,
+        data=_identity("AFD01-LATE-RETRY"),
+        wall_time_ns=time.time_ns(),
+        monotonic_ns=time.monotonic_ns(),
+    )
+    workspace._fleet._on_datagram(first)
+    qapp.processEvents()
+
+    session = workspace._fleet.sessions()[0]
+    assert session.is_online(now_monotonic_ns=first.monotonic_ns)
+    assert not session.recording_armed
+    assert not workspace._start_button.isEnabled()
+
+    second = FleetDatagram(
+        endpoint=endpoint,
+        data=_identity("AFD01-LATE-RETRY"),
+        wall_time_ns=time.time_ns(),
+        monotonic_ns=time.monotonic_ns(),
+    )
+    workspace._fleet._on_datagram(second)
+    qapp.processEvents()
+
+    assert attempts == 2
+    assert session.recording_armed
+    assert workspace._start_button.isEnabled()
+    workspace.close()
+
+
+def test_batch_creation_reports_existing_evidence_owner_without_partial_batch(
+    qapp,
+    settings,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.i18n import tr
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
+    workspace._batch_id_edit.setText("PILOT-RECORDING-CONFLICT")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+    monkeypatch.setattr(
+        workspace._fleet,
+        "arm_batch_recording",
+        lambda _batch_id, _output: (_ for _ in ()).throw(
+            RuntimeError("fleet evidence recording already belongs to another batch")
+        ),
+    )
+
+    workspace._on_create_batch()
+
+    assert workspace.batch is None
+    assert workspace._footer_status.text() == tr(
+        "Cannot create batch: {details}",
+        details="fleet evidence recording already belongs to another batch",
+    )
+    workspace.close()
+
+
+def test_settings_save_failure_prevents_partial_batch(
+    qapp,
+    settings,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
+    workspace._batch_id_edit.setText("PILOT-SETTINGS-FAIL")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+
+    def fail_save() -> None:
+        raise OSError("settings unavailable")
+
+    monkeypatch.setattr(workspace._settings, "save", fail_save)
+
+    with pytest.raises(OSError, match="settings unavailable"):
+        workspace.create_batch()
+
+    assert workspace.batch is None
+    assert not (tmp_path / "output" / "PILOT-SETTINGS-FAIL").exists()
     workspace.close()
 
 

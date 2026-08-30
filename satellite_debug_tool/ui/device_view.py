@@ -34,8 +34,10 @@ from satellite_debug_tool.core.protocol import (
     ParaType,
 )
 from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.core.security import FirmwarePackage
 from satellite_debug_tool.core.session import (
     DeviceSessionCore,
+    OtaArtifactToken,
     OtaCapabilityState,
     OtaController,
     OtaState,
@@ -77,11 +79,11 @@ if False:  # Translation extraction declarations for indirect status templates.
     QCoreApplication.translate("DeviceView", "✗ {detail}")
     QCoreApplication.translate(
         "DeviceView",
-        "✓ Update complete; device is online ({before} → {after})",
+        "✓ Target firmware {version} confirmed on the same device ({before} → {after})",
     )
     QCoreApplication.translate(
         "DeviceView",
-        "✓ Device is back online (version {version}, unchanged)",
+        "Firmware {version} was reported, but applying this package was not independently confirmed",
     )
 
 
@@ -93,9 +95,9 @@ class DeviceView(QWidget):
 
     status_message = Signal(str, int)
     debug_mode_requested = Signal(bool)
-    device_transaction_active_changed = Signal(bool)
     handshake_retry_pause_changed = Signal(bool)
     ota_status_changed = Signal(str, object, int, bool)
+    ota_artifact_changed = Signal(object)
 
     def __init__(
         self,
@@ -292,33 +294,43 @@ class DeviceView(QWidget):
             self._ota_controller.active,
         )
 
-    def customer_ota_available(self) -> bool:
+    def customer_ota_available(
+        self,
+        artifact: OtaArtifactToken | None = None,
+    ) -> bool:
         """Whether the shared engineering OTA transport can accept a verified image."""
-        return bool(
+        available = bool(
             self._session_core.connected
             and self._ota_controller.supported
             and not self._ota_controller.active
+            and not self._session_core.device_transaction_active
+        )
+        return bool(
+            available
+            and (
+                artifact is None
+                or self._ota_controller.verified_artifact_matches(artifact)
+            )
         )
 
-    def load_customer_ota_image(self, data: bytes, filename: str) -> bool:
-        """Load an image already authenticated by the customer package verifier."""
-        if not self.customer_ota_available() or not data or not filename:
-            return False
-        self._ota_controller.configure_file(bytes(data), Path(filename).name)
-        set_translatable_text(
-            "{file}  ({size} bytes)",
-            self._ota_file_label,
-            file=self._ota_controller.filename,
-            size=self._ota_controller.file_size,
-        )
-        self._set_controls_enabled(True)
-        return True
+    def load_customer_ota_package(
+        self,
+        package: FirmwarePackage,
+    ) -> OtaArtifactToken | None:
+        """Bind a verified package and its provenance to the shared OTA owner."""
 
-    def start_customer_ota(self) -> bool:
-        if not self.customer_ota_available() or not self._ota_controller.has_file:
+        if not self.customer_ota_available():
+            return None
+        return self._ota_controller.configure_verified_package(package)
+
+    def start_customer_ota(self, artifact: OtaArtifactToken) -> bool:
+        if not self.customer_ota_available(artifact):
             return False
         self._ota_pause_debug_cb.setChecked(True)
-        self._on_ota_start()
+        self._ota_controller.start(
+            pause_debug=True,
+            required_artifact=artifact,
+        )
         return self._ota_controller.active
 
     def abort_customer_ota(self) -> None:
@@ -359,6 +371,9 @@ class DeviceView(QWidget):
     def _bind_controllers(self) -> None:
         self._session_core.connection_changed.connect(self._apply_connection_state)
         self._session_core.record_received.connect(self._apply_session_record)
+        self._session_core.device_transaction_changed.connect(
+            self._on_device_transaction_changed
+        )
 
         parameter = self._parameter_controller
         parameter.capability_changed.connect(self._on_parameter_capability_changed)
@@ -371,8 +386,26 @@ class DeviceView(QWidget):
         ota.state_changed.connect(self._on_ota_state_changed)
         ota.status_changed.connect(self._on_ota_controller_status)
         ota.progress_changed.connect(self._ota_progress.setValue)
-        ota.transaction_active_changed.connect(self._on_ota_transaction_changed)
+        ota.file_changed.connect(self._on_ota_file_changed)
+        ota.artifact_changed.connect(self.ota_artifact_changed)
         ota.debug_mode_requested.connect(self.debug_mode_requested)
+
+    @Slot(str, int)
+    def _on_ota_file_changed(self, filename: str, size: int) -> None:
+        if filename:
+            set_translatable_text(
+                "{file}  ({size} bytes)",
+                self._ota_file_label,
+                file=filename,
+                size=int(size),
+            )
+        else:
+            set_translatable_text("No file selected", self._ota_file_label)
+        self._set_controls_enabled(self._session_core.connected)
+
+    @Slot(bool)
+    def _on_device_transaction_changed(self, _active: bool) -> None:
+        self._set_controls_enabled(self._session_core.connected)
 
     @Slot(object)
     def set_worker(self, worker):
@@ -448,7 +481,8 @@ class DeviceView(QWidget):
             ParameterStatus.WAITING_PROFILE: tr_source("Waiting for device Profile and capabilities..."),
             ParameterStatus.WAITING_CAPABILITY: tr_source("Waiting for device capability declaration..."),
             ParameterStatus.UNSUPPORTED: tr_source("Parameter management is unavailable in this firmware"),
-            ParameterStatus.TRANSACTION_ACTIVE: tr_source("OTA is active; parameter operations are paused"),
+            ParameterStatus.TRANSACTION_ACTIVE: tr_source("Device is busy; parameter operation was not started"),
+            ParameterStatus.SESSION_CHANGED: tr_source("Device session changed; parameter operation was cancelled"),
             ParameterStatus.READING: tr_source("Reading parameter table..."),
             ParameterStatus.READ_SEND_FAILED: tr_source("Failed to send parameter-table request"),
             ParameterStatus.READ_TIMEOUT: tr_source("Parameter-table read timed out"),
@@ -470,6 +504,7 @@ class DeviceView(QWidget):
             ParameterStatus.RESET_SUCCESS,
             ParameterStatus.RESET_FAILED,
             ParameterStatus.RESET_TIMEOUT,
+            ParameterStatus.SESSION_CHANGED,
         }:
             self.status_message.emit(tr(source, **values), 5000)
 
@@ -484,9 +519,13 @@ class DeviceView(QWidget):
             ParameterStatus.WRITE_AWAITING: tr_source("Awaiting write confirmation..."),
             ParameterStatus.WRITE_SEND_FAILED: tr_source("Send failed"),
             ParameterStatus.WRITE_WAITING_READBACK: tr_source("Waiting for device readback..."),
+            ParameterStatus.WRITE_READBACK_SEND_FAILED: tr_source(
+                "Failed to request device readback"
+            ),
             ParameterStatus.WRITE_SUCCESS: tr_source("✓ Success"),
             ParameterStatus.WRITE_NOT_READ_BACK: tr_source("Target value was not read back"),
             ParameterStatus.WRITE_ERROR: tr_source("✗ {detail}"),
+            ParameterStatus.SESSION_CHANGED: tr_source("Device session changed; parameter write was cancelled"),
         }
         source = sources.get(status)
         if source is None:
@@ -496,12 +535,6 @@ class DeviceView(QWidget):
 
     @Slot(object)
     def _on_ota_state_changed(self, _state: OtaState) -> None:
-        self._set_controls_enabled(self._session_core.connected)
-
-    @Slot(bool)
-    def _on_ota_transaction_changed(self, active: bool) -> None:
-        self._parameter_controller.set_transaction_active(active)
-        self.device_transaction_active_changed.emit(active)
         self._set_controls_enabled(self._session_core.connected)
 
     @Slot(object, object)
@@ -525,7 +558,11 @@ class DeviceView(QWidget):
                 OtaStatus.WAITING_PROFILE: tr_source("Waiting for device Profile and capabilities..."),
                 OtaStatus.WAITING_CAPABILITY: tr_source("Waiting for device capability declaration..."),
                 OtaStatus.UNSUPPORTED: tr_source("OTA is unavailable in this firmware"),
+                OtaStatus.TRANSACTION_ACTIVE: tr_source("Device is busy"),
                 OtaStatus.NO_FILE: tr_source("No file selected"),
+                OtaStatus.ARTIFACT_TOO_LARGE: tr_source(
+                    "Firmware image exceeds the OTA protocol limit"
+                ),
                 OtaStatus.STOPPING_LIVE_DATA: tr_source("Stopping live data..."),
                 OtaStatus.STOP_LIVE_DATA_FAILED: tr_source("Failed to stop live data: {detail}"),
                 OtaStatus.SENDING_BEGIN: tr_source("Sending OTA_BEGIN..."),
@@ -542,14 +579,28 @@ class DeviceView(QWidget):
                 OtaStatus.END_TIMEOUT: tr_source("ota_end timed out"),
                 OtaStatus.REBOOTING: tr_source("Device is rebooting ({elapsed}s elapsed; bootloader flashing usually takes about 45s)..."),
                 OtaStatus.REBOOT_TIMEOUT: tr_source("Device did not return within 120 s; check the connection"),
-                OtaStatus.DEVICE_RETURNED_CHANGED: tr_source("✓ Update complete; device is online ({before} → {after})"),
-                OtaStatus.DEVICE_RETURNED_UNCHANGED: tr_source("✓ Device is back online (version {version}, unchanged)"),
+                OtaStatus.ARTIFACT_MISMATCH: tr_source("The selected firmware no longer matches the confirmed package"),
+                OtaStatus.IDENTITY_UNAVAILABLE: tr_source("A device serial number or unique identifier is required for customer OTA"),
+                OtaStatus.IDENTITY_FACTS_CONFLICT: tr_source("Debug and Product Service report different device serial numbers"),
+                OtaStatus.FIRMWARE_FACTS_CONFLICT: tr_source("Debug and Product Service report different firmware versions"),
+                OtaStatus.TARGET_VERSION_CONFIRMED: tr_source("✓ Target firmware {version} confirmed on the same device ({before} → {after})"),
+                OtaStatus.TARGET_VERSION_NOT_CONFIRMED: tr_source("Target firmware {target} was not confirmed; device reported {actual}"),
+                OtaStatus.RETURN_IDENTITY_CHANGED: tr_source("A different device identity responded after the transfer"),
+                OtaStatus.RETURN_IDENTITY_UNCONFIRMED: tr_source("The returning device identity could not be confirmed"),
+                OtaStatus.RETURN_FIRMWARE_UNCONFIRMED: tr_source(
+                    "Firmware was not reported again by every captured source"
+                ),
+                OtaStatus.FIRMWARE_CHANGED: tr_source("Device firmware changed ({before} → {after})"),
+                OtaStatus.APPLICATION_UNCONFIRMED: tr_source("Firmware {version} was reported, but applying this package was not independently confirmed"),
                 OtaStatus.CONNECTION_LOST: tr_source("Connection lost; OTA aborted"),
+                OtaStatus.SESSION_CHANGED: tr_source("Device session changed; select the firmware again"),
                 OtaStatus.ABORTED: tr_source("Aborted by user"),
             }[status]
         self._set_ota_status(source, **values)
         final_statuses = {
             OtaStatus.STOP_LIVE_DATA_FAILED,
+            OtaStatus.TRANSACTION_ACTIVE,
+            OtaStatus.ARTIFACT_TOO_LARGE,
             OtaStatus.BEGIN_SEND_FAILED,
             OtaStatus.BEGIN_REJECTED,
             OtaStatus.BEGIN_TIMEOUT,
@@ -560,9 +611,19 @@ class DeviceView(QWidget):
             OtaStatus.END_REJECTED,
             OtaStatus.END_TIMEOUT,
             OtaStatus.REBOOT_TIMEOUT,
-            OtaStatus.DEVICE_RETURNED_CHANGED,
-            OtaStatus.DEVICE_RETURNED_UNCHANGED,
+            OtaStatus.ARTIFACT_MISMATCH,
+            OtaStatus.IDENTITY_UNAVAILABLE,
+            OtaStatus.IDENTITY_FACTS_CONFLICT,
+            OtaStatus.FIRMWARE_FACTS_CONFLICT,
+            OtaStatus.TARGET_VERSION_CONFIRMED,
+            OtaStatus.TARGET_VERSION_NOT_CONFIRMED,
+            OtaStatus.RETURN_IDENTITY_CHANGED,
+            OtaStatus.RETURN_IDENTITY_UNCONFIRMED,
+            OtaStatus.RETURN_FIRMWARE_UNCONFIRMED,
+            OtaStatus.FIRMWARE_CHANGED,
+            OtaStatus.APPLICATION_UNCONFIRMED,
             OtaStatus.CONNECTION_LOST,
+            OtaStatus.SESSION_CHANGED,
             OtaStatus.ABORTED,
         }
         if status in final_statuses:
@@ -572,7 +633,11 @@ class DeviceView(QWidget):
             )
 
     def _set_controls_enabled(self, connected: bool):
-        available = connected and not self._ota_controller.active
+        available = (
+            connected
+            and not self._ota_controller.active
+            and not self._session_core.device_transaction_active
+        )
         self._refresh_info_btn.setEnabled(available)
         self._read_all_btn.setEnabled(available and self._parameter_controller.supported)
         self._factory_reset_btn.setEnabled(
@@ -582,11 +647,7 @@ class DeviceView(QWidget):
         self._ota_upload_btn.setEnabled(
             available and self._ota_controller.supported and self._ota_controller.has_file
         )
-        self._ota_abort_btn.setEnabled(
-            connected
-            and self._ota_controller.active
-            and self._ota_controller.state is not OtaState.WAIT_REBOOT
-        )
+        self._ota_abort_btn.setEnabled(self._ota_controller.active)
         for row, para in enumerate(self._params):
             edit = self._para_table.cellWidget(row, 2)
             apply_btn = self._para_table.cellWidget(row, 3)
@@ -740,14 +801,7 @@ class DeviceView(QWidget):
             return
         p = Path(path)
         data = p.read_bytes()
-        self._ota_controller.configure_file(data, p.name)
-        set_translatable_text(
-            "{file}  ({size} bytes)",
-            self._ota_file_label,
-            file=p.name,
-            size=len(data),
-        )
-        self._set_controls_enabled(self._session_core.connected)
+        self._ota_controller.configure_engineering_file(data, p.name)
 
     def _on_ota_start(self):
         if not self._ota_controller.has_file or not self._ota_controller.supported:

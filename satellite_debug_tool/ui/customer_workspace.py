@@ -1,4 +1,4 @@
-"""Customer-facing AFD01 workspace sharing the engineering Live session."""
+"""Customer-facing product workspace sharing the engineering Live session."""
 
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ class CustomerWorkspace(QWidget):
         side = QVBoxLayout(self._sidebar)
         side.setContentsMargins(9, 12, 9, 12)
         side.setSpacing(5)
-        self._section_label = QLabel(tr("AFD01 operation"))
+        self._section_label = QLabel(tr("Product operation"))
         self._section_label.setObjectName("customerSidebarTitle")
         side.addWidget(self._section_label)
 
@@ -175,11 +175,20 @@ class CustomerWorkspace(QWidget):
         )
         rf_scroll.setWidget(self._rf_host)
 
+        maintenance_scroll = QScrollArea()
+        maintenance_scroll.setObjectName("customerMaintenanceScroll")
+        maintenance_scroll.setWidgetResizable(True)
+        maintenance_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        maintenance_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        maintenance_scroll.setWidget(self._maintenance_host)
+
         pages = (
             overview_scroll,
             rf_scroll,
             self._playback_host,
-            self._maintenance_host,
+            maintenance_scroll,
         )
         self._page_views.extend(
             (
@@ -210,6 +219,7 @@ class CustomerWorkspace(QWidget):
         self._overview.status_message.connect(self.status_message)
         self._rf_host.status_message.connect(self.status_message)
         self._playback_host.status_message.connect(self.status_message)
+        self._maintenance_host.status_message.connect(self.status_message)
         self.set_page(0)
 
     def set_page(self, page: int | str) -> None:
@@ -258,6 +268,7 @@ class CustomerWorkspace(QWidget):
             f"color: {pal['accent_ink']}; font-weight: 600; }}"
             f"#customerPendingState {{ color: {pal['text_muted']}; }}"
             f"#customerOverviewScroll {{ background: {pal['bg']}; }}"
+            f"#customerMaintenanceScroll {{ background: {pal['bg']}; }}"
         )
         self._overview.set_theme(theme, scale)
         self._rf_host.set_theme(theme, scale)
@@ -274,7 +285,7 @@ class CustomerWorkspace(QWidget):
             )
 
     def retranslate_ui(self) -> None:
-        self._section_label.setText(tr("AFD01 operation"))
+        self._section_label.setText(tr("Product operation"))
         for button, (_page_id, label, _icon_name) in zip(
             self._nav_buttons, self._PAGE_DEFS
         ):
