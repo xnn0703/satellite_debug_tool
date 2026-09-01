@@ -20,6 +20,7 @@
 - [x] protocol 8 且 mount capability 有效才允许安装姿态编辑；缺能力时保持禁用并显示明确原因。
 - [x] 设备未上报有效 SN 时继续显示“不支持/—”，上位机不生成或借用 AFD01 SN。
 - [x] 设备将 SNR `0.0` 标为有效时原样显示；valid bit 缺失或数据 stale 时才显示不可用/陈旧。
+- [x] 设备已声明 TX 控制能力、但 TX 状态 valid bit 缺失时显示“设备回读不可用”，不误写成“不支持”，也不推导为“开”。
 
 ## C. 试产工作区
 
@@ -63,6 +64,8 @@
 - [ ] AFD01C UDP 4004 实测 Product Identity、protocol 8、FAST/SLOW/capabilities 连续更新，重连后状态正确恢复。
 - [ ] 未配置 SN 与配置有效 SN 两种状态均按 C 章显示和门禁。
 - [ ] RF 控制实测至少覆盖 MANUAL 回读、频点/极化 applied 回读、TX fail-close；频谱仪/功率计证据单独记录。
+- [x] 设备端将 TX gate GPIO 读回写入 FAST/SLOW `tx_enabled`，并只在读回有效时置对应 valid bit。
+- [ ] 真机确认客户总览随 gate GPIO 读回显示“开/关”；软件链路完成不替代该项实板验收。
 - [ ] 使用审批后的 AFD01C 签名测试包验证同型号接受与 A/C 交叉拒绝；没有受信 key/测试包时本项保持未完成。
 - [ ] Windows 125%/150% DPI 与目标发行包完成平台验证。
 - [ ] KaTR003B 标定、阵面能力、正式 AFD01C recipe、3D 模型和正式量产放行均未被本 M22 软件验收代替。

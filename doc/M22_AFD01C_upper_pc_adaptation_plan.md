@@ -130,3 +130,9 @@ git diff --check
 - 试产页不再把已注册但未配置 SN 的 AFD01C 称为“不支持的硬件”；配置有效 SN 后才允许按 AFD01C recipe 入批。
 - AFD01/AFD01C 签名包交叉选择均被拒绝。
 - 仍未完成的正式 recipe、签名包、RF/阵面/标定及 3D 模型验收在开发记录中明确保留，不以软件测试代替。
+
+## 8. 2026-08-31 真机 TX 状态语义收口
+
+- `SERVICE_CAPABILITIES` 已证明 TX 控制受支持、但 FAST/SLOW TX valid bit 未置位时，客户总览显示“设备回读不可用”，不得把“支持但没有状态证据”写成“不支持”。
+- 上位机不从控制 accepted、已发送命令、阵面在线或操作者观察推导 `tx_enabled`。只有设备后续上报有效 TX gate 状态时，客户总览才显示“开/关”。
+- 频谱仪或功率计确认的物理 RF 输出仍是独立验收事实，不由 Product Service `tx_enabled` 代替。

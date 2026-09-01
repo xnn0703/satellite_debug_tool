@@ -79,6 +79,7 @@ class CmdType(IntEnum):
     GNSS_CNR_REPORT = 0x0E
     GNSS_SAT_REPORT = 0x0F
     GNSS_SIGNAL_REPORT = 0x10
+    TRACKING_SIMULATION = 0x11
     # M18: stable customer product-service records. The envelope stays compatible
     # with Debug v2 while customer UI no longer depends on dynamic channel names.
     SERVICE_IDENTITY = 0x20

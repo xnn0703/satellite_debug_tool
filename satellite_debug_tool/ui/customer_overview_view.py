@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 import math
 from typing import Optional
 
@@ -39,6 +40,10 @@ from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import icons, styles as S
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
 from satellite_debug_tool.ui.beam_polar_widget import BeamPolarWidget, BeamSatelliteMarker
+from satellite_debug_tool.ui.component_temperature_window import (
+    ComponentTemperatureAnchor,
+    ComponentTemperatureWindow,
+)
 from satellite_debug_tool.ui.semantic_style import (
     set_semantic_properties,
     set_semantic_property,
@@ -279,6 +284,7 @@ class CustomerOverviewView(QWidget):
         self._last_model = ""
         self._density = ""
         self._view_active = False
+        self._temperature_windows: dict[str, ComponentTemperatureWindow] = {}
         self._setup_ui(enable_3d)
         self._live.connection_state_changed.connect(self._on_connection_changed)
         phase_signal = getattr(
@@ -545,27 +551,32 @@ class CustomerOverviewView(QWidget):
         self._component_widgets: dict[str, QWidget] = {}
         self._component_names: dict[str, QLabel] = {}
         self._component_details: dict[str, QLabel] = {}
+        self._component_title_sources: dict[str, str] = {}
         for key, title in (
             ("converter", tr_source("Converter")),
             ("tx_array", tr_source("TX array")),
             ("rx_array", tr_source("RX array")),
         ):
-            item = QWidget()
+            item = ComponentTemperatureAnchor(title)
             item.setObjectName("customerComponentItem")
+            item.activated.connect(partial(self._show_component_temperature_history, key))
             item_layout = QVBoxLayout(item)
             item_layout.setContentsMargins(10, 1, 10, 1)
             item_layout.setSpacing(1)
             name = QLabel(tr(title))
             name.setObjectName("customerComponentName")
+            name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             detail = QLabel("— · — · — · —")
             detail.setObjectName("customerComponentDetail")
             detail.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             detail.setMinimumWidth(0)
+            detail.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             item_layout.addWidget(name)
             item_layout.addWidget(detail)
             self._component_widgets[key] = item
             self._component_names[key] = name
             self._component_details[key] = detail
+            self._component_title_sources[key] = title
             self._component_layout.addWidget(item, 1)
 
         self._root_layout.addWidget(self._signal_panel)
@@ -954,11 +965,16 @@ class CustomerOverviewView(QWidget):
             ),
         )
         self._set_status("gnss", "GNSS fix", self._display(op.gnss_fix))
-        tx = (
-            _availability_placeholder(op.tx_enabled)
-            if op.tx_enabled.value is None
-            else tr("On") if op.tx_enabled.value else tr("Off")
+        tx_control_supported = (
+            snapshot.rf_capabilities.tx_control.availability is Availability.VALID
+            and bool(snapshot.rf_capabilities.tx_control.value)
         )
+        if op.tx_enabled.value is not None:
+            tx = tr("On") if op.tx_enabled.value else tr("Off")
+        elif tx_control_supported:
+            tx = tr("Device readback unavailable")
+        else:
+            tx = _availability_placeholder(op.tx_enabled)
         if op.tx_enabled.availability is Availability.STALE:
             tx = tr("{value} (stale)", value=tx)
         tx_status = (
@@ -1306,6 +1322,21 @@ class CustomerOverviewView(QWidget):
             self._component_details[key].setText(" · ".join(values))
             self._component_details[key].setToolTip(" · ".join(values))
 
+    def _show_component_temperature_history(self, component_key: str) -> None:
+        if self._service_store is None:
+            return
+        window = self._temperature_windows.get(component_key)
+        if window is None:
+            window = ComponentTemperatureWindow(
+                self._service_store,
+                component_key,
+                self._component_title_sources[component_key],
+                theme=self._theme,
+                parent=self,
+            )
+            self._temperature_windows[component_key] = window
+        window.present_near(self._component_widgets[component_key])
+
     @staticmethod
     def _format_component_value(value: ProductValue[float], unit: str) -> str:
         if value.value is None:
@@ -1319,6 +1350,8 @@ class CustomerOverviewView(QWidget):
         if self._attitude is not None:
             self._attitude.set_theme(theme, "small")
         self._beam_polar.set_theme(theme)
+        for window in self._temperature_windows.values():
+            window.set_theme(theme, "small")
 
     def _apply_theme(self) -> None:
         pal = S.palette(self._theme)
@@ -1368,6 +1401,7 @@ class CustomerOverviewView(QWidget):
             f"#customerSnrReadout[density='dense'] #customerMetricValue {{ font-size: 23px; }}"
             f"#customerSnrReadout[availability='stale'] #customerMetricValue {{ color: {pal['text_3']}; }}"
             f"#customerComponentItem {{ border-right: 1px solid {pal['border']}; }}"
+            f"#customerComponentItem:hover, #customerComponentItem:focus {{ background: {pal['card_2']}; }}"
             f"#customerComponentName {{ color: {pal['text_2']}; font-size: 10px; }}"
             f"#customerComponentDetail {{ color: {pal['text']}; font-family: '{S.monospace_family()}'; font-weight: 600; }}"
             f"#customerComponentItem[density='dense'] #customerComponentName {{ font-size: 9px; }}"
@@ -1392,6 +1426,11 @@ class CustomerOverviewView(QWidget):
             ("rx_array", tr_source("RX array")),
         ):
             self._component_names[key].setText(tr(title))
+            component_item = self._component_widgets[key]
+            if isinstance(component_item, ComponentTemperatureAnchor):
+                component_item.retranslate_ui()
+        for window in self._temperature_windows.values():
+            window.retranslate_ui()
         for metric in self._beam_values.values():
             metric.retranslate_ui()
         self._snr_readout.retranslate_ui()

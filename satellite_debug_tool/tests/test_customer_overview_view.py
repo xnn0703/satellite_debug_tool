@@ -26,6 +26,7 @@ from satellite_debug_tool.core.protocol import (
     ServiceIdentity,
     ServiceComponentHealth,
     ServiceComponentValue,
+    ServiceCapabilities,
     ServiceLinkDetail,
     ServiceFastState,
     ServiceRfLockStatus,
@@ -423,6 +424,37 @@ def test_customer_overview_keeps_tx_state_separate_from_array_health(app) -> Non
     assert tr("On") in view._status_values["tx"].text()
     assert view._status_values["tx"].property("status") == "ok"
     assert tr("Offline") in view._component_details["tx_array"].text()
+
+
+def test_customer_overview_distinguishes_supported_tx_from_missing_readback(app) -> None:
+    live = _LiveDouble()
+    live.products.feed(
+        ServiceCapabilities(
+            1,
+            100,
+            0x7F,
+            19450.0,
+            20270.0,
+            28050.0,
+            30000.0,
+            0x0C,
+            0x03,
+            0x03,
+        )
+    )
+    live.products.feed(
+        ServiceFastState(
+            1, 100, 0, 0, 0, False, 0, 0, False,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        )
+    )
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+
+    view.refresh()
+
+    assert tr("Device readback unavailable") in view._status_values["tx"].text()
+    assert tr("Not supported") not in view._status_values["tx"].text()
+    assert view._status_values["tx"].property("status") == "warn"
 
 
 def test_stale_success_values_render_as_warning(app) -> None:

@@ -35,6 +35,7 @@ from satellite_debug_tool.ui.log_view import LogView
 from satellite_debug_tool.ui.playback_view import PlaybackView
 from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
 from satellite_debug_tool.ui.settings_dialog import SettingsDialog
+from satellite_debug_tool.ui.tracking_simulator_view import TrackingSimulatorView
 from satellite_debug_tool.ui.update_dialog import (
     UpdateDialog,
     silent_background_check,
@@ -43,7 +44,7 @@ from satellite_debug_tool.ui.view_lifecycle import activate_view, deactivate_vie
 
 
 class MainWindow(QMainWindow):
-    _TAB_IDS = ("live", "playback", "log", "device")
+    _TAB_IDS = ("live", "playback", "log", "device", "tracking_simulator")
 
     def __init__(self, settings: Settings | None = None):
         super().__init__()
@@ -103,15 +104,18 @@ class MainWindow(QMainWindow):
         self._playback: PlaybackView | None = None
         self._log: LogView | None = None
         self._device: DeviceView | None = None
+        self._tracking_simulator: TrackingSimulatorView | None = None
         self._production: ProductionWorkspace | None = None
         self._playback_host = LazyViewHost(self._create_playback_view)
         self._log_host = LazyViewHost(self._create_log_view)
         self._device_host = LazyViewHost(self._create_device_view)
+        self._tracking_simulator_host = LazyViewHost(self._create_tracking_simulator_view)
         self._production_host = LazyViewHost(self._create_production_workspace)
         self._tabs.addTab(self._live, tr("Live"))
         self._tabs.addTab(self._playback_host, tr("Playback"))
         self._tabs.addTab(self._log_host, "Log")
         self._tabs.addTab(self._device_host, tr("Device"))
+        self._tabs.addTab(self._tracking_simulator_host, tr("Tracking Simulator"))
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._tabs.currentChanged.connect(self._sync_tab_pills)
 
@@ -126,6 +130,7 @@ class MainWindow(QMainWindow):
             self._playback_host,
             self._log_host,
             self._device_host,
+            self._tracking_simulator_host,
             self._production_host,
         ):
             view.status_message.connect(self._on_status_message)
@@ -199,6 +204,10 @@ class MainWindow(QMainWindow):
         )
         return self._production
 
+    def _create_tracking_simulator_view(self) -> TrackingSimulatorView:
+        self._tracking_simulator = TrackingSimulatorView(self._live.session_core())
+        return self._tracking_simulator
+
     def _ensure_device_view(self) -> DeviceView:
         return self._device_host.ensure_view()
 
@@ -245,6 +254,7 @@ class MainWindow(QMainWindow):
             (tr("Playback"), "history"),
             ("Log", "list"),
             (tr("Device"), "cpu"),
+            (tr("Tracking Simulator"), "activity"),
         ]
         for idx, (label, icon_name) in enumerate(engineering_defs):
             button = QPushButton(label)
@@ -312,7 +322,7 @@ class MainWindow(QMainWindow):
         self._settings.save()
 
     def _sync_tab_pills(self, _index: int = -1):
-        """客户模式隐藏导航，工程模式显示四个 Tab 并同步选中态。"""
+        """客户模式隐藏导航，工程模式显示五个 Tab 并同步选中态。"""
         from satellite_debug_tool.ui import icons as _ic
 
         pal = S.palette(self._theme)
@@ -452,6 +462,7 @@ class MainWindow(QMainWindow):
             self._playback_host,
             self._log_host,
             self._device_host,
+            self._tracking_simulator_host,
             self._production_host,
         ):
             if hasattr(view, "set_theme"):
@@ -576,10 +587,10 @@ class MainWindow(QMainWindow):
             sb.clearMessage()
         for button, source in zip(
             self._engineering_tab_pills,
-            ("Live", "Playback", "Log", "Device"),
+            ("Live", "Playback", "Log", "Device", "Tracking Simulator"),
         ):
             button.setText(tr(source))
-        for index, source in enumerate(("Live", "Playback", "Log", "Device")):
+        for index, source in enumerate(("Live", "Playback", "Log", "Device", "Tracking Simulator")):
             self._tabs.setTabText(index, tr(source))
 
     # ============================ 设置 ============================

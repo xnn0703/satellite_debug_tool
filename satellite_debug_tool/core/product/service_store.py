@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
+import math
 import time
 from typing import Optional
 
@@ -104,6 +105,14 @@ _SNR_HISTORY_SECONDS = 300.0
 _SNR_MAX_RATE_HZ = 20
 _SNR_HISTORY_CAPACITY = int(_SNR_HISTORY_SECONDS * _SNR_MAX_RATE_HZ) + _SNR_MAX_RATE_HZ
 
+COMPONENT_TEMPERATURE_HISTORY_SECONDS = 30.0 * 60.0
+_COMPONENT_HEALTH_MAX_RATE_HZ = 2
+_COMPONENT_TEMPERATURE_HISTORY_CAPACITY = (
+    int(COMPONENT_TEMPERATURE_HISTORY_SECONDS * _COMPONENT_HEALTH_MAX_RATE_HZ)
+    + _COMPONENT_HEALTH_MAX_RATE_HZ
+)
+_COMPONENT_KEYS = ("converter", "tx_array", "rx_array")
+
 
 @dataclass(frozen=True)
 class ProductTelemetryCursor:
@@ -157,6 +166,13 @@ class ProductServiceStore(QObject):
             maxlen=_SNR_HISTORY_CAPACITY
         )
         self._snr_timestamp = U32UptimeUnwrapper()
+        self._component_temperature_history: dict[
+            str, deque[tuple[int, float]]
+        ] = {
+            key: deque(maxlen=_COMPONENT_TEMPERATURE_HISTORY_CAPACITY)
+            for key in _COMPONENT_KEYS
+        }
+        self._component_temperature_timestamp = U32UptimeUnwrapper()
 
     @property
     def service_available(self) -> bool:
@@ -305,6 +321,9 @@ class ProductServiceStore(QObject):
         self._received.clear()
         self._snr_history.clear()
         self._snr_timestamp.reset()
+        for history in self._component_temperature_history.values():
+            history.clear()
+        self._component_temperature_timestamp.reset()
         self.updated.emit()
 
     def feed(self, record, *, received_monotonic: Optional[float] = None) -> bool:
@@ -353,6 +372,7 @@ class ProductServiceStore(QObject):
         elif isinstance(record, ServiceComponentHealth):
             self._components = record
             key = "components"
+            self._cache_component_temperatures(record)
         elif isinstance(record, ServiceCapabilities):
             self._capabilities = record
             key = "capabilities"
@@ -406,6 +426,54 @@ class ProductServiceStore(QObject):
         times = np.asarray([timestamp / 1000.0 for timestamp, _ in selected])
         values = np.asarray([value for _, value in selected], dtype=np.float32)
         return times, values
+
+    def component_temperature_history(
+        self,
+        component: str,
+        *,
+        window_s: float = COMPONENT_TEMPERATURE_HISTORY_SECONDS,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return one component's received 0x23 temperature history.
+
+        Invalid temperature fields are represented as ``NaN`` so plots retain
+        a visible gap instead of connecting across missing samples or inventing
+        a real ``0 °C`` value.
+        """
+
+        key = str(component).strip().lower()
+        if key not in self._component_temperature_history:
+            raise ValueError(f"unknown Product component: {component}")
+        history = self._component_temperature_history[key]
+        if not history:
+            return np.array([], dtype=np.float64), np.array([], dtype=np.float32)
+        samples = list(history)
+        end = samples[-1][0]
+        cutoff = end - int(max(0.0, float(window_s)) * 1000.0)
+        selected = [(timestamp, value) for timestamp, value in samples if timestamp >= cutoff]
+        times = np.asarray([timestamp / 1000.0 for timestamp, _ in selected])
+        values = np.asarray([value for _, value in selected], dtype=np.float32)
+        return times, values
+
+    def _cache_component_temperatures(
+        self,
+        record: ServiceComponentHealth,
+    ) -> None:
+        timestamp = self._component_temperature_timestamp.add(record.timestamp)
+        if timestamp is None:
+            return
+        cutoff = timestamp - int(COMPONENT_TEMPERATURE_HISTORY_SECONDS * 1000.0)
+        for key in _COMPONENT_KEYS:
+            component = getattr(record, key)
+            temperature = float(component.temperature_c)
+            value = (
+                temperature
+                if component.valid_mask & (1 << 1) and math.isfinite(temperature)
+                else math.nan
+            )
+            history = self._component_temperature_history[key]
+            history.append((timestamp, value))
+            while history and history[0][0] < cutoff:
+                history.popleft()
 
     def _identity_snapshot(self, fallback: DeviceIdentity) -> DeviceIdentity:
         record = self._identity

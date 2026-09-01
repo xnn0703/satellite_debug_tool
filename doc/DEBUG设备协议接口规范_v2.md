@@ -534,6 +534,9 @@ beam_az, beam_el, snr                  float32 x3, deg/deg/dB
 
 `valid_mask` bit0..11 依次对应上述 12 个业务字段。枚举约定：
 
+`tx_enabled` 表示最终 TX gate GPIO 的 MCU 引脚读回；只有 gate 写入并读回一致时才置 bit5。该字段不表示
+阵面或 PA 已应用，也不构成物理 RF 输出证据。
+
 - `control_mode`: `0=AUTO, 1=MANUAL`，其他值为 UNKNOWN。
 - `tracking_phase`: `0=STANDBY, 1=ACQUIRING, 2=FINE_TRACKING, 3=LOCKED, 4=REACQUIRING, 5=FAULT`。
 - `navigation_state`: `0=UNAVAILABLE, 1=INITIALIZING, 2=ALIGNING, 3=READY, 4=DEGRADED, 5=FAULT`。
@@ -553,6 +556,7 @@ tx_enabled                             u8
 `valid_mask` bit0..7 依次对应纬度、经度、高度、接收频点、发射频点、接收极化、发射极化和
 发射使能。位置位只有在 `GPS_FIX=2D..RTK_FLOAT` 且最近位置更新时间不超过 3000 ms 时才可置 1；
 `NO_FIX/STALE` 时允许保留 payload 数值，但不得置有效位。
+其中 bit7 与 FAST bit5 使用同一 TX gate GPIO 读回事实，不表示物理 RF 输出。
 
 产品服务极化枚举固定为 `0=VERTICAL, 1=HORIZONTAL, 2=LEFT_CIRCULAR,
 3=RIGHT_CIRCULAR`。AFD01、AFD01C 与 ESA01/503 阵面当前只声明并接受 2/3；设备端负责与内部阵面枚举转换，禁止把产品
@@ -1244,3 +1248,15 @@ ufd45 同理实现 `ufd45_debug_profile_register()`，两套互不影响。
 ---
 
 文档结束。
+
+## Debug Tracking 场景仿真（0x11）
+
+该命令只由 AFD01/AFD01C Debug 固件处理，Release 固件不提供。DATA 使用小端编码：
+
+- 公共头：`schema:u8=1 | op:u8 | session_id:u32`。
+- `op=0 START`、`op=1 SAMPLE` 的 DATA 固定 87 字节；公共头后依次为 `flags:u8`、`latitude/longitude:f64`、11 个姿态/运动/GEO `f32`、`sat_num:u32` 和 4 个 SNR 诊断 `f32`。
+- `flags.bit0/1/2` 分别表示 `snr_valid/norm_valid/rx_online`。
+- `op=2 STOP` 的 DATA 固定 6 字节。
+- `session_id` 必须非零；活动会话只接受相同 ID，停止后的迟到包会被拒绝。
+
+START/SAMPLE 连续 2000 ms 未到达时设备自动退出仿真。仿真期间设备强制关闭 TX；显式 STOP 或超时后恢复原 TX 策略，原请求仍成立时 TX 可能重新开启。

@@ -64,3 +64,11 @@
 - 参数控制器的断线与连接代际变化复用同一会话终止路径；活动读写会发布“会话已变化”终态，重连后同名参数不再重现旧会话的等待状态。
 - READY 批次后接入的设备也由 Fleet 维护同一录制前置条件；首次创建失败时启动门保持关闭，后续设备数据驱动重试，录制就绪后再放行，不再留下永久无法启动的 READY 批次。
 - 最终定向回归 `307 passed`；全量 `1190 passed in 39.92s`；翻译目录 `929 messages`；`git diff --check` 通过。软件验收完成，真机/RF/Windows/签名发布包/3D 边界保持未完成。
+
+## 2026-08-31：AFD01C TX 回读缺失的显示修正
+
+- 用户观察到最终 TX gate 已开启，但客户总览显示“发射：不支持”。链路核对证明 AFD01C `SERVICE_CAPABILITIES` 已声明 TX control；设备端 `transceiver_get_product_status()` 仍固定输出 `tx_enabled=0`、`tx_output_feedback_available=0`，所以 FAST/SLOW 均不置 TX valid bit。最终 gate 状态与物理 RF 输出继续作为两项不同证据。
+- 上位机 codec 没有丢字段；`ProductServiceStore` 按 valid bit 正确拒绝把 payload 中的无效零提升为回读事实。错误只在最终文案：字段缺失被通用 placeholder 写成了“不支持”。
+- 客户总览现在同时检查权威 capability 与 operation readback：TX control 已明确支持而状态 valid bit 缺失时显示“设备回读不可用”。它不会用 accepted、command-sent 或操作者观察补造“开”。
+- 固件本轮已把有效 TX gate readback 接入 `transceiver_product_status_t.tx_enabled/tx_gate_readback_available`，Product Service 据此置 FAST bit5 / SLOW bit7。该状态只证明 gate GPIO 读回，不替代频谱仪或功率计的物理 RF 验收；真机界面联调仍待执行。
+- 定向执行客户总览测试 `21 passed`；翻译目录仍为 `929 messages` 且检查通过；`git diff --check` 通过。未运行无关全量回归。

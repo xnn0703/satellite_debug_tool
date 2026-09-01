@@ -244,7 +244,7 @@ def test_runtime_switch_preserves_main_window_state(i18n_context, qapp):
     qapp.processEvents()
 
 
-def test_engineering_workspace_restores_four_tabs_and_shortcut_toggles(
+def test_engineering_workspace_restores_tabs_and_shortcut_toggles(
     i18n_context,
     qapp,
 ):
@@ -258,7 +258,7 @@ def test_engineering_workspace_restores_four_tabs_and_shortcut_toggles(
     window.show()
     qapp.processEvents()
 
-    engineering_views = tuple(window._tabs.widget(index) for index in range(4))
+    engineering_views = tuple(window._tabs.widget(index) for index in range(5))
     assert window._workspace.currentWidget() is window._customer
     assert window._customer.isVisible()
     assert not any(button.isVisible() for button in window._engineering_tab_pills)
@@ -273,6 +273,7 @@ def test_engineering_workspace_restores_four_tabs_and_shortcut_toggles(
         "Playback",
         "Log",
         "Device",
+        "Tracking Simulator",
     ]
     assert all(button.isVisible() for button in window._engineering_tab_pills)
     assert not hasattr(window, "_operation_pill")
@@ -284,7 +285,7 @@ def test_engineering_workspace_restores_four_tabs_and_shortcut_toggles(
         qapp.processEvents()
         assert window._tabs.currentIndex() == index
         assert button.isChecked()
-    assert tuple(window._tabs.widget(index) for index in range(4)) == engineering_views
+    assert tuple(window._tabs.widget(index) for index in range(5)) == engineering_views
 
     manager.set_preference(LANGUAGE_ZH_CN)
     qapp.processEvents()
@@ -293,6 +294,7 @@ def test_engineering_workspace_restores_four_tabs_and_shortcut_toggles(
         "回放",
         "Log",
         "设备",
+        "跟踪仿真器",
     ]
     window._engineering_shortcut.activated.emit()
     qapp.processEvents()
@@ -303,8 +305,8 @@ def test_engineering_workspace_restores_four_tabs_and_shortcut_toggles(
     window._engineering_shortcut.activated.emit()
     qapp.processEvents()
     assert window._workspace.currentWidget() is window._tabs
-    assert window._tabs.currentIndex() == 3
-    assert tuple(window._tabs.widget(index) for index in range(4)) == engineering_views
+    assert window._tabs.currentIndex() == 4
+    assert tuple(window._tabs.widget(index) for index in range(5)) == engineering_views
 
     window._engineering_shortcut.activated.emit()
     qapp.processEvents()

@@ -9,7 +9,10 @@ from .playback_projection import (
     CustomerPlaybackProjector,
     customer_channel_entries,
 )
-from .service_store import ProductServiceStore
+from .service_store import (
+    COMPONENT_TEMPERATURE_HISTORY_SECONDS,
+    ProductServiceStore,
+)
 from .support_policy import (
     CustomerProductPolicy,
     CustomerServiceState,
@@ -51,6 +54,7 @@ from .models import (
 __all__ = [
     "Availability",
     "ComponentHealth",
+    "COMPONENT_TEMPERATURE_HISTORY_SECONDS",
     "ControlMode",
     "CustomerProductPolicy",
     "CustomerRecordingState",
