@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -45,6 +45,7 @@ from satellite_debug_tool.core.session import (
     MountConfigurationController,
     MountConfigurationStatus,
     OtaArtifactToken,
+    SessionOperationGateway,
 )
 from satellite_debug_tool.core.security import (
     FirmwarePackage,
@@ -73,15 +74,30 @@ class CustomerMaintenanceView(QWidget):
         parent: Optional[QWidget] = None,
         *,
         trusted_keys: Optional[Mapping[str, TrustedFirmwareKey]] = None,
+        operation_gateway_factory: Optional[
+            Callable[[], SessionOperationGateway]
+        ] = None,
     ) -> None:
         super().__init__(parent)
+        if operation_gateway_factory is not None and not callable(
+            operation_gateway_factory
+        ):
+            raise TypeError("operation_gateway_factory must be callable")
         self._live = live_view
         self._device = device_view
         self._settings = settings
         self._store = live_view.product_store()
+        operation_gateway = (
+            operation_gateway_factory()
+            if operation_gateway_factory is not None
+            else None
+        )
+        if operation_gateway_factory is not None and operation_gateway is None:
+            raise ValueError("operation_gateway_factory must return a gateway")
         self._mount_controller = MountConfigurationController(
             live_view.session_core(),
             parent=self,
+            operation_gateway=operation_gateway,
         )
         self._theme = "dark"
         self._mount_authoritative: Optional[tuple[float, float, float]] = None

@@ -352,6 +352,25 @@ class CustomerOverviewView(QWidget):
             record_action = self._live.toggle_recording
         self._record_btn.clicked.connect(record_action)
         self._connection_layout.addWidget(self._record_btn)
+        self._clear_btn = QPushButton("")
+        self._clear_btn.setObjectName("customerClearDisplayButton")
+        self._clear_btn.setProperty("variant", "ghost")
+        self._clear_btn.setFixedSize(30, 29)
+        self._clear_btn.clicked.connect(self._clear_display_data)
+        self._connection_layout.addWidget(self._clear_btn)
+        fixed_endpoint = getattr(self._live, "fixed_endpoint", None)
+        if fixed_endpoint is not None:
+            self._ip_edit.setText(fixed_endpoint[0])
+            self._remote_port.setValue(int(fixed_endpoint[1]))
+            self._ip_edit.setReadOnly(True)
+            self._remote_port.setReadOnly(True)
+            self._remote_port.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            self._ip_edit.setToolTip(
+                tr("Edit this endpoint from the device list")
+            )
+            self._remote_port.setToolTip(
+                tr("Edit this endpoint from the device list")
+            )
         if self._playback_mode:
             for widget in (
                 self._ip_edit,
@@ -359,6 +378,7 @@ class CustomerOverviewView(QWidget):
                 self._remote_port,
                 self._connect_btn,
                 self._record_btn,
+                self._clear_btn,
             ):
                 widget.hide()
         self._root_layout.addWidget(connection)
@@ -594,7 +614,7 @@ class CustomerOverviewView(QWidget):
         ok = self._live.connect_udp(
             ip,
             self._remote_port.value(),
-            int(self._settings.get("udp.local_port", 45678)),
+            int(self._settings.get("device_udp.local_port", 45678)),
             auto_debug=False,
         )
         if not ok:
@@ -609,8 +629,9 @@ class CustomerOverviewView(QWidget):
         else:
             label = tr("Disconnect")
         self._connect_btn.setText(label)
-        self._ip_edit.setEnabled(not connected)
-        self._remote_port.setEnabled(not connected)
+        fixed_endpoint = getattr(self._live, "fixed_endpoint", None)
+        self._ip_edit.setEnabled(fixed_endpoint is None and not connected)
+        self._remote_port.setEnabled(fixed_endpoint is None and not connected)
         self.refresh()
 
     def _on_device_connection_phase_changed(self, _phase: str) -> None:
@@ -682,6 +703,11 @@ class CustomerOverviewView(QWidget):
             enabled = True
         self._record_btn.setText(text)
         self._record_btn.setEnabled(enabled)
+
+    @Slot()
+    def _clear_display_data(self) -> None:
+        self._live.clear_display_data()
+        self.refresh()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -1355,6 +1381,9 @@ class CustomerOverviewView(QWidget):
 
     def _apply_theme(self) -> None:
         pal = S.palette(self._theme)
+        self._clear_btn.setIcon(
+            icons.icon("trash", color=pal["text_2"], size=14)
+        )
         self.setStyleSheet(
             f"CustomerOverviewView {{ background: {pal['bg']}; color: {pal['text']}; }}"
             f"#customerConnectionBar, #customerInfoBand, #customerSection {{ "
@@ -1414,6 +1443,9 @@ class CustomerOverviewView(QWidget):
             self._snr_plot.getAxis(axis).setTextPen(pg.mkPen(pal["text_2"]))
 
     def retranslate_ui(self) -> None:
+        clear_text = tr("Clear this device's local display data")
+        self._clear_btn.setToolTip(clear_text)
+        self._clear_btn.setAccessibleName(clear_text)
         self._beam_title.setText(tr("Beam direction"))
         sky = None if self._orbit_store is None else self._orbit_store.sky_snapshot()
         self._update_beam_legend(profile_characterized=bool(sky is None or sky.profile_characterized))

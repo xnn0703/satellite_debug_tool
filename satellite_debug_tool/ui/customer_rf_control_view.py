@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
@@ -24,6 +24,7 @@ from satellite_debug_tool.core.product import Availability, ControlMode, Product
 from satellite_debug_tool.core.session import (
     ProductControlController,
     ProductControlStatus,
+    SessionOperationGateway,
 )
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import styles as S
@@ -35,13 +36,33 @@ class CustomerRfControlView(QWidget):
 
     status_message = Signal(str, int)
 
-    def __init__(self, live_view, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        live_view,
+        parent: Optional[QWidget] = None,
+        *,
+        operation_gateway_factory: Optional[
+            Callable[[], SessionOperationGateway]
+        ] = None,
+    ) -> None:
         super().__init__(parent)
+        if operation_gateway_factory is not None and not callable(
+            operation_gateway_factory
+        ):
+            raise TypeError("operation_gateway_factory must be callable")
         self._live = live_view
         self._store = live_view.product_store()
+        operation_gateway = (
+            operation_gateway_factory()
+            if operation_gateway_factory is not None
+            else None
+        )
+        if operation_gateway_factory is not None and operation_gateway is None:
+            raise ValueError("operation_gateway_factory must return a gateway")
         self._controller = ProductControlController(
             live_view.session_core(),
             parent=self,
+            operation_gateway=operation_gateway,
         )
         self._theme = "dark"
         self._rf_dirty = False
