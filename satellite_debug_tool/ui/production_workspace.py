@@ -32,8 +32,9 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.comm import UdpEndpointBroker
 from satellite_debug_tool.core.product import production_product_policy
-from satellite_debug_tool.core.session import SessionRegistry
+from satellite_debug_tool.core.session import EndpointSessionDirectory, SessionRegistry
 from satellite_debug_tool.core.production import (
     AttemptStatus,
     BatchCoordinator,
@@ -155,10 +156,14 @@ class ProductionWorkspace(QWidget):
         parent: Optional[QWidget] = None,
         *,
         session_registry: Optional[SessionRegistry] = None,
+        broker: Optional[UdpEndpointBroker] = None,
+        session_directory: Optional[EndpointSessionDirectory] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._session_registry = session_registry
+        self._broker = broker
+        self._session_directory = session_directory or session_registry
         self._theme = "dark"
         self._recipe: Optional[ProductionRecipe] = None
         self._fixture_rows: dict[str, int] = {}
@@ -617,15 +622,25 @@ class ProductionWorkspace(QWidget):
             self.load_recipe_file(recipe_path)
 
     def _configure_fleet(self) -> None:
+        if bool(
+            getattr(self._settings, "device_configuration_blocked", False)
+            or getattr(self._settings, "read_only_recovery", False)
+        ):
+            self._footer_status.setText(
+                tr("Device UDP settings require recovery before Production can start")
+            )
+            return
         try:
             fleet = FleetController(
                 discovery_cidr=str(
                     self._settings.get("production.discovery_cidr", "192.168.1.0/24")
                 ),
-                local_port=int(self._settings.get("production.local_port", 45679)),
+                local_port=int(self._settings.get("device_udp.local_port", 45678)),
                 device_port=int(self._settings.get("production.device_port", 4004)),
                 max_devices=int(self._settings.get("production.max_devices", 4)),
                 session_registry=self._session_registry,
+                broker=self._broker,
+                session_directory=self._session_directory,
                 parent=self,
             )
         except (FleetConfigurationError, TypeError, ValueError) as exc:
@@ -791,7 +806,7 @@ class ProductionWorkspace(QWidget):
         self._settings.set("paths.production_dir", str(Path(output_root).expanduser()))
         self._settings.set("production.last_operator", operator)
         self._settings.set("production.last_recipe", self._recipe_edit.text().strip())
-        self._settings.save()
+        self._settings.persist_preferences()
         batch_output.mkdir(parents=True, exist_ok=True)
         fleet = self._fleet
         if fleet is not None:
@@ -1104,6 +1119,13 @@ class ProductionWorkspace(QWidget):
         )
 
     def _evaluate_start_gate(self) -> tuple[tuple[DeviceSession, ...], str]:
+        if bool(
+            getattr(self._settings, "device_configuration_blocked", False)
+            or getattr(self._settings, "read_only_recovery", False)
+        ):
+            return (), tr(
+                "Device UDP settings require recovery before Production can start"
+            )
         if self._batch is None or self._store is None:
             return (), tr("Create a batch before starting.")
         if self._batch.get("status") != BatchStatus.READY.value:
@@ -1412,6 +1434,10 @@ class ProductionWorkspace(QWidget):
             message = tr("Discovering on UDP port {port}", port=port)
         elif status == "stopped":
             message = tr("Device discovery stopped")
+        elif status == "finalize_pending":
+            message = tr("Production evidence recording is still finalizing")
+        elif status == "release_pending":
+            message = tr("Production session ownership is still being released")
         else:
             message = tr("Device discovery failed")
         self._footer_status.setText(message)
@@ -1431,19 +1457,39 @@ class ProductionWorkspace(QWidget):
         except ResultStoreError:
             return
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> bool:
         self.deactivate_view()
         self._fixture_host.shutdown()
         if self._fleet is not None:
             self._fleet.stop()
+            if not self._fleet.shutdown_ready:
+                return False
         self._batch_coordinator.close()
+        return True
 
     def confirm_shutdown(self) -> bool:
-        return (
-            True
-            if self._fixture_debug is None
-            else self._fixture_debug.confirm_shutdown()
-        )
+        if (
+            self._fixture_debug is not None
+            and not self._fixture_debug.confirm_shutdown()
+        ):
+            return False
+        fleet = self._fleet
+        if fleet is None:
+            return True
+        fleet.stop()
+        if fleet.shutdown_ready:
+            return True
+        if fleet.recording_finalize_pending:
+            message = tr(
+                "Production evidence recording is still finalizing; retry exit after it completes"
+            )
+        else:
+            message = tr(
+                "Production session ownership is still active; finish the operation and retry exit"
+            )
+        self._footer_status.setText(message)
+        self.status_message.emit(message, 8000)
+        return False
 
     def set_theme(self, theme: str, _scale: str = "small") -> None:
         self._theme = theme

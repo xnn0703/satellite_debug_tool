@@ -64,6 +64,35 @@ def test_workspace_explicitly_marks_engineering_preview(qapp, settings) -> None:
     workspace.close()
 
 
+def test_shutdown_preflight_blocks_active_production_ownership(qapp, settings) -> None:
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    class PendingFleet:
+        recording_finalize_pending = False
+        shutdown_ready = False
+
+        def __init__(self) -> None:
+            self.stop_calls = 0
+
+        def stop(self) -> dict:
+            self.stop_calls += 1
+            return {}
+
+    workspace = ProductionWorkspace(settings)
+    real_fleet = workspace._fleet
+    pending = PendingFleet()
+    workspace._fleet = pending
+
+    assert not workspace.confirm_shutdown()
+    assert pending.stop_calls == 1
+    assert "ownership" in workspace._footer_status.text().lower() or "所有权" in (
+        workspace._footer_status.text()
+    )
+
+    workspace._fleet = real_fleet
+    workspace.close()
+
+
 def test_workspace_creates_immutable_batch_artifacts(
     qapp,
     settings,

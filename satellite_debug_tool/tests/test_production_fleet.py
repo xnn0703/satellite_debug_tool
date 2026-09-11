@@ -12,13 +12,16 @@ import time
 import pytest
 
 from satellite_debug_tool.core.production import (
+    DeviceSession,
     DeviceSessionState,
     FleetConfigurationError,
     FleetController,
     FleetDatagram,
     UdpFleetHub,
 )
+from satellite_debug_tool.core.comm import UdpEndpointBroker
 from satellite_debug_tool.core.protocol import CmdType, build_frame
+from satellite_debug_tool.core.session import DeviceSessionCore
 from satellite_debug_tool.io.data_recorder import SDB_FOOTER, SDB_MAGIC
 
 
@@ -147,6 +150,112 @@ def test_one_hub_socket_discovers_and_preserves_source_endpoint(qapp) -> None:
     finally:
         assert hub.stop_hub()
         server.close()
+
+
+def test_production_running_state_is_independent_from_customer_broker_demand(
+    qapp,
+) -> None:
+    broker = UdpEndpointBroker(local_port=0)
+    customer_demand = broker.acquire_demand("customer-test")
+    controller = FleetController(
+        discovery_cidr="127.0.0.1/32",
+        local_port=0,
+        device_port=4004,
+        broker=broker,
+    )
+    try:
+        assert broker.isRunning()
+        assert not controller.is_running
+        assert broker.demand_count == 1
+        assert broker.claim_count == 0
+        assert broker.discovery_count == 0
+
+        assert controller.start()
+        assert controller.is_running
+        assert broker.demand_count == 2
+        assert broker.claim_count == 1
+        assert broker.discovery_count == 1
+
+        controller.stop()
+        assert not controller.is_running
+        assert controller.shutdown_ready
+        assert broker.isRunning()
+        assert broker.demand_count == 1
+        assert broker.claim_count == 0
+        assert broker.discovery_count == 0
+    finally:
+        controller.stop()
+        customer_demand.release()
+        assert broker.shutdown()
+
+
+def test_inactive_production_facet_never_reparses_customer_datagram() -> None:
+    endpoint = ("192.168.1.12", 4004)
+    controller = _controller()
+    core = DeviceSessionCore(endpoint=endpoint)
+    retained = DeviceSession(endpoint, 1, session_core=core)
+    controller._sessions[endpoint] = retained
+    frame = _identity("AFD01-CUSTOMER-ONLY")
+    datagram = _datagram(endpoint, frame)
+
+    core.feed_bytes(frame, received_monotonic=1.0)
+    frames_before = core.receiver.frames_ok
+    assert frames_before == 1
+
+    controller._admission_enabled = False
+    controller._on_broker_datagram(datagram)
+
+    assert core.receiver.frames_ok == frames_before
+    assert retained.received_datagrams == 0
+    controller.stop()
+
+
+def test_batch_gate_release_failure_keeps_exact_retry_owner_and_hub(qapp) -> None:
+    class RetryGateway:
+        def __init__(self) -> None:
+            self.allow_release = False
+            self.calls: list[object] = []
+
+        def release_operation(self, owner: object) -> bool:
+            self.calls.append(owner)
+            return self.allow_release
+
+    endpoint = ("127.0.0.1", 4004)
+    controller = FleetController(
+        discovery_cidr="127.0.0.1/32",
+        local_port=0,
+        device_port=4004,
+    )
+    gateway = RetryGateway()
+    controller._recording_batch_id = "PILOT-GATE-RETRY"
+    controller._batch_gate_owner = "batch-owner"
+    controller._batch_gateways = {endpoint: gateway}
+    statuses: list[str] = []
+    controller.status_changed.connect(statuses.append)
+    try:
+        assert controller.start()
+        controller.stop()
+
+        assert not controller.is_running
+        assert controller.hub.isRunning()
+        assert controller.batch_gate_release_pending
+        assert controller._batch_gate_owner == "batch-owner"
+        assert controller._batch_gateways == {endpoint: gateway}
+        assert controller._recording_batch_id == "PILOT-GATE-RETRY"
+        assert statuses[-1] == "release_pending"
+
+        gateway.allow_release = True
+        controller.stop()
+
+        assert not controller.is_running
+        assert controller.shutdown_ready
+        assert not controller.batch_gate_release_pending
+        assert controller._batch_gate_owner == ""
+        assert controller._recording_batch_id == ""
+        assert gateway.calls == ["batch-owner", "batch-owner"]
+    finally:
+        gateway.allow_release = True
+        controller.stop()
 
 
 def test_controller_assigns_four_stable_slots_and_rejects_the_fifth() -> None:
@@ -537,6 +646,44 @@ def test_prearmed_fleet_records_the_first_valid_device_datagram(
     assert contents.endswith(SDB_FOOTER)
     assert first_frame in contents
     assert session.recording_complete is True
+    controller.stop()
+
+
+def test_production_finalize_timeout_retains_recorder_and_runtime_owner_for_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    controller = _controller()
+    output_root = tmp_path / "PILOT-RETRY"
+    assert controller.arm_batch_recording("PILOT-RETRY", output_root)
+    endpoint = ("192.168.1.12", 4004)
+    controller._on_datagram(_datagram(endpoint, _identity("AFD01-RETRY")))
+    session = controller.sessions()[0]
+    recorder = session._recorder
+    recorder_lease = session._recorder_lease
+    assert recorder is not None
+    assert recorder_lease is not None
+    real_stop = recorder.stop
+    monkeypatch.setattr(recorder, "stop", lambda: False)
+
+    first = controller.finalize_recordings()
+
+    assert first[endpoint] is None
+    assert session._recorder is recorder
+    assert session._recorder_lease is recorder_lease
+    assert session.recording_armed
+    assert not recorder_lease.released
+    assert controller._recording_batch_id == "PILOT-RETRY"
+
+    monkeypatch.setattr(recorder, "stop", real_stop)
+    second = controller.finalize_recordings()
+
+    assert second[endpoint] is not None
+    assert session._recorder is None
+    assert session._recorder_lease is None
+    assert not session.recording_armed
+    assert recorder_lease.released
+    assert controller._recording_batch_id == ""
     controller.stop()
 
 
