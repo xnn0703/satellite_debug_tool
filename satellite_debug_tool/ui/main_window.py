@@ -7,10 +7,11 @@ its page is active.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -23,12 +24,28 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool import __version__
+from satellite_debug_tool.core.comm import UdpEndpointBroker
 from satellite_debug_tool.core.config import Settings
-from satellite_debug_tool.core.session import SessionRegistry
+from satellite_debug_tool.core.customer import (
+    CustomerDeviceDirectory,
+    CustomerDeviceDirectoryError,
+)
+from satellite_debug_tool.core.session import (
+    EndpointSessionDirectory,
+)
 from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.customer_workspace import CustomerWorkspace
+from satellite_debug_tool.ui.customer_device_dialog import CustomerDeviceDialog
+from satellite_debug_tool.ui.customer_session_bundle import (
+    CustomerEndpointSessionBundleFactory,
+)
 from satellite_debug_tool.ui.device_view import DeviceView
+from satellite_debug_tool.ui.engineering_session_host import (
+    ENGINEERING_SERIAL,
+    ENGINEERING_SHARED_UDP,
+    EngineeringSessionHost,
+)
 from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.lazy_view_host import LazyViewHost
 from satellite_debug_tool.ui.log_view import LogView
@@ -79,26 +96,48 @@ class MainWindow(QMainWindow):
             if self._settings.remove("ui.active_tab"):
                 cleaned = True
         if cleaned:
-            self._settings.save()
+            self._settings.persist_preferences()
 
         # 主题：兼容旧 "Dark"/"Light" 大写写法
         theme_raw = self._settings.get("ui.theme", "dark")
         self._theme = self._normalize_theme(theme_raw)
+        self._engineering_session_mode = ENGINEERING_SERIAL
 
         # ---------- 顶部全局 gbar（品牌 + 居中 Tab 药丸 + 右侧控件，Mission Console） ----------
         self._build_global_bar()
 
-        # ---------- 共享会话 ----------
-        # LiveView 始终是唯一设备连接和实时数据拥有者。客户工作台与工程页只做
-        # 不同呈现，切换工作区不会重建 worker、握手或 Store。
-        self._session_registry = SessionRegistry(parent=self)
+        # ---------- 共享 UDP Runtime + 独立工程串口 ----------
+        # Customer 与 Production 共用一个 Broker/Directory；工程串口保留独立
+        # Core，不能借用或重绑 Customer endpoint。
+        self._udp_broker = UdpEndpointBroker(
+            local_port=int(self._settings.get("device_udp.local_port", 45678)),
+            parent=self,
+        )
+        self._endpoint_directory = EndpointSessionDirectory(
+            self._udp_broker,
+            parent=self,
+        )
+        self._session_registry = self._endpoint_directory
+        self._customer_bundle_factory = CustomerEndpointSessionBundleFactory(
+            settings=self._settings,
+            session_directory=self._endpoint_directory,
+            status_sink=self._on_status_message,
+            parent=self,
+        )
+        self._customer_devices = CustomerDeviceDirectory(
+            self._settings,
+            self._endpoint_directory,
+            supplemental_facts_provider=self._customer_bundle_factory,
+            parent=self,
+        )
+        self._customer_bundle_factory.bind_device_directory(self._customer_devices)
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.North)
         self._tabs.tabBar().hide()   # gbar 药丸接管 tab 切换
         self._tabs.setDocumentMode(True)
         self._live = LiveView(
             settings=self._settings,
-            session_registry=self._session_registry,
+            serial_only=True,
             defer_presentation=True,
         )
         self._playback: PlaybackView | None = None
@@ -111,11 +150,29 @@ class MainWindow(QMainWindow):
         self._device_host = LazyViewHost(self._create_device_view)
         self._tracking_simulator_host = LazyViewHost(self._create_tracking_simulator_view)
         self._production_host = LazyViewHost(self._create_production_workspace)
-        self._tabs.addTab(self._live, tr("Live"))
+        self._engineering_live_host = EngineeringSessionHost(
+            "live",
+            serial_provider=lambda: self._live,
+            device_directory=self._customer_devices,
+            bundle_factory=self._customer_bundle_factory,
+        )
+        self._engineering_device_router = EngineeringSessionHost(
+            "device",
+            serial_provider=lambda: self._device_host,
+            device_directory=self._customer_devices,
+            bundle_factory=self._customer_bundle_factory,
+        )
+        self._engineering_tracking_router = EngineeringSessionHost(
+            "tracking",
+            serial_provider=lambda: self._tracking_simulator_host,
+            device_directory=self._customer_devices,
+            bundle_factory=self._customer_bundle_factory,
+        )
+        self._tabs.addTab(self._engineering_live_host, tr("Live"))
         self._tabs.addTab(self._playback_host, tr("Playback"))
         self._tabs.addTab(self._log_host, "Log")
-        self._tabs.addTab(self._device_host, tr("Device"))
-        self._tabs.addTab(self._tracking_simulator_host, tr("Tracking Simulator"))
+        self._tabs.addTab(self._engineering_device_router, tr("Device"))
+        self._tabs.addTab(self._engineering_tracking_router, tr("Tracking Simulator"))
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._tabs.currentChanged.connect(self._sync_tab_pills)
 
@@ -123,17 +180,35 @@ class MainWindow(QMainWindow):
             self._live,
             self._settings,
             self._ensure_device_view,
+            device_directory=self._customer_devices,
+            page_bundle_factory=self._customer_bundle_factory,
         )
+        self._customer.add_requested.connect(self._on_add_customer_device)
+        self._customer.edit_requested.connect(self._on_edit_customer_device)
+        self._customer.delete_requested.connect(self._on_delete_customer_device)
         for view in (
             self._customer,
-            self._live,
+            self._engineering_live_host,
             self._playback_host,
             self._log_host,
-            self._device_host,
-            self._tracking_simulator_host,
+            self._engineering_device_router,
+            self._engineering_tracking_router,
             self._production_host,
         ):
             view.status_message.connect(self._on_status_message)
+
+        initial_engineering_mode = str(
+            self._settings.get("ui.engineering_session_mode", ENGINEERING_SERIAL)
+        )
+        if initial_engineering_mode not in {
+            ENGINEERING_SERIAL,
+            ENGINEERING_SHARED_UDP,
+        }:
+            initial_engineering_mode = ENGINEERING_SERIAL
+        self._set_engineering_session_mode(
+            initial_engineering_mode,
+            persist=False,
+        )
 
         self._workspace = QStackedWidget()
         self._active_workspace_index: int | None = None
@@ -201,6 +276,8 @@ class MainWindow(QMainWindow):
         self._production = ProductionWorkspace(
             self._settings,
             session_registry=self._session_registry,
+            broker=self._udp_broker,
+            session_directory=self._endpoint_directory,
         )
         return self._production
 
@@ -271,6 +348,24 @@ class MainWindow(QMainWindow):
         self._tab_pills = self._engineering_tab_pills
         self._tab_pillbar.hide()
         row.addWidget(self._tab_pillbar)
+        self._engineering_mode_combo = QComboBox()
+        self._engineering_mode_combo.setObjectName("engineeringModeCombo")
+        self._engineering_mode_combo.addItem(
+            tr("Engineering serial"),
+            ENGINEERING_SERIAL,
+        )
+        self._engineering_mode_combo.addItem(
+            tr("Shared customer UDP"),
+            ENGINEERING_SHARED_UDP,
+        )
+        self._engineering_mode_combo.setToolTip(
+            tr("Choose an independent serial session or the selected customer UDP session")
+        )
+        self._engineering_mode_combo.currentIndexChanged.connect(
+            self._on_engineering_mode_changed
+        )
+        self._engineering_mode_combo.hide()
+        row.addWidget(self._engineering_mode_combo)
         row.addStretch(1)
 
         # 右：主题切换 + 检查更新 + 设置（图标按钮）
@@ -319,7 +414,7 @@ class MainWindow(QMainWindow):
         self._theme = nxt
         self._apply_theme(nxt)
         self._settings.set("ui.theme", nxt)
-        self._settings.save()
+        self._settings.persist_preferences()
 
     def _sync_tab_pills(self, _index: int = -1):
         """客户模式隐藏导航，工程模式显示五个 Tab 并同步选中态。"""
@@ -332,6 +427,7 @@ class MainWindow(QMainWindow):
         current_tab = self._tabs.currentIndex() if hasattr(self, "_tabs") else 0
 
         self._tab_pillbar.setVisible(engineering_active)
+        self._engineering_mode_combo.setVisible(engineering_active)
         for tab_index, button in enumerate(self._engineering_tab_pills):
             button.setVisible(engineering_active)
             button.setChecked(engineering_active and tab_index == current_tab)
@@ -344,6 +440,63 @@ class MainWindow(QMainWindow):
         self._tabs.setCurrentIndex(index)
         # 重复点击当前页不会触发 currentChanged，需要主动恢复药丸选中态。
         self._sync_tab_pills()
+
+    def _engineering_mode_block_reason(self, target_mode: str) -> str:
+        if target_mode == ENGINEERING_SHARED_UDP:
+            if self._live.is_recording():
+                return tr("Stop the Engineering serial recording before switching mode")
+            if self._live.session_core().device_transaction_active:
+                return tr("Finish the Engineering serial device operation before switching mode")
+            if self._live.is_connected():
+                return tr("Disconnect the Engineering serial session before switching mode")
+            return ""
+        for snapshot in self._customer_devices.devices():
+            if snapshot.recording_active:
+                return tr("Stop shared UDP recording before switching mode")
+            if snapshot.operation_busy:
+                return tr("Finish the shared UDP device operation before switching mode")
+        return ""
+
+    def _on_engineering_mode_changed(self, index: int) -> None:
+        if not hasattr(self, "_engineering_live_host"):
+            return
+        mode = str(self._engineering_mode_combo.itemData(int(index)) or "")
+        if mode == self._engineering_session_mode:
+            return
+        reason = self._engineering_mode_block_reason(mode)
+        if reason:
+            blocker = QSignalBlocker(self._engineering_mode_combo)
+            current = self._engineering_mode_combo.findData(
+                self._engineering_session_mode
+            )
+            self._engineering_mode_combo.setCurrentIndex(current)
+            del blocker
+            self._on_status_message(reason, 5000)
+            return
+        self._set_engineering_session_mode(mode, persist=True)
+
+    def _set_engineering_session_mode(
+        self,
+        mode: str,
+        *,
+        persist: bool,
+    ) -> None:
+        if mode not in {ENGINEERING_SERIAL, ENGINEERING_SHARED_UDP}:
+            raise ValueError("unknown Engineering session mode")
+        self._engineering_session_mode = mode
+        for host in (
+            self._engineering_live_host,
+            self._engineering_device_router,
+            self._engineering_tracking_router,
+        ):
+            host.set_mode(mode)
+        index = self._engineering_mode_combo.findData(mode)
+        blocker = QSignalBlocker(self._engineering_mode_combo)
+        self._engineering_mode_combo.setCurrentIndex(index)
+        del blocker
+        if persist:
+            self._settings.set("ui.engineering_session_mode", mode)
+            self._settings.persist_preferences()
 
     def unlock_engineering_for_session(self) -> None:
         """Expose engineering diagnostics for this process without persisting it."""
@@ -418,7 +571,7 @@ class MainWindow(QMainWindow):
         self._theme = theme
         self._apply_theme(theme)
         self._settings.set("ui.theme", theme)
-        self._settings.save()
+        self._settings.persist_preferences()
 
     def _apply_theme(self, theme: str):
         """全局 chrome + 广播到三个 view。"""
@@ -458,15 +611,16 @@ class MainWindow(QMainWindow):
         # 广播到 view
         for view in (
             self._customer,
-            self._live,
+            self._engineering_live_host,
             self._playback_host,
             self._log_host,
-            self._device_host,
-            self._tracking_simulator_host,
+            self._engineering_device_router,
+            self._engineering_tracking_router,
             self._production_host,
         ):
             if hasattr(view, "set_theme"):
                 view.set_theme(theme, "small")
+        self._customer_bundle_factory.set_theme(theme, "small")
 
     def _style_global_bar(self, pal: dict):
         """gbar 品牌 + 药丸 Tab + 右侧图标按钮的主题样式。"""
@@ -500,6 +654,7 @@ class MainWindow(QMainWindow):
             f"#tabPill:checked {{ background-color: {pal['card_2']}; color: {pal['accent_2']}; "
             f"font-weight: 600; }}"
         )
+        self._engineering_mode_combo.setStyleSheet("")
         for b in self._tab_pills:
             name = b.property("iconName")
             on = b.isChecked()
@@ -524,7 +679,7 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index: int):
         tab_id = self._TAB_IDS[index] if 0 <= index < len(self._TAB_IDS) else "live"
         self._settings.set("ui.active_tab_id", tab_id)
-        self._settings.save()
+        self._settings.persist_preferences()
         # 切 tab 时清掉 statusbar 上残留的临时消息（不同 view 之间不串扰）
         sb = self.statusBar()
         if sb is not None:
@@ -592,14 +747,107 @@ class MainWindow(QMainWindow):
             button.setText(tr(source))
         for index, source in enumerate(("Live", "Playback", "Log", "Device", "Tracking Simulator")):
             self._tabs.setTabText(index, tr(source))
+        serial_index = self._engineering_mode_combo.findData(ENGINEERING_SERIAL)
+        shared_index = self._engineering_mode_combo.findData(ENGINEERING_SHARED_UDP)
+        self._engineering_mode_combo.setItemText(
+            serial_index,
+            tr("Engineering serial"),
+        )
+        self._engineering_mode_combo.setItemText(
+            shared_index,
+            tr("Shared customer UDP"),
+        )
+        self._engineering_mode_combo.setToolTip(
+            tr("Choose an independent serial session or the selected customer UDP session")
+        )
+        for host in (
+            self._engineering_live_host,
+            self._engineering_device_router,
+            self._engineering_tracking_router,
+        ):
+            host.retranslate_ui()
+        self._customer_bundle_factory.retranslate_ui()
 
     # ============================ 设置 ============================
 
+    def _show_customer_device_error(self, error: Exception) -> None:
+        message = tr("Customer device configuration failed: {detail}", detail=str(error))
+        self._on_status_message(message, 5000)
+        QMessageBox.warning(self, tr("Customer devices"), message)
+
+    def _on_add_customer_device(self) -> None:
+        dialog = CustomerDeviceDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            result = self._customer_devices.add(dialog.endpoint())
+        except CustomerDeviceDirectoryError as exc:
+            self._show_customer_device_error(exc)
+            return
+        if result.duplicate_selected:
+            self._on_status_message(tr("The existing customer device was selected"), 3000)
+        else:
+            self._on_status_message(tr("Customer device added"), 2500)
+
+    def _on_edit_customer_device(self, endpoint: object) -> None:
+        source = (str(endpoint[0]), int(endpoint[1]))
+        dialog = CustomerDeviceDialog(source, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            result = self._customer_devices.edit(source, dialog.endpoint())
+        except CustomerDeviceDirectoryError as exc:
+            self._show_customer_device_error(exc)
+            return
+        if result.duplicate_selected:
+            self._on_status_message(tr("The existing customer device was selected"), 3000)
+        elif result.changed:
+            self._on_status_message(tr("Customer device updated"), 2500)
+
+    def _on_delete_customer_device(self, endpoint: object) -> None:
+        target = (str(endpoint[0]), int(endpoint[1]))
+        answer = QMessageBox.question(
+            self,
+            tr("Delete customer device"),
+            tr(
+                "Delete customer device {endpoint}?",
+                endpoint=f"{target[0]}:{target[1]}",
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._customer_devices.delete(target)
+        except CustomerDeviceDirectoryError as exc:
+            self._show_customer_device_error(exc)
+            return
+        self._on_status_message(tr("Customer device deleted"), 2500)
+
     def _on_open_settings(self):
         """点击 ⚙ 设置按钮：弹出路径配置弹窗。"""
-        # 把当前 LiveView 的 profile_store 传给设置弹窗，让"管理图表分组"按钮能用
-        profile_store = getattr(self._live, "_profile_store", None)
-        dlg = SettingsDialog(self._settings, self, profile_store=profile_store)
+        active_endpoint = (
+            self._customer_devices.active_endpoint()
+            if self._engineering_session_mode == ENGINEERING_SHARED_UDP
+            else None
+        )
+        runtime = (
+            None
+            if active_endpoint is None
+            else self._customer_devices.runtime(active_endpoint)
+        )
+        profile_store = (
+            runtime.core.profile_store
+            if runtime is not None
+            else getattr(self._live, "_profile_store", None)
+        )
+        dlg = SettingsDialog(
+            self._settings,
+            self,
+            profile_store=profile_store,
+            device_udp_port_editable=lambda: not self._udp_broker.has_active_demand,
+        )
         dlg.exec()
 
     # ============================ M11 更新 ============================
@@ -617,6 +865,22 @@ class MainWindow(QMainWindow):
             on_new_version=self._on_silent_check_found_new,
         )
 
+    def _shutdown_background_update_check(self, timeout_ms: int = 9000) -> bool:
+        """Stop the optional update worker before its parent window is destroyed."""
+
+        thread = self._bg_check_thread
+        if thread is None:
+            return True
+        if not thread.isRunning():
+            self._bg_check_thread = None
+            return True
+        thread.requestInterruption()
+        thread.quit()
+        if not thread.wait(max(0, int(timeout_ms))):
+            return False
+        self._bg_check_thread = None
+        return True
+
     def _on_silent_check_found_new(self, latest):
         """后台检查发现新版：状态栏提示，用户点击 / 工具栏按钮可展开 UpdateDialog。"""
         msg = tr(
@@ -633,6 +897,36 @@ class MainWindow(QMainWindow):
         if self._production is not None and not self._production.confirm_shutdown():
             event.ignore()
             return
+        if not self._shutdown_background_update_check():
+            QMessageBox.warning(
+                self,
+                tr("Check for updates"),
+                tr("Background update check did not stop cleanly"),
+            )
+            event.ignore()
+            return
+        # 工程串口 LiveView 独占自己的 worker。必须先确认线程已停止，再进入
+        # customer/directory 的不可逆释放阶段；否则超时后 event.ignore() 会留下
+        # 一个已被部分拆除、但窗口仍存活的进程组合。
+        if not self._live.shutdown():
+            QMessageBox.warning(
+                self,
+                tr("Device operation in progress"),
+                tr("The engineering transport did not stop cleanly"),
+            )
+            event.ignore()
+            return
+        if not self._customer.shutdown():
+            QMessageBox.warning(
+                self,
+                tr("Device operation in progress"),
+                tr(
+                    "Customer session shutdown did not complete; finish the active "
+                    "local operation and retry"
+                ),
+            )
+            event.ignore()
+            return
         active = self._active_workspace_index
         if active == 0:
             deactivate_view(self._customer)
@@ -644,5 +938,28 @@ class MainWindow(QMainWindow):
         self._playback_host.shutdown()
         self._log_host.shutdown()
         self._device_host.shutdown()
+        self._tracking_simulator_host.shutdown()
         self._production_host.shutdown()
+        try:
+            self._customer_devices.shutdown()
+        except CustomerDeviceDirectoryError as exc:
+            QMessageBox.warning(self, tr("Customer devices"), str(exc))
+            event.ignore()
+            return
+        if not self._endpoint_directory.shutdown():
+            QMessageBox.warning(
+                self,
+                tr("Device operation in progress"),
+                tr("Shared device sessions still have active owners"),
+            )
+            event.ignore()
+            return
+        if not self._udp_broker.shutdown():
+            QMessageBox.warning(
+                self,
+                tr("Device operation in progress"),
+                tr("The shared UDP transport did not stop cleanly"),
+            )
+            event.ignore()
+            return
         super().closeEvent(event)
