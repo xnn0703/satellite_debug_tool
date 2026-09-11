@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QCoreApplication, Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -32,6 +32,7 @@ from satellite_debug_tool.core.protocol import (
     PARA_FLAG_READ_ONLY,
     PARA_FLAG_REQUIRES_REBOOT,
     ParaType,
+    build_request_meta_info,
 )
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.security import FirmwarePackage
@@ -46,6 +47,9 @@ from satellite_debug_tool.core.session import (
     ParameterController,
     ParameterOperation,
     ParameterStatus,
+    SessionCommandSender,
+    SessionOperationGateway,
+    SessionOperationClass,
 )
 from satellite_debug_tool.i18n import (
     mark_raw_text,
@@ -105,8 +109,24 @@ class DeviceView(QWidget):
         settings=None,
         profile_store: Optional[ProfileStore] = None,
         session_core: Optional[DeviceSessionCore] = None,
+        *,
+        operation_gateway_factory: Optional[
+            Callable[[], SessionOperationGateway]
+        ] = None,
+        connection_state_provider: Optional[Callable[[], bool]] = None,
+        command_sender: Optional[SessionCommandSender] = None,
     ):
         super().__init__(parent)
+        if operation_gateway_factory is not None and not callable(
+            operation_gateway_factory
+        ):
+            raise TypeError("operation_gateway_factory must be callable")
+        if connection_state_provider is not None and not callable(
+            connection_state_provider
+        ):
+            raise TypeError("connection_state_provider must be callable")
+        self._connection_state_provider = connection_state_provider
+        self._command_sender = command_sender
         if session_core is not None and profile_store is not None:
             if session_core.profile_store is not profile_store:
                 raise ValueError("session_core and profile_store must share one authority")
@@ -115,13 +135,32 @@ class DeviceView(QWidget):
             parent=self,
         )
         self._profile_store = self._session_core.profile_store
+        parameter_gateway = (
+            operation_gateway_factory()
+            if operation_gateway_factory is not None
+            else None
+        )
+        ota_gateway = (
+            operation_gateway_factory()
+            if operation_gateway_factory is not None
+            else None
+        )
+        if operation_gateway_factory is not None:
+            if parameter_gateway is None or ota_gateway is None:
+                raise ValueError("operation_gateway_factory must return a gateway")
+            if parameter_gateway is ota_gateway:
+                raise ValueError(
+                    "Parameter and OTA controllers require independent gateways"
+                )
         self._parameter_controller = ParameterController(
             self._session_core,
             parent=self,
+            operation_gateway=parameter_gateway,
         )
         self._ota_controller = OtaController(
             self._session_core,
             parent=self,
+            operation_gateway=ota_gateway,
         )
         self._theme = "dark"
         self._scale = "small"
@@ -145,7 +184,7 @@ class DeviceView(QWidget):
 
         self._setup_ui()
         self._bind_controllers()
-        self._apply_connection_state(self._session_core.connected)
+        self._apply_connection_state(self._connection_available())
         if self._session_core.meta_info is not None:
             self._apply_session_record(self._session_core.meta_info)
         register_translatable(self)
@@ -300,7 +339,7 @@ class DeviceView(QWidget):
     ) -> bool:
         """Whether the shared engineering OTA transport can accept a verified image."""
         available = bool(
-            self._session_core.connected
+            self._connection_available()
             and self._ota_controller.supported
             and not self._ota_controller.active
             and not self._session_core.device_transaction_active
@@ -369,7 +408,8 @@ class DeviceView(QWidget):
             raise ValueError("DeviceView profile store belongs to its DeviceSessionCore")
 
     def _bind_controllers(self) -> None:
-        self._session_core.connection_changed.connect(self._apply_connection_state)
+        if self._connection_state_provider is None:
+            self._session_core.connection_changed.connect(self._apply_connection_state)
         self._session_core.record_received.connect(self._apply_session_record)
         self._session_core.device_transaction_changed.connect(
             self._on_device_transaction_changed
@@ -401,11 +441,11 @@ class DeviceView(QWidget):
             )
         else:
             set_translatable_text("No file selected", self._ota_file_label)
-        self._set_controls_enabled(self._session_core.connected)
+        self._set_controls_enabled(self._connection_available())
 
     @Slot(bool)
     def _on_device_transaction_changed(self, _active: bool) -> None:
-        self._set_controls_enabled(self._session_core.connected)
+        self._set_controls_enabled(self._connection_available())
 
     @Slot(object)
     def set_worker(self, worker):
@@ -429,6 +469,10 @@ class DeviceView(QWidget):
             self._para_table.setRowCount(0)
             self._clear_para_status()
         self._set_controls_enabled(connected)
+
+    def _connection_available(self) -> bool:
+        provider = self._connection_state_provider
+        return bool(self._session_core.connected if provider is None else provider())
 
     @Slot(bool)
     def set_debug_state(self, enabled: bool) -> None:
@@ -463,12 +507,12 @@ class DeviceView(QWidget):
         if state is not ParameterCapabilityState.SUPPORTED:
             self._params = []
             self._para_table.setRowCount(0)
-        self._set_controls_enabled(self._session_core.connected)
+        self._set_controls_enabled(self._connection_available())
 
     @Slot(object)
     def _on_ota_capability_changed(self, state: OtaCapabilityState) -> None:
         self._ota_capability_state = CapabilityUiState(state.value)
-        self._set_controls_enabled(self._session_core.connected)
+        self._set_controls_enabled(self._connection_available())
 
     @Slot(object, object)
     def _on_parameter_status_changed(
@@ -535,7 +579,7 @@ class DeviceView(QWidget):
 
     @Slot(object)
     def _on_ota_state_changed(self, _state: OtaState) -> None:
-        self._set_controls_enabled(self._session_core.connected)
+        self._set_controls_enabled(self._connection_available())
 
     @Slot(object, object)
     def _on_ota_controller_status(
@@ -595,6 +639,9 @@ class DeviceView(QWidget):
                 OtaStatus.CONNECTION_LOST: tr_source("Connection lost; OTA aborted"),
                 OtaStatus.SESSION_CHANGED: tr_source("Device session changed; select the firmware again"),
                 OtaStatus.ABORTED: tr_source("Aborted by user"),
+                OtaStatus.ABORT_PENDING: tr_source(
+                    "OTA final device state is unknown; recovery is required"
+                ),
             }[status]
         self._set_ota_status(source, **values)
         final_statuses = {
@@ -625,6 +672,7 @@ class DeviceView(QWidget):
             OtaStatus.CONNECTION_LOST,
             OtaStatus.SESSION_CHANGED,
             OtaStatus.ABORTED,
+            OtaStatus.ABORT_PENDING,
         }
         if status in final_statuses:
             self.status_message.emit(
@@ -658,9 +706,16 @@ class DeviceView(QWidget):
                 apply_btn.setEnabled(available and writable)
 
     def _send(self, frame: bytes) -> bool:
-        if not self._session_core.connected:
+        if not self._connection_available():
             self.status_message.emit(tr("Not connected; command was not sent"), 3000)
             return False
+        if self._command_sender is not None:
+            return bool(
+                self._command_sender.send(
+                    frame,
+                    operation=SessionOperationClass.READ_ONLY_QUERY,
+                )
+            )
         return self._session_core.send(frame)
 
     # ---- 设备信息 ----
@@ -672,7 +727,12 @@ class DeviceView(QWidget):
         self._info_labels["protocol_ver"].setText(f"v{self._protocol_ver}")
 
     def _on_refresh_info(self):
-        if not self._session_core.request_meta_info():
+        sent = (
+            self._send(build_request_meta_info())
+            if self._command_sender is not None
+            else self._session_core.request_meta_info()
+        )
+        if not sent:
             self.status_message.emit(tr("Not connected; command was not sent"), 3000)
 
     # ---- 参数管理 ----
@@ -743,7 +803,7 @@ class DeviceView(QWidget):
             tr("Read {count} parameter(s)", count=len(report.params)),
             2000,
         )
-        self._set_controls_enabled(self._session_core.connected)
+        self._set_controls_enabled(self._connection_available())
 
     def _on_para_apply(self, row: int):
         if not self._parameter_controller.supported:
