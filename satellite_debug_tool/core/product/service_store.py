@@ -326,6 +326,14 @@ class ProductServiceStore(QObject):
         self._component_temperature_timestamp.reset()
         self.updated.emit()
 
+    def clear_history(self) -> None:
+        """Clear presentation histories while retaining current device facts."""
+
+        self._snr_history.clear()
+        for history in self._component_temperature_history.values():
+            history.clear()
+        self.updated.emit()
+
     def feed(self, record, *, received_monotonic: Optional[float] = None) -> bool:
         received = (
             time.monotonic()
