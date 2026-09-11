@@ -60,7 +60,7 @@
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
 
-`*` 命令空间分段分配：通用 Debug/GNSS 为 `0x01..0x10`，Product Service（AFD01 / AFD01C / ESA01）为
+`*` 命令空间分段分配：通用 Debug/GNSS/Tracking 为 `0x01..0x11`，Product Service（AFD01 / AFD01C / ESA01）为
 `0x20..0x2C`，XESA01 Orbit 为 `0x30..0x31`；中间保留值不因图中范围而成为有效命令。
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
@@ -91,6 +91,7 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x0E | `GNSS_CNR_REPORT`   | D→H | RANGECMPB 逐信号 C/N₀ 分片 | 约 1 Hz |
 | 0x0F | `GNSS_SAT_REPORT`   | D→H | MG902 NAV-SAT 分片 | 约 1 Hz |
 | 0x10 | `GNSS_SIGNAL_REPORT`| D→H | MG902 NAV-SIG 分片 | 约 1 Hz |
+| 0x11 | `TRACKING_SIMULATION`| H→D | Debug Tracking 场景仿真 | 50 Hz / 按需 |
 | 0x20 | `SERVICE_IDENTITY` | D→H | 产品身份 | 接入时 + 0.2 Hz |
 | 0x21 | `SERVICE_FAST_STATE` | D→H | 客户实时状态 | 默认 10 Hz，可配 1~20 Hz |
 | 0x22 | `SERVICE_SLOW_STATE` | D→H | 位置/RF 回读 | 1 Hz |
@@ -1247,8 +1248,6 @@ ufd45 同理实现 `ufd45_debug_profile_register()`，两套互不影响。
 
 ---
 
-文档结束。
-
 ## Debug Tracking 场景仿真（0x11）
 
 该命令只由 AFD01/AFD01C Debug 固件处理，Release 固件不提供。DATA 使用小端编码：
@@ -1260,3 +1259,7 @@ ufd45 同理实现 `ufd45_debug_profile_register()`，两套互不影响。
 - `session_id` 必须非零；活动会话只接受相同 ID，停止后的迟到包会被拒绝。
 
 START/SAMPLE 连续 2000 ms 未到达时设备自动退出仿真。仿真期间设备强制关闭 TX；显式 STOP 或超时后恢复原 TX 策略，原请求仍成立时 TX 可能重新开启。
+
+---
+
+文档结束。
