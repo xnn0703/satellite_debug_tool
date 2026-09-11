@@ -1,6 +1,15 @@
 """Shared device-session authority for all application workspaces."""
 
 from .device_session import DeviceEndpoint, DeviceSessionCore, DeviceSessionScope
+from .command_sender import (
+    CallableSessionCommandSender,
+    LegacySessionOperationGateway,
+    SessionCommandSender,
+    SessionOperationClass,
+    SessionOperationGateway,
+    SessionRecorderKind,
+    SessionRecorderLease,
+)
 from .controllers import DebugController, DebugRequestResult, parse_debug_ack_target
 from .ota_controller import (
     OTA_MAX_IMAGE_BYTES,
@@ -32,11 +41,32 @@ from .product_controller import (
     ProductControlStatus,
     ProductSubscriptionController,
 )
-from .registry import SessionAuthorityError, SessionRegistry
+from .registry import EndpointSessionDirectory, SessionAuthorityError, SessionRegistry
+from .runtime import (
+    CustomerAttachmentLease,
+    CustomerAttachmentScope,
+    DatagramSentEvent,
+    EndpointSendCapability,
+    EndpointSessionRuntime,
+    IdentityAuthorizationScope,
+    ProductionAttachmentLease,
+    RuntimeCommandSender,
+    RuntimeLease,
+    RuntimeLeaseError,
+    RuntimeOperationGate,
+    RuntimeOperationGateState,
+    RuntimeOperationGateway,
+    RuntimePresencePhase,
+    RuntimeRecorderLease,
+    SubscriptionDemandLease,
+)
 
 __all__ = [
     "CaptureProfileController",
     "CaptureProfileResult",
+    "CallableSessionCommandSender",
+    "CustomerAttachmentLease",
+    "CustomerAttachmentScope",
     "DISCOVERY_FAST_ATTEMPTS",
     "DISCOVERY_FAST_INTERVAL_MS",
     "DISCOVERY_SLOW_INTERVAL_MS",
@@ -44,8 +74,14 @@ __all__ = [
     "DeviceEndpoint",
     "DeviceSessionCore",
     "DeviceSessionScope",
+    "DatagramSentEvent",
     "DebugController",
     "DebugRequestResult",
+    "EndpointSendCapability",
+    "EndpointSessionDirectory",
+    "EndpointSessionRuntime",
+    "IdentityAuthorizationScope",
+    "LegacySessionOperationGateway",
     "OtaCapabilityState",
     "OTA_MAX_IMAGE_BYTES",
     "OtaArtifactSource",
@@ -64,7 +100,22 @@ __all__ = [
     "ProductControlController",
     "ProductControlStatus",
     "ProductSubscriptionController",
+    "ProductionAttachmentLease",
+    "RuntimeCommandSender",
+    "RuntimeLease",
+    "RuntimeLeaseError",
+    "RuntimeOperationGate",
+    "RuntimeOperationGateState",
+    "RuntimeOperationGateway",
+    "RuntimePresencePhase",
+    "RuntimeRecorderLease",
+    "SessionCommandSender",
+    "SessionOperationClass",
+    "SessionOperationGateway",
+    "SessionRecorderKind",
+    "SessionRecorderLease",
     "SessionAuthorityError",
     "SessionRegistry",
+    "SubscriptionDemandLease",
     "parse_debug_ack_target",
 ]
