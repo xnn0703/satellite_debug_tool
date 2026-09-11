@@ -373,7 +373,7 @@ class UpdateDialog(QDialog):
             "update.last_check_iso",
             datetime.now(timezone.utc).isoformat(),
         )
-        self._settings.save()
+        self._settings.persist_preferences()
 
     def _on_check_done(self, latest: LatestRelease) -> None:
         self._cleanup_check_thread()
@@ -416,7 +416,7 @@ class UpdateDialog(QDialog):
             self.reject()
             return
         self._settings.set("update.skip_version", self._latest.tag_name)
-        self._settings.save()
+        self._settings.persist_preferences()
         self.reject()
 
     # ---------- 下载 ----------
@@ -705,7 +705,7 @@ def silent_background_check(
             "update.last_check_iso",
             datetime.now(timezone.utc).isoformat(),
         )
-        settings.save()
+        settings.persist_preferences()
         skip = settings.get("update.skip_version", "")
         if skip and skip == latest.tag_name:
             log.info("Version %s was skipped by the user", skip)

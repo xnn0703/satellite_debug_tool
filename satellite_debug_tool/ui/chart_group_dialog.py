@@ -402,7 +402,7 @@ class ChartGroupDialog(QDialog):
             for gid, g in self._groups.items()
         }
         self._settings.set("chart.custom_groups", all_custom)
-        self._settings.save()
+        self._settings.persist_preferences()
         self.accept()
 
     # ---- 测试辅助 ----
