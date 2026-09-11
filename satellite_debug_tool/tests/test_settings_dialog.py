@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -103,6 +104,59 @@ class TestSettingsDialog:
         assert tmp_settings.get("paths.recording_dir") == "/original"
         dlg.deleteLater()
 
+    def test_udp_port_is_read_only_while_shared_transport_has_demand(
+        self, qapp, tmp_settings
+    ):
+        from satellite_debug_tool.ui.settings_dialog import SettingsDialog
+
+        original = int(tmp_settings.get("device_udp.local_port"))
+        dlg = SettingsDialog(
+            tmp_settings,
+            device_udp_port_editable=lambda: False,
+        )
+        assert not dlg._device_udp_port.isEnabled()
+        dlg._device_udp_port.setValue(original + 1)
+        dlg._on_accept()
+        assert int(tmp_settings.get("device_udp.local_port")) == original
+        dlg.deleteLater()
+
+    def test_recovery_requires_dedicated_rebuild_and_commits_devices(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
+
+        from satellite_debug_tool.core.config import Settings
+        from satellite_debug_tool.ui.settings_dialog import SettingsDialog
+
+        directory = tmp_path / ".satellite_debug_tool"
+        directory.mkdir()
+        (directory / "settings.json").write_bytes(b"broken-primary")
+        (directory / "settings.json.bak").write_bytes(b"broken-backup")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        settings = Settings()
+        dlg = SettingsDialog(settings)
+        monkeypatch.setattr(QMessageBox, "information", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(QMessageBox, "critical", lambda *_args, **_kwargs: None)
+
+        assert dlg._recovery_frame.isVisibleTo(dlg)
+        assert dlg._dialog_buttons.button(QDialogButtonBox.Ok).isEnabled()
+        dlg._device_udp_port.setValue(50100)
+        dlg._recovery_devices.setPlainText(
+            "192.168.1.13:4004\n192.168.1.12:4004"
+        )
+        dlg._recovery_confirmation.setText(Settings.REBUILD_CONFIRMATION)
+        dlg._on_rebuild_settings()
+
+        rebuilt = json.loads(
+            (directory / "settings.json").read_text(encoding="utf-8")
+        )
+        assert rebuilt["device_udp"]["local_port"] == 50100
+        assert rebuilt["customer"]["devices"] == [
+            {"ip": "192.168.1.13", "port": 4004},
+            {"ip": "192.168.1.12", "port": 4004},
+        ]
+        assert tuple(directory.glob("settings_recovery_*.json"))
+        dlg.deleteLater()
 
 class TestViewsAcceptSettings:
     """验证 4 个 view 都能接受 settings 入参（不报错），且 None 时也能工作。"""

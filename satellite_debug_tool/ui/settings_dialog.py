@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -15,13 +15,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.config import Settings, SettingsSaveError
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.i18n import (
     LANGUAGE_AUTO,
@@ -48,10 +50,15 @@ class SettingsDialog(QDialog):
         settings: Settings,
         parent: Optional[QWidget] = None,
         profile_store: Optional[ProfileStore] = None,
+        device_udp_port_editable: Optional[Callable[[], bool]] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._profile_store = profile_store
+        self._device_udp_port_editable = device_udp_port_editable
+        self._recovery_active = bool(
+            settings.read_only_recovery or settings.device_configuration_blocked
+        )
         self.setWindowTitle(tr("Settings"))
         self.setMinimumWidth(520)
         self._setup_ui()
@@ -74,6 +81,73 @@ class SettingsDialog(QDialog):
         language_row.addWidget(language_label)
         language_row.addWidget(self._language_combo, 1)
         outer.addLayout(language_row)
+
+        device_udp_row = QHBoxLayout()
+        self._device_udp_label = QLabel(tr("Device UDP local port:"))
+        self._device_udp_label.setMinimumWidth(120)
+        self._device_udp_port = QSpinBox()
+        self._device_udp_port.setRange(1, 65535)
+        self._device_udp_port.setValue(
+            int(self._settings.get("device_udp.local_port", 45678))
+        )
+        self._device_udp_port.setToolTip(
+            tr("Customer and production sessions share this UDP socket")
+        )
+        self._refresh_device_udp_port_editability()
+        device_udp_row.addWidget(self._device_udp_label)
+        device_udp_row.addWidget(self._device_udp_port)
+        device_udp_row.addStretch(1)
+        outer.addLayout(device_udp_row)
+
+        self._recovery_frame = QFrame()
+        self._recovery_frame.setObjectName("settingsRecoveryFrame")
+        recovery = QVBoxLayout(self._recovery_frame)
+        recovery.setContentsMargins(10, 10, 10, 10)
+        recovery.setSpacing(7)
+        self._recovery_title = QLabel(tr("Device settings recovery required"))
+        self._recovery_title.setObjectName("settingsRecoveryTitle")
+        recovery.addWidget(self._recovery_title)
+        self._recovery_detail = QLabel(
+            str(self._settings.device_configuration_error)
+            or tr("Device settings cannot be used safely.")
+        )
+        self._recovery_detail.setWordWrap(True)
+        recovery.addWidget(self._recovery_detail)
+        self._recovery_devices_label = QLabel(
+            tr("Customer devices (one IPv4:port per line):")
+        )
+        recovery.addWidget(self._recovery_devices_label)
+        self._recovery_devices = QPlainTextEdit()
+        self._recovery_devices.setFixedHeight(76)
+        configured = self._settings.get("customer.devices", [])
+        if isinstance(configured, list):
+            self._recovery_devices.setPlainText(
+                "\n".join(
+                    f"{item.get('ip')}:{item.get('port')}"
+                    for item in configured
+                    if isinstance(item, dict)
+                )
+            )
+        recovery.addWidget(self._recovery_devices)
+        confirm_row = QHBoxLayout()
+        self._recovery_confirmation_label = QLabel(
+            tr("Type REBUILD_DEVICE_SETTINGS to rebuild:")
+        )
+        self._recovery_confirmation = QLineEdit()
+        confirm_row.addWidget(self._recovery_confirmation_label)
+        confirm_row.addWidget(self._recovery_confirmation, 1)
+        recovery.addLayout(confirm_row)
+        recovery_actions = QHBoxLayout()
+        self._export_recovery_btn = QPushButton(tr("Export recovery evidence..."))
+        self._export_recovery_btn.clicked.connect(self._on_export_recovery)
+        self._rebuild_settings_btn = QPushButton(tr("Rebuild device settings"))
+        self._rebuild_settings_btn.clicked.connect(self._on_rebuild_settings)
+        recovery_actions.addWidget(self._export_recovery_btn)
+        recovery_actions.addStretch(1)
+        recovery_actions.addWidget(self._rebuild_settings_btn)
+        recovery.addLayout(recovery_actions)
+        self._recovery_frame.setVisible(self._recovery_active)
+        outer.addWidget(self._recovery_frame)
 
         outer.addWidget(
             QLabel(tr("Default folders used by file selection dialogs"))
@@ -185,12 +259,14 @@ class SettingsDialog(QDialog):
         outer.addWidget(hint)
 
         # 按钮
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText(tr("OK"))
-        buttons.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
+        self._dialog_buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        self._dialog_buttons.button(QDialogButtonBox.Ok).setText(tr("OK"))
+        self._dialog_buttons.button(QDialogButtonBox.Cancel).setText(tr("Cancel"))
+        self._dialog_buttons.accepted.connect(self._on_accept)
+        self._dialog_buttons.rejected.connect(self.reject)
+        outer.addWidget(self._dialog_buttons)
 
     def _make_row(self, layout: QVBoxLayout, label_text: str,
                   initial: str, browse_title_id: str) -> QLineEdit:
@@ -239,15 +315,30 @@ class SettingsDialog(QDialog):
         # M11：更新设置
         self._settings.set("update.auto_check", bool(self._cb_auto_check.isChecked()))
         self._settings.set("update.check_interval_hours", int(self._spin_interval.value()))
-        self._settings.save()
+        self._refresh_device_udp_port_editability()
+        if not self._recovery_active and self._device_udp_port.isEnabled():
+            self._settings.set(
+                "device_udp.local_port", int(self._device_udp_port.value())
+            )
+        if self._recovery_active:
+            self._settings.persist_preferences()
+        else:
+            try:
+                self._settings.save()
+            except SettingsSaveError as exc:
+                QMessageBox.critical(self, tr("Settings"), str(exc))
+                return
         manager = get_translation_manager()
         if manager is not None:
             manager.set_preference(language)
         self.accept()
 
+    def done(self, result: int) -> None:
+        super().done(result)
+
     def _on_reset_skip_version(self) -> None:
         self._settings.set("update.skip_version", "")
-        self._settings.save()
+        self._settings.persist_preferences()
         self._render_skipped_version()
         self._btn_reset_skip.setEnabled(False)
 
@@ -260,7 +351,94 @@ class SettingsDialog(QDialog):
         )
 
     def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("Settings"))
+        self._device_udp_label.setText(tr("Device UDP local port:"))
+        self._refresh_device_udp_port_editability()
+        self._recovery_title.setText(tr("Device settings recovery required"))
+        self._recovery_devices_label.setText(
+            tr("Customer devices (one IPv4:port per line):")
+        )
+        self._recovery_confirmation_label.setText(
+            tr("Type REBUILD_DEVICE_SETTINGS to rebuild:")
+        )
+        self._export_recovery_btn.setText(tr("Export recovery evidence..."))
+        self._rebuild_settings_btn.setText(tr("Rebuild device settings"))
         self._render_skipped_version()
+
+    def _refresh_device_udp_port_editability(self) -> None:
+        provider = self._device_udp_port_editable
+        editable = True if provider is None else bool(provider())
+        # Recovery rebuild is the sole device-settings transaction and must
+        # remain editable while normal device paths are fail-closed.
+        self._device_udp_port.setEnabled(bool(self._recovery_active or editable))
+        self._device_udp_port.setToolTip(
+            tr("Customer and production sessions share this UDP socket")
+            if editable or self._recovery_active
+            else tr("Disconnect all UDP device sessions before changing this port")
+        )
+
+    def _parse_recovery_devices(self) -> list[dict[str, object]]:
+        devices: list[dict[str, object]] = []
+        for line in self._recovery_devices.toPlainText().splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            try:
+                ip_text, port_text = value.rsplit(":", 1)
+                port = int(port_text, 10)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    tr("Invalid customer device endpoint: {endpoint}", endpoint=value)
+                ) from exc
+            devices.append({"ip": ip_text.strip(), "port": port})
+        return devices
+
+    def _on_export_recovery(self) -> None:
+        default_path = str(
+            self._settings.config_directory / "settings_recovery_evidence.json"
+        )
+        filename, _selected = QFileDialog.getSaveFileName(
+            self,
+            tr("Export recovery evidence"),
+            default_path,
+            tr("JSON files (*.json);;All files (*)"),
+        )
+        if not filename:
+            return
+        try:
+            self._settings.export_recovery_evidence(filename)
+        except SettingsSaveError as exc:
+            QMessageBox.critical(self, tr("Settings"), str(exc))
+            return
+        QMessageBox.information(
+            self,
+            tr("Settings"),
+            tr("Recovery evidence exported."),
+        )
+
+    def _on_rebuild_settings(self) -> None:
+        try:
+            devices = self._parse_recovery_devices()
+            current_active = self._settings.get("customer.active_endpoint")
+            active = current_active if current_active in devices else (
+                devices[0] if devices else None
+            )
+            self._settings.rebuild_device_settings(
+                local_port=int(self._device_udp_port.value()),
+                devices=devices,
+                active_endpoint=active,
+                confirmation=self._recovery_confirmation.text(),
+            )
+        except (SettingsSaveError, ValueError) as exc:
+            QMessageBox.critical(self, tr("Settings"), str(exc))
+            return
+        self._recovery_active = False
+        QMessageBox.information(
+            self,
+            tr("Settings"),
+            tr("Device settings rebuilt. Restart the application before connecting devices."),
+        )
+        self.accept()
 
     def _on_open_chart_groups(self) -> None:
         """打开 ChartGroupDialog（modal，关闭后回到 SettingsDialog）。
