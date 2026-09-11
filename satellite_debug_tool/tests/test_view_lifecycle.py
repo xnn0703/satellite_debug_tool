@@ -19,6 +19,12 @@ def lifecycle_settings(tmp_path: Path, monkeypatch):
     return settings
 
 
+def _configure_customer_endpoint(settings) -> None:
+    endpoint = {"ip": "127.0.0.1", "port": 4004}
+    settings.set("customer.devices", [endpoint])
+    settings.set("customer.active_endpoint", endpoint)
+
+
 def test_main_window_runs_render_timers_only_for_active_page(
     qapplication_session, lifecycle_settings
 ) -> None:
@@ -26,6 +32,7 @@ def test_main_window_runs_render_timers_only_for_active_page(
 
     qapp = qapplication_session
     lifecycle_settings.set("ui.active_tab_id", "live")
+    _configure_customer_endpoint(lifecycle_settings)
     window = MainWindow(settings=lifecycle_settings)
     overview = window._customer.overview
     live = window._live
@@ -88,6 +95,7 @@ def test_heavy_pages_are_built_on_first_access(
 
     qapp = qapplication_session
     lifecycle_settings.set("ui.active_tab_id", "live")
+    _configure_customer_endpoint(lifecycle_settings)
     window = MainWindow(settings=lifecycle_settings)
 
     assert window._playback is None
@@ -257,6 +265,143 @@ def test_deferred_live_session_connects_before_engineering_ui_exists(
     live.disconnect_device()
     assert not live.is_connected()
     assert not live.session_core().connected
+    live.deleteLater()
+
+
+def test_unmanaged_live_reaps_worker_before_reconnect_disconnect_and_shutdown(
+    qapplication_session, lifecycle_settings, monkeypatch
+) -> None:
+    from PySide6.QtCore import QThread, Signal
+
+    from satellite_debug_tool.ui import live_view as live_module
+
+    class _ThreadWorker(QThread):
+        connected = Signal()
+        disconnected = Signal()
+        error = Signal(str)
+        data_received = Signal(bytes)
+
+        instances = []
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._running = False
+            self.instances.append(self)
+
+        def connect(self, _config: dict) -> bool:
+            self._running = True
+            self.start()
+            self.connected.emit()
+            return True
+
+        def disconnect(self) -> None:
+            self._running = False
+            self.disconnected.emit()
+
+        def send(self, _frame: bytes) -> bool:
+            return self._running
+
+        def run(self) -> None:
+            while self._running:
+                self.msleep(5)
+
+    monkeypatch.setattr(live_module, "UdpWorker", _ThreadWorker)
+    live = live_module.LiveView(lifecycle_settings, defer_presentation=True)
+    config = {
+        "type": "udp",
+        "remote_ip": "127.0.0.1",
+        "remote_port": 4004,
+        "local_port": 0,
+    }
+
+    assert live._connect_transport(config)
+    first = _ThreadWorker.instances[-1]
+    assert first.isRunning()
+
+    assert live._connect_transport(config)
+    second = _ThreadWorker.instances[-1]
+    assert second is not first
+    assert not first.isRunning()
+    assert live._worker is second
+    assert live.session_core().transport is second
+
+    assert live.disconnect_device()
+    assert not second.isRunning()
+    assert live._worker is None
+    assert not live.session_core().connected
+
+    assert live._connect_transport(config)
+    third = _ThreadWorker.instances[-1]
+    assert third.isRunning()
+    assert live.shutdown()
+    assert not third.isRunning()
+    assert live._worker is None
+    live.deleteLater()
+
+
+def test_unmanaged_live_retains_worker_when_bounded_wait_does_not_stop_it(
+    qapplication_session, lifecycle_settings, monkeypatch
+) -> None:
+    from PySide6.QtCore import QObject, Signal
+
+    from satellite_debug_tool.ui import live_view as live_module
+
+    class _StuckWorker(QObject):
+        connected = Signal()
+        disconnected = Signal()
+        error = Signal(str)
+        data_received = Signal(bytes)
+
+        instances = []
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.running = True
+            self.delete_requested = False
+            self.instances.append(self)
+
+        def connect(self, _config: dict) -> bool:
+            self.connected.emit()
+            return True
+
+        def disconnect(self) -> None:
+            self.disconnected.emit()
+
+        def isRunning(self) -> bool:  # noqa: N802 - mirrors QThread
+            return self.running
+
+        def wait(self, _timeout_ms: int) -> bool:
+            return False
+
+        def deleteLater(self) -> None:  # noqa: N802 - mirrors QObject
+            self.delete_requested = True
+
+        def send(self, _frame: bytes) -> bool:
+            return False
+
+    monkeypatch.setattr(live_module, "UdpWorker", _StuckWorker)
+    live = live_module.LiveView(lifecycle_settings, defer_presentation=True)
+    config = {
+        "type": "udp",
+        "remote_ip": "127.0.0.1",
+        "remote_port": 4004,
+        "local_port": 0,
+    }
+
+    assert live._connect_transport(config)
+    worker = _StuckWorker.instances[-1]
+    assert not live.disconnect_device()
+    assert live._worker is worker
+    assert not worker.delete_requested
+
+    assert not live._connect_transport(config)
+    assert len(_StuckWorker.instances) == 1
+    assert live._worker is worker
+
+    worker.running = False
+    assert live.shutdown()
+    assert worker.delete_requested
+    assert live._worker is None
     live.deleteLater()
 
 
