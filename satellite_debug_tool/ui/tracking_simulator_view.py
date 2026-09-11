@@ -6,6 +6,7 @@ import json
 import math
 import secrets
 import time
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
@@ -23,7 +24,12 @@ from PySide6.QtWidgets import (
 from satellite_debug_tool.core.product import Availability
 from satellite_debug_tool.core.protocol.codec_v2 import build_service_apply_rf
 from satellite_debug_tool.core.protocol.frame_v2 import ServiceControlOp, ServiceResultCode
-from satellite_debug_tool.core.session.device_session import DeviceSessionCore
+from satellite_debug_tool.core.session import (
+    DeviceSessionCore,
+    LegacySessionOperationGateway,
+    SessionOperationClass,
+    SessionOperationGateway,
+)
 from satellite_debug_tool.core.tracking_simulator import (
     ScenarioEngine,
     TrackingScenario,
@@ -63,9 +69,28 @@ _DEFAULT_SCENARIO = {
 class TrackingSimulatorView(QWidget):
     status_message = Signal(str, int)
 
-    def __init__(self, session: DeviceSessionCore, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        session: DeviceSessionCore,
+        parent: QWidget | None = None,
+        *,
+        operation_gateway_factory: Optional[
+            Callable[[], SessionOperationGateway]
+        ] = None,
+    ) -> None:
         super().__init__(parent)
+        if operation_gateway_factory is not None and not callable(
+            operation_gateway_factory
+        ):
+            raise TypeError("operation_gateway_factory must be callable")
         self._session = session
+        self._operation_gateway = (
+            operation_gateway_factory()
+            if operation_gateway_factory is not None
+            else LegacySessionOperationGateway(session)
+        )
+        if self._operation_gateway is None:
+            raise ValueError("operation_gateway_factory must return a gateway")
         self._lease_token = object()
         self._scenario: TrackingScenario | None = None
         self._engine: ScenarioEngine | None = None
@@ -76,6 +101,9 @@ class TrackingSimulatorView(QWidget):
         self._deadline = 0.0
         self._rf_request_id: int | None = None
         self._rf_ack = False
+        self._mutation_sent = False
+        self._terminal_request_id = ""
+        self._stop_state_cursor = 0.0
 
         self._editor = QTextEdit(json.dumps(_DEFAULT_SCENARIO, ensure_ascii=False, indent=2))
         self._status = QLabel(tr("Stopped"))
@@ -111,9 +139,7 @@ class TrackingSimulatorView(QWidget):
         self._timer.start()
         session.product_store.control_response.connect(self._on_control_response)
         session.connection_changed.connect(self._on_connection_changed)
-        self.destroyed.connect(
-            lambda _obj=None: session.release_device_transaction(self._lease_token)
-        )
+        self.destroyed.connect(self._on_destroyed)
         self._refresh_controls()
 
     @Slot()
@@ -130,7 +156,14 @@ class TrackingSimulatorView(QWidget):
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             QMessageBox.warning(self, tr("Invalid scenario"), str(error))
             return
-        if not self._session.connected or not self._session.try_acquire_device_transaction(self._lease_token):
+        if not self._session.connected or not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose="tracking-simulator",
+            allowed_operations={
+                SessionOperationClass.MUTATING,
+                SessionOperationClass.TERMINAL,
+            },
+        ):
             self._set_status(tr("Device link or transaction is unavailable"))
             return
         self._scenario = scenario
@@ -138,10 +171,25 @@ class TrackingSimulatorView(QWidget):
         self._session_id = secrets.randbelow(0xFFFFFFFF) + 1
         self._position_s = 0.0
         self._last_tick = time.monotonic()
-        initial = self._engine.sample(0.0, pointing_error_deg=0.0, offaxis_deg=0.0, scan_loss_db=0.0, beam_fresh=False)
-        if not self._session.send(build_tracking_simulation_frame(0, self._session_id, scenario, initial)):
-            self._fail(tr("Failed to send simulator START"))
+        if not self._operation_gateway.update_operation_context(
+            self._lease_token,
+            request_id=f"tracking-start:{self._session_id}",
+            target_facts=(
+                ("simulator_session_id", self._session_id),
+                ("scenario", scenario.name),
+                ("target", "tracking_sim_active=1"),
+            ),
+        ):
+            self._finish_local(tr("Failed to freeze simulator operation context"))
             return
+        initial = self._engine.sample(0.0, pointing_error_deg=0.0, offaxis_deg=0.0, scan_loss_db=0.0, beam_fresh=False)
+        if not self._operation_gateway.send(
+            build_tracking_simulation_frame(0, self._session_id, scenario, initial),
+            operation=SessionOperationClass.MUTATING,
+        ):
+            self._finish_local(tr("Failed to send simulator START"))
+            return
+        self._mutation_sent = True
         self._phase = "wait_sim"
         self._deadline = time.monotonic() + 3.0
         self._set_status(tr("Waiting for device simulation state and TX gate off"))
@@ -156,17 +204,37 @@ class TrackingSimulatorView(QWidget):
 
     @Slot()
     def stop(self) -> None:
-        if self._phase == "stopped":
+        if self._phase in {"stopped", "wait_stop"}:
             return
-        if self._session_id != 0 and self._scenario is not None:
-            self._session.send(build_tracking_simulation_frame(2, self._session_id, self._scenario))
-        self._finish_local(tr("Stopped; normal TX policy may resume"))
+        self._begin_stop(tr("Waiting for device simulation-stop readback"))
 
     @Slot()
     def _tick(self) -> None:
         if self._phase == "stopped" or self._scenario is None or self._engine is None:
             return
         now = time.monotonic()
+        if self._phase == "wait_stop":
+            value, cursor = self._simulation_state_evidence()
+            if cursor > self._stop_state_cursor and value == 0:
+                if self._operation_gateway.confirm_terminal(
+                    self._lease_token,
+                    request_id=self._terminal_request_id,
+                    evidence_facts=(
+                        ("simulator_session_id", self._session_id),
+                        ("tracking_sim_active", 0),
+                        ("state_received_monotonic", cursor),
+                    ),
+                ):
+                    self._finish_local(
+                        tr("Stopped; device confirmed normal TX policy may resume"),
+                        release_operation=False,
+                    )
+                return
+            if now >= self._deadline:
+                self._finish_unconfirmed(
+                    tr("Simulator STOP timed out; final device state is unknown"),
+                )
+            return
         if self._phase in {"wait_sim", "wait_rf"} and now >= self._deadline:
             self._fail(tr("Simulator start timed out"))
             return
@@ -179,7 +247,10 @@ class TrackingSimulatorView(QWidget):
                 self._scenario.rx_polarization,
                 self._scenario.tx_polarization,
             )
-            if not self._session.send(frame):
+            if not self._operation_gateway.send(
+                frame,
+                operation=SessionOperationClass.MUTATING,
+            ):
                 self._fail(tr("Failed to send RF configuration"))
                 return
             self._rf_ack = False
@@ -214,7 +285,15 @@ class TrackingSimulatorView(QWidget):
             scan_loss_db=scan_loss,
             beam_fresh=fresh,
         )
-        if not self._session.send(build_tracking_simulation_frame(1, self._session_id, self._scenario, sample)):
+        if not self._operation_gateway.send(
+            build_tracking_simulation_frame(
+                1,
+                self._session_id,
+                self._scenario,
+                sample,
+            ),
+            operation=SessionOperationClass.MUTATING,
+        ):
             self._fail(tr("Failed to send simulator SAMPLE"))
 
     def _beam_facts(self) -> tuple[float, float, bool]:
@@ -266,7 +345,9 @@ class TrackingSimulatorView(QWidget):
     @Slot(bool)
     def _on_connection_changed(self, connected: bool) -> None:
         if not connected and self._phase != "stopped":
-            self._finish_local(tr("Connection lost; device timeout will stop simulation"))
+            self._finish_unconfirmed(
+                tr("Connection lost; simulator final device state is unknown"),
+            )
 
     @Slot(int)
     def _seek_stopped(self, value: int) -> None:
@@ -293,17 +374,85 @@ class TrackingSimulatorView(QWidget):
                 json.dump(scenario.to_dict(), stream, ensure_ascii=False, indent=2)
 
     def _fail(self, message: str) -> None:
-        if self._session_id and self._scenario is not None:
-            self._session.send(build_tracking_simulation_frame(2, self._session_id, self._scenario))
+        if self._mutation_sent:
+            self._begin_stop(message)
+            return
         self._finish_local(message)
 
-    def _finish_local(self, message: str) -> None:
-        self._phase = "stopped"
-        self._session.release_device_transaction(self._lease_token)
-        self._session_id = 0
-        self._rf_request_id = None
+    def _begin_stop(self, message: str) -> None:
+        scenario = self._scenario
+        if self._session_id == 0 or scenario is None:
+            self._finish_unconfirmed(message)
+            return
+        request_id = f"tracking-stop:{self._session_id}"
+        if not self._operation_gateway.update_operation_context(
+            self._lease_token,
+            request_id=request_id,
+            target_facts=(
+                ("simulator_session_id", self._session_id),
+                ("target", "tracking_sim_active=0"),
+            ),
+        ):
+            self._finish_unconfirmed(
+                tr("Simulator STOP context could not be frozen; final state is unknown"),
+            )
+            return
+        if not self._operation_gateway.begin_terminating(self._lease_token):
+            self._finish_unconfirmed(
+                tr("Simulator STOP could not enter terminating state"),
+            )
+            return
+        _value, self._stop_state_cursor = self._simulation_state_evidence()
+        self._terminal_request_id = request_id
+        self._phase = "wait_stop"
+        self._deadline = time.monotonic() + 3.0
+        if not self._operation_gateway.send(
+            build_tracking_simulation_frame(2, self._session_id, scenario),
+            operation=SessionOperationClass.TERMINAL,
+        ):
+            self._finish_unconfirmed(
+                tr("Failed to send simulator STOP; final device state is unknown"),
+            )
+            return
         self._set_status(message)
         self._refresh_controls()
+
+    def _simulation_state_evidence(self) -> tuple[int | None, float]:
+        hw_type = self._session.profile_store.current_hw_type()
+        if not hw_type:
+            return None, 0.0
+        state = self._session.profile_store.find_state_by_role(
+            hw_type,
+            "tracking_sim_active",
+        )
+        if state is None:
+            return None, 0.0
+        snapshot = self._session.state_store.get(hw_type, state.state_id)
+        if snapshot is None:
+            return None, 0.0
+        return int(snapshot.value), float(snapshot.last_received_monotonic)
+
+    def _finish_unconfirmed(self, message: str) -> None:
+        """Stop local simulation ownership without claiming a device result."""
+
+        self._finish_local(message)
+
+    def _finish_local(self, message: str, *, release_operation: bool = True) -> None:
+        self._phase = "stopped"
+        if release_operation:
+            self._operation_gateway.release_operation(self._lease_token)
+        self._session_id = 0
+        self._rf_request_id = None
+        self._mutation_sent = False
+        self._terminal_request_id = ""
+        self._stop_state_cursor = 0.0
+        self._set_status(message)
+        self._refresh_controls()
+
+    @Slot(object)
+    def _on_destroyed(self, _obj=None) -> None:
+        self._phase = "stopped"
+        self._operation_gateway.release_operation(self._lease_token)
 
     def _set_status(self, message: str) -> None:
         self._status.setText(message)
@@ -316,7 +465,7 @@ class TrackingSimulatorView(QWidget):
         self._save.setEnabled(stopped)
         self._start.setEnabled(stopped or self._phase == "paused")
         self._pause.setEnabled(self._phase == "running")
-        self._stop.setEnabled(not stopped)
+        self._stop.setEnabled(self._phase not in {"stopped", "wait_stop"})
         self._timeline.setEnabled(stopped)
 
     def activate(self) -> None:
