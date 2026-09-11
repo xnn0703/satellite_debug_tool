@@ -856,7 +856,7 @@ class FixtureDebugWorkspace(QWidget):
                 self._profile_status.setText(str(exc))
             else:
                 self._settings.set("production.fixture_profile_id", profile_id)
-                self._settings.save()
+                self._settings.persist_preferences()
                 candidates = self._calibration_store.list_for_profile(profile_id)
                 self._calibration = next(
                     (
@@ -900,7 +900,7 @@ class FixtureDebugWorkspace(QWidget):
             QMessageBox.critical(self, tr("Fixture profile"), str(exc))
             return
         self._settings.set("production.fixture_profile_id", profile.profile_id)
-        self._settings.save()
+        self._settings.persist_preferences()
         self._reload_profiles()
 
     def _update_profile_ranges(self) -> None:
