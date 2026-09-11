@@ -87,10 +87,17 @@ from satellite_debug_tool.core.session import (
     DebugRequestResult,
     DeviceSessionCore,
     ProductSubscriptionController,
+    SessionOperationClass,
+    SessionRecorderKind,
+    SessionRecorderLease,
     SessionRegistry,
 )
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.io.data_recorder import DataRecorder, SDB_VERSION_V3
+from satellite_debug_tool.io.recording_path_registry import (
+    RecordingPathError,
+    RecordingPathRegistry,
+)
 from satellite_debug_tool.i18n import (
     register_translatable,
     set_raw_text,
@@ -111,6 +118,7 @@ from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
 
 DEVICE_ACTIVITY_TIMEOUT_S = 3.0
 ORBIT_SKY_REQUEST_TIMEOUT_S = 3.0
+TRANSPORT_WORKER_STOP_TIMEOUT_MS = 1000
 
 
 class LiveView(QWidget):
@@ -128,6 +136,7 @@ class LiveView(QWidget):
     profile_ready = Signal(str)
     recording_state_changed = Signal(bool, str)
     customer_recording_state_changed = Signal(str, str)
+    capture_profile_resync_changed = Signal(bool)
     orbit_capability_changed = Signal(bool)
 
     def __init__(
@@ -136,22 +145,34 @@ class LiveView(QWidget):
         parent: Optional[QWidget] = None,
         *,
         session_registry: Optional[SessionRegistry] = None,
+        customer_binding=None,
+        serial_only: bool = False,
         defer_presentation: bool = False,
     ):
         super().__init__(parent)
         self._settings = settings
+        self._customer_binding = customer_binding
+        self._managed_runtime = (
+            None if customer_binding is None else customer_binding.runtime
+        )
+        self._serial_only = bool(serial_only)
 
         # ---------- 业务状态（原 MainWindow.__init__）----------
         self._worker = None
-        self._session_registry = session_registry or SessionRegistry(parent=self)
-        initial_endpoint = (
-            str(settings.get("udp.remote_ip", "192.168.1.12")),
-            int(settings.get("udp.remote_port", 4004)),
-        )
-        self._session_core = self._session_registry.get_or_create(
-            initial_endpoint,
-            owner="interactive",
-        )
+        self._worker_signal_slots: dict[str, object] = {}
+        self._session_registry = session_registry
+        if customer_binding is None:
+            # Engineering serial and the legacy single-endpoint worker are
+            # independent transports.  Shared UDP authority exists only in
+            # EndpointSessionDirectory-backed customer bindings.
+            initial_endpoint = (
+                str(settings.get("udp.remote_ip", "192.168.1.12")),
+                int(settings.get("udp.remote_port", 4004)),
+            )
+            self._session_core = DeviceSessionCore(parent=self)
+        else:
+            initial_endpoint = customer_binding.endpoint
+            self._session_core = customer_binding.core
         self._data_store = self._session_core.data_store
         self._profile_store = self._session_core.profile_store
         self._state_store = self._session_core.state_store
@@ -168,10 +189,12 @@ class LiveView(QWidget):
         self._orbit_sky_timer.setInterval(1000)
         self._orbit_sky_timer.timeout.connect(self.request_orbit_sky_refresh)
         self._product_store = self._session_core.product_store
-        self._product_subscription_controller = ProductSubscriptionController(
-            self._session_core,
-            parent=self,
+        self._product_subscription_controller = (
+            ProductSubscriptionController(self._session_core, parent=self)
+            if customer_binding is None
+            else None
         )
+        self._managed_subscription_timer = QTimer(self)
         self._product_store.updated.connect(self._on_product_store_updated)
         self._gnss_store.changed.connect(self._on_gnss_store_changed)
         self._gnss_widget = None
@@ -183,7 +206,8 @@ class LiveView(QWidget):
         self._event_log.event_added.connect(self._on_event_added_for_chart)
         self._profile_store.profile_changed.connect(self._on_profile_changed_sync)
         self._session_core.record_received.connect(self._on_session_record)
-        self._session_core.activity.connect(self._mark_device_activity)
+        if customer_binding is None:
+            self._session_core.activity.connect(self._mark_device_activity)
         self._session_core.heartbeat_received.connect(self._status_strip_heartbeat)
         self._session_core.profile_ready.connect(self._on_handshake_ready)
         self._session_core.link_lost.connect(self._on_link_lost)
@@ -201,12 +225,18 @@ class LiveView(QWidget):
         self._device_activity_timer.setInterval(250)
         self._device_activity_timer.timeout.connect(self._check_device_activity)
         self._active_hw_type: Optional[str] = None
-        self._debug_controller = DebugController(self._session_core, parent=self)
+        self._debug_controller = DebugController(
+            self._session_core,
+            parent=self,
+            operation_gateway=self.new_operation_gateway(),
+        )
         self._debug_controller.state_changed.connect(self._on_debug_state_changed)
         self._debug_controller.pending_changed.connect(self._on_debug_pending_changed)
         self._debug_controller.request_finished.connect(self._on_debug_request_finished)
         self._customer_auto_debug = False
         self._recorder = None
+        self._engineering_recorder_lease: SessionRecorderLease | None = None
+        self._engineering_recorder_owner = object()
         self._is_recording = False
         self._customer_recording = False
         self._customer_recording_state = CustomerRecordingState.IDLE
@@ -216,9 +246,13 @@ class LiveView(QWidget):
         self._capture_profile_controller = CaptureProfileController(
             self._session_core,
             parent=self,
+            operation_gateway=self.new_operation_gateway(),
         )
         self._capture_profile_controller.finished.connect(
             self._on_capture_profile_finished
+        )
+        self._capture_profile_controller.resync_required_changed.connect(
+            self.capture_profile_resync_changed
         )
         self._frame_times: list[float] = []
         self._frame_count = 0
@@ -229,8 +263,10 @@ class LiveView(QWidget):
         self._presentation_ready = False
         self._presentation_build_elapsed_ms: Optional[float] = None
 
-        self._connection_type = str(
-            self._settings.get("general.connection_type", "Serial")
+        self._connection_type = (
+            "UDP"
+            if customer_binding is not None
+            else str(self._settings.get("general.connection_type", "Serial"))
         )
         if self._connection_type not in {"Serial", "UDP"}:
             self._connection_type = "Serial"
@@ -238,11 +274,11 @@ class LiveView(QWidget):
         self._serial_baudrate = int(
             self._settings.get("serial.default_baudrate", "115200")
         )
-        self._udp_remote_ip = str(
-            self._settings.get("udp.remote_ip", "192.168.1.12")
+        self._udp_remote_ip = str(initial_endpoint[0])
+        self._udp_remote_port = int(initial_endpoint[1])
+        self._udp_local_port = int(
+            self._settings.get("device_udp.local_port", 45678)
         )
-        self._udp_remote_port = int(self._settings.get("udp.remote_port", 4004))
-        self._udp_local_port = int(self._settings.get("udp.local_port", 45678))
         self._active_connection_config: Optional[dict] = None
 
         # Rendering timers exist for the lifetime of the view, while the heavy
@@ -253,6 +289,22 @@ class LiveView(QWidget):
         self._heavy_timer = QTimer(self)
         self._heavy_timer.setInterval(200)
         self._heavy_timer.timeout.connect(self._update_heavy)
+
+        if customer_binding is not None:
+            customer_binding.connection_state_changed.connect(
+                self._on_managed_attachment_changed
+            )
+            customer_binding.device_connection_phase_changed.connect(
+                self._on_managed_presence_changed
+            )
+            customer_binding.attachment_failed.connect(self._on_error)
+            runtime_datagram = getattr(self._managed_runtime, "datagram_received", None)
+            if runtime_datagram is not None:
+                runtime_datagram.connect(self._on_runtime_datagram_received)
+            self._managed_runtime.datagram_sent.connect(
+                self._on_runtime_datagram_sent
+            )
+            self._apply_managed_attachment_state(emit_signals=False)
 
         if not defer_presentation:
             self.ensure_presentation()
@@ -287,6 +339,25 @@ class LiveView(QWidget):
     def session_core(self) -> DeviceSessionCore:
         return self._session_core
 
+    @property
+    def fixed_endpoint(self) -> Optional[tuple[str, int]]:
+        """Endpoint frozen into a managed Customer presentation, if any."""
+
+        binding = self._customer_binding
+        return None if binding is None else binding.endpoint
+
+    def new_operation_gateway(self):
+        """Return one controller-private gateway for this fixed session."""
+
+        binding = self._customer_binding
+        return None if binding is None else binding.new_operation_gateway()
+
+    def session_command_sender(self):
+        """Return the attachment-scoped sender used by read-only probes."""
+
+        binding = self._customer_binding
+        return None if binding is None else binding.command_sender
+
     def data_store(self) -> DataStore:
         return self._data_store
 
@@ -305,19 +376,32 @@ class LiveView(QWidget):
 
     @property
     def _product_subscribe_attempts(self) -> int:
-        return self._product_subscription_controller.attempts
+        controller = self._current_subscription_controller()
+        return 0 if controller is None else controller.attempts
 
     @property
     def _product_subscribe_pending_id(self) -> int | None:
-        return self._product_subscription_controller.pending_request_id
+        controller = self._current_subscription_controller()
+        return None if controller is None else controller.pending_request_id
 
     @property
     def _product_subscription_confirmed(self) -> bool:
-        return self._product_subscription_controller.confirmed
+        controller = self._current_subscription_controller()
+        return bool(controller is not None and controller.confirmed)
 
     @property
     def _product_subscribe_timer(self) -> QTimer:
-        return self._product_subscription_controller.retry_timer
+        controller = self._current_subscription_controller()
+        return (
+            self._managed_subscription_timer
+            if controller is None
+            else controller.retry_timer
+        )
+
+    def _current_subscription_controller(self):
+        if self._managed_runtime is not None:
+            return self._managed_runtime.subscription_controller
+        return self._product_subscription_controller
 
     @property
     def _capture_pending_id(self) -> int | None:
@@ -330,6 +414,10 @@ class LiveView(QWidget):
     @property
     def _capture_timer(self) -> QTimer:
         return self._capture_profile_controller.timeout_timer
+
+    @property
+    def capture_profile_resync_required(self) -> bool:
+        return self._capture_profile_controller.resync_required
 
     def product_snapshot(self):
         return self._session_core.product_snapshot()
@@ -390,7 +478,10 @@ class LiveView(QWidget):
         self._orbit_sky_request_started_at = time.monotonic()
         self._orbit_sky_snapshot_id = 0
         self._orbit_sky_expected_page = 0
-        if not self._send_control_frame(build_orbit_sky_snapshot(request_id, 0, 0)):
+        if not self._send_control_frame(
+            build_orbit_sky_snapshot(request_id, 0, 0),
+            operation=SessionOperationClass.READ_ONLY_QUERY,
+        ):
             self._reset_orbit_sky_request()
             return False
         return True
@@ -400,7 +491,8 @@ class LiveView(QWidget):
         if not self._is_connected or not (1 <= int(norad_id) <= 0xFFFFFFFF):
             return False
         return self._send_control_frame(
-            build_orbit_select(self.next_product_request_id(), int(norad_id))
+            build_orbit_select(self.next_product_request_id(), int(norad_id)),
+            operation=SessionOperationClass.MUTATING,
         )
 
     def _reset_orbit_sky_request(self) -> None:
@@ -437,6 +529,22 @@ class LiveView(QWidget):
         """Customer workspace UDP connection entry using the shared Live session."""
         if self._is_connected:
             return True
+        if self._customer_binding is not None:
+            requested = (str(remote_ip).strip(), int(remote_port))
+            if requested != self._customer_binding.endpoint:
+                self.status_message.emit(
+                    tr("The customer session endpoint is fixed; edit it in the device list"),
+                    3500,
+                )
+                return False
+            if int(local_port) != int(self._udp_local_port):
+                self.status_message.emit(
+                    tr("The shared UDP local port is fixed in Settings"),
+                    3500,
+                )
+                return False
+            self._customer_auto_debug = bool(auto_debug)
+            return bool(self._customer_binding.attach())
         self._connection_type = "UDP"
         self._udp_remote_ip = str(remote_ip).strip()
         self._udp_remote_port = int(remote_port)
@@ -445,7 +553,7 @@ class LiveView(QWidget):
         self._settings.set("udp.remote_ip", self._udp_remote_ip)
         self._settings.set("udp.remote_port", self._udp_remote_port)
         self._settings.set("udp.local_port", self._udp_local_port)
-        self._settings.save()
+        self._settings.persist_preferences()
         if self._presentation_ready:
             index = self._type_combo.findData("UDP")
             if index >= 0:
@@ -464,9 +572,9 @@ class LiveView(QWidget):
         )
         return self._is_connected
 
-    def disconnect_device(self) -> None:
+    def disconnect_device(self) -> bool:
         self._customer_auto_debug = False
-        self._on_disconnect_clicked()
+        return self._on_disconnect_clicked()
 
     def toggle_recording(self) -> None:
         self._on_record_clicked()
@@ -508,13 +616,19 @@ class LiveView(QWidget):
     def probe_orbit_capabilities(self) -> bool:
         if not self._is_connected:
             return False
-        return self._send_control_frame(build_orbit_capabilities(self.next_product_request_id()))
+        return self._send_control_frame(
+            build_orbit_capabilities(self.next_product_request_id()),
+            operation=SessionOperationClass.READ_ONLY_QUERY,
+        )
 
     def next_product_request_id(self) -> int:
         return self._session_core.next_request_id()
 
     def send_product_frame(self, frame: bytes) -> bool:
-        return self._send_control_frame(frame)
+        return self._send_control_frame(
+            frame,
+            operation=SessionOperationClass.MUTATING,
+        )
 
     def is_debug_enabled(self) -> bool:
         return self._debug_controller.enabled
@@ -556,6 +670,15 @@ class LiveView(QWidget):
         self._remote_ip.setText(self._udp_remote_ip)
         self._remote_port.setValue(self._udp_remote_port)
         self._local_port.setValue(self._udp_local_port)
+        if self._customer_binding is not None:
+            self._type_combo.setEnabled(False)
+            self._remote_ip.setReadOnly(True)
+            self._remote_port.setReadOnly(True)
+            self._remote_port.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            self._local_port.setReadOnly(True)
+            self._local_port.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            self._connect_btn.setEnabled(not self._is_connected)
+            self._disconnect_btn.setEnabled(self._is_connected)
 
     def _setup_ui(self):
         # 整个 LiveView 用 QVBoxLayout：顶部 toolbar + 主区 + 底部 status row
@@ -603,8 +726,13 @@ class LiveView(QWidget):
         self._toolbar.addSeparator()
 
         self._type_combo = QComboBox()
-        self._type_combo.addItem(tr("Serial"), "Serial")
-        self._type_combo.addItem("UDP", "UDP")
+        if self._customer_binding is not None:
+            self._type_combo.addItem(tr("Shared customer UDP"), "UDP")
+        elif self._serial_only:
+            self._type_combo.addItem(tr("Engineering serial"), "Serial")
+        else:
+            self._type_combo.addItem(tr("Serial"), "Serial")
+            self._type_combo.addItem("UDP", "UDP")
         self._type_combo.setFixedWidth(80)
         self._type_combo.currentIndexChanged.connect(self._on_type_changed)
         self._toolbar.addWidget(QLabel(tr("Type:")))
@@ -713,7 +841,7 @@ class LiveView(QWidget):
                 "the Profile and current state panel"
             )
         )
-        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        self._clear_btn.clicked.connect(self.clear_display_data)
         self._toolbar.addWidget(self._clear_btn)
 
         self._gnss_btn = QPushButton("GNSS")
@@ -906,8 +1034,9 @@ class LiveView(QWidget):
         else:
             self._config_stack.setCurrentIndex(1)
         self._connection_type = conn_type
-        self._settings.set("general.connection_type", conn_type)
-        self._settings.save()
+        if self._customer_binding is None:
+            self._settings.set("general.connection_type", conn_type)
+            self._settings.persist_preferences()
 
     def _refresh_ports(self):
         ports = SerialWorker.list_ports()
@@ -921,6 +1050,14 @@ class LiveView(QWidget):
     def _on_connect_clicked(self):
         conn_type = self._type_combo.currentData() or "Serial"
         trace_message("DBG_UI", f"CLICK CONNECT type={conn_type}")
+        if self._customer_binding is not None:
+            self.connect_udp(
+                self._udp_remote_ip,
+                self._udp_remote_port,
+                self._udp_local_port,
+                auto_debug=True,
+            )
+            return
         if conn_type == "Serial":
             port = self._port_combo.currentData()
             if not port:
@@ -938,7 +1075,7 @@ class LiveView(QWidget):
                 "serial.default_baudrate", str(self._serial_baudrate)
             )
             self._settings.set("serial.last_port", self._serial_port)
-            self._settings.save()
+            self._settings.persist_preferences()
         else:
             self._connection_type = "UDP"
             self._udp_remote_ip = self._remote_ip.text().strip()
@@ -953,33 +1090,37 @@ class LiveView(QWidget):
             self._settings.set("udp.remote_ip", self._udp_remote_ip)
             self._settings.set("udp.remote_port", self._udp_remote_port)
             self._settings.set("udp.local_port", self._udp_local_port)
-            self._settings.save()
+            self._settings.persist_preferences()
         self._settings.set("general.connection_type", self._connection_type)
-        self._settings.save()
+        self._settings.persist_preferences()
         self._connect_transport(config)
 
-    def _connect_transport(self, config: dict) -> None:
+    def _connect_transport(self, config: dict) -> bool:
         """Start one transport from stable connection state."""
+        if self._customer_binding is not None:
+            raise RuntimeError("managed customer LiveView cannot create a transport worker")
+        if self._worker is not None and not self._shutdown_transport_worker():
+            self._on_error(tr("Transport worker did not stop"))
+            return False
         conn_type = str(config.get("type", ""))
         if conn_type == "serial":
-            self._worker = SerialWorker()
+            worker = SerialWorker()
             detail = f"{config['port']} @ {config['baudrate']}"
         elif conn_type == "udp":
-            self._worker = UdpWorker()
+            worker = UdpWorker()
             detail = f"UDP {config['remote_ip']}:{config['remote_port']}"
         else:
             raise ValueError(f"unsupported connection type: {conn_type}")
+        self._worker = worker
         self._active_connection_config = dict(config)
         if self._presentation_ready:
             set_raw_text(detail, self._conn_status_label)
 
-        self._worker.connected.connect(self._on_connected)
-        self._worker.disconnected.connect(self._on_disconnected)
-        self._worker.error.connect(self._on_error)
-        self._worker.data_received.connect(self._on_data_received)
+        self._wire_transport_worker(worker)
 
-        if self._worker.connect(config):
+        if worker.connect(config):
             self._is_connected = True
+            return True
         else:
             if self._presentation_ready:
                 set_translatable_text("Connection failed", self._conn_status_label)
@@ -988,20 +1129,222 @@ class LiveView(QWidget):
                     dev="—",
                     detail_source="Connection failed",
                 )
+            self._shutdown_transport_worker()
+            return False
+
+    def _wire_transport_worker(self, worker: object) -> None:
+        slots = {
+            "connected": lambda worker=worker: self._on_worker_connected(worker),
+            "disconnected": lambda worker=worker: self._on_worker_disconnected(worker),
+            "error": lambda message, worker=worker: self._on_worker_error(worker, message),
+            "data_received": (
+                lambda data, worker=worker: self._on_worker_data_received(worker, data)
+            ),
+        }
+        worker.connected.connect(slots["connected"])
+        worker.disconnected.connect(slots["disconnected"])
+        worker.error.connect(slots["error"])
+        worker.data_received.connect(slots["data_received"])
+        self._worker_signal_slots = slots
+
+    def _unwire_transport_worker(self, worker: object) -> None:
+        slots = self._worker_signal_slots
+        self._worker_signal_slots = {}
+        for name, slot in slots.items():
+            signal = getattr(worker, name, None)
+            if signal is None or not hasattr(signal, "disconnect"):
+                continue
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+
+    def _shutdown_transport_worker(self) -> bool:
+        """Stop and reap only the unmanaged Serial/UdpWorker transport."""
+
+        if self._customer_binding is not None:
+            return True
+        worker = self._worker
+        if worker is None:
+            return True
+        try:
+            worker.disconnect()
+        except (RuntimeError, OSError):
+            return False
+        if self._is_connected:
+            self._on_disconnected()
+
+        is_running = getattr(worker, "isRunning", None)
+        running = bool(is_running()) if callable(is_running) else False
+        if running:
+            wait = getattr(worker, "wait", None)
+            if not callable(wait) or not bool(wait(TRANSPORT_WORKER_STOP_TIMEOUT_MS)):
+                return False
+        if callable(is_running) and bool(is_running()):
+            return False
+
+        self._unwire_transport_worker(worker)
+        delete_later = getattr(worker, "deleteLater", None)
+        if callable(delete_later):
+            try:
+                delete_later()
+            except RuntimeError:
+                pass
+        if self._worker is worker:
+            self._worker = None
+        return True
+
+    def _on_worker_connected(self, worker: object) -> None:
+        if worker is self._worker:
+            self._on_connected()
+
+    def _on_worker_disconnected(self, worker: object) -> None:
+        if worker is self._worker:
+            self._on_disconnected()
+
+    def _on_worker_error(self, worker: object, message: str) -> None:
+        if worker is self._worker:
+            self._on_error(message)
+
+    def _on_worker_data_received(self, worker: object, data: bytes) -> None:
+        if worker is self._worker:
+            self._on_data_received(data)
 
     def _on_disconnect_clicked(self):
         trace_message("DBG_UI", "CLICK DISCONNECT")
+        if self._customer_binding is not None:
+            if self._is_recording:
+                if self._customer_recording:
+                    self._stop_recording(restore_customer_profile=True)
+                    return False
+                if not self._stop_recording(restore_customer_profile=False):
+                    return False
+            if self._customer_recording_state is not CustomerRecordingState.IDLE:
+                self.status_message.emit(
+                    tr("Finish restoring the customer stream before disconnecting"),
+                    3500,
+                )
+                return False
+            if self._debug_controller.pending_target is not None:
+                self.status_message.emit(
+                    tr("Finish the pending Debug operation before disconnecting"),
+                    3500,
+                )
+                return False
+            if self._debug_controller.enabled:
+                self.status_message.emit(
+                    tr("Disable Debug and wait for confirmation before disconnecting"),
+                    3500,
+                )
+                self.request_debug_mode(False)
+                return False
+            return bool(self._customer_binding.detach())
         self._debug_controller.reset()
         if self._presentation_ready:
             set_translatable_text("Debug: OFF", self._debug_btn)
             self._debug_btn.setEnabled(False)
-        if self._worker:
-            self._worker.disconnect()
+        if self._worker is None:
+            return True
+        stopped = self._shutdown_transport_worker()
+        if not stopped:
+            self._on_error(tr("Transport worker did not stop"))
+        return stopped
 
     @property
     def worker(self):
         """当前 BaseWorker 实例，未连接时为 None。供 DeviceView 共享连接。"""
         return self._worker if self._is_connected else None
+
+    @Slot(bool)
+    def _on_managed_attachment_changed(self, _attached: bool) -> None:
+        self._apply_managed_attachment_state(emit_signals=True)
+
+    @Slot(str)
+    def _on_managed_presence_changed(self, _phase: str) -> None:
+        binding = self._customer_binding
+        if binding is None or not binding.attached:
+            return
+        previous = self._device_connection_phase
+        self._set_device_connection_phase(binding.connection_phase)
+        if (
+            binding.connection_phase is DeviceConnectionPhase.ONLINE
+            and previous is not DeviceConnectionPhase.ONLINE
+        ):
+            self._try_start_armed_customer_recording()
+            self._try_restore_customer_profile()
+            QTimer.singleShot(0, self.probe_orbit_capabilities)
+            if self._customer_auto_debug and not self._debug_controller.enabled:
+                QTimer.singleShot(0, lambda: self.request_debug_mode(True))
+
+    def _apply_managed_attachment_state(self, *, emit_signals: bool) -> None:
+        binding = self._customer_binding
+        if binding is None:
+            return
+        connected = bool(binding.attached)
+        changed = connected != self._is_connected
+        self._is_connected = connected
+        self._active_connection_config = (
+            {
+                "type": "udp",
+                "remote_ip": binding.endpoint[0],
+                "remote_port": binding.endpoint[1],
+                "local_port": self._udp_local_port,
+            }
+            if connected
+            else None
+        )
+        self._debug_controller.set_connected(connected)
+        if connected:
+            self._set_device_connection_phase(binding.connection_phase)
+            self._sync_orbit_sky_timer()
+        else:
+            if self._is_recording and not self._customer_recording:
+                self._stop_recording(restore_customer_profile=False)
+            self._orbit_sky_timer.stop()
+            self._reset_orbit_sky_request()
+            self._set_device_connection_phase(DeviceConnectionPhase.DISCONNECTED)
+            self._customer_auto_debug = False
+        if self._presentation_ready:
+            self._connect_btn.setEnabled(not connected)
+            self._disconnect_btn.setEnabled(connected)
+            self._type_combo.setEnabled(False)
+            self._remote_ip.setReadOnly(True)
+            self._remote_port.setReadOnly(True)
+            self._local_port.setReadOnly(True)
+            self._control_panel.set_enabled(connected)
+            self._update_debug_button_enabled()
+            self._render_connection_phase()
+        if emit_signals and changed:
+            self.connected_worker_changed.emit(None)
+            self.connection_state_changed.emit(connected)
+
+    @Slot(object)
+    def _on_runtime_datagram_received(self, datagram: object) -> None:
+        if not self._is_recording or self._recorder is None:
+            return
+        data = getattr(datagram, "data", None)
+        if data is None:
+            return
+        self._recorder.write_frame(
+            bytes(data),
+            host_timestamp_ns=int(getattr(datagram, "wall_time_ns", time.time_ns())),
+        )
+
+    @Slot(object)
+    def _on_runtime_datagram_sent(self, event: object) -> None:
+        if (
+            not self._is_recording
+            or self._recorder is None
+            or self._recorder.format_version != SDB_VERSION_V3
+        ):
+            return
+        frame = getattr(event, "frame", None)
+        if frame is None:
+            return
+        self._recorder.write_control_frame(
+            bytes(frame),
+            host_timestamp_ns=int(getattr(event, "host_time_ns", time.time_ns())),
+        )
 
     def _set_device_connection_phase(
         self, phase: DeviceConnectionPhase
@@ -1111,11 +1454,6 @@ class LiveView(QWidget):
         self.connection_state_changed.emit(True)
 
         endpoint = self._active_session_endpoint()
-        self._session_registry.register(
-            endpoint,
-            self._session_core,
-            owner="interactive",
-        )
         self._session_core.begin_connection(
             endpoint=endpoint,
             transport=self._worker,
@@ -1186,7 +1524,9 @@ class LiveView(QWidget):
             return
         self._connect_btn.setEnabled(not self._is_connected)
         self._disconnect_btn.setEnabled(self._is_connected)
-        self._type_combo.setEnabled(not self._is_connected)
+        self._type_combo.setEnabled(
+            self._customer_binding is None and not self._is_connected
+        )
         self._control_panel.set_enabled(self._is_connected)
         self._update_debug_button_enabled()
         self._render_debug_button()
@@ -1207,14 +1547,20 @@ class LiveView(QWidget):
     # ----- 命令下发 -----
 
     def _start_product_subscription(self) -> None:
+        if self._managed_runtime is not None:
+            return
         self._sync_session_transport()
         self._product_subscription_controller.start()
 
     def _send_product_subscription(self) -> None:
+        if self._managed_runtime is not None:
+            return
         self._sync_session_transport()
         self._product_subscription_controller.send_now()
 
     def _retry_product_subscription(self) -> None:
+        if self._managed_runtime is not None:
+            return
         self._product_subscription_controller.retry()
 
     def _on_product_store_updated(self) -> None:
@@ -1237,14 +1583,57 @@ class LiveView(QWidget):
                 and all(isinstance(s, int) and s >= 0 for s in sizes):
             self._top_splitter.setSizes(sizes)
 
-    def _send_control_frame(self, frame: bytes) -> bool:
-        if self._worker is None or not self._is_connected:
+    def _send_control_frame(
+        self,
+        frame: bytes,
+        *,
+        operation: SessionOperationClass = SessionOperationClass.MUTATING,
+    ) -> bool:
+        if not self._is_connected:
+            self.status_message.emit(tr("Not connected; command was not sent"), 3000)
+            return False
+        if self._customer_binding is not None:
+            operation = SessionOperationClass(operation)
+            if operation is not SessionOperationClass.MUTATING:
+                return bool(
+                    self._customer_binding.command_sender.send(
+                        frame,
+                        operation=operation,
+                    )
+                )
+            gateway = self.new_operation_gateway()
+            owner = object()
+            if gateway is None or not gateway.allows_unconfirmed_mutation():
+                self.status_message.emit(
+                    tr("This command has no device confirmation contract"),
+                    3000,
+                )
+                return False
+            if not gateway.try_acquire_operation(
+                owner,
+                purpose="live-direct-control",
+            ):
+                self.status_message.emit(tr("Another device operation is active"), 3000)
+                return False
+            try:
+                return bool(
+                    gateway.send(
+                        frame,
+                        operation=SessionOperationClass.MUTATING,
+                    )
+                )
+            finally:
+                gateway.release_operation(owner)
+        if self._worker is None:
             self.status_message.emit(tr("Not connected; command was not sent"), 3000)
             return False
         self._sync_session_transport()
         return self._session_core.send(frame)
 
     def _sync_session_transport(self) -> None:
+        if self._customer_binding is not None:
+            self._debug_controller.set_connected(self._customer_binding.attached)
+            return
         worker = self._worker
         if worker is None:
             self._debug_controller.set_connected(False)
@@ -1254,6 +1643,13 @@ class LiveView(QWidget):
         self._debug_controller.set_connected(self._is_connected)
 
     def _session_send(self, frame: bytes) -> bool:
+        if self._customer_binding is not None:
+            return bool(
+                self._customer_binding.command_sender.send(
+                    frame,
+                    operation=SessionOperationClass.READ_ONLY_QUERY,
+                )
+            )
         worker = self._worker
         if worker is None:
             return False
@@ -1460,6 +1856,9 @@ class LiveView(QWidget):
             self._status_strip.set_link_state(connected=True)
 
     def _on_disconnected(self):
+        if self._customer_binding is not None:
+            self._apply_managed_attachment_state(emit_signals=True)
+            return
         # M9: 断开前通知设备关闭数据上报
         if self._debug_controller.enabled and self._worker is not None:
             self._debug_controller.send_shutdown_notice()
@@ -1510,7 +1909,7 @@ class LiveView(QWidget):
             f"connected={int(self._is_connected)} "
             f"pending={self._debug_controller.pending_target!r}",
         )
-        if not self._worker:
+        if not self._is_connected:
             trace_message("DBG_UI", "CLICK DEBUG ignored reason=no_worker")
             return
         if self._debug_controller.pending_target is not None:
@@ -1625,6 +2024,65 @@ class LiveView(QWidget):
         self._view_active = False
         self._update_timer.stop()
         self._heavy_timer.stop()
+
+    def shutdown(self) -> bool:
+        """Stop this view's owned transport without touching a managed Broker."""
+
+        self.deactivate_view()
+        if self._customer_binding is not None:
+            if self._is_recording:
+                if self._customer_recording:
+                    return False
+                if not self._stop_recording(restore_customer_profile=False):
+                    return False
+            if self._engineering_recorder_lease is not None:
+                return False
+            if (
+                self._capture_profile_controller.recording_lease_active
+                and self._customer_binding.attached
+            ):
+                return False
+            if self._customer_recording_state is not CustomerRecordingState.IDLE:
+                return False
+            self._managed_subscription_timer.stop()
+            self._orbit_sky_timer.stop()
+            self._handshake_timer.stop()
+            self._device_activity_timer.stop()
+            self._apply_managed_attachment_state(emit_signals=True)
+            return True
+        stopped = self._shutdown_transport_worker()
+        if not stopped:
+            self._on_error(tr("Transport worker did not stop"))
+        return stopped
+
+    def prepare_session_shutdown(self) -> bool:
+        """Bound local recorder close and release an unconfirmed profile request."""
+
+        if self._customer_binding is None:
+            return False
+        if self._is_recording and not self._customer_recording:
+            if not self._stop_recording(restore_customer_profile=False):
+                return False
+            return self._engineering_recorder_lease is None
+        if self._is_recording and self._customer_recording:
+            if not self._stop_recording(restore_customer_profile=True):
+                return False
+        if not self._capture_profile_controller.recording_lease_active:
+            if self._customer_recording_state is CustomerRecordingState.ARMED:
+                self._clear_customer_recording_intent()
+            return self._customer_recording_state is CustomerRecordingState.IDLE
+        self._capture_profile_controller.reset()
+        self._customer_capture_confirmed = False
+        self._capture_restore_debug = False
+        self._customer_recording_path = None
+        self._set_customer_recording_state(CustomerRecordingState.IDLE)
+        return True
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if not self.shutdown():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _update_heavy(self):
         self._chart.refresh(self._data_store)
@@ -1895,7 +2353,7 @@ class LiveView(QWidget):
 
     def _customer_recording_metadata(self) -> dict:
         snapshot = self._product_store.snapshot()
-        return {
+        metadata = {
             "capture_profile": "support_full",
             "presentation": "customer",
             "hardware_type": self._profile_store.current_hw_type(),
@@ -1907,10 +2365,32 @@ class LiveView(QWidget):
                 "protocol_version": self._product_value(snapshot.identity.protocol_version),
             },
         }
+        endpoint = self.fixed_endpoint
+        if endpoint is not None:
+            metadata["endpoint"] = {
+                "ip": endpoint[0],
+                "port": endpoint[1],
+            }
+        return metadata
+
+    def _engineering_recording_metadata(self) -> Optional[dict]:
+        endpoint = self.fixed_endpoint
+        if endpoint is None:
+            return None
+        return {
+            "capture_profile": "engineering_current_stream",
+            "presentation": "engineering_shared_udp",
+            "hardware_type": self._profile_store.current_hw_type(),
+            "endpoint": {"ip": endpoint[0], "port": endpoint[1]},
+        }
 
     def _choose_recording_path(self, *, customer: bool) -> Optional[Path]:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         prefix = "support" if customer else "recording"
+        endpoint = self.fixed_endpoint
+        if endpoint is not None:
+            endpoint_suffix = f"_{endpoint[0].replace('.', '-')}_{endpoint[1]}"
+            prefix = f"{prefix}{endpoint_suffix}"
         default_name = f"{prefix}_{timestamp}.sdb"
         rec_dir = self._settings.get("paths.recording_dir", "") or ""
         if rec_dir:
@@ -1966,57 +2446,114 @@ class LiveView(QWidget):
         if target is None:
             return False
 
+        engineering_lease: SessionRecorderLease | None = None
+        if not customer and self._customer_binding is not None:
+            gateway = self.new_operation_gateway()
+            if gateway is None:
+                return False
+            engineering_lease = gateway.acquire_recorder(
+                self._engineering_recorder_owner,
+                kind=SessionRecorderKind.ENGINEERING_PASSIVE,
+            )
+            if engineering_lease is None:
+                self.status_message.emit(
+                    tr("This device recorder is busy"),
+                    3500,
+                )
+                return False
+
         profile_dict = self._recording_profile_dict()
-        metadata = self._customer_recording_metadata() if customer else None
-        self._recorder = DataRecorder(
-            target,
-            profile_dict=profile_dict,
-            format_version=format_version,
-            metadata=metadata,
+        metadata = (
+            self._customer_recording_metadata()
+            if customer
+            else self._engineering_recording_metadata()
         )
-        if not self._recorder.start():
+        try:
+            reservation = RecordingPathRegistry.default().reserve_unique(target)
+        except (OSError, RecordingPathError) as exc:
+            if engineering_lease is not None:
+                engineering_lease.release()
+            self.status_message.emit(
+                tr("Failed to reserve recording path: {detail}", detail=str(exc)),
+                3500,
+            )
+            return False
+        actual_target = reservation.path
+        recorder_constructed = False
+        try:
+            self._recorder = DataRecorder(
+                actual_target,
+                profile_dict=profile_dict,
+                format_version=format_version,
+                metadata=metadata,
+            )
+            recorder_constructed = True
+            started = self._recorder.start(reservation)
+        except (OSError, RuntimeError, ValueError):
+            if not recorder_constructed:
+                reservation.discard_failed_file()
+            started = False
+        if not started:
             self._recorder = None
+            if engineering_lease is not None:
+                engineering_lease.release()
             self.status_message.emit(tr("Failed to start recording"), 3000)
             return False
 
+        self._engineering_recorder_lease = engineering_lease
         self._is_recording = True
         self._customer_recording = customer
         if customer:
-            self._customer_recording_path = Path(target)
+            self._customer_recording_path = Path(actual_target)
             self._set_customer_recording_state(CustomerRecordingState.ACTIVE)
         self._render_recording_state()
         self.status_message.emit(
             tr(
                 "Recording to {path}{profile_suffix}",
-                path=target,
+                path=actual_target,
                 profile_suffix=tr(" + Profile") if profile_dict else "",
             ),
             3000,
         )
-        self.recording_state_changed.emit(True, str(target))
+        self.recording_state_changed.emit(True, str(actual_target))
         return True
 
-    def _stop_recording(self, *, restore_customer_profile: bool) -> None:
+    def _stop_recording(self, *, restore_customer_profile: bool) -> bool:
         recorder = self._recorder
         was_customer = self._customer_recording
-        stopped = recorder.stop() if recorder is not None else True
-        dropped = recorder.dropped_count if recorder is not None else 0
+        try:
+            stopped = recorder.stop() if recorder is not None else True
+            dropped = recorder.dropped_count if recorder is not None else 0
+        except (OSError, RuntimeError):
+            stopped = False
+            dropped = recorder.dropped_count if recorder is not None else 0
+        if not stopped:
+            self.status_message.emit(
+                tr("Recording stop did not complete cleanly"),
+                4000,
+            )
+            return False
+
         self._recorder = None
         self._is_recording = False
         self._customer_recording = False
         self._render_recording_state()
-        if stopped:
-            message = (
-                tr("Recording stopped with {count} dropped chunk(s)", count=dropped)
-                if dropped
-                else tr("Recording stopped")
-            )
-        else:
-            message = tr("Recording stop did not complete cleanly")
+        message = (
+            tr("Recording stopped with {count} dropped chunk(s)", count=dropped)
+            if dropped
+            else tr("Recording stopped")
+        )
         self.status_message.emit(message, 4000)
         self.recording_state_changed.emit(False, "")
         if not was_customer:
-            return
+            lease, self._engineering_recorder_lease = (
+                self._engineering_recorder_lease,
+                None,
+            )
+            if lease is not None and not lease.release():
+                self._engineering_recorder_lease = lease
+                return False
+            return True
 
         self._customer_capture_confirmed = False
         if restore_customer_profile:
@@ -2027,6 +2564,7 @@ class LiveView(QWidget):
             self._capture_restore_debug = False
             self._customer_recording_path = None
             self._set_customer_recording_state(CustomerRecordingState.IDLE)
+        return True
 
     def _on_import_clicked(self):
         """M7：此入口保留向后兼容；新建议用回放 Tab 独立 DataStore。"""
@@ -2079,30 +2617,35 @@ class LiveView(QWidget):
             self.status_message.emit(tr("Import failed: {detail}", detail=exc), 5000)
             return
 
-    def _on_clear_clicked(self):
+    @Slot()
+    def clear_display_data(self) -> None:
+        """Clear local presentation data without changing the device session."""
+
         self._data_store.clear()
         self._event_log.clear()
         self._state_store.clear()
         self._gnss_store.clear()
+        self._product_store.clear_history()
         self._frame_count = 0
         self._error_count = 0
         self._frame_times.clear()
 
-        self._chart.clear()
-        self._attitude.clear()
-        self._dashboard.refresh(self._data_store)
+        if self._presentation_ready:
+            self._chart.clear()
+            self._attitude.clear()
+            self._dashboard.refresh(self._data_store)
 
-        if hasattr(self._event_timeline, "_list"):
-            self._event_timeline._list.clear()
-            if hasattr(self._event_timeline, "_update_count"):
-                self._event_timeline._update_count()
+            if hasattr(self._event_timeline, "_list"):
+                self._event_timeline._list.clear()
+                if hasattr(self._event_timeline, "_update_count"):
+                    self._event_timeline._update_count()
 
-        for name in list(self._channel_panel.channel_names()):
-            self._channel_panel.remove_channel(name)
+            for name in list(self._channel_panel.channel_names()):
+                self._channel_panel.remove_channel(name)
 
-        self._channel_count_label.setText("CH 0")
-        self._frame_count_label.setText("FRM 0")
-        self._error_count_label.setText("ERR 0")
+            self._channel_count_label.setText("CH 0")
+            self._frame_count_label.setText("FRM 0")
+            self._error_count_label.setText("ERR 0")
         self.status_message.emit(tr("Display cleared"), 2000)
 
     def _on_gnss_store_changed(self) -> None:
@@ -2168,7 +2711,8 @@ class LiveView(QWidget):
                 request_id,
                 self._orbit_sky_snapshot_id,
                 self._orbit_sky_expected_page,
-            )
+            ),
+            operation=SessionOperationClass.READ_ONLY_QUERY,
         ):
             self._reset_orbit_sky_request()
 
