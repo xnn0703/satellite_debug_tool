@@ -21,6 +21,12 @@ from satellite_debug_tool.core.protocol import (
 )
 
 from .device_session import DeviceSessionCore
+from .command_sender import (
+    SessionCommandSender,
+    SessionOperationClass,
+    SessionOperationGateway,
+    operation_gateway_or_legacy,
+)
 
 
 DEBUG_ACK_TIMEOUT_MS = 3000
@@ -58,9 +64,19 @@ class DebugController(QObject):
         self,
         session: DeviceSessionCore,
         parent: Optional[QObject] = None,
+        *,
+        command_sender: SessionCommandSender | None = None,
+        operation_gateway: SessionOperationGateway | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
+        self._operation_gateway = operation_gateway_or_legacy(
+            session,
+            operation_gateway,
+            command_sender,
+        )
+        self._command_sender = self._operation_gateway
+        self._lease_token = object()
         self._connected = False
         self._enabled = False
         self._pending_target: bool | None = None
@@ -70,6 +86,7 @@ class DebugController(QObject):
         self._ack_timer.setSingleShot(True)
         self._ack_timer.timeout.connect(self._on_timeout)
         session.command_response.connect(self.feed_response)
+        self.destroyed.connect(self._on_destroyed)
 
     @property
     def enabled(self) -> bool:
@@ -88,12 +105,15 @@ class DebugController(QObject):
         state_changed = self._enabled
         pending_changed = self._pending_target is not None
         self._enabled = False
-        self._pending_target = None
-        self._last_requested_target = None
-        self._last_request_at = 0.0
         self._ack_timer.stop()
         if pending_changed:
+            self._pending_target = None
+            self._operation_gateway.release_operation(self._lease_token)
             self.pending_changed.emit(None)
+        else:
+            self._operation_gateway.release_operation(self._lease_token)
+        self._last_requested_target = None
+        self._last_request_at = 0.0
         if state_changed:
             self.state_changed.emit(False)
 
@@ -120,14 +140,39 @@ class DebugController(QObject):
                 DebugRequestResult.ALREADY_CONFIRMED.value,
             )
             return
+        if not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose="debug-enable",
+        ):
+            self.request_finished.emit(requested, False, DebugRequestResult.BUSY.value)
+            return
         self._pending_target = requested
         self._last_requested_target = requested
         self._last_request_at = time.monotonic()
+        if not self._operation_gateway.update_operation_context(
+            self._lease_token,
+            request_id=f"DEBUG_ENABLE:{int(requested)}",
+            target_facts=(("debug_enabled", requested),),
+        ):
+            self._pending_target = None
+            self._last_requested_target = None
+            self._last_request_at = 0.0
+            self._operation_gateway.release_operation(self._lease_token)
+            self.request_finished.emit(
+                requested,
+                False,
+                DebugRequestResult.SEND_FAILED.value,
+            )
+            return
         self.pending_changed.emit(requested)
         self._ack_timer.start(DEBUG_ACK_TIMEOUT_MS)
-        if not self._session.send(build_debug_enable_v2(requested)):
+        if not self._command_sender.send(
+            build_debug_enable_v2(requested),
+            operation=SessionOperationClass.MUTATING,
+        ):
             self._pending_target = None
             self._ack_timer.stop()
+            self._operation_gateway.release_operation(self._lease_token)
             self.pending_changed.emit(None)
             self.request_finished.emit(
                 requested,
@@ -138,24 +183,62 @@ class DebugController(QObject):
         trace_message("DBG_CTRL", f"send DEBUG_ENABLE target={int(requested)}")
 
     def set_sample_rate(self, hz: int) -> bool:
-        return self._session.send(build_set_sample_rate(int(hz)))
+        return self._send_one_shot_mutation(
+            build_set_sample_rate(int(hz)),
+            purpose="debug-set-sample-rate",
+        )
 
     def set_channel_enable_mask(self, mask: int) -> bool:
-        return self._session.send(build_channel_enable_mask(int(mask)))
+        return self._send_one_shot_mutation(
+            build_channel_enable_mask(int(mask)),
+            purpose="debug-set-channel-enable-mask",
+        )
 
     def reset_statistics(self) -> bool:
-        return self._session.send(build_reset_stats())
+        return self._send_one_shot_mutation(
+            build_reset_stats(),
+            purpose="debug-reset-statistics",
+        )
 
     def set_trace_mode(self, mode: int) -> bool:
-        return self._session.send(build_set_trace_mode(int(mode)))
+        return self._send_one_shot_mutation(
+            build_set_trace_mode(int(mode)),
+            purpose="debug-set-trace-mode",
+        )
 
     def send_user_mark(self, mark_id: int, text: str) -> bool:
-        return self._session.send(build_user_mark(int(mark_id), str(text)))
+        return self._send_one_shot_mutation(
+            build_user_mark(int(mark_id), str(text)),
+            purpose="debug-user-mark",
+        )
+
+    def _send_one_shot_mutation(self, frame: bytes, *, purpose: str) -> bool:
+        """Send only on an explicit legacy boundary that accepts sent-only facts."""
+
+        if self._pending_target is not None:
+            return False
+        if not self._operation_gateway.allows_unconfirmed_mutation():
+            return False
+        if not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose=purpose,
+        ):
+            return False
+        try:
+            return self._command_sender.send(
+                frame,
+                operation=SessionOperationClass.MUTATING,
+            )
+        finally:
+            self._operation_gateway.release_operation(self._lease_token)
 
     def send_shutdown_notice(self) -> bool:
         """Best-effort OFF command before the transport is closed."""
 
-        return self._session.send(build_debug_enable_v2(False))
+        return self._command_sender.send(
+            build_debug_enable_v2(False),
+            operation=SessionOperationClass.TERMINAL,
+        )
 
     @Slot(object)
     def feed_response(self, response: CommandResponse) -> None:
@@ -209,13 +292,24 @@ class DebugController(QObject):
         if self._pending_target is None:
             return
         trace_message("DBG_CTRL", f"ack timeout target={int(self._pending_target)}")
-        self._finish(False, DebugRequestResult.TIMEOUT.value)
+        self._finish_unknown(DebugRequestResult.TIMEOUT.value)
+
+    def _finish_unknown(self, result: str) -> None:
+        target = self._pending_target
+        if target is None:
+            return
+        self._ack_timer.stop()
+        self._pending_target = None
+        self._operation_gateway.release_operation(self._lease_token)
+        self.pending_changed.emit(None)
+        self.request_finished.emit(target, False, result)
 
     def _finish(self, ok: bool, result: str) -> None:
         target = self._pending_target
         self._pending_target = None
         self._ack_timer.stop()
         self.pending_changed.emit(None)
+        self._operation_gateway.release_operation(self._lease_token)
         if ok and target is not None:
             self._set_state(target)
         if target is not None:
@@ -228,3 +322,8 @@ class DebugController(QObject):
         self._enabled = target
         trace_message("DBG_CTRL", f"debug state confirmed target={int(target)}")
         self.state_changed.emit(target)
+
+    @Slot(object)
+    def _on_destroyed(self, _obj=None) -> None:
+        self._pending_target = None
+        self._operation_gateway.release_operation(self._lease_token)

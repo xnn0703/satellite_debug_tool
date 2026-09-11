@@ -33,6 +33,12 @@ from satellite_debug_tool.core.protocol import (
 )
 
 from .device_session import DeviceSessionCore, DeviceSessionScope
+from .command_sender import (
+    SessionCommandSender,
+    SessionOperationClass,
+    SessionOperationGateway,
+    operation_gateway_or_legacy,
+)
 
 
 OTA_CHUNK_SIZE = 512
@@ -59,6 +65,7 @@ class OtaState(str, Enum):
     DATA = "data"
     END = "end"
     WAIT_REBOOT = "wait_reboot"
+    TERMINATING = "terminating"
 
 
 class OtaArtifactSource(str, Enum):
@@ -128,6 +135,7 @@ class OtaStatus(str, Enum):
     CONNECTION_LOST = "connection_lost"
     SESSION_CHANGED = "session_changed"
     ABORTED = "aborted"
+    ABORT_PENDING = "abort_pending"
 
 
 class OtaController(QObject):
@@ -145,15 +153,26 @@ class OtaController(QObject):
         self,
         session: DeviceSessionCore,
         parent: Optional[QObject] = None,
+        *,
+        command_sender: SessionCommandSender | None = None,
+        operation_gateway: SessionOperationGateway | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
+        self._operation_gateway = operation_gateway_or_legacy(
+            session,
+            operation_gateway,
+            command_sender,
+        )
+        self._command_sender = self._operation_gateway
         self._lease_token = object()
         self._connected = session.connected
         self._hardware = session.profile_store.current_hw_type()
         self._capability = OtaCapabilityState.DISCONNECTED
         self._state = OtaState.IDLE
         self._active = False
+        self._mutation_sent = False
+        self._operation_request_id = ""
         self._artifact: _OtaArtifact | None = None
         self._active_artifact: _OtaArtifact | None = None
         self._next_artifact_id = 0
@@ -184,9 +203,7 @@ class OtaController(QObject):
         session.generation_changed.connect(self._on_generation_changed)
         session.record_received.connect(self.feed_record)
         session.profile_store.profile_changed.connect(self._on_profile_changed)
-        self.destroyed.connect(
-            lambda _obj=None, session=session, token=self._lease_token: session.release_device_transaction(token)
-        )
+        self.destroyed.connect(self._on_destroyed)
         self._refresh_capability()
 
     @property
@@ -293,7 +310,7 @@ class OtaController(QObject):
         product: str = "",
         firmware_sha256: str = "",
     ) -> OtaArtifactToken | None:
-        if self._active:
+        if self.active:
             self.status_changed.emit(OtaStatus.TRANSACTION_ACTIVE, {})
             return None
         payload = bytes(data)
@@ -339,7 +356,7 @@ class OtaController(QObject):
         )
 
     def clear_file(self) -> bool:
-        if self._active:
+        if self.active:
             return False
         had_file = self._artifact is not None
         self._artifact = None
@@ -360,9 +377,12 @@ class OtaController(QObject):
         if not connected:
             self._hardware = None
             if self._active and self._state is not OtaState.WAIT_REBOOT:
-                self._finish(OtaStatus.CONNECTION_LOST, restore_debug=False)
-                self.clear_file()
-            elif not self._active:
+                self._finish_unknown(
+                    OtaStatus.CONNECTION_LOST,
+                    "OTA connection was lost before a matching terminal result",
+                    restore_debug=False,
+                )
+            elif not self.active:
                 self.clear_file()
         self._refresh_capability()
 
@@ -381,12 +401,24 @@ class OtaController(QObject):
             and artifact is not None
             and endpoint == artifact.scope.endpoint
         ):
-            if not self._session.try_acquire_device_transaction(self._lease_token):
-                self._finish(OtaStatus.TRANSACTION_ACTIVE, restore_debug=False)
+            if not self._operation_gateway.try_acquire_operation(
+                self._lease_token,
+                purpose="ota-return-verification",
+            ):
+                self._finish_unknown(
+                    OtaStatus.TRANSACTION_ACTIVE,
+                    "OTA return verification could not retain its operation owner",
+                    restore_debug=False,
+                )
             return
         if self._active:
-            self._finish(OtaStatus.SESSION_CHANGED, restore_debug=False)
-        self.clear_file()
+            self._finish_unknown(
+                OtaStatus.SESSION_CHANGED,
+                "OTA session changed before a matching terminal result",
+                restore_debug=False,
+            )
+        if not self.active:
+            self.clear_file()
 
     @Slot(object)
     def feed_record(self, record: object) -> None:
@@ -526,8 +558,9 @@ class OtaController(QObject):
         return returned[0] if returned else ""
 
     def _finish_identity_changed(self, field: str) -> None:
-        self._finish(
+        self._finish_unknown(
             OtaStatus.RETURN_IDENTITY_CHANGED,
+            "A different device identity returned after OTA transfer",
             restore_debug=False,
             field=field,
         )
@@ -557,8 +590,9 @@ class OtaController(QObject):
                 for value in returned_versions
             ):
                 if self._versions_equal(artifact.target_version, before):
-                    self._finish(
+                    self._finish_unknown(
                         OtaStatus.APPLICATION_UNCONFIRMED,
+                        "OTA package application was not independently confirmed",
                         restore_debug=False,
                         version=returned,
                     )
@@ -582,8 +616,9 @@ class OtaController(QObject):
                 after=returned,
             )
         else:
-            self._finish(
+            self._finish_unknown(
                 OtaStatus.APPLICATION_UNCONFIRMED,
+                "OTA firmware application was not independently confirmed",
                 restore_debug=False,
                 version=returned,
             )
@@ -608,7 +643,7 @@ class OtaController(QObject):
         pause_debug: bool,
         required_artifact: OtaArtifactToken | None = None,
     ) -> bool:
-        if self._active or not self._connected or not self.supported:
+        if self.active or not self._connected or not self.supported:
             self._emit_capability_status()
             return False
         artifact = self._artifact
@@ -631,10 +666,14 @@ class OtaController(QObject):
         except CodecError:
             self.status_changed.emit(OtaStatus.BEGIN_SEND_FAILED, {})
             return False
-        if not self._session.try_acquire_device_transaction(self._lease_token):
+        if not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose="ota",
+        ):
             self.status_changed.emit(OtaStatus.TRANSACTION_ACTIVE, {})
             return False
         self._active = True
+        self._mutation_sent = False
         self._active_artifact = artifact
         self._sequence = 0
         self._retry = 0
@@ -644,6 +683,9 @@ class OtaController(QObject):
         self._start_time = time.monotonic()
         self._paused_debug = bool(pause_debug)
         self._restore_debug = self._paused_debug and self._known_debug_enabled
+        if not self._update_operation_context("prepare"):
+            self._finish(OtaStatus.BEGIN_SEND_FAILED)
+            return False
         self.progress_changed.emit(0)
         self._session.set_handshake_retries_paused(True)
         if self._paused_debug:
@@ -668,9 +710,55 @@ class OtaController(QObject):
     def abort(self) -> None:
         if not self._active:
             return
-        if self._state is not OtaState.WAIT_REBOOT:
-            self._session.send(build_ota_abort())
-        self._finish(OtaStatus.ABORTED)
+        if not self._mutation_sent:
+            self._finish(OtaStatus.ABORTED)
+            return
+        if self._state is OtaState.WAIT_REBOOT:
+            self._finish_unknown(
+                OtaStatus.ABORT_PENDING,
+                "OTA reboot verification was abandoned without terminal device evidence",
+                restore_debug=False,
+            )
+            return
+        self._begin_terminal_abort("OTA was aborted by the operator")
+
+    def _begin_terminal_abort(self, reason: str) -> None:
+        """Send OTA_ABORT while retaining ownership until device evidence exists."""
+
+        if not self._update_operation_context("abort"):
+            self._finish_unknown(
+                OtaStatus.ABORT_PENDING,
+                f"{reason}; OTA abort context could not be frozen",
+                restore_debug=False,
+            )
+            return
+        if not self._operation_gateway.begin_terminating(self._lease_token):
+            self._finish_unknown(
+                OtaStatus.ABORT_PENDING,
+                f"{reason}; OTA abort could not enter the terminating state",
+                restore_debug=False,
+            )
+            return
+        self._set_state(OtaState.TERMINATING)
+        self._response_timer.stop()
+        self._reboot_timer.stop()
+        self._session.set_handshake_retries_paused(False)
+        sent = self._command_sender.send(
+            build_ota_abort(),
+            operation=SessionOperationClass.TERMINAL,
+        )
+        self.status_changed.emit(OtaStatus.ABORT_PENDING, {"sent": bool(sent)})
+        if not sent:
+            self._finish_unknown(
+                OtaStatus.ABORT_PENDING,
+                f"{reason}; OTA abort datagram could not be written",
+                restore_debug=False,
+                sent=False,
+            )
+            return
+        # DEBUG v2 has no OTA_ABORT acknowledgement. Keep the local owner in
+        # TERMINATING until the bounded abort timeout closes this transaction.
+        self._response_timer.start(OTA_END_TIMEOUT_MS)
 
     def _refresh_capability(self) -> None:
         previous = self._capability
@@ -694,7 +782,7 @@ class OtaController(QObject):
         self._capability = capability
         if previous is not capability:
             self.capability_changed.emit(capability)
-        if not self._active:
+        if not self.active:
             self._emit_capability_status()
 
     def _emit_capability_status(self) -> None:
@@ -716,11 +804,16 @@ class OtaController(QObject):
             return
         self._set_state(OtaState.BEGIN)
         self.status_changed.emit(OtaStatus.SENDING_BEGIN, {})
-        if not self._session.send(
-            build_ota_begin(len(artifact.data), artifact.filename)
+        if not self._update_operation_context("begin"):
+            self._finish(OtaStatus.BEGIN_SEND_FAILED)
+            return
+        if not self._command_sender.send(
+            build_ota_begin(len(artifact.data), artifact.filename),
+            operation=SessionOperationClass.MUTATING,
         ):
             self._finish(OtaStatus.BEGIN_SEND_FAILED)
             return
+        self._mutation_sent = True
         self._response_timer.start(OTA_BEGIN_TIMEOUT_MS)
 
     def _send_current_chunk(self) -> None:
@@ -736,17 +829,30 @@ class OtaController(QObject):
         try:
             frame = build_ota_data(self._sequence, chunk)
         except CodecError:
-            self._finish(
+            self._finish_unknown(
                 OtaStatus.CHUNK_SEND_FAILED,
+                "OTA data frame could not be built after the transfer had started",
                 sequence=self._sequence,
             )
             return
-        if not self._session.send(frame):
-            self._finish(
+        if not self._update_operation_context("data", sequence=self._sequence):
+            self._finish_unknown(
                 OtaStatus.CHUNK_SEND_FAILED,
+                "OTA data context could not be frozen after the transfer had started",
                 sequence=self._sequence,
             )
             return
+        if not self._command_sender.send(
+            frame,
+            operation=SessionOperationClass.MUTATING,
+        ):
+            self._finish_unknown(
+                OtaStatus.CHUNK_SEND_FAILED,
+                "OTA data datagram could not be written after the transfer had started",
+                sequence=self._sequence,
+            )
+            return
+        self._mutation_sent = True
         self._response_timer.start(OTA_CHUNK_TIMEOUT_MS)
 
     def _send_end(self) -> None:
@@ -755,9 +861,22 @@ class OtaController(QObject):
             return
         self._set_state(OtaState.END)
         self.status_changed.emit(OtaStatus.VERIFYING, {})
-        if not self._session.send(build_ota_end(artifact.crc32)):
-            self._finish(OtaStatus.END_SEND_FAILED)
+        if not self._update_operation_context("end"):
+            self._finish_unknown(
+                OtaStatus.END_SEND_FAILED,
+                "OTA end context could not be frozen after the transfer had started",
+            )
             return
+        if not self._command_sender.send(
+            build_ota_end(artifact.crc32),
+            operation=SessionOperationClass.MUTATING,
+        ):
+            self._finish_unknown(
+                OtaStatus.END_SEND_FAILED,
+                "OTA end datagram could not be written after the transfer had started",
+            )
+            return
+        self._mutation_sent = True
         self._response_timer.start(OTA_END_TIMEOUT_MS)
 
     def _apply_response(self, response: CommandResponse) -> None:
@@ -798,10 +917,15 @@ class OtaController(QObject):
             self._emit_progress()
             QTimer.singleShot(0, self._send_current_chunk)
             return
-        self._finish(
+        self.status_changed.emit(
             OtaStatus.CHUNK_REJECTED,
-            sequence=self._sequence,
-            detail=message or str(response.code),
+            {
+                "sequence": self._sequence,
+                "detail": message or str(response.code),
+            },
+        )
+        self._begin_terminal_abort(
+            "Device rejected an OTA data chunk after the transfer had started"
         )
 
     def _apply_end_response(self, response: CommandResponse) -> None:
@@ -813,9 +937,12 @@ class OtaController(QObject):
                 return
             self._enter_wait_reboot()
             return
-        self._finish(
+        self.status_changed.emit(
             OtaStatus.END_REJECTED,
-            detail=message or str(response.code),
+            {"detail": message or str(response.code)},
+        )
+        self._begin_terminal_abort(
+            "Device rejected OTA_END after receiving the transfer"
         )
 
     def _emit_progress(self) -> None:
@@ -872,42 +999,57 @@ class OtaController(QObject):
             OtaStatus.REBOOTING,
             {"elapsed": int(now - self._reboot_started)},
         )
-        self._session.send(build_request_meta_info())
+        self._command_sender.send(
+            build_request_meta_info(),
+            operation=SessionOperationClass.IDENTITY,
+        )
 
     def _finish_reboot_timeout(self) -> None:
         artifact = self._active_artifact
         if artifact is None or not self._returned_firmware_facts:
-            self._finish(OtaStatus.REBOOT_TIMEOUT, restore_debug=False)
+            self._finish_unknown(
+                OtaStatus.REBOOT_TIMEOUT,
+                "OTA reboot timed out before identity and firmware were confirmed",
+                restore_debug=False,
+            )
             return
         if (
             artifact.scope.has_immutable_identity
             and not self._returned_identity_complete(artifact.scope)
         ):
-            self._finish(
+            self._finish_unknown(
                 OtaStatus.RETURN_IDENTITY_UNCONFIRMED,
+                "OTA return identity was incomplete at the verification deadline",
                 restore_debug=False,
             )
             return
         if not self._returned_firmware_complete(artifact.scope):
-            self._finish(
+            self._finish_unknown(
                 OtaStatus.RETURN_FIRMWARE_UNCONFIRMED,
+                "OTA return firmware facts were incomplete at the verification deadline",
                 restore_debug=False,
             )
             return
         if not self._returned_firmware_consistent(artifact.scope):
-            self._finish(OtaStatus.FIRMWARE_FACTS_CONFLICT, restore_debug=False)
+            self._finish_unknown(
+                OtaStatus.FIRMWARE_FACTS_CONFLICT,
+                "OTA return firmware facts conflicted at the verification deadline",
+                restore_debug=False,
+            )
             return
         returned = self._returned_firmware_value(artifact.scope)
         if artifact.source is OtaArtifactSource.VERIFIED_PACKAGE:
-            self._finish(
+            self._finish_unknown(
                 OtaStatus.TARGET_VERSION_NOT_CONFIRMED,
+                "OTA target version was not confirmed by returned firmware facts",
                 restore_debug=False,
                 target=artifact.target_version,
                 actual=returned,
             )
             return
-        self._finish(
+        self._finish_unknown(
             OtaStatus.APPLICATION_UNCONFIRMED,
+            "OTA application was not independently confirmed at the verification deadline",
             restore_debug=False,
             version=returned,
         )
@@ -929,14 +1071,82 @@ class OtaController(QObject):
                 )
                 self._send_current_chunk()
             else:
-                self._finish(
+                self._finish_unknown(
                     OtaStatus.CHUNK_TIMEOUT,
+                    "OTA data chunk timed out without a matching acknowledgement",
                     sequence=self._sequence,
                 )
         elif self._state is OtaState.BEGIN:
-            self._finish(OtaStatus.BEGIN_TIMEOUT)
+            self._finish_unknown(
+                OtaStatus.BEGIN_TIMEOUT,
+                "OTA begin timed out without a matching acknowledgement",
+            )
         elif self._state is OtaState.END:
-            self._finish(OtaStatus.END_TIMEOUT)
+            self._finish_unknown(
+                OtaStatus.END_TIMEOUT,
+                "OTA end timed out without a matching acknowledgement",
+            )
+        elif self._state is OtaState.TERMINATING:
+            self._finish_unknown(
+                OtaStatus.ABORT_PENDING,
+                "OTA abort has no matching protocol evidence; final state is unknown",
+                restore_debug=False,
+                sent=True,
+            )
+
+    def _update_operation_context(
+        self,
+        stage: str,
+        *,
+        sequence: int | None = None,
+    ) -> bool:
+        artifact = self._active_artifact
+        if artifact is None:
+            return False
+        request_id = f"OTA:{artifact.token.value}:{str(stage).strip().lower()}"
+        facts: list[tuple[str, object]] = [
+            ("artifact_token", artifact.token.value),
+            ("artifact_source", artifact.source.value),
+            ("filename", artifact.filename),
+            ("image_size", len(artifact.data)),
+            ("crc32", f"{artifact.crc32:08x}"),
+            ("stage", str(stage).strip().lower()),
+        ]
+        if sequence is not None:
+            request_id = f"{request_id}:{int(sequence)}"
+            facts.append(("sequence", int(sequence)))
+        if not self._operation_gateway.update_operation_context(
+            self._lease_token,
+            request_id=request_id,
+            target_facts=facts,
+        ):
+            return False
+        self._operation_request_id = request_id
+        return True
+
+    def _finish_unknown(
+        self,
+        status: OtaStatus,
+        reason: str,
+        *,
+        restore_debug: bool = False,
+        **values: Any,
+    ) -> None:
+        """Publish an unconfirmed OTA result and release local ownership."""
+
+        del restore_debug
+        self._response_timer.stop()
+        self._reboot_timer.stop()
+        self._session.set_handshake_retries_paused(False)
+        self._active = False
+        self._mutation_sent = False
+        self._operation_request_id = ""
+        self._active_artifact = None
+        self._returned_identity_fact_names.clear()
+        self._returned_firmware_facts.clear()
+        self._set_state(OtaState.IDLE)
+        self._operation_gateway.release_operation(self._lease_token)
+        self.status_changed.emit(status, values)
 
     def _finish(
         self,
@@ -947,6 +1157,8 @@ class OtaController(QObject):
     ) -> None:
         should_restore = restore_debug and self._restore_debug and self._connected
         self._active = False
+        self._mutation_sent = False
+        self._operation_request_id = ""
         self._response_timer.stop()
         self._reboot_timer.stop()
         self._active_artifact = None
@@ -954,12 +1166,17 @@ class OtaController(QObject):
         self._returned_firmware_facts.clear()
         self._session.set_handshake_retries_paused(False)
         self._set_state(OtaState.IDLE)
-        self._session.release_device_transaction(self._lease_token)
+        self._operation_gateway.release_operation(self._lease_token)
         self.status_changed.emit(status, values)
         self._paused_debug = False
         self._restore_debug = False
         if should_restore:
             QTimer.singleShot(0, lambda: self.debug_mode_requested.emit(True))
+
+    @Slot(object)
+    def _on_destroyed(self, _obj=None) -> None:
+        self._active = False
+        self._operation_gateway.release_operation(self._lease_token)
 
     def _set_state(self, state: OtaState) -> None:
         if self._state is state:

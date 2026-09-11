@@ -31,6 +31,15 @@ from satellite_debug_tool.core.protocol import (
 )
 
 from .device_session import DeviceSessionCore, DeviceSessionScope
+from .command_sender import (
+    SessionCommandSender,
+    SessionOperationClass,
+    SessionOperationGateway,
+    SessionRecorderKind,
+    SessionRecorderLease,
+    command_sender_or_legacy,
+    operation_gateway_or_legacy,
+)
 
 
 class ProductControlStatus(str, Enum):
@@ -169,10 +178,12 @@ class ProductSubscriptionController(QObject):
         session: DeviceSessionCore,
         *,
         fast_rate_hz: int = 10,
+        command_sender: SessionCommandSender | None = None,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
+        self._command_sender = command_sender_or_legacy(session, command_sender)
         self._fast_rate_hz = max(1, int(fast_rate_hz))
         self._attempts = 0
         self._pending_request_id: int | None = None
@@ -220,8 +231,9 @@ class ProductSubscriptionController(QObject):
         self._attempts += 1
         request_id = self._session.next_request_id()
         self._pending_request_id = request_id
-        sent = self._session.send(
-            build_service_subscribe(request_id, self._fast_rate_hz)
+        sent = self._command_sender.send(
+            build_service_subscribe(request_id, self._fast_rate_hz),
+            operation=SessionOperationClass.PRODUCT_SUBSCRIPTION,
         )
         if not sent:
             self._pending_request_id = None
@@ -232,6 +244,21 @@ class ProductSubscriptionController(QObject):
             f"result={int(sent)}",
         )
         return sent
+
+    def set_fast_rate_hz(self, fast_rate_hz: int) -> bool:
+        """Apply one validated aggregate rate without creating another state machine."""
+
+        rate = int(fast_rate_hz)
+        if not (1 <= rate <= 20):
+            raise ValueError("product-service rate must be 1..20 Hz")
+        if rate == self._fast_rate_hz:
+            return True
+        self._fast_rate_hz = rate
+        if not self._session.connected:
+            return True
+        self._pending_request_id = None
+        self._set_confirmed(False)
+        return self.send_now()
 
     @Slot()
     def retry(self) -> None:
@@ -261,7 +288,11 @@ class ProductSubscriptionController(QObject):
         try:
             result = ServiceResultCode(response.result_code)
         except ValueError:
-            result = ServiceResultCode.INTERNAL_ERROR
+            self._finish_unknown(
+                ProductControlStatus.INTERNAL_ERROR,
+                "Product control returned an unknown result code",
+            )
+            return
         if result == ServiceResultCode.ACCEPTED:
             trace_message(
                 "PRODUCT_SERVICE",
@@ -300,18 +331,30 @@ class CaptureProfileController(QObject):
 
     pending_changed = Signal(object)
     finished = Signal(bool, bool, str)
+    resync_required_changed = Signal(bool)
 
     def __init__(
         self,
         session: DeviceSessionCore,
         parent: Optional[QObject] = None,
+        *,
+        command_sender: SessionCommandSender | None = None,
+        operation_gateway: SessionOperationGateway | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
+        self._operation_gateway = operation_gateway_or_legacy(
+            session,
+            operation_gateway,
+            command_sender,
+        )
+        self._command_sender = self._operation_gateway
         self._pending_request_id: int | None = None
         self._pending_target: bool | None = None
         self._pending_epoch: int | None = None
+        self._resync_required = False
         self._lease_token = object()
+        self._recorder_lease: SessionRecorderLease | None = None
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)
         self._timeout.timeout.connect(self.expire)
@@ -319,9 +362,7 @@ class CaptureProfileController(QObject):
         session.product_store.updated.connect(self._on_store_updated)
         session.connection_changed.connect(self._on_connection_changed)
         session.generation_changed.connect(self._on_generation_changed)
-        self.destroyed.connect(
-            lambda _obj=None, session=session, token=self._lease_token: session.release_device_transaction(token)
-        )
+        self.destroyed.connect(self._on_destroyed)
 
     @property
     def pending_request_id(self) -> int | None:
@@ -335,11 +376,51 @@ class CaptureProfileController(QObject):
     def timeout_timer(self) -> QTimer:
         return self._timeout
 
+    @property
+    def recording_lease_active(self) -> bool:
+        lease = self._recorder_lease
+        return lease is not None and not lease.released
+
+    @property
+    def resync_required(self) -> bool:
+        return self._resync_required
+
     def request(self, support_full: bool) -> bool:
         if self._pending_request_id is not None:
             return False
         target = bool(support_full)
-        if not self._session.try_acquire_device_transaction(self._lease_token):
+        acquired_recorder = False
+        if target and not self.recording_lease_active:
+            acquire_recorder = getattr(
+                self._operation_gateway,
+                "acquire_recorder",
+                None,
+            )
+            if acquire_recorder is None:
+                self.finished.emit(
+                    target,
+                    False,
+                    f"{CaptureProfileResult.DEVICE_ERROR.value}:BUSY",
+                )
+                return False
+            self._recorder_lease = acquire_recorder(
+                self._lease_token,
+                kind=SessionRecorderKind.CUSTOMER_FULL_CAPTURE,
+            )
+            if self._recorder_lease is None:
+                self.finished.emit(
+                    target,
+                    False,
+                    f"{CaptureProfileResult.DEVICE_ERROR.value}:BUSY",
+                )
+                return False
+            acquired_recorder = True
+        if not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose="capture-profile",
+        ):
+            if acquired_recorder:
+                self._release_recorder()
             self.finished.emit(
                 target,
                 False,
@@ -350,17 +431,32 @@ class CaptureProfileController(QObject):
         self._pending_request_id = request_id
         self._pending_target = target
         self._pending_epoch = self._session.product_store.telemetry_epoch
+        update_context = getattr(
+            self._operation_gateway,
+            "update_operation_context",
+            None,
+        )
+        if update_context is not None:
+            update_context(
+                self._lease_token,
+                request_id=request_id,
+                target_facts=(("support_full", int(target)),),
+            )
         self.pending_changed.emit(target)
         self._timeout.start(3000)
-        if self._session.send(
-            build_service_set_capture_profile(request_id, target)
+        if self._command_sender.send(
+            build_service_set_capture_profile(request_id, target),
+            operation=SessionOperationClass.MUTATING,
         ):
             return True
-        self._clear_pending()
+        self._finish_unconfirmed()
         self.finished.emit(target, False, CaptureProfileResult.SEND_FAILED.value)
         return False
 
     def reset(self) -> None:
+        if self._pending_request_id is not None or self.recording_lease_active:
+            self._finish_unconfirmed()
+            return
         self._clear_pending()
 
     @Slot(object)
@@ -372,18 +468,36 @@ class CaptureProfileController(QObject):
         ):
             return
         target = bool(self._pending_target)
-        self._clear_pending()
         try:
             result = ServiceResultCode(response.result_code)
         except ValueError:
-            result = ServiceResultCode.INTERNAL_ERROR
+            self._finish_unconfirmed()
+            self.finished.emit(
+                target,
+                False,
+                f"{CaptureProfileResult.DEVICE_ERROR.value}:UNKNOWN_RESULT",
+            )
+            return
         if result == ServiceResultCode.ACCEPTED:
             if response.applied_mask & _CAPTURE_PROFILE_APPLIED_MASK:
+                self._set_resync_required(False)
+                self._clear_pending(
+                    release_operation=not target,
+                    release_recorder=not target,
+                )
                 self.finished.emit(target, True, CaptureProfileResult.ACK.value)
                 return
             detail = "APPLIED_MASK_MISSING"
         else:
             detail = result.name
+        uncertain = (not target) or result == ServiceResultCode.ACCEPTED
+        if uncertain:
+            self._finish_unconfirmed()
+        else:
+            self._clear_pending(
+                release_operation=True,
+                release_recorder=target,
+            )
         self.finished.emit(
             target,
             False,
@@ -403,7 +517,7 @@ class CaptureProfileController(QObject):
         if self._pending_request_id is None:
             return
         target = bool(self._pending_target)
-        self._clear_pending()
+        self._finish_unconfirmed()
         self.finished.emit(
             target,
             False,
@@ -423,18 +537,55 @@ class CaptureProfileController(QObject):
         if self._pending_request_id is None:
             return
         target = bool(self._pending_target)
-        self._clear_pending()
+        self._finish_unconfirmed()
         self.finished.emit(target, False, CaptureProfileResult.TIMEOUT.value)
 
-    def _clear_pending(self) -> None:
+    def _finish_unconfirmed(self) -> None:
+        """Release local ownership while preserving the endpoint-local unknown fact."""
+
+        self._set_resync_required(True)
+        self._clear_pending(release_operation=True, release_recorder=True)
+
+    def _set_resync_required(self, required: bool) -> None:
+        required = bool(required)
+        if self._resync_required == required:
+            return
+        self._resync_required = required
+        self.resync_required_changed.emit(required)
+
+    def _clear_pending(
+        self,
+        *,
+        release_operation: bool = True,
+        release_recorder: bool = False,
+    ) -> None:
         had_pending = self._pending_request_id is not None
         self._timeout.stop()
         self._pending_request_id = None
         self._pending_target = None
         self._pending_epoch = None
-        self._session.release_device_transaction(self._lease_token)
+        if release_operation:
+            self._operation_gateway.release_operation(self._lease_token)
+        if release_recorder:
+            self._release_recorder()
         if had_pending:
             self.pending_changed.emit(None)
+
+    def _release_recorder(self) -> bool:
+        lease, self._recorder_lease = self._recorder_lease, None
+        if lease is None:
+            return True
+        if lease.release():
+            return True
+        self._recorder_lease = lease
+        return False
+
+    @Slot(object)
+    def _on_destroyed(self, _obj=None) -> None:
+        if self.recording_lease_active:
+            self._finish_unconfirmed()
+            return
+        self._operation_gateway.release_operation(self._lease_token)
 
 
 class ProductControlController(QObject):
@@ -447,9 +598,18 @@ class ProductControlController(QObject):
         self,
         session: DeviceSessionCore,
         parent: Optional[QObject] = None,
+        *,
+        command_sender: SessionCommandSender | None = None,
+        operation_gateway: SessionOperationGateway | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
+        self._operation_gateway = operation_gateway_or_legacy(
+            session,
+            operation_gateway,
+            command_sender,
+        )
+        self._command_sender = self._operation_gateway
         self._lease_token = object()
         self._pending: Optional[PendingProductControl] = None
         self._timeout = QTimer(self)
@@ -459,9 +619,7 @@ class ProductControlController(QObject):
         session.product_store.updated.connect(self._check_readback)
         session.connection_changed.connect(self._on_connection_changed)
         session.generation_changed.connect(self._on_generation_changed)
-        self.destroyed.connect(
-            lambda _obj=None, session=session, token=self._lease_token: session.release_device_transaction(token)
-        )
+        self.destroyed.connect(self._on_destroyed)
 
     @property
     def pending(self) -> Optional[PendingProductControl]:
@@ -471,7 +629,7 @@ class ProductControlController(QObject):
     def transaction_available(self) -> bool:
         """Whether this controller can claim the shared device transaction now."""
 
-        return self._session.device_transaction_available(self._lease_token)
+        return self._operation_gateway.operation_available(self._lease_token)
 
     def request_control_mode(self, target: ControlMode) -> bool:
         request_id = self._session.next_request_id()
@@ -535,7 +693,10 @@ class ProductControlController(QObject):
         if self._pending is not None:
             self.status_changed.emit(ProductControlStatus.BUSY, {})
             return False
-        if not self._session.try_acquire_device_transaction(self._lease_token):
+        if not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose=f"product-control:{operation.name.lower()}",
+        ):
             self.status_changed.emit(ProductControlStatus.BUSY, {})
             return False
         self._pending = PendingProductControl(
@@ -544,13 +705,26 @@ class ProductControlController(QObject):
             expected,
             readback_cursor=self._telemetry_cursor(operation),
         )
+        if not self._operation_gateway.update_operation_context(
+            self._lease_token,
+            request_id=request_id,
+            target_facts=(
+                ("operation", operation.name),
+                ("expected", repr(expected)),
+            ),
+        ):
+            self._finish(ProductControlStatus.SEND_FAILED)
+            return False
         self.pending_changed.emit(True)
         self.status_changed.emit(
             ProductControlStatus.WAITING_RESPONSE,
             {"request_id": request_id},
         )
         self._timeout.start(3000)
-        if not self._session.send(frame):
+        if not self._command_sender.send(
+            frame,
+            operation=SessionOperationClass.MUTATING,
+        ):
             self._finish(ProductControlStatus.SEND_FAILED)
             return False
         return True
@@ -574,14 +748,20 @@ class ProductControlController(QObject):
         request_cursor = pending.readback_cursor
         current_cursor = self._telemetry_cursor(pending.operation)
         if request_cursor is None or current_cursor.epoch != request_cursor.epoch:
-            self._finish(ProductControlStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                ProductControlStatus.SESSION_CHANGED,
+                "Product control telemetry epoch changed before confirmation",
+            )
             return
         required_mask = _PRODUCT_CONTROL_APPLIED_MASKS.get(pending.operation)
         if (
             required_mask is None
             or (response.applied_mask & required_mask) != required_mask
         ):
-            self._finish(ProductControlStatus.INTERNAL_ERROR)
+            self._finish_unknown(
+                ProductControlStatus.INTERNAL_ERROR,
+                "Product control was accepted without complete applied evidence",
+            )
             return
         self._pending = PendingProductControl(
             pending.request_id,
@@ -604,7 +784,10 @@ class ProductControlController(QObject):
             return
         current = self._telemetry_cursor(pending.operation)
         if current.epoch != baseline.epoch:
-            self._finish(ProductControlStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                ProductControlStatus.SESSION_CHANGED,
+                "Product control telemetry epoch changed before applied readback",
+            )
             return
         if baseline.timestamp_ms is None:
             if (
@@ -658,30 +841,56 @@ class ProductControlController(QObject):
     @Slot(bool)
     def _on_connection_changed(self, connected: bool) -> None:
         if not connected and self._pending is not None:
-            self._finish(ProductControlStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                ProductControlStatus.SESSION_CHANGED,
+                "Product control connection changed before confirmation",
+            )
 
     @Slot(int, object)
     def _on_generation_changed(self, _generation: int, _endpoint: object) -> None:
         if self._pending is not None:
-            self._finish(ProductControlStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                ProductControlStatus.SESSION_CHANGED,
+                "Product control generation changed before confirmation",
+            )
 
     @Slot()
     def _on_timeout(self) -> None:
         pending = self._pending
         if pending is None:
             return
-        self._finish(
+        status = (
             ProductControlStatus.READBACK_TIMEOUT
             if pending.response_received
             else ProductControlStatus.RESPONSE_TIMEOUT
         )
+        self._finish_unknown(status, "Product control timed out before applied evidence")
+
+    def _finish_unknown(
+        self,
+        status: ProductControlStatus,
+        reason: str,
+    ) -> None:
+        """Publish an unconfirmed result and release this endpoint operation."""
+
+        del reason
+        self._timeout.stop()
+        self._pending = None
+        self._operation_gateway.release_operation(self._lease_token)
+        self.pending_changed.emit(False)
+        self.status_changed.emit(status, {})
 
     def _finish(self, status: ProductControlStatus) -> None:
         self._timeout.stop()
         self._pending = None
-        self._session.release_device_transaction(self._lease_token)
+        self._operation_gateway.release_operation(self._lease_token)
         self.pending_changed.emit(False)
         self.status_changed.emit(status, {})
+
+    @Slot(object)
+    def _on_destroyed(self, _obj=None) -> None:
+        self._pending = None
+        self._operation_gateway.release_operation(self._lease_token)
 
 
 class MountConfigurationController(QObject):
@@ -694,9 +903,18 @@ class MountConfigurationController(QObject):
         self,
         session: DeviceSessionCore,
         parent: Optional[QObject] = None,
+        *,
+        command_sender: SessionCommandSender | None = None,
+        operation_gateway: SessionOperationGateway | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
+        self._operation_gateway = operation_gateway_or_legacy(
+            session,
+            operation_gateway,
+            command_sender,
+        )
+        self._command_sender = self._operation_gateway
         self._lease_token = object()
         self._pending: Optional[PendingMountConfiguration] = None
         self._timeout = QTimer(self)
@@ -706,9 +924,7 @@ class MountConfigurationController(QObject):
         session.product_store.updated.connect(self._check_readback)
         session.connection_changed.connect(self._on_connection_changed)
         session.generation_changed.connect(self._on_generation_changed)
-        self.destroyed.connect(
-            lambda _obj=None, session=session, token=self._lease_token: session.release_device_transaction(token)
-        )
+        self.destroyed.connect(self._on_destroyed)
 
     @property
     def pending(self) -> Optional[PendingMountConfiguration]:
@@ -718,7 +934,7 @@ class MountConfigurationController(QObject):
     def transaction_available(self) -> bool:
         """Whether this controller can claim the shared device transaction now."""
 
-        return self._session.device_transaction_available(self._lease_token)
+        return self._operation_gateway.operation_available(self._lease_token)
 
     def request_mount(
         self,
@@ -742,13 +958,16 @@ class MountConfigurationController(QObject):
         except ValueError:
             self.status_changed.emit(MountConfigurationStatus.OUT_OF_RANGE, {})
             return False
-        if not self._session.try_acquire_device_transaction(self._lease_token):
+        if not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose="mount-configuration",
+        ):
             self.status_changed.emit(MountConfigurationStatus.BUSY, {})
             return False
         store = self._session.product_store
         device_uid, serial_number = self._device_identity()
         if not device_uid and not serial_number:
-            self._session.release_device_transaction(self._lease_token)
+            self._operation_gateway.release_operation(self._lease_token)
             self.status_changed.emit(
                 MountConfigurationStatus.IDENTITY_UNAVAILABLE,
                 {},
@@ -766,13 +985,28 @@ class MountConfigurationController(QObject):
             hardware_identity_generation=store.hardware_identity_generation,
             navigation_source_generation=store.navigation_source_generation,
         )
+        if not self._operation_gateway.update_operation_context(
+            self._lease_token,
+            request_id=request_id,
+            target_facts=(
+                ("mount_yaw_deg", target[0]),
+                ("mount_pitch_deg", target[1]),
+                ("mount_roll_deg", target[2]),
+                ("stage", "write"),
+            ),
+        ):
+            self._finish(MountConfigurationStatus.SEND_FAILED)
+            return False
         self.pending_changed.emit(True)
         self.status_changed.emit(
             MountConfigurationStatus.WAITING_RESPONSE,
             {"request_id": request_id},
         )
         self._timeout.start(3000)
-        if self._session.send(frame):
+        if self._command_sender.send(
+            frame,
+            operation=SessionOperationClass.MUTATING,
+        ):
             return True
         if self._pending is not None:
             self._finish(MountConfigurationStatus.SEND_FAILED)
@@ -804,10 +1038,16 @@ class MountConfigurationController(QObject):
             self._session.product_store.mount_status_cursor.epoch
             != pending.readback_cursor.epoch
         ):
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount telemetry epoch changed after the write was accepted",
+            )
             return
         if not (response.applied_mask & SERVICE_PERSISTED_DEVICE_MOUNT):
-            self._finish(MountConfigurationStatus.INTERNAL_ERROR)
+            self._finish_unknown(
+                MountConfigurationStatus.INTERNAL_ERROR,
+                "Mount write was accepted without persisted-mount evidence",
+            )
             return
         self._pending = replace(
             pending,
@@ -829,7 +1069,10 @@ class MountConfigurationController(QObject):
             pending.stage is _MountConfigurationStage.READBACK
             and current_cursor.epoch != pending.readback_cursor.epoch
         ):
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount telemetry epoch changed before matching readback",
+            )
             return
         if current_cursor.generation <= pending.readback_cursor.generation:
             return
@@ -846,7 +1089,10 @@ class MountConfigurationController(QObject):
         if identity_match is None:
             return
         if not identity_match:
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount readback identity differed from the frozen device identity",
+            )
             return
         if not (status.valid_mask & MOUNT_STATUS_VALID_RESTART_REQUIRED):
             return
@@ -862,7 +1108,10 @@ class MountConfigurationController(QObject):
         if identity_match is None:
             return
         if not identity_match:
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount post-restart identity differed from the frozen device identity",
+            )
             return
         if store.navigation_source_generation <= pending.navigation_source_generation:
             return
@@ -885,10 +1134,31 @@ class MountConfigurationController(QObject):
         )
         self.status_changed.emit(MountConfigurationStatus.WAITING_RESTART, {})
         self._timeout.start(120000)
-        if self._session.send(build_device_reboot()):
+        if not self._operation_gateway.update_operation_context(
+            self._lease_token,
+            request_id=f"{pending.request_id}:restart",
+            target_facts=(
+                ("mount_yaw_deg", pending.target_deg[0]),
+                ("mount_pitch_deg", pending.target_deg[1]),
+                ("mount_roll_deg", pending.target_deg[2]),
+                ("stage", "restart"),
+            ),
+        ):
+            self._finish_unknown(
+                MountConfigurationStatus.RESTART_SEND_FAILED,
+                "Mount restart context could not be frozen after persisted write",
+            )
+            return
+        if self._command_sender.send(
+            build_device_reboot(),
+            operation=SessionOperationClass.MUTATING,
+        ):
             return
         if self._pending is not None:
-            self._finish(MountConfigurationStatus.RESTART_SEND_FAILED)
+            self._finish_unknown(
+                MountConfigurationStatus.RESTART_SEND_FAILED,
+                "Mount restart command could not be written after persisted write",
+            )
 
     @staticmethod
     def _angles_match(status, target: tuple[float, float, float]) -> bool:
@@ -982,7 +1252,10 @@ class MountConfigurationController(QObject):
         if pending is None or connected:
             return
         if pending.stage is not _MountConfigurationStage.RESTART:
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount connection changed before matching applied evidence",
+            )
 
     @Slot(int, object)
     def _on_generation_changed(self, _generation: int, endpoint: object) -> None:
@@ -990,13 +1263,25 @@ class MountConfigurationController(QObject):
         if pending is None:
             return
         if endpoint != pending.endpoint:
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount operation returned on a different endpoint",
+            )
             return
         if pending.stage is not _MountConfigurationStage.RESTART:
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount session generation changed before the requested restart",
+            )
             return
-        if not self._session.try_acquire_device_transaction(self._lease_token):
-            self._finish(MountConfigurationStatus.SESSION_CHANGED)
+        if not self._operation_gateway.try_acquire_operation(
+            self._lease_token,
+            purpose="mount-return-verification",
+        ):
+            self._finish_unknown(
+                MountConfigurationStatus.SESSION_CHANGED,
+                "Mount return verification could not retain its operation owner",
+            )
 
     @Slot()
     def _on_timeout(self) -> None:
@@ -1009,14 +1294,34 @@ class MountConfigurationController(QObject):
             status = MountConfigurationStatus.READBACK_TIMEOUT
         else:
             status = MountConfigurationStatus.RESTART_TIMEOUT
-        self._finish(status)
+        self._finish_unknown(
+            status,
+            "Mount operation timed out before matching persisted and post-restart evidence",
+        )
+
+    def _finish_unknown(
+        self,
+        status: MountConfigurationStatus,
+        reason: str,
+    ) -> None:
+        del reason
+        self._timeout.stop()
+        self._pending = None
+        self._operation_gateway.release_operation(self._lease_token)
+        self.pending_changed.emit(False)
+        self.status_changed.emit(status, {})
 
     def _finish(self, status: MountConfigurationStatus) -> None:
         self._timeout.stop()
         self._pending = None
-        self._session.release_device_transaction(self._lease_token)
+        self._operation_gateway.release_operation(self._lease_token)
         self.pending_changed.emit(False)
         self.status_changed.emit(status, {})
+
+    @Slot(object)
+    def _on_destroyed(self, _obj=None) -> None:
+        self._pending = None
+        self._operation_gateway.release_operation(self._lease_token)
 
 
 __all__ = [

@@ -191,6 +191,8 @@ class DeviceSessionCore(QObject):
         self._request_id = 0
         self._device_transaction_lock = Lock()
         self._device_transaction_owner: object | None = None
+        self._managed_transaction_active: Callable[[], bool] | None = None
+        self._managed_transaction_available: Callable[[object | None], bool] | None = None
 
     @staticmethod
     def normalize_endpoint(endpoint: DeviceEndpoint) -> DeviceEndpoint:
@@ -291,12 +293,18 @@ class DeviceSessionCore(QObject):
     def device_transaction_active(self) -> bool:
         """Whether one device-level command transaction currently owns the link."""
 
+        managed = self._managed_transaction_active
+        if managed is not None:
+            return bool(managed())
         with self._device_transaction_lock:
             return self._device_transaction_owner is not None
 
     def device_transaction_available(self, owner: object | None = None) -> bool:
         """Return whether ``owner`` may synchronously claim the device transaction."""
 
+        managed = self._managed_transaction_available
+        if managed is not None:
+            return bool(managed(owner))
         with self._device_transaction_lock:
             current = self._device_transaction_owner
             return current is None or (owner is not None and current is owner)
@@ -306,6 +314,10 @@ class DeviceSessionCore(QObject):
 
         if owner is None:
             raise ValueError("device transaction owner must not be None")
+        if self._managed_transaction_active is not None:
+            # Managed UDP callers must present an EndpointSendCapability via a
+            # RuntimeOperationGateway; Core alone cannot mint that authority.
+            return False
         changed = False
         with self._device_transaction_lock:
             current = self._device_transaction_owner
@@ -321,6 +333,8 @@ class DeviceSessionCore(QObject):
     def release_device_transaction(self, owner: object) -> bool:
         """Release the transaction only when ``owner`` is the current authority."""
 
+        if self._managed_transaction_active is not None:
+            return False
         with self._device_transaction_lock:
             if self._device_transaction_owner is not owner:
                 return False
@@ -335,11 +349,27 @@ class DeviceSessionCore(QObject):
     def _clear_device_transaction(self) -> None:
         """Release every operation lease when its connection authority ends."""
 
+        if self._managed_transaction_active is not None:
+            return
         with self._device_transaction_lock:
             if self._device_transaction_owner is None:
                 return
             self._device_transaction_owner = None
         self.device_transaction_changed.emit(False)
+
+    def bind_managed_transaction_view(
+        self,
+        *,
+        active: Callable[[], bool],
+        available: Callable[[object | None], bool],
+    ) -> None:
+        """Disable the legacy lock and project the Runtime's single operation CAS."""
+
+        with self._device_transaction_lock:
+            if self._device_transaction_owner is not None:
+                raise RuntimeError("cannot bind Runtime while a legacy transaction is active")
+        self._managed_transaction_active = active
+        self._managed_transaction_available = available
 
     def request_meta_info(self) -> bool:
         """Request the canonical device identity and firmware metadata."""
