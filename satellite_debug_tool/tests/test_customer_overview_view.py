@@ -65,6 +65,7 @@ class _LiveDouble(QObject):
         self.connect_kwargs = None
         self.sky_consumers: list[tuple[str, bool]] = []
         self.selected_target = 0
+        self.clear_display_calls = 0
 
     def profile_store(self):
         return self.profiles
@@ -121,6 +122,13 @@ class _LiveDouble(QObject):
     def select_orbit_tracking_target(self, norad_id: int):
         self.selected_target = norad_id
         return True
+
+    def clear_display_data(self) -> None:
+        self.clear_display_calls += 1
+        self.data.clear()
+        self.states.clear()
+        self.gnss.clear()
+        self.products.clear_history()
 
 
 class _SettingsDouble:
@@ -283,6 +291,33 @@ def test_customer_connection_does_not_enable_engineering_debug(app) -> None:
     view._toggle_connection()
 
     assert live.connect_kwargs == {"auto_debug": False}
+
+
+def test_customer_overview_clear_button_delegates_to_fixed_live_session(app) -> None:
+    first = _LiveDouble()
+    second = _LiveDouble()
+    first_view = CustomerOverviewView(first, _SettingsDouble(), enable_3d=False)
+    second_view = CustomerOverviewView(second, _SettingsDouble(), enable_3d=False)
+
+    assert first_view._clear_btn.icon().isNull() is False
+    assert first_view._clear_btn.toolTip()
+    first_view._clear_btn.click()
+
+    assert first.clear_display_calls == 1
+    assert second.clear_display_calls == 0
+    assert first.connected is True
+    assert first.recording is False
+
+
+def test_customer_overview_hides_live_clear_button_in_playback(app) -> None:
+    view = CustomerOverviewView(
+        _LiveDouble(),
+        _SettingsDouble(),
+        enable_3d=False,
+        playback_mode=True,
+    )
+
+    assert view._clear_btn.isHidden()
 
 
 def test_product_identity_loads_model_without_profile_ready(app) -> None:

@@ -674,6 +674,24 @@ def test_service_snr_history_remains_monotonic_across_u32_rollover() -> None:
     assert times[1] > times[0]
 
 
+def test_service_clear_history_retains_current_product_facts() -> None:
+    store = ProductServiceStore()
+    store.feed(_fast_snr(0xFFFFFF00, 10.0))
+
+    assert store.has_snr_stream
+    current = store.snapshot().operation.snr_db
+    store.clear_history()
+
+    assert not store.has_snr_stream
+    assert store.snr_history()[0].size == 0
+    assert store.snapshot().operation.snr_db == current
+
+    store.feed(_fast_snr(0x00000100, 11.0))
+    times, values = store.snr_history()
+    assert times.tolist() == pytest.approx([0x100000100 / 1000.0])
+    assert values.tolist() == pytest.approx([11.0])
+
+
 def test_service_control_builders_reject_invalid_values() -> None:
     with pytest.raises(CodecError):
         build_service_set_control_mode(1, 7)

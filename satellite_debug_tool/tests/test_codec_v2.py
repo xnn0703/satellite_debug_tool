@@ -76,7 +76,7 @@ class TestBuildFrame:
         assert MAX_DATA_LENGTH == 1536
         assert MAX_FRAME_LENGTH == 1548
 
-        frame = build_frame(0x11, b"\xA5" * 1536)
+        frame = build_frame(CmdType.TRACKING_SIMULATION, b"\xA5" * 1536)
         assert int.from_bytes(frame[4:6], "little") == 1536
         # MAX_FRAME_LENGTH 保留设备端 +12B 缓冲合同；实际 wire envelope 是 9B。
         assert len(frame) == 1545

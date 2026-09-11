@@ -442,7 +442,9 @@ def test_ota_wait_reboot_can_be_cancelled_without_sending_stale_frame(qapp):
     assert view._ota_controller.state is OtaState.IDLE
     assert view._ota_controller.active is False
     assert len(worker.sent) == sent_count
-    assert view._ota_status_source == "Aborted by user"
+    assert view._ota_status_source == (
+        "OTA final device state is unknown; recovery is required"
+    )
     assert view._ota_status_values == {}
     view.deleteLater()
 

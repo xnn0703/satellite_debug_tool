@@ -461,6 +461,9 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
 
     settings, manager = i18n_context
     manager.set_preference(LANGUAGE_ZH_CN)
+    endpoint = {"ip": "127.0.0.1", "port": 4004}
+    settings.set("customer.devices", [endpoint])
+    settings.set("customer.active_endpoint", endpoint)
     window = MainWindow(settings=settings)
     window.resize(1920, 1080)
     window.show()

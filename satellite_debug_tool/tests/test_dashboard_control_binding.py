@@ -116,6 +116,50 @@ def test_liveview_fps_counts_data_reports_only(qapp):
     assert view._frame_count_label.text() == "FRM 1"
 
 
+def test_liveview_clear_display_data_is_local_and_retains_session(
+    qapp,
+    monkeypatch,
+):
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.ui.live_view import LiveView
+
+    view = LiveView(settings=Settings())
+    worker = _Worker()
+    view._worker = worker
+    view._is_connected = True
+    history_clears: list[bool] = []
+    monkeypatch.setattr(
+        view._product_store,
+        "clear_history",
+        lambda: history_clears.append(True),
+    )
+    view._on_data_received(_data_report_frame())
+    sent_before_clear = tuple(worker.sent)
+
+    view.clear_display_data()
+
+    assert view._is_connected is True
+    assert view._frame_count == 0
+    assert view._data_store.frame_count == 0
+    assert history_clears == [True]
+    assert tuple(worker.sent) == sent_before_clear
+
+
+def test_deferred_liveview_clear_display_data_does_not_build_presentation(qapp):
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.ui.live_view import LiveView
+
+    view = LiveView(settings=Settings(), defer_presentation=True)
+
+    assert not view.presentation_ready
+    assert not hasattr(view, "_chart")
+    view.clear_display_data()
+
+    assert not view.presentation_ready
+    assert not hasattr(view, "_chart")
+    assert view._frame_count == 0
+
+
 def test_liveview_debug_waits_for_specific_ack(qapp):
     from satellite_debug_tool.core.config import Settings
     from satellite_debug_tool.core.protocol import RespCode, SubCmd
@@ -280,10 +324,14 @@ def test_liveview_device_transaction_locks_only_the_button(qapp):
     assert view.session_core().try_acquire_device_transaction(transaction_owner)
     assert not view._debug_btn.isEnabled()
 
-    # Device 仍可通过统一控制入口发命令，不依赖按钮可用状态。
+    # 统一事务 owner 同时约束按钮和程序化入口，另一个 controller 不得旁路。
+    view.request_debug_mode(True)
+    assert view._debug_controller.pending_target is None
+    assert worker.sent == []
+    assert view.session_core().release_device_transaction(transaction_owner)
     view.request_debug_mode(True)
     assert view._debug_controller.pending_target is True
-    assert view.session_core().release_device_transaction(transaction_owner)
+    assert len(worker.sent) == 1
 
 
 def test_dashboard_rebuilds_when_semantics_changes_control_binding(qapp):

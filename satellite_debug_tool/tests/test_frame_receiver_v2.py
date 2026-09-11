@@ -53,7 +53,8 @@ class TestBasicRecv:
     def test_1536_byte_data_received(self):
         r = FrameReceiverV2()
         payload = b"\xA5" * 1536
-        records = r.feed(build_frame(0x11, payload))
+        # TRACKING_SIMULATION 是合法的 H→D 命令，上位机接收侧无需解码。
+        records = r.feed(build_frame(CmdType.TRACKING_SIMULATION, payload))
 
         assert len(records) == 1
         assert isinstance(records[0], RawFrame)
@@ -149,12 +150,12 @@ class TestErrors:
 class TestUnknownCmd:
     def test_unknown_cmd_returns_raw_frame(self):
         r = FrameReceiverV2()
-        # 0x11 未定义，预期 receiver 返回 RawFrame
-        frame = build_frame(0x11, b"\x11\x22\x33")
+        # 0x12 仍在顶层命令空间中保留，不因 0x11 合法化而被注册。
+        frame = build_frame(0x12, b"\x11\x22\x33")
         records = r.feed(frame)
         assert len(records) == 1
         assert isinstance(records[0], RawFrame)
-        assert records[0].cmd_type == 0x11
+        assert records[0].cmd_type == 0x12
         assert records[0].data == b"\x11\x22\x33"
 
     def test_gnss_extensions_are_raw_frames_without_new_decoders(self, monkeypatch):

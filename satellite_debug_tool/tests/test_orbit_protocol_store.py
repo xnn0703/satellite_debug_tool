@@ -187,7 +187,11 @@ def test_live_view_serializes_shared_sky_pages_for_all_consumers(monkeypatch):
     app = QApplication.instance() or QApplication([])
     view = LiveView(Settings())
     sent = []
-    monkeypatch.setattr(view, "_send_control_frame", lambda frame: sent.append(frame) or True)
+    monkeypatch.setattr(
+        view,
+        "_send_control_frame",
+        lambda frame, **_kwargs: sent.append(frame) or True,
+    )
     view._is_connected = True
     view._orbit_store.feed(
         OrbitCapabilitiesReport(
@@ -237,7 +241,11 @@ def test_live_view_recovers_a_timed_out_sky_request(monkeypatch):
     view = LiveView(Settings())
     sent = []
     now = [100.0]
-    monkeypatch.setattr(view, "_send_control_frame", lambda frame: sent.append(frame) or True)
+    monkeypatch.setattr(
+        view,
+        "_send_control_frame",
+        lambda frame, **_kwargs: sent.append(frame) or True,
+    )
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
     view._is_connected = True
     view._orbit_store.feed(

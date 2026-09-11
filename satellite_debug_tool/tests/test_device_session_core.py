@@ -56,6 +56,7 @@ from satellite_debug_tool.core.session import (
     MountConfigurationController,
     MountConfigurationStatus,
     OtaController,
+    OtaState,
     OtaStatus,
     OTA_MAX_IMAGE_BYTES,
     ParameterController,
@@ -485,6 +486,9 @@ def test_ota_parameters_product_and_mount_share_one_bidirectional_transaction(
     assert not parameters.request_table()
     assert parameter_statuses[-1] is ParameterStatus.TRANSACTION_ACTIVE
     ota.abort()
+    assert core.device_transaction_active
+    assert ota.state is OtaState.TERMINATING
+    ota._on_response_timeout()
     assert not core.device_transaction_active
 
     assert parameters.request_table()
