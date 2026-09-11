@@ -168,7 +168,7 @@ class TranslationManager(QObject):
         self._preference = normalize_language_preference(preference)
         if persist and self._settings is not None:
             self._settings.set("ui.language", self._preference)
-            self._settings.save()
+            self._settings.persist_preferences()
         return self.apply_preference(self._preference)
 
     def apply_preference(self, preference: object, *, emit: bool = True) -> str:
