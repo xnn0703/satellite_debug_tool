@@ -26,6 +26,7 @@ SDB v2 保持原始连续帧区格式。SDB v3 使用同一基础文件头，但
 from __future__ import annotations
 
 import json
+import os
 import queue
 import struct
 import threading
@@ -45,6 +46,12 @@ from satellite_debug_tool.io.sdb_schema import (
     SDB_V3_RECORD_HEADER,
     SDB_VERSION_V2,
     SDB_VERSION_V3,
+)
+from satellite_debug_tool.io.recording_path_registry import (
+    RecordingPathError,
+    RecordingPathRegistry,
+    RecordingReservation,
+    canonical_recording_key,
 )
 
 # 后台队列容量（每项一帧；10 KB/s × 10s ≈ 100k 帧上限的十分之一足矣）
@@ -90,17 +97,55 @@ class DataRecorder:
         self._written_records = 0
         self._write_failed = False
         self._finalize_ok = False
+        self._reservation: Optional[RecordingReservation] = None
+        self._stop_requested = False
+        self._stop_sentinel_queued = False
 
     # ---- 生命周期 ----
 
-    def start(self) -> bool:
+    def start(self, reservation: Optional[RecordingReservation] = None) -> bool:
         if self._is_recording:
             return True
+        owned_reservation = reservation
+        created_reservation = False
+        adopted_reservation = False
+        raw_fd: Optional[int] = None
         try:
-            self._fp = open(self._path, "wb")
+            if owned_reservation is None:
+                owned_reservation = RecordingPathRegistry.default().reserve_exact(
+                    self._path
+                )
+                created_reservation = True
+            if owned_reservation.key != canonical_recording_key(self._path):
+                raise RecordingPathError(
+                    "recording reservation does not match recorder filepath"
+                )
+            self._path = owned_reservation.path
+            self._reservation = owned_reservation
+            raw_fd = owned_reservation.take_fd()
+            adopted_reservation = True
+            self._fp = os.fdopen(raw_fd, "wb")
+            raw_fd = None
             self._write_header()
-        except OSError:
+            self._fp.flush()
+            os.fsync(self._fp.fileno())
+        except (OSError, TypeError, ValueError, UnicodeError, RecordingPathError):
+            if raw_fd is not None:
+                try:
+                    os.close(raw_fd)
+                except OSError:
+                    pass
+            try:
+                if self._fp is not None:
+                    self._fp.close()
+            except OSError:
+                pass
             self._fp = None
+            if owned_reservation is not None and (
+                created_reservation or adopted_reservation
+            ):
+                owned_reservation.discard_failed_file()
+            self._reservation = None
             return False
         self._is_recording = True
         self._dropped = 0
@@ -109,10 +154,26 @@ class DataRecorder:
         self._written_records = 0
         self._write_failed = False
         self._finalize_ok = False
+        self._stop_requested = False
+        self._stop_sentinel_queued = False
         self._thread = threading.Thread(
             target=self._run, name="SdbRecorder", daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError:
+            self._thread = None
+            self._is_recording = False
+            try:
+                if self._fp is not None:
+                    self._fp.close()
+            except OSError:
+                pass
+            self._fp = None
+            if self._reservation is not None:
+                self._reservation.discard_failed_file()
+                self._reservation = None
+            return False
         return True
 
     def write_frame(
@@ -176,26 +237,35 @@ class DataRecorder:
             return False
 
     def stop(self) -> bool:
-        if not self._is_recording:
+        if (
+            not self._is_recording
+            and self._thread is None
+            and not self._stop_requested
+        ):
             return False
         self._is_recording = False
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            # Stop must never wait behind a full queue on the UI thread. Drop
-            # one pending record, account for it, and place the final sentinel.
-            try:
-                dropped = self._queue.get_nowait()
-            except queue.Empty:
-                dropped = None
-            if dropped is not None:
-                self._dropped += 1
-                self._pending_gap += 1
+        self._stop_requested = True
+        if not self._stop_sentinel_queued and self._thread is not None:
             try:
                 self._queue.put_nowait(None)
+                self._stop_sentinel_queued = True
             except queue.Full:
-                self._write_failed = True
-                return False
+                # Stop must never wait behind a full queue on the UI thread.
+                # Drop one pending record, account for it, and place the final
+                # sentinel.  If even this fails, a later stop() retries.
+                try:
+                    dropped = self._queue.get_nowait()
+                except queue.Empty:
+                    dropped = None
+                if dropped is not None:
+                    self._dropped += 1
+                    self._pending_gap += 1
+                try:
+                    self._queue.put_nowait(None)
+                    self._stop_sentinel_queued = True
+                except queue.Full:
+                    self._write_failed = True
+                    return False
         if self._thread is not None:
             self._thread.join(timeout=_STOP_TIMEOUT_SEC)
             if self._thread.is_alive():
@@ -326,3 +396,6 @@ class DataRecorder:
                 pass
         finally:
             self._fp = None
+            if self._reservation is not None:
+                self._reservation.release()
+                self._reservation = None
