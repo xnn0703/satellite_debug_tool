@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
 import socket
 import threading
 import time
@@ -17,6 +18,7 @@ from satellite_debug_tool.core.production import (
     PowerSupplyState,
     ScpiLineCodec,
     SocketScpiTransport,
+    psw80_27_validation_policy,
 )
 
 
@@ -74,6 +76,36 @@ def _adapter(
         monotonic_clock_ns=lambda: 200,
     )
     return adapter, transport
+
+
+class FakeMonotonicClock:
+    def __init__(self, *, sleep_advance_s: float | None = None) -> None:
+        self.now_ns = 0
+        self.sleep_advance_s = sleep_advance_s
+        self.sleeps: list[float] = []
+
+    def monotonic_ns(self) -> int:
+        return self.now_ns
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        elapsed = seconds if self.sleep_advance_s is None else self.sleep_advance_s
+        self.now_ns += int(elapsed * 1_000_000_000)
+
+
+def test_psw80_27_policy_derives_limits_from_requested_setpoints() -> None:
+    policy = psw80_27_validation_policy(12.0, 1.0)
+
+    assert policy.voltage_setpoint_tolerance_v == pytest.approx(0.002)
+    assert policy.current_setpoint_tolerance_a == pytest.approx(0.002)
+    assert policy.output_voltage_min_v == pytest.approx(11.952)
+    assert policy.output_voltage_max_v == pytest.approx(12.048)
+    assert policy.off_voltage_max_v == pytest.approx(0.05)
+
+    with pytest.raises(PowerSupplyError, match="exceeds 720 W"):
+        psw80_27_validation_policy(80.0, 27.0)
+    with pytest.raises(PowerSupplyError, match="exceeds 720 W"):
+        replace(_config(), voltage_set_v=80.0, current_set_a=27.0).validate()
 
 
 def test_scpi_line_codec_handles_fragmented_and_coalesced_tcp_data() -> None:
@@ -207,6 +239,195 @@ def test_prepare_enable_and_disable_require_closed_loop_evidence() -> None:
     assert not transport.script
     assert all(record.connection_generation == 1 for record in adapter.records)
     assert adapter.records[13].fixture_action_id == "PWR-001"
+
+
+def test_output_on_waits_for_voltage_ramp_before_confirming() -> None:
+    transport = ScriptedTransport(
+        [
+            ("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70"),
+            ("OUTP 0", None),
+            ("OUTP?", "0"),
+            ("MEAS:ALL?", "0.000,0.000"),
+            ("SOUR:VOLT 14", None),
+            ("SOUR:CURR 2", None),
+            ("*OPC?", "1"),
+            ("SOUR:VOLT?", "14.000"),
+            ("SOUR:CURR?", "2.000"),
+            ("SYST:ERR?", '0,"No error"'),
+            ("STAT:OPER:COND?", "0"),
+            ("STAT:QUES:COND?", "0"),
+            ("OUTP:PROT:TRIP?", "0"),
+            ("OUTP 1", None),
+            ("OUTP?", "1"),
+            ("MEAS:ALL?", "-0.003,0.897"),
+            ("STAT:OPER:COND?", "1024"),
+            ("STAT:QUES:COND?", "0"),
+            ("OUTP:PROT:TRIP?", "0"),
+            ("OUTP?", "1"),
+            ("MEAS:ALL?", "14.005,0.000"),
+            ("STAT:OPER:COND?", "256"),
+            ("STAT:QUES:COND?", "0"),
+            ("OUTP:PROT:TRIP?", "0"),
+        ]
+    )
+    clock = FakeMonotonicClock(sleep_advance_s=1.5)
+    adapter = GwInstekPswAdapter(
+        _config(),
+        transport_factory=lambda _config: transport,
+        monotonic_clock_ns=clock.monotonic_ns,
+        sleep=clock.sleep,
+    )
+    adapter.connect()
+    adapter.prepare_output_off(fixture_action_id="PWR-RAMP")
+
+    result = adapter.enable_output(fixture_action_id="PWR-RAMP")
+
+    assert result.state == PowerSupplyState.ON_CONFIRMED
+    assert result.measurement.voltage_v == pytest.approx(14.005)
+    assert clock.sleeps == [pytest.approx(0.1)]
+    assert transport.commands.count("OUTP 1") == 1
+    assert not transport.script
+    assert {
+        record.fixture_action_id
+        for record in adapter.records
+        if record.command != "*IDN?"
+    } == {"PWR-RAMP"}
+
+
+def test_output_off_waits_for_voltage_to_fall_below_automatic_threshold() -> None:
+    transport = ScriptedTransport(
+        [
+            ("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70"),
+            ("OUTP 0", None),
+            ("OUTP?", "0"),
+            ("MEAS:ALL?", "8.077,0.000"),
+            ("OUTP?", "0"),
+            ("MEAS:ALL?", "0.018,0.000"),
+            ("SOUR:VOLT 12", None),
+            ("SOUR:CURR 1", None),
+            ("*OPC?", "1"),
+            ("SOUR:VOLT?", "12.000"),
+            ("SOUR:CURR?", "1.000"),
+            ("SYST:ERR?", '0,"No error"'),
+            ("STAT:OPER:COND?", "0"),
+            ("STAT:QUES:COND?", "0"),
+            ("OUTP:PROT:TRIP?", "0"),
+        ]
+    )
+    clock = FakeMonotonicClock(sleep_advance_s=0.5)
+    policy = psw80_27_validation_policy(12.0, 1.0)
+    adapter = GwInstekPswAdapter(
+        PowerSupplyConfig(
+            host="192.168.1.108",
+            voltage_set_v=12.0,
+            current_set_a=1.0,
+            voltage_setpoint_tolerance_v=policy.voltage_setpoint_tolerance_v,
+            current_setpoint_tolerance_a=policy.current_setpoint_tolerance_a,
+            output_voltage_min_v=policy.output_voltage_min_v,
+            output_voltage_max_v=policy.output_voltage_max_v,
+            off_voltage_max_v=policy.off_voltage_max_v,
+        ),
+        transport_factory=lambda _config: transport,
+        monotonic_clock_ns=clock.monotonic_ns,
+        sleep=clock.sleep,
+    )
+    adapter.connect()
+
+    result = adapter.prepare_output_off(fixture_action_id="PWR-FALL")
+
+    assert result.state == PowerSupplyState.READY_OFF
+    assert result.measurement.voltage_v == pytest.approx(0.018)
+    assert clock.sleeps == [pytest.approx(0.1)]
+    assert not transport.script
+
+
+def test_output_on_reports_last_voltage_after_settle_timeout() -> None:
+    status_cycle = [
+        ("OUTP?", "1"),
+        ("MEAS:ALL?", "0.819,0.000"),
+        ("STAT:OPER:COND?", "1024"),
+        ("STAT:QUES:COND?", "0"),
+        ("OUTP:PROT:TRIP?", "0"),
+    ]
+    transport = ScriptedTransport(
+        [
+            ("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70"),
+            ("OUTP 0", None),
+            ("OUTP?", "0"),
+            ("MEAS:ALL?", "0.000,0.000"),
+            ("SOUR:VOLT 14", None),
+            ("SOUR:CURR 2", None),
+            ("*OPC?", "1"),
+            ("SOUR:VOLT?", "14.000"),
+            ("SOUR:CURR?", "2.000"),
+            ("SYST:ERR?", '0,"No error"'),
+            ("STAT:OPER:COND?", "0"),
+            ("STAT:QUES:COND?", "0"),
+            ("OUTP:PROT:TRIP?", "0"),
+            ("OUTP 1", None),
+            *status_cycle,
+            *status_cycle,
+            *status_cycle,
+        ]
+    )
+    clock = FakeMonotonicClock()
+    adapter = GwInstekPswAdapter(
+        replace(_config(), output_settle_timeout_s=0.2),
+        transport_factory=lambda _config: transport,
+        monotonic_clock_ns=clock.monotonic_ns,
+        sleep=clock.sleep,
+    )
+    adapter.connect()
+    adapter.prepare_output_off(fixture_action_id="PWR-TIMEOUT")
+
+    with pytest.raises(
+        PowerSupplyError,
+        match=r"0\.8190 V, expected 13\.5000\.\.14\.5000 V",
+    ):
+        adapter.enable_output(fixture_action_id="PWR-TIMEOUT")
+
+    assert adapter.state == PowerSupplyState.UNKNOWN
+    assert adapter.evidence_level == PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
+    assert transport.commands.count("OUTP 1") == 1
+    assert not transport.script
+
+
+def test_output_on_stops_stabilization_when_protection_trips() -> None:
+    transport = ScriptedTransport(
+        [
+            ("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70"),
+            ("OUTP 0", None),
+            ("OUTP?", "0"),
+            ("MEAS:ALL?", "0.000,0.000"),
+            ("SOUR:VOLT 14", None),
+            ("SOUR:CURR 2", None),
+            ("*OPC?", "1"),
+            ("SOUR:VOLT?", "14.000"),
+            ("SOUR:CURR?", "2.000"),
+            ("SYST:ERR?", '0,"No error"'),
+            ("STAT:OPER:COND?", "0"),
+            ("STAT:QUES:COND?", "0"),
+            ("OUTP:PROT:TRIP?", "0"),
+            ("OUTP 1", None),
+            ("OUTP?", "1"),
+            ("MEAS:ALL?", "0.819,0.000"),
+            ("STAT:OPER:COND?", "1024"),
+            ("STAT:QUES:COND?", "4"),
+            ("OUTP:PROT:TRIP?", "1"),
+        ]
+    )
+    adapter = GwInstekPswAdapter(
+        _config(), transport_factory=lambda _config: transport
+    )
+    adapter.connect()
+    adapter.prepare_output_off(fixture_action_id="PWR-TRIP")
+
+    with pytest.raises(PowerSupplyError, match="protection or questionable"):
+        adapter.enable_output(fixture_action_id="PWR-TRIP")
+
+    assert adapter.state == PowerSupplyState.PROTECTION_TRIPPED
+    assert adapter.evidence_level != PowerEvidenceLevel.VOLTAGE_CONFIRMED
+    assert transport.commands.count("OUTP 1") == 1
 
 
 def test_output_on_requires_ready_state_and_action_id() -> None:

@@ -36,6 +36,46 @@ class PowerEvidenceLevel(str, Enum):
 
 
 @dataclass(frozen=True)
+class PowerValidationPolicy:
+    voltage_setpoint_tolerance_v: float
+    current_setpoint_tolerance_a: float
+    output_voltage_min_v: float
+    output_voltage_max_v: float
+    off_voltage_max_v: float
+
+
+def _validate_psw80_27_setpoints(voltage: float, current: float) -> None:
+    if not math.isfinite(voltage) or not (0.0 < voltage <= 80.0):
+        raise PowerSupplyError("PSW80-27 voltage setpoint must be within 0..80 V")
+    if not math.isfinite(current) or not (0.0 < current <= 27.0):
+        raise PowerSupplyError("PSW80-27 current setpoint must be within 0..27 A")
+    if voltage * current > 720.0:
+        raise PowerSupplyError("PSW80-27 requested power exceeds 720 W")
+
+
+def psw80_27_validation_policy(
+    voltage_set_v: float,
+    current_set_a: float,
+) -> PowerValidationPolicy:
+    """Derive PSW80-27 limits from its published accuracy and resolution."""
+    voltage = float(voltage_set_v)
+    current = float(current_set_a)
+    _validate_psw80_27_setpoints(voltage, current)
+
+    # PSW80-27 voltage programming and measurement accuracy are each
+    # 0.1 % + 10 mV. Include two 2 mV remote-resolution steps so the
+    # comparison remains stable at quantization boundaries.
+    output_tolerance_v = 0.002 * voltage + 0.024
+    return PowerValidationPolicy(
+        voltage_setpoint_tolerance_v=0.002,
+        current_setpoint_tolerance_a=0.002,
+        output_voltage_min_v=max(0.0, voltage - output_tolerance_v),
+        output_voltage_max_v=min(80.0, voltage + output_tolerance_v),
+        off_voltage_max_v=0.050,
+    )
+
+
+@dataclass(frozen=True)
 class PowerSupplyConfig:
     host: str
     voltage_set_v: float
@@ -44,12 +84,14 @@ class PowerSupplyConfig:
     expected_manufacturer: str = "GW-INSTEK"
     expected_model: str = "PSW 80-27"
     expected_serial: str = ""
-    setpoint_tolerance: float = 0.01
+    voltage_setpoint_tolerance_v: float = 0.002
+    current_setpoint_tolerance_a: float = 0.002
     output_voltage_min_v: float = 13.5
     output_voltage_max_v: float = 14.5
     off_voltage_max_v: float = 0.5
     command_timeout_s: float = 2.0
     connect_timeout_s: float = 3.0
+    output_settle_timeout_s: float = 3.0
     max_line_bytes: int = 1024
 
     def validate(self) -> None:
@@ -64,17 +106,23 @@ class PowerSupplyConfig:
         for name, value in (
             ("voltage_set_v", self.voltage_set_v),
             ("current_set_a", self.current_set_a),
-            ("setpoint_tolerance", self.setpoint_tolerance),
+            ("voltage_setpoint_tolerance_v", self.voltage_setpoint_tolerance_v),
+            ("current_setpoint_tolerance_a", self.current_setpoint_tolerance_a),
             ("output_voltage_min_v", self.output_voltage_min_v),
             ("output_voltage_max_v", self.output_voltage_max_v),
             ("off_voltage_max_v", self.off_voltage_max_v),
             ("command_timeout_s", self.command_timeout_s),
             ("connect_timeout_s", self.connect_timeout_s),
+            ("output_settle_timeout_s", self.output_settle_timeout_s),
         ):
             if not math.isfinite(float(value)) or float(value) < 0:
                 raise PowerSupplyError(f"{name} must be finite and non-negative")
-        if self.voltage_set_v <= 0 or self.current_set_a <= 0:
-            raise PowerSupplyError("power-supply setpoints must be positive")
+        _validate_psw80_27_setpoints(
+            float(self.voltage_set_v),
+            float(self.current_set_a),
+        )
+        if self.output_settle_timeout_s <= 0:
+            raise PowerSupplyError("output_settle_timeout_s must be positive")
         if self.output_voltage_min_v > self.output_voltage_max_v:
             raise PowerSupplyError("output voltage window is invalid")
         if not (64 <= int(self.max_line_bytes) <= 65536):
@@ -225,12 +273,14 @@ class GwInstekPswAdapter:
         transport_factory: Optional[Callable[[PowerSupplyConfig], ScpiTransport]] = None,
         wall_clock_ns: Callable[[], int] = time.time_ns,
         monotonic_clock_ns: Callable[[], int] = time.monotonic_ns,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         config.validate()
         self._config = config
         self._transport_factory = transport_factory or SocketScpiTransport
         self._wall_clock_ns = wall_clock_ns
         self._monotonic_clock_ns = monotonic_clock_ns
+        self._sleep = sleep
         self._transport: Optional[ScpiTransport] = None
         self._lock = threading.RLock()
         self._generation = 0
@@ -358,13 +408,7 @@ class GwInstekPswAdapter:
             self._state = PowerSupplyState.TURNING_OFF
             self._command("OUTP 0", fixture_action_id=fixture_action_id)
             self._evidence_level = PowerEvidenceLevel.COMMAND_SENT
-            output = parse_bool(self.query("OUTP?", fixture_action_id=fixture_action_id))
-            measurement = parse_measurement(
-                self.query("MEAS:ALL?", fixture_action_id=fixture_action_id)
-            )
-            if output or measurement.voltage_v > self._config.off_voltage_max_v:
-                self._state = PowerSupplyState.UNKNOWN
-                raise PowerSupplyError("power output did not reach the verified OFF state")
+            measurement = self._wait_for_output_off(fixture_action_id)
             self._evidence_level = PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
             self._command(
                 f"SOUR:VOLT {_format_number(self._config.voltage_set_v)}",
@@ -383,8 +427,18 @@ class GwInstekPswAdapter:
             current_set = parse_float(
                 self.query("SOUR:CURR?", fixture_action_id=fixture_action_id)
             )
-            self._verify_setpoint("voltage", voltage_set, self._config.voltage_set_v)
-            self._verify_setpoint("current", current_set, self._config.current_set_a)
+            self._verify_setpoint(
+                "voltage",
+                voltage_set,
+                self._config.voltage_set_v,
+                self._config.voltage_setpoint_tolerance_v,
+            )
+            self._verify_setpoint(
+                "current",
+                current_set,
+                self._config.current_set_a,
+                self._config.current_setpoint_tolerance_a,
+            )
             self._verify_no_scpi_error(fixture_action_id)
             operation = parse_int(
                 self.query("STAT:OPER:COND?", fixture_action_id=fixture_action_id)
@@ -410,32 +464,55 @@ class GwInstekPswAdapter:
             self._state = PowerSupplyState.TURNING_ON
             self._command("OUTP 1", fixture_action_id=fixture_action_id)
             self._evidence_level = PowerEvidenceLevel.COMMAND_SENT
-            output = parse_bool(self.query("OUTP?", fixture_action_id=fixture_action_id))
-            if not output:
-                self._state = PowerSupplyState.UNKNOWN
-                raise PowerSupplyError("power supply did not confirm OUTPUT ON")
-            self._evidence_level = PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
-            measurement = parse_measurement(
-                self.query("MEAS:ALL?", fixture_action_id=fixture_action_id)
+            deadline_ns = self._monotonic_clock_ns() + int(
+                self._config.output_settle_timeout_s * 1_000_000_000
             )
-            operation = parse_int(
-                self.query("STAT:OPER:COND?", fixture_action_id=fixture_action_id)
-            )
-            questionable = parse_int(
-                self.query("STAT:QUES:COND?", fixture_action_id=fixture_action_id)
-            )
-            tripped = parse_bool(
-                self.query("OUTP:PROT:TRIP?", fixture_action_id=fixture_action_id)
-            )
-            if tripped or questionable:
-                self._state = PowerSupplyState.PROTECTION_TRIPPED
-                raise PowerSupplyError("power supply reports a protection or questionable state")
-            if not self._voltage_in_output_window(measurement.voltage_v):
-                self._state = PowerSupplyState.UNKNOWN
-                raise PowerSupplyError("measured voltage is outside the configured ON window")
-            self._evidence_level = PowerEvidenceLevel.VOLTAGE_CONFIRMED
-            self._state = PowerSupplyState.ON_CONFIRMED
-            return self._result(True, measurement, operation, questionable, tripped)
+            while True:
+                output = parse_bool(
+                    self.query("OUTP?", fixture_action_id=fixture_action_id)
+                )
+                measurement = parse_measurement(
+                    self.query("MEAS:ALL?", fixture_action_id=fixture_action_id)
+                )
+                operation = parse_int(
+                    self.query("STAT:OPER:COND?", fixture_action_id=fixture_action_id)
+                )
+                questionable = parse_int(
+                    self.query("STAT:QUES:COND?", fixture_action_id=fixture_action_id)
+                )
+                tripped = parse_bool(
+                    self.query("OUTP:PROT:TRIP?", fixture_action_id=fixture_action_id)
+                )
+                if not output:
+                    self._state = PowerSupplyState.UNKNOWN
+                    raise PowerSupplyError("power supply did not confirm OUTPUT ON")
+                self._evidence_level = PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
+                if tripped or questionable:
+                    self._state = PowerSupplyState.PROTECTION_TRIPPED
+                    raise PowerSupplyError(
+                        "power supply reports a protection or questionable state"
+                    )
+                if self._voltage_in_output_window(measurement.voltage_v):
+                    self._evidence_level = PowerEvidenceLevel.VOLTAGE_CONFIRMED
+                    self._state = PowerSupplyState.ON_CONFIRMED
+                    return self._result(
+                        True,
+                        measurement,
+                        operation,
+                        questionable,
+                        tripped,
+                    )
+                remaining_ns = deadline_ns - self._monotonic_clock_ns()
+                if remaining_ns <= 0:
+                    self._state = PowerSupplyState.UNKNOWN
+                    raise PowerSupplyError(
+                        "power output did not enter the configured ON window within "
+                        f"{self._config.output_settle_timeout_s:.3f} s: measured "
+                        f"{measurement.voltage_v:.4f} V, expected "
+                        f"{self._config.output_voltage_min_v:.4f}.."
+                        f"{self._config.output_voltage_max_v:.4f} V"
+                    )
+                self._sleep(min(0.1, remaining_ns / 1_000_000_000.0))
 
     def disable_output(self, *, fixture_action_id: str = "") -> PowerActionResult:
         with self._lock:
@@ -443,10 +520,7 @@ class GwInstekPswAdapter:
             self._state = PowerSupplyState.TURNING_OFF
             self._command("OUTP 0", fixture_action_id=fixture_action_id)
             self._evidence_level = PowerEvidenceLevel.COMMAND_SENT
-            output = parse_bool(self.query("OUTP?", fixture_action_id=fixture_action_id))
-            measurement = parse_measurement(
-                self.query("MEAS:ALL?", fixture_action_id=fixture_action_id)
-            )
+            measurement = self._wait_for_output_off(fixture_action_id)
             operation = parse_int(
                 self.query("STAT:OPER:COND?", fixture_action_id=fixture_action_id)
             )
@@ -456,9 +530,6 @@ class GwInstekPswAdapter:
             tripped = parse_bool(
                 self.query("OUTP:PROT:TRIP?", fixture_action_id=fixture_action_id)
             )
-            if output or measurement.voltage_v > self._config.off_voltage_max_v:
-                self._state = PowerSupplyState.UNKNOWN
-                raise PowerSupplyError("power output did not reach the verified OFF state")
             self._evidence_level = PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
             self._state = (
                 PowerSupplyState.PROTECTION_TRIPPED
@@ -466,6 +537,33 @@ class GwInstekPswAdapter:
                 else PowerSupplyState.OFF_CONFIRMED
             )
             return self._result(False, measurement, operation, questionable, tripped)
+
+    def _wait_for_output_off(self, fixture_action_id: str) -> PowerMeasurement:
+        deadline_ns = self._monotonic_clock_ns() + int(
+            self._config.output_settle_timeout_s * 1_000_000_000
+        )
+        while True:
+            output = parse_bool(
+                self.query("OUTP?", fixture_action_id=fixture_action_id)
+            )
+            measurement = parse_measurement(
+                self.query("MEAS:ALL?", fixture_action_id=fixture_action_id)
+            )
+            if output:
+                self._state = PowerSupplyState.UNKNOWN
+                raise PowerSupplyError("power supply did not confirm OUTPUT OFF")
+            if measurement.voltage_v <= self._config.off_voltage_max_v:
+                return measurement
+            remaining_ns = deadline_ns - self._monotonic_clock_ns()
+            if remaining_ns <= 0:
+                self._state = PowerSupplyState.UNKNOWN
+                raise PowerSupplyError(
+                    "power output did not fall below the configured OFF threshold within "
+                    f"{self._config.output_settle_timeout_s:.3f} s: measured "
+                    f"{measurement.voltage_v:.4f} V, expected ≤"
+                    f"{self._config.off_voltage_max_v:.4f} V"
+                )
+            self._sleep(min(0.1, remaining_ns / 1_000_000_000.0))
 
     def release_local(self) -> None:
         """Return panel control without changing or inferring output state."""
@@ -494,8 +592,14 @@ class GwInstekPswAdapter:
         if expected_serial and identity.serial_number.strip() != expected_serial:
             raise PowerSupplyError(f"unexpected power-supply serial: {identity.serial_number}")
 
-    def _verify_setpoint(self, name: str, actual: float, expected: float) -> None:
-        if abs(actual - expected) > self._config.setpoint_tolerance:
+    def _verify_setpoint(
+        self,
+        name: str,
+        actual: float,
+        expected: float,
+        tolerance: float,
+    ) -> None:
+        if abs(actual - expected) > tolerance:
             self._state = PowerSupplyState.UNKNOWN
             raise PowerSupplyError(f"power-supply {name} setpoint readback does not match")
 
@@ -628,6 +732,7 @@ __all__ = [
     "PowerSupplyConfig",
     "PowerSupplyError",
     "PowerSupplyState",
+    "PowerValidationPolicy",
     "ScpiLineCodec",
     "ScpiTransport",
     "SocketScpiTransport",
@@ -636,4 +741,5 @@ __all__ = [
     "parse_identity",
     "parse_int",
     "parse_measurement",
+    "psw80_27_validation_policy",
 ]

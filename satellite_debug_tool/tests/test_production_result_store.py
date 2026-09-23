@@ -128,7 +128,7 @@ def test_schema_v1_database_is_migrated_for_hardware_identity(
     try:
         assert migrated._connection.execute(
             "SELECT value FROM schema_info WHERE key = 'schema_version'"
-        ).fetchone()[0] == "2"
+        ).fetchone()[0] == "3"
         columns = {
             row[1] for row in migrated._connection.execute("PRAGMA table_info(devices)")
         }

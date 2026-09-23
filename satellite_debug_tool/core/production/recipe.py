@@ -30,6 +30,7 @@ class ProductionRecipe:
     schema_version: int
     sha256: str
     engineering_only: bool
+    target_device_count: int
     _canonical_json: str
 
     @classmethod
@@ -85,6 +86,7 @@ class ProductionRecipe:
             schema_version=int(normalized["schema_version"]),
             sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
             engineering_only=minimum_observation_s < _FORMAL_MINIMUM_OBSERVATION_S,
+            target_device_count=int(normalized.get("target_device_count", 1)),
             _canonical_json=canonical,
         )
 
@@ -117,6 +119,14 @@ def _validate_recipe(payload: dict[str, Any]) -> list[str]:
     product = payload.get("product")
     if not isinstance(product, str) or production_recipe_product_policy(product) is None:
         errors.append("product must name a registered production product")
+
+    target_count = payload.get("target_device_count", 1)
+    if (
+        isinstance(target_count, bool)
+        or not isinstance(target_count, int)
+        or not (1 <= target_count <= 4)
+    ):
+        errors.append("target_device_count must be an integer within 1..4")
 
     for key in ("expected", "fixtures", "tests", "duration_policy"):
         if not isinstance(payload.get(key), dict):

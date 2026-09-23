@@ -71,6 +71,21 @@ class BatchCoordinator(QObject):
     def lease_active(self) -> bool:
         return self._lease.held_by(self._lease_handle)
 
+    def reserve_start(self) -> None:
+        """Reserve the batch fixture owner before asynchronous fixture preparation."""
+        _store, batch = self._require_batch(BatchStatus.READY)
+        if self.lease_active:
+            return
+        try:
+            self._lease_handle = self._lease.acquire(f"batch:{batch['batch_id']}")
+        except FixtureLeaseError as exc:
+            raise ResultStoreError(str(exc)) from exc
+
+    def cancel_start_reservation(self) -> None:
+        if self._batch is None or self._batch.get("status") != BatchStatus.READY.value:
+            return
+        self._release_lease()
+
     def create(
         self,
         *,
@@ -109,10 +124,12 @@ class BatchCoordinator(QObject):
         freeze_participants: Callable[[], None],
     ) -> dict:
         store, batch = self._require_batch(BatchStatus.READY)
-        try:
-            handle = self._lease.acquire(f"batch:{batch['batch_id']}")
-        except FixtureLeaseError as exc:
-            raise ResultStoreError(str(exc)) from exc
+        handle = self._lease_handle
+        if not self._lease.held_by(handle):
+            try:
+                handle = self._lease.acquire(f"batch:{batch['batch_id']}")
+            except FixtureLeaseError as exc:
+                raise ResultStoreError(str(exc)) from exc
         try:
             updated = store.start_batch(
                 batch["batch_id"],
@@ -122,6 +139,7 @@ class BatchCoordinator(QObject):
             freeze_participants()
         except Exception:
             self._lease.release(handle)
+            self._lease_handle = None
             current = store.get_batch(batch["batch_id"])
             if current.get("status") == BatchStatus.RUNNING.value:
                 current = store.transition_batch(
@@ -151,6 +169,40 @@ class BatchCoordinator(QObject):
                     AttemptStatus.ABORTED,
                 )
         updated = store.transition_batch(batch["batch_id"], BatchStatus.ABORTED)
+        self._batch = updated
+        self._release_lease()
+        self.changed.emit(dict(updated))
+        return dict(updated)
+
+    def complete(self) -> dict:
+        """Commit a completed batch after every attempt reached a final result."""
+
+        store, batch = self._require_batch(BatchStatus.RUNNING)
+        attempts = store.list_attempts(batch["batch_id"])
+        if not attempts:
+            raise ResultStoreError("a completed batch requires test attempts")
+        active = [
+            attempt
+            for attempt in attempts
+            if attempt["status"]
+            not in {
+                AttemptStatus.PASS.value,
+                AttemptStatus.FAIL.value,
+                AttemptStatus.SKIPPED.value,
+                AttemptStatus.INCOMPLETE.value,
+                AttemptStatus.ABORTED.value,
+            }
+        ]
+        if active:
+            raise ResultStoreError("all attempts must reach a final result")
+        incomplete = [
+            attempt
+            for attempt in attempts
+            if attempt["status"]
+            in {AttemptStatus.INCOMPLETE.value, AttemptStatus.ABORTED.value}
+        ]
+        target = BatchStatus.INCOMPLETE if incomplete else BatchStatus.COMPLETED
+        updated = store.transition_batch(batch["batch_id"], target)
         self._batch = updated
         self._release_lease()
         self.changed.emit(dict(updated))

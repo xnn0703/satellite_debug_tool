@@ -52,6 +52,13 @@ class EvidenceLevel(str, Enum):
     POSE_VERIFIED = "pose_verified"
 
 
+class ReportStatus(str, Enum):
+    NOT_GENERATED = "not_generated"
+    GENERATED_V1 = "generated_v1"
+    REVIEWED_V2 = "reviewed_v2"
+    GENERATION_FAILED = "generation_failed"
+
+
 EVIDENCE_RANK = {
     EvidenceLevel.NONE: 0,
     EvidenceLevel.COMMAND_SENT: 1,

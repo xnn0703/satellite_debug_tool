@@ -31,6 +31,7 @@ from satellite_debug_tool.core.product import (
     verified_device_uid,
     verified_identity_text,
 )
+from satellite_debug_tool.core.profile.cache import profile_to_dict
 from satellite_debug_tool.core.protocol import (
     FrameReceiverV2,
     RawFrame,
@@ -538,8 +539,15 @@ class DeviceSession(QObject):
         reservation = None
         try:
             reservation = RecordingPathRegistry.default().reserve_unique(path)
+            hardware_type = self.core.profile_store.current_hw_type()
+            profile = (
+                self.core.profile_store.get_profile(hardware_type)
+                if hardware_type
+                else None
+            )
             recorder = DataRecorder(
                 reservation.path,
+                profile_dict=None if profile is None else profile_to_dict(profile),
                 format_version=SDB_VERSION_V3,
                 metadata={
                     "mode": "production",

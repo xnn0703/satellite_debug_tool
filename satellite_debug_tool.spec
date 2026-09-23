@@ -33,6 +33,7 @@ pyside6_datas, pyside6_binaries, pyside6_hidden = collect_all("PySide6")
 pyqtgraph_datas, pyqtgraph_binaries, pyqtgraph_hidden = collect_all("pyqtgraph")
 # M11 fix: PyOpenGL（pyqtgraph.opengl 3D 姿态显示需要），全包确保 GLU/GL 子模块齐
 opengl_datas, opengl_binaries, opengl_hidden = collect_all("OpenGL")
+docx_datas, docx_binaries, docx_hidden = collect_all("docx")
 
 # ``collect_all("PySide6")`` also discovers standalone Qt development tools
 # (Designer, Assistant and Linguist). They are not runtime dependencies, and
@@ -102,8 +103,8 @@ if sys.platform == "darwin":
 a = Analysis(
     [ENTRY],
     pathex=[str(ROOT)],
-    binaries=pyside6_binaries + pyqtgraph_binaries + opengl_binaries,
-    datas=pyside6_datas + pyqtgraph_datas + opengl_datas + app_datas + [
+    binaries=pyside6_binaries + pyqtgraph_binaries + opengl_binaries + docx_binaries,
+    datas=pyside6_datas + pyqtgraph_datas + opengl_datas + docx_datas + app_datas + [
         # M11：升级器需要知道去哪个仓库拉版本
         (str(ROOT / "release.config.json"), "."),
     ],
@@ -111,6 +112,7 @@ a = Analysis(
         pyside6_hidden
         + pyqtgraph_hidden
         + opengl_hidden
+        + docx_hidden
         + extra_hidden
         + [
             "serial.tools.list_ports",

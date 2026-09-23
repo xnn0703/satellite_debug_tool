@@ -20,7 +20,8 @@ from satellite_debug_tool.core.production import (
     UdpFleetHub,
 )
 from satellite_debug_tool.core.comm import UdpEndpointBroker
-from satellite_debug_tool.core.protocol import CmdType, build_frame
+from satellite_debug_tool.core.protocol import ChannelDefEntry, CmdType, MetaInfo, build_frame
+from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.core.session import DeviceSessionCore
 from satellite_debug_tool.io.data_recorder import SDB_FOOTER, SDB_MAGIC
 
@@ -381,6 +382,31 @@ def test_valid_zero_snr_is_preserved_as_device_evidence() -> None:
     )
     assert len(history) == 1
     assert history[0].value_db == 0.0
+
+
+def test_production_recording_freezes_profile_for_offline_curve_semantics(
+    qapp, tmp_path: Path
+) -> None:
+    endpoint = ("192.168.1.12", 4004)
+    session = DeviceSession(endpoint, 1)
+    session.core.profile_store.apply_meta(MetaInfo(2, "1.0", "afd01", "AFD01-PROFILE"))
+    session.core.profile_store.apply_channel_define(
+        "afd01",
+        1,
+        [ChannelDefEntry(7, 6, 0, 1, "SNR", "dB", -10.0, 30.0)],
+    )
+    session.feed_datagram(
+        FleetDatagram(endpoint, _identity("AFD01-PROFILE"), time.time_ns(), time.monotonic_ns())
+    )
+
+    assert session.arm_recording("PROFILE-BATCH", tmp_path)
+    path = session.finalize_recording()
+    assert path is not None
+    sdb = DataImporter.open_sdb(path)
+
+    assert sdb.profile is not None
+    assert sdb.profile["hw_type"] == "afd01"
+    assert sdb.profile["channels"][0]["name"] == "SNR"
 
 
 def test_duplicate_serial_number_marks_both_sessions_conflicted() -> None:

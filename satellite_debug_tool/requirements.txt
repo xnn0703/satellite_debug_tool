@@ -4,6 +4,7 @@ pyserial>=3.5
 pyqtgraph>=0.13
 numpy>=1.24
 PyOpenGL>=3.1   # pyqtgraph.opengl 3D 姿态显示用
+python-docx>=1.1  # 试产单设备正式 Word 报告
 
 # M11 自动升级
 py7zr>=0.20    # 7z 分卷解压（updater）

@@ -472,6 +472,7 @@ class FixtureDebugWorkspace(QWidget):
         calibration_store: Optional[FixtureCalibrationStore] = None,
         session_root: Optional[Path] = None,
         control_sender: Optional[Callable[[bytes, tuple[str, int]], bool]] = None,
+        motion_only: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -484,6 +485,7 @@ class FixtureDebugWorkspace(QWidget):
             parent=self,
         )
         self._control_sender = control_sender
+        self._motion_only = bool(motion_only)
         self._theme = "dark"
         self._profile: Optional[WorkstationFixtureProfile] = None
         self._calibration: Optional[FixtureCalibration] = None
@@ -509,12 +511,29 @@ class FixtureDebugWorkspace(QWidget):
         self._calibration_capture_enabled = False
         self._view_active = False
         self._build_ui()
+        if self._motion_only:
+            self._apply_motion_only_mode()
         self._reload_profiles()
-        self._refresh_serial_ports()
+        if not self._motion_only:
+            self._refresh_serial_ports()
         self._plot_timer = QTimer(self)
         self._plot_timer.setInterval(100)
         self._plot_timer.timeout.connect(self._refresh_plot)
         register_translatable(self)
+
+    def _apply_motion_only_mode(self) -> None:
+        """Expose only the motion-platform owner in the production diagnostics tab."""
+        self._profile_group.setTitle(tr("Motion platform profile"))
+        for widget in (
+            self._serial_label,
+            self._serial_combo,
+            self._serial_refresh,
+            self._serial_connect,
+            self._ms_status,
+        ):
+            widget.hide()
+        self._calibration_group.hide()
+        self._live_group.hide()
 
     @property
     def profile(self) -> Optional[WorkstationFixtureProfile]:
@@ -928,6 +947,8 @@ class FixtureDebugWorkspace(QWidget):
             self._serial_combo.setCurrentText(current)
 
     def _toggle_ms_connection(self) -> None:
+        if self._motion_only:
+            return
         if self._ms_worker is not None:
             self._disconnect_ms()
             return
@@ -1742,7 +1763,11 @@ class FixtureDebugWorkspace(QWidget):
             axis.setTextPen(pg.mkPen(palette["text_2"]))
 
     def retranslate_ui(self) -> None:
-        self._profile_group.setTitle(tr("Fixture profile and reference"))
+        self._profile_group.setTitle(
+            tr("Motion platform profile")
+            if self._motion_only
+            else tr("Fixture profile and reference")
+        )
         self._safety_group.setTitle(tr("Motion safety gate"))
         self._manual_group.setTitle(tr("Absolute movement"))
         self._trajectory_group.setTitle(tr("Three-axis sine trajectory"))

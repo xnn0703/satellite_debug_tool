@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime
+from dataclasses import asdict
+import json
 import math
 from pathlib import Path
 import re
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
+    QComboBox,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -23,8 +27,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QMessageBox,
+    QSpinBox,
     QSplitter,
     QStackedWidget,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -43,19 +50,34 @@ from satellite_debug_tool.core.production import (
     DeviceSessionState,
     ExternalInsApplicability,
     FixtureControlLease,
+    Ms6222ControlLease,
     FleetConfigurationError,
     FleetController,
+    GwInstekPswAdapter,
+    PowerSupplyConfig,
+    ProductionPowerWorker,
     ProductionRecipe,
+    ProductionConfigurationError,
+    ProductionConfigurationStore,
+    ResolvedProductionConfiguration,
     ProductionResultStore,
+    ProductionReportService,
+    ReportBranding,
     RecipeValidationError,
     ResultStoreError,
     evaluate_external_ins,
+    psw80_27_validation_policy,
 )
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.production_snr_widget import ProductionSnrPanel
 from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+from satellite_debug_tool.ui.ms6222_debug_workspace import Ms6222DebugWorkspace
 from satellite_debug_tool.ui.lazy_view_host import LazyViewHost
+from satellite_debug_tool.ui.power_supply_debug_workspace import (
+    PowerSupplyDebugWorkspace,
+)
+from satellite_debug_tool.ui.report_review_dialog import ReportReviewDialog
 from satellite_debug_tool.ui.view_lifecycle import activate_view, deactivate_view
 
 
@@ -158,12 +180,23 @@ class ProductionWorkspace(QWidget):
         session_registry: Optional[SessionRegistry] = None,
         broker: Optional[UdpEndpointBroker] = None,
         session_directory: Optional[EndpointSessionDirectory] = None,
+        configuration_store: Optional[ProductionConfigurationStore] = None,
+        production_power_adapter_factory: Callable[
+            [PowerSupplyConfig], GwInstekPswAdapter
+        ] = GwInstekPswAdapter,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._session_registry = session_registry
         self._broker = broker
         self._session_directory = session_directory or session_registry
+        self._configuration_store = configuration_store or ProductionConfigurationStore()
+        self._resolved_configuration: Optional[ResolvedProductionConfiguration] = None
+        self._production_power_adapter_factory = production_power_adapter_factory
+        self._production_power_worker: Optional[ProductionPowerWorker] = None
+        self._pending_power_participants: tuple[DeviceSession, ...] = ()
+        self._power_record_count = 0
+        self._power_abort_pending = False
         self._theme = "dark"
         self._recipe: Optional[ProductionRecipe] = None
         self._fixture_rows: dict[str, int] = {}
@@ -181,6 +214,7 @@ class ProductionWorkspace(QWidget):
         self._ignored_after_start: set[str] = set()
         self._fleet: Optional[FleetController] = None
         self._fixture_control_lease = FixtureControlLease()
+        self._ms6222_control_lease = Ms6222ControlLease()
         self._batch_coordinator = BatchCoordinator(
             self._fixture_control_lease,
             parent=self,
@@ -239,17 +273,29 @@ class ProductionWorkspace(QWidget):
         self._batch_page_button = QPushButton(tr("Batch test"))
         self._batch_page_button.setCheckable(True)
         self._batch_page_button.setChecked(True)
-        self._fixture_page_button = QPushButton(tr("Fixture diagnostics"))
+        self._fixture_page_button = QPushButton(tr("Motion platform test"))
         self._fixture_page_button.setCheckable(True)
+        self._ms6222_page_button = QPushButton(tr("MS-6222 test"))
+        self._ms6222_page_button.setCheckable(True)
+        self._power_page_button = QPushButton(tr("Power supply diagnostics"))
+        self._power_page_button.setCheckable(True)
         self._subpage_group.addButton(self._batch_page_button, 0)
         self._subpage_group.addButton(self._fixture_page_button, 1)
+        self._subpage_group.addButton(self._ms6222_page_button, 2)
+        self._subpage_group.addButton(self._power_page_button, 3)
         self._subpage_group.idClicked.connect(self._switch_subpage)
         navigation.addWidget(self._batch_page_button)
         navigation.addWidget(self._fixture_page_button)
+        navigation.addWidget(self._ms6222_page_button)
+        navigation.addWidget(self._power_page_button)
         navigation.addStretch(1)
         outer.addLayout(navigation)
 
         self._subpages = QStackedWidget()
+        self._subpages.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Ignored,
+        )
         self._batch_page = QWidget()
         root = QVBoxLayout(self._batch_page)
         root.setContentsMargins(0, 0, 0, 0)
@@ -293,6 +339,29 @@ class ProductionWorkspace(QWidget):
         self._recipe_edit.setReadOnly(True)
         self._recipe_button = QPushButton(tr("Import recipe..."))
         self._recipe_button.clicked.connect(self._choose_recipe)
+        self._recipe_label.hide()
+        self._recipe_edit.hide()
+        self._recipe_button.hide()
+
+        self._product_template_label = QLabel(tr("Product template"))
+        self._product_template_combo = QComboBox()
+        self._product_template_combo.currentIndexChanged.connect(
+            self._on_configuration_selection_changed
+        )
+        self._device_count_label = QLabel(tr("Device quantity"))
+        self._device_count_spin = QSpinBox()
+        self._device_count_spin.setRange(1, 4)
+        self._device_count_spin.valueChanged.connect(
+            self._on_configuration_selection_changed
+        )
+        self._station_profile_label = QLabel(tr("Station profile"))
+        self._station_profile_combo = QComboBox()
+        self._station_profile_combo.currentIndexChanged.connect(
+            self._on_configuration_selection_changed
+        )
+        self._configuration_summary = QLabel()
+        self._configuration_summary.setWordWrap(True)
+        self._configuration_summary.setObjectName("productionConfigurationSummary")
         self._output_label = QLabel(tr("Output folder"))
         self._output_edit = QLineEdit()
         self._output_edit.setObjectName("productionOutput")
@@ -314,12 +383,16 @@ class ProductionWorkspace(QWidget):
         setup.addWidget(self._operator_label, 0, 3)
         setup.addWidget(self._operator_edit, 0, 4, 1, 2)
         setup.addWidget(self._create_button, 0, 6)
-        setup.addWidget(self._recipe_label, 1, 0)
-        setup.addWidget(self._recipe_edit, 1, 1, 1, 2)
-        setup.addWidget(self._recipe_button, 1, 3)
-        setup.addWidget(self._output_label, 1, 4)
-        setup.addWidget(self._output_edit, 1, 5)
-        setup.addWidget(self._output_button, 1, 6)
+        setup.addWidget(self._product_template_label, 1, 0)
+        setup.addWidget(self._product_template_combo, 1, 1, 1, 2)
+        setup.addWidget(self._device_count_label, 1, 3)
+        setup.addWidget(self._device_count_spin, 1, 4)
+        setup.addWidget(self._station_profile_label, 1, 5)
+        setup.addWidget(self._station_profile_combo, 1, 6)
+        setup.addWidget(self._configuration_summary, 2, 0, 1, 7)
+        setup.addWidget(self._output_label, 3, 0)
+        setup.addWidget(self._output_edit, 3, 1, 1, 5)
+        setup.addWidget(self._output_button, 3, 6)
         setup.setColumnStretch(1, 2)
         setup.setColumnStretch(2, 1)
         setup.setColumnStretch(4, 0)
@@ -414,7 +487,15 @@ class ProductionWorkspace(QWidget):
         self._abort_button.setProperty("variant", "danger")
         self._abort_button.setEnabled(False)
         self._abort_button.clicked.connect(self._on_abort_batch)
+        self._complete_button = QPushButton(tr("Complete and generate reports"))
+        self._complete_button.setEnabled(False)
+        self._complete_button.clicked.connect(self._on_complete_batch)
+        self._review_button = QPushButton(tr("Review report..."))
+        self._review_button.setEnabled(False)
+        self._review_button.clicked.connect(self._on_review_report)
         footer.addWidget(self._footer_status, 1)
+        footer.addWidget(self._review_button)
+        footer.addWidget(self._complete_button)
         footer.addWidget(self._start_button)
         footer.addWidget(self._abort_button)
         root.addLayout(footer)
@@ -423,6 +504,14 @@ class ProductionWorkspace(QWidget):
         self._fixture_host = LazyViewHost(self._create_fixture_debug)
         self._fixture_host.status_message.connect(self.status_message)
         self._subpages.addWidget(self._fixture_host)
+        self._ms6222_debug: Optional[Ms6222DebugWorkspace] = None
+        self._ms6222_host = LazyViewHost(self._create_ms6222_debug)
+        self._ms6222_host.status_message.connect(self.status_message)
+        self._subpages.addWidget(self._ms6222_host)
+        self._power_debug: Optional[PowerSupplyDebugWorkspace] = None
+        self._power_host = LazyViewHost(self._create_power_debug)
+        self._power_host.status_message.connect(self.status_message)
+        self._subpages.addWidget(self._power_host)
         outer.addWidget(self._subpages, 1)
         self._update_responsive_columns()
 
@@ -430,6 +519,7 @@ class ProductionWorkspace(QWidget):
         fixture = FixtureDebugWorkspace(
             self._settings,
             self._fixture_control_lease,
+            motion_only=True,
         )
         fixture.active_changed.connect(self._on_fixture_debug_active_changed)
         self._fixture_debug = fixture
@@ -438,17 +528,43 @@ class ProductionWorkspace(QWidget):
     def _ensure_fixture_debug(self) -> FixtureDebugWorkspace:
         return self._fixture_host.ensure_view()
 
+    def _create_ms6222_debug(self) -> Ms6222DebugWorkspace:
+        reference = Ms6222DebugWorkspace(
+            self._settings,
+            self._ms6222_control_lease,
+        )
+        reference.active_changed.connect(self._on_ms6222_debug_active_changed)
+        self._ms6222_debug = reference
+        return reference
+
+    def _ensure_ms6222_debug(self) -> Ms6222DebugWorkspace:
+        return self._ms6222_host.ensure_view()
+
+    def _create_power_debug(self) -> PowerSupplyDebugWorkspace:
+        power = PowerSupplyDebugWorkspace(
+            self._settings,
+            self._fixture_control_lease,
+        )
+        power.active_changed.connect(self._on_power_debug_active_changed)
+        self._power_debug = power
+        return power
+
+    def _ensure_power_debug(self) -> PowerSupplyDebugWorkspace:
+        return self._power_host.ensure_view()
+
     def _switch_subpage(self, index: int) -> None:
-        requested = 0 if int(index) == 0 else 1
-        if requested == 1 and self._batch_coordinator.lease_active:
+        requested = int(index)
+        if requested not in {0, 1, 2, 3}:
+            requested = 0
+        if requested in {1, 2, 3} and self._batch_coordinator.lease_active:
             self._batch_page_button.setChecked(True)
             self.status_message.emit(
-                tr("Fixture diagnostics are unavailable while a batch owns fixture control."),
+                tr("Diagnostics are unavailable while a batch owns fixture control."),
                 6000,
             )
             return
         if (
-            requested == 0
+            requested != 1
             and self._fixture_debug is not None
             and self._fixture_debug.session_active
         ):
@@ -458,7 +574,29 @@ class ProductionWorkspace(QWidget):
                 6000,
             )
             return
-        if requested == 0 and self._fixture_debug is not None:
+        if (
+            requested != 2
+            and self._ms6222_debug is not None
+            and self._ms6222_debug.connection_active
+        ):
+            self._ms6222_page_button.setChecked(True)
+            self.status_message.emit(
+                tr("Disconnect MS-6222 before leaving this page."),
+                6000,
+            )
+            return
+        if (
+            requested != 3
+            and self._power_debug is not None
+            and self._power_debug.session_active
+        ):
+            self._power_page_button.setChecked(True)
+            self.status_message.emit(
+                tr("Disconnect the power supply before leaving this page."),
+                6000,
+            )
+            return
+        if requested != 1 and self._fixture_debug is not None:
             self._fixture_debug.clear_safety_confirmation()
         previous = self._subpages.currentIndex()
         if self._view_active and previous != requested:
@@ -470,6 +608,18 @@ class ProductionWorkspace(QWidget):
 
     def _on_fixture_debug_active_changed(self, active: bool) -> None:
         self._batch_page_button.setEnabled(not active)
+        self._ms6222_page_button.setEnabled(not active)
+        self._power_page_button.setEnabled(not active)
+
+    def _on_ms6222_debug_active_changed(self, active: bool) -> None:
+        self._batch_page_button.setEnabled(not active)
+        self._fixture_page_button.setEnabled(not active)
+        self._power_page_button.setEnabled(not active)
+
+    def _on_power_debug_active_changed(self, active: bool) -> None:
+        self._batch_page_button.setEnabled(not active)
+        self._fixture_page_button.setEnabled(not active)
+        self._ms6222_page_button.setEnabled(not active)
 
     @staticmethod
     def _new_table(rows: int, columns: int) -> QTableWidget:
@@ -597,6 +747,131 @@ class ProductionWorkspace(QWidget):
             self._set_item(self._fixture_table, row, 1, tr("Not configured"))
             self._set_item(self._fixture_table, row, 2, "-")
 
+    def refresh_production_configurations(self) -> None:
+        """Reload selectable profiles from the single production catalog."""
+        selected_template = str(
+            self._product_template_combo.currentData()
+            or self._settings.get("production.product_template_id", "")
+            or ""
+        )
+        selected_station = str(
+            self._station_profile_combo.currentData()
+            or self._settings.get("production.station_profile_id", "")
+            or ""
+        )
+        try:
+            products, _powers, stations = self._configuration_store.load_catalog()
+        except ProductionConfigurationError as exc:
+            products, stations = (), ()
+            self._resolved_configuration = None
+            self._recipe = None
+            self._configuration_summary.setText(
+                tr("Production configuration error: {details}", details=str(exc))
+            )
+        for combo in (self._product_template_combo, self._station_profile_combo):
+            combo.blockSignals(True)
+            combo.clear()
+        for template in products:
+            self._product_template_combo.addItem(
+                f"{template.display_name} (R{template.revision})",
+                template.template_id,
+            )
+        for station in stations:
+            self._station_profile_combo.addItem(
+                f"{station.display_name} (R{station.revision})",
+                station.station_profile_id,
+            )
+        for combo, selected in (
+            (self._product_template_combo, selected_template),
+            (self._station_profile_combo, selected_station),
+        ):
+            index = combo.findData(selected)
+            combo.setCurrentIndex(index if index >= 0 else (0 if combo.count() else -1))
+            combo.blockSignals(False)
+        self._on_configuration_selection_changed()
+
+    def _on_configuration_selection_changed(self, *_args) -> None:
+        template_id = str(self._product_template_combo.currentData() or "")
+        station_id = str(self._station_profile_combo.currentData() or "")
+        if not template_id or not station_id:
+            self._resolved_configuration = None
+            if self._recipe_edit.text().strip() == "":
+                self._recipe = None
+                self._apply_recipe_test_gates(None)
+            self._configuration_summary.setText(
+                tr("Configure product and station profiles in Settings.")
+            )
+            self._update_start_gate()
+            return
+        try:
+            resolved = self._configuration_store.resolve(
+                template_id,
+                station_id,
+                int(self._device_count_spin.value()),
+            )
+            recipe = ProductionRecipe.from_mapping(resolved.to_recipe_payload())
+        except (ProductionConfigurationError, RecipeValidationError) as exc:
+            self._resolved_configuration = None
+            self._recipe = None
+            self._apply_recipe_test_gates(None)
+            self._configuration_summary.setText(
+                tr("Configuration is not ready: {details}", details=str(exc))
+            )
+            self._update_start_gate()
+            return
+        self._resolved_configuration = resolved
+        self._recipe = recipe
+        self._recipe_edit.clear()
+        self._apply_recipe_test_gates(recipe)
+        product = resolved.product_template
+        power = resolved.power_profile
+        station = resolved.station_profile
+        self._configuration_summary.setText(
+            tr(
+                "{product} × {count} | per device {voltage:g} V / {single_current:g} A | "
+                "combined {voltage:g} V / {total_current:g} A / {power_w:g} W | "
+                "power {power_model} at {host} | branches {branches} × {branch_current:g} A | "
+                "configuration SHA-256 {sha}",
+                product=product.product.upper(),
+                count=resolved.device_count,
+                voltage=product.supply_voltage_v,
+                single_current=product.per_device_current_a,
+                total_current=resolved.total_current_a,
+                power_w=resolved.total_power_w,
+                power_model=power.model,
+                host=power.host,
+                branches=station.branch_count,
+                branch_current=station.branch_current_a,
+                sha=resolved.sha256[:12],
+            )
+        )
+        self.update_fixture_state(
+            "power",
+            state=tr("Configured"),
+            evidence=f"{power.model} | {power.host}:{power.port}",
+        )
+        self.update_fixture_state(
+            "motion",
+            state=tr("Configured") if station.motion_profile_id else tr("Not configured"),
+            evidence=station.motion_profile_id or "-",
+        )
+        self.update_fixture_state(
+            "reference",
+            state=(
+                tr("Configured")
+                if station.reference_profile_id
+                else tr("Not configured")
+            ),
+            evidence=station.reference_profile_id or "-",
+        )
+        self.update_fixture_state(
+            "vehicle",
+            state=tr("Manual gate"),
+            evidence=tr("Operator confirmation required"),
+        )
+        self._footer_status.setText(tr("Production configuration is ready."))
+        self._refresh_session_rows()
+
     @staticmethod
     def _set_item(table: QTableWidget, row: int, column: int, text: str) -> None:
         item = table.item(row, column)
@@ -617,8 +892,12 @@ class ProductionWorkspace(QWidget):
             or (Path.home() / "SatelliteProduction")
         )
         self._output_edit.setText(output)
+        self._device_count_spin.setValue(
+            max(1, min(4, int(self._settings.get("production.device_count", 1))))
+        )
+        self.refresh_production_configurations()
         recipe_path = str(self._settings.get("production.last_recipe", "") or "")
-        if recipe_path and Path(recipe_path).is_file():
+        if self._recipe is None and recipe_path and Path(recipe_path).is_file():
             self.load_recipe_file(recipe_path)
 
     def _configure_fleet(self) -> None:
@@ -720,6 +999,7 @@ class ProductionWorkspace(QWidget):
             self.load_recipe_file(path)
 
     def load_recipe_file(self, path: str | Path) -> bool:
+        """Import a legacy schema-v1 recipe for migration and historical tests."""
         source = Path(path).expanduser()
         try:
             recipe = ProductionRecipe.from_path(source)
@@ -736,6 +1016,7 @@ class ProductionWorkspace(QWidget):
             return False
 
         self._recipe = recipe
+        self._resolved_configuration = None
         self._apply_recipe_test_gates(recipe)
         self._recipe_edit.setText(str(source.resolve()))
         scope = tr("Engineering only") if recipe.engineering_only else tr("Formal production")
@@ -749,6 +1030,13 @@ class ProductionWorkspace(QWidget):
         )
         self._recipe_edit.setToolTip(self._recipe_status.text())
         self._footer_status.setText(self._recipe_status.text())
+        self._configuration_summary.setText(
+            tr(
+                "Legacy recipe loaded for migration: {recipe_id} | target {count} device(s)",
+                recipe_id=recipe.recipe_id,
+                count=recipe.target_device_count,
+            )
+        )
         self.append_event(tr("Recipe validated: {recipe_id}", recipe_id=recipe.recipe_id))
         self._refresh_session_rows()
         return True
@@ -805,7 +1093,16 @@ class ProductionWorkspace(QWidget):
             )
         self._settings.set("paths.production_dir", str(Path(output_root).expanduser()))
         self._settings.set("production.last_operator", operator)
-        self._settings.set("production.last_recipe", self._recipe_edit.text().strip())
+        self._settings.set(
+            "production.product_template_id",
+            str(self._product_template_combo.currentData() or ""),
+        )
+        self._settings.set(
+            "production.station_profile_id",
+            str(self._station_profile_combo.currentData() or ""),
+        )
+        self._settings.set("production.device_count", self._recipe.target_device_count)
+        self._settings.set("production.last_recipe", "")
         self._settings.persist_preferences()
         batch_output.mkdir(parents=True, exist_ok=True)
         fleet = self._fleet
@@ -819,6 +1116,19 @@ class ProductionWorkspace(QWidget):
                 )
         try:
             self._recipe.write_snapshot(batch_output / "recipe.json")
+            if self._resolved_configuration is not None:
+                snapshot = self._resolved_configuration.to_snapshot()
+                snapshot["sha256"] = self._resolved_configuration.sha256
+                (batch_output / "production_configuration.json").write_text(
+                    json.dumps(
+                        snapshot,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
             batch = self._batch_coordinator.create(
                 batch_id=batch_id,
                 recipe=self._recipe,
@@ -853,6 +1163,9 @@ class ProductionWorkspace(QWidget):
         ):
             editor.setReadOnly(True)
         self._recipe_button.setEnabled(False)
+        self._product_template_combo.setEnabled(False)
+        self._device_count_spin.setEnabled(False)
+        self._station_profile_combo.setEnabled(False)
         self._output_button.setEnabled(False)
         self._create_button.setEnabled(False)
 
@@ -1200,8 +1513,15 @@ class ProductionWorkspace(QWidget):
             and session.identity_key
             and self._session_recipe_product(session) == self._recipe.product
         )
-        if not participants:
-            return (), tr("At least one identified online device is required.")
+        target_count = self._recipe.target_device_count
+        if len(participants) != target_count:
+            return (), tr(
+                "Exactly {expected} identified {product} device(s) are required; "
+                "currently ready: {actual}.",
+                expected=target_count,
+                product=self._recipe.product.upper(),
+                actual=len(participants),
+            )
         recording_pending = tuple(
             session.serial_number
             for session in participants
@@ -1232,9 +1552,31 @@ class ProductionWorkspace(QWidget):
     def _update_start_gate(self) -> None:
         if not hasattr(self, "_start_button"):
             return
+        if self._production_power_worker is not None:
+            self._start_button.setEnabled(False)
+            self._abort_button.setEnabled(False)
+            self._start_button.setToolTip(tr("Preparing and verifying production power."))
+            return
         if self._batch is not None and self._batch.get("status") == BatchStatus.RUNNING.value:
             self._start_button.setEnabled(False)
             self._abort_button.setEnabled(True)
+            attempts = [] if self._store is None else self._store.list_attempts(
+                self._batch["batch_id"]
+            )
+            self._complete_button.setEnabled(
+                bool(attempts)
+                and all(
+                    item["status"]
+                    in {
+                        AttemptStatus.PASS.value,
+                        AttemptStatus.FAIL.value,
+                        AttemptStatus.SKIPPED.value,
+                        AttemptStatus.INCOMPLETE.value,
+                        AttemptStatus.ABORTED.value,
+                    }
+                    for item in attempts
+                )
+            )
             self._start_button.setToolTip(tr("Batch participants are frozen."))
             return
         if self._batch is not None and self._batch.get("status") in {
@@ -1244,12 +1586,23 @@ class ProductionWorkspace(QWidget):
         }:
             self._start_button.setEnabled(False)
             self._abort_button.setEnabled(False)
+            self._complete_button.setEnabled(False)
+            if self._store is not None:
+                self._review_button.setEnabled(
+                    any(
+                        item["status"] == "generated_v1"
+                        for item in self._store.list_report_artifacts(
+                            self._batch["batch_id"]
+                        )
+                    )
+                )
             return
 
         participants, reason = self._evaluate_start_gate()
         ready = bool(participants) and not reason
         self._start_button.setEnabled(ready)
         self._abort_button.setEnabled(False)
+        self._complete_button.setEnabled(False)
         if ready:
             message = tr(
                 "{count} device(s) ready. Starting will freeze the participant list.",
@@ -1264,7 +1617,10 @@ class ProductionWorkspace(QWidget):
 
     def _on_start_batch(self) -> None:
         try:
-            self.start_batch()
+            if self._resolved_configuration is not None:
+                self._begin_powered_batch_start()
+            else:
+                self.start_batch()
         except (ResultStoreError, RuntimeError, ValueError) as exc:
             message = tr("Cannot start batch: {details}", details=str(exc))
             self._footer_status.setText(message)
@@ -1274,6 +1630,12 @@ class ProductionWorkspace(QWidget):
         participants, reason = self._evaluate_start_gate()
         if reason:
             raise ResultStoreError(reason)
+        return self._commit_batch_start(participants)
+
+    def _commit_batch_start(
+        self,
+        participants: tuple[DeviceSession, ...],
+    ) -> dict:
         if self._store is None or self._batch is None:
             raise ResultStoreError("no batch is ready")
         enabled_tests = tuple(
@@ -1310,8 +1672,181 @@ class ProductionWorkspace(QWidget):
         self.append_event(message)
         self._update_start_gate()
         self._fixture_page_button.setEnabled(False)
+        self._power_page_button.setEnabled(False)
         self.status_message.emit(message, 5000)
         return dict(batch)
+
+    def _begin_powered_batch_start(self) -> None:
+        if self._production_power_worker is not None:
+            raise ResultStoreError("production power preparation is already active")
+        participants, reason = self._evaluate_start_gate()
+        if reason:
+            raise ResultStoreError(reason)
+        resolved = self._resolved_configuration
+        if resolved is None:
+            raise ResultStoreError("production configuration is not resolved")
+        profile = resolved.power_profile
+        if profile.driver_id != "gwinstek_psw80_27":
+            raise ResultStoreError(f"unsupported production power driver: {profile.driver_id}")
+        policy = psw80_27_validation_policy(
+            resolved.product_template.supply_voltage_v,
+            resolved.total_current_a,
+        )
+        config = PowerSupplyConfig(
+            host=profile.host,
+            port=profile.port,
+            expected_manufacturer=profile.manufacturer,
+            expected_model=profile.model,
+            expected_serial=profile.serial_number,
+            voltage_set_v=resolved.product_template.supply_voltage_v,
+            current_set_a=resolved.total_current_a,
+            voltage_setpoint_tolerance_v=policy.voltage_setpoint_tolerance_v,
+            current_setpoint_tolerance_a=policy.current_setpoint_tolerance_a,
+            output_voltage_min_v=policy.output_voltage_min_v,
+            output_voltage_max_v=policy.output_voltage_max_v,
+            off_voltage_max_v=policy.off_voltage_max_v,
+            output_settle_timeout_s=profile.output_settle_timeout_s,
+        )
+        self._batch_coordinator.reserve_start()
+        worker = ProductionPowerWorker(
+            config,
+            adapter_factory=self._production_power_adapter_factory,
+            parent=self,
+        )
+        worker.power_ready.connect(self._on_production_power_ready)
+        worker.power_failed.connect(self._on_production_power_failed)
+        worker.power_stopped.connect(self._on_production_power_stopped)
+        self._production_power_worker = worker
+        self._pending_power_participants = participants
+        self._power_record_count = 0
+        self._start_button.setEnabled(False)
+        self._start_button.setToolTip(tr("Preparing and verifying production power."))
+        message = tr("Production power preparation started.")
+        self._footer_status.setText(message)
+        self.append_event(message)
+        worker.start()
+
+    def _on_production_power_ready(
+        self,
+        identity,
+        result,
+        records,
+        action_id: str,
+    ) -> None:
+        self._append_production_power_records(records)
+        self._write_production_power_summary(
+            "on_confirmed",
+            action_id=action_id,
+            identity=asdict(identity),
+            result=asdict(result),
+        )
+        participants = self._pending_power_participants
+        self._pending_power_participants = ()
+        try:
+            self._commit_batch_start(participants)
+        except Exception as exc:
+            self._footer_status.setText(
+                tr("Cannot start batch after power preparation: {details}", details=str(exc))
+            )
+            worker = self._production_power_worker
+            if worker is not None:
+                worker.request_verified_off()
+            return
+        self.update_fixture_state(
+            "power",
+            state=tr("Ready"),
+            evidence=tr("Identity and voltage confirmed"),
+        )
+
+    def _on_production_power_failed(
+        self,
+        details: str,
+        records,
+        action_id: str,
+    ) -> None:
+        self._append_production_power_records(records)
+        self._write_production_power_summary(
+            "failed",
+            action_id=action_id,
+            details=details,
+        )
+        running = bool(
+            self._batch is not None
+            and self._batch.get("status") == BatchStatus.RUNNING.value
+        )
+        if running:
+            self._batch_coordinator.mark_incomplete()
+            if self._fleet is not None:
+                self._fleet.finalize_recordings()
+            try:
+                self._archive_terminal_batch()
+            except (ResultStoreError, OSError, ValueError) as exc:
+                self.append_event(
+                    tr("Evidence archive failed: {details}", details=str(exc))
+                )
+        else:
+            self._batch_coordinator.cancel_start_reservation()
+        self._pending_power_participants = ()
+        self._footer_status.setText(
+            tr("Production power failed: {details}", details=details)
+        )
+        self.append_event(self._footer_status.text())
+        self.update_fixture_state("power", state=tr("Failed"), evidence=details)
+        self._release_production_power_worker()
+        self._update_start_gate()
+
+    def _on_production_power_stopped(
+        self,
+        result,
+        records,
+        action_id: str,
+    ) -> None:
+        self._append_production_power_records(records)
+        self._write_production_power_summary(
+            "off_confirmed",
+            action_id=action_id,
+            result=None if result is None else asdict(result),
+        )
+        abort_pending = self._power_abort_pending
+        self._power_abort_pending = False
+        self._release_production_power_worker()
+        if abort_pending:
+            self._finish_abort_batch()
+
+    def _append_production_power_records(self, records) -> None:
+        if self._batch_output_dir is None:
+            return
+        typed = tuple(records)
+        new_records = typed[self._power_record_count :]
+        if not new_records:
+            return
+        target = self._batch_output_dir / "power_supply_records.jsonl"
+        with target.open("a", encoding="utf-8") as stream:
+            for record in new_records:
+                stream.write(
+                    json.dumps(asdict(record), ensure_ascii=False, sort_keys=True) + "\n"
+                )
+        self._power_record_count = len(typed)
+
+    def _write_production_power_summary(self, status: str, **details) -> None:
+        if self._batch_output_dir is None:
+            return
+        target = self._batch_output_dir / "power_supply_summary.json"
+        payload = {
+            "status": status,
+            "batch_id": "" if self._batch is None else self._batch.get("batch_id", ""),
+            **details,
+        }
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def _release_production_power_worker(self) -> None:
+        worker = self._production_power_worker
+        self._production_power_worker = None
+        if worker is not None:
+            worker.deleteLater()
 
     def _apply_external_ins_gates(
         self, participants: tuple[DeviceSession, ...]
@@ -1369,17 +1904,155 @@ class ProductionWorkspace(QWidget):
 
     def _on_abort_batch(self) -> None:
         try:
-            self.abort_batch()
+            worker = self._production_power_worker
+            if worker is not None:
+                self._power_abort_pending = True
+                self._abort_button.setEnabled(False)
+                self._footer_status.setText(
+                    tr("Disabling and verifying production power before aborting.")
+                )
+                worker.request_verified_off()
+            else:
+                self.abort_batch()
         except ResultStoreError as exc:
             message = tr("Cannot abort batch: {details}", details=str(exc))
             self._footer_status.setText(message)
             self.status_message.emit(message, 8000)
 
+    def _on_complete_batch(self) -> None:
+        try:
+            artifacts = self.complete_batch()
+        except (ResultStoreError, RuntimeError, OSError, ValueError) as exc:
+            message = tr("Cannot complete batch: {details}", details=str(exc))
+            self._footer_status.setText(message)
+            self.status_message.emit(message, 8000)
+            return
+        message = tr("Batch completed; generated {count} device archive(s).", count=len(artifacts))
+        self._footer_status.setText(message)
+        self.append_event(message)
+        self.status_message.emit(message, 6000)
+
+    def complete_batch(self):
+        """Finalize evidence, commit the terminal state, and generate device V1 reports."""
+
+        worker = self._production_power_worker
+        if worker is not None:
+            worker.request_verified_off()
+            if not worker.wait(10000):
+                raise ResultStoreError("production power did not stop within 10 seconds")
+            self._release_production_power_worker()
+        if self._fleet is not None:
+            self._fleet.finalize_recordings()
+            pending = [
+                session.serial_number or str(session.endpoint)
+                for session in self._fleet.sessions()
+                if session.recording_armed
+            ]
+            if pending:
+                raise ResultStoreError(
+                    "device evidence recording is still finalizing: " + ", ".join(pending)
+                )
+        batch = self._batch_coordinator.complete()
+        artifacts = self._archive_terminal_batch()
+        self._batch_state.setText(
+            tr("Batch completed")
+            if batch["status"] == BatchStatus.COMPLETED.value
+            else tr("Batch incomplete")
+        )
+        self._fixture_page_button.setEnabled(True)
+        self._power_page_button.setEnabled(True)
+        self._update_start_gate()
+        return artifacts
+
+    def _report_service(self) -> ProductionReportService:
+        if self._store is None or self._batch_output_dir is None:
+            raise ResultStoreError("no batch result store is active")
+        output_root = str(
+            self._settings.get("paths.production_report_dir", "")
+            or self._settings.get("paths.production_dir", "")
+            or self._batch_output_dir.parent
+        )
+        branding_value = self._settings.get("production.report_branding", {})
+        branding = ReportBranding.from_mapping(
+            branding_value if isinstance(branding_value, dict) else {}
+        )
+        return ProductionReportService(
+            self._store,
+            batch_output_dir=self._batch_output_dir,
+            report_root=output_root,
+            branding=branding,
+        )
+
+    def _archive_terminal_batch(self):
+        if self._batch is None:
+            raise ResultStoreError("no batch is active")
+        return self._report_service().archive_batch(self._batch["batch_id"])
+
+    def _on_review_report(self) -> None:
+        if self._store is None or self._batch is None:
+            return
+        candidates = []
+        for device in self._store.list_devices(self._batch["batch_id"]):
+            records = self._store.list_report_artifacts(
+                self._batch["batch_id"], device["serial_number"]
+            )
+            if any(item["status"] == "generated_v1" for item in records) and not any(
+                item["version"] == 2 for item in records
+            ):
+                candidates.append(device["serial_number"])
+        if not candidates:
+            QMessageBox.information(
+                self, tr("Review production report"), tr("No V1 report is waiting for review.")
+            )
+            return
+        dialog = ReportReviewDialog(
+            candidates,
+            default_reviewer=str(
+                self._settings.get("production.last_reviewer", "") or ""
+            ),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            artifact = self._report_service().review(
+                self._batch["batch_id"],
+                dialog.serial_number,
+                reviewer=dialog.reviewer,
+                final_verdict=dialog.final_verdict,
+                reason=dialog.reason,
+            )
+            self._settings.set("production.last_reviewer", dialog.reviewer)
+            self._settings.persist_preferences()
+        except (ResultStoreError, OSError, ValueError) as exc:
+            QMessageBox.critical(self, tr("Review production report"), str(exc))
+            return
+        QMessageBox.information(
+            self,
+            tr("Review production report"),
+            tr("V2 report generated: {path}", path=str(artifact.document_path)),
+        )
+        self._update_start_gate()
+
     def abort_batch(self) -> dict:
+        worker = self._production_power_worker
+        if worker is not None:
+            worker.request_verified_off()
+            if not worker.wait(10000):
+                raise ResultStoreError("production power did not stop within 10 seconds")
+            self._release_production_power_worker()
+        return self._finish_abort_batch()
+
+    def _finish_abort_batch(self) -> dict:
         batch = self._batch_coordinator.abort()
         if self._fleet is not None:
             self._fleet.finalize_recordings()
+        try:
+            self._archive_terminal_batch()
+        except (ResultStoreError, OSError, ValueError) as exc:
+            self.append_event(tr("Evidence archive failed: {details}", details=str(exc)))
         self._fixture_page_button.setEnabled(True)
+        self._power_page_button.setEnabled(True)
         self._batch_state.setText(tr("Batch aborted"))
         message = tr("Batch aborted by operator.")
         self._footer_status.setText(message)
@@ -1460,6 +2133,14 @@ class ProductionWorkspace(QWidget):
     def shutdown(self) -> bool:
         self.deactivate_view()
         self._fixture_host.shutdown()
+        self._ms6222_host.shutdown()
+        self._power_host.shutdown()
+        power_worker = self._production_power_worker
+        if power_worker is not None:
+            power_worker.request_verified_off()
+            if not power_worker.wait(10000):
+                return False
+            self._production_power_worker = None
         if self._fleet is not None:
             self._fleet.stop()
             if not self._fleet.shutdown_ready:
@@ -1471,6 +2152,16 @@ class ProductionWorkspace(QWidget):
         if (
             self._fixture_debug is not None
             and not self._fixture_debug.confirm_shutdown()
+        ):
+            return False
+        if (
+            self._power_debug is not None
+            and not self._power_debug.confirm_shutdown()
+        ):
+            return False
+        if (
+            self._ms6222_debug is not None
+            and not self._ms6222_debug.confirm_shutdown()
         ):
             return False
         fleet = self._fleet
@@ -1506,10 +2197,14 @@ class ProductionWorkspace(QWidget):
         for panel in self._snr_panels.values():
             panel.set_theme(theme)
         self._fixture_host.set_theme(theme, _scale)
+        self._ms6222_host.set_theme(theme, _scale)
+        self._power_host.set_theme(theme, _scale)
 
     def retranslate_ui(self) -> None:
         self._batch_page_button.setText(tr("Batch test"))
-        self._fixture_page_button.setText(tr("Fixture diagnostics"))
+        self._fixture_page_button.setText(tr("Motion platform test"))
+        self._ms6222_page_button.setText(tr("MS-6222 test"))
+        self._power_page_button.setText(tr("Power supply diagnostics"))
         self._title.setText(tr("Production batch test"))
         self._preview_notice.setText(
             tr(
@@ -1521,6 +2216,9 @@ class ProductionWorkspace(QWidget):
         self._batch_id_label.setText(tr("Batch ID"))
         self._operator_label.setText(tr("Operator"))
         self._recipe_label.setText(tr("Recipe"))
+        self._product_template_label.setText(tr("Product template"))
+        self._device_count_label.setText(tr("Device quantity"))
+        self._station_profile_label.setText(tr("Station profile"))
         self._output_label.setText(tr("Output folder"))
         self._recipe_button.setText(tr("Import recipe..."))
         self._output_button.setText(tr("Browse..."))
@@ -1536,6 +2234,8 @@ class ProductionWorkspace(QWidget):
             )
         )
         self._abort_button.setText(tr("Abort"))
+        self._complete_button.setText(tr("Complete and generate reports"))
+        self._review_button.setText(tr("Review report..."))
         self._set_workflow_headers()
         self._set_fixture_headers()
         for panel in self._snr_panels.values():
@@ -1552,6 +2252,10 @@ class ProductionWorkspace(QWidget):
         for row, (_fixture_id, label) in enumerate(self._FIXTURE_DEFS):
             self._set_item(self._fixture_table, row, 0, tr(label))
         self._fixture_host.retranslate_ui()
+        self._ms6222_host.retranslate_ui()
+        self._power_host.retranslate_ui()
+        if self._resolved_configuration is not None:
+            self._on_configuration_selection_changed()
         self._update_start_gate()
 
     def closeEvent(self, event) -> None:  # noqa: N802

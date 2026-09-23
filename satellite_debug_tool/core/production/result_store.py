@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import ipaddress
 import json
 from pathlib import Path
@@ -28,7 +29,7 @@ from .models import (
 from .recipe import ProductionRecipe
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _ACTIVE_ATTEMPT_STATUSES = (
     AttemptStatus.WAITING_PREREQUISITE.value,
     AttemptStatus.ARMED.value,
@@ -602,6 +603,307 @@ class ProductionResultStore:
             )
         ]
 
+    def list_metrics(self, attempt_id: int) -> list[dict[str, Any]]:
+        return [
+            _row_dict(row)
+            for row in self._fetchall(
+                "SELECT * FROM metrics WHERE attempt_id = ? ORDER BY metric_id",
+                (int(attempt_id),),
+            )
+        ]
+
+    def list_fixture_actions(self, batch_id: str) -> list[dict[str, Any]]:
+        return [
+            _row_dict(row)
+            for row in self._fetchall(
+                """
+                SELECT * FROM fixture_actions
+                WHERE batch_id = ? ORDER BY created_utc, action_id
+                """,
+                (batch_id,),
+            )
+        ]
+
+    def freeze_report_snapshot(
+        self,
+        batch_id: str,
+        serial_number: str,
+        snapshot: Mapping[str, Any],
+        *,
+        automatic_verdict: str,
+        report_id: str,
+    ) -> dict[str, Any]:
+        """Persist the sole immutable input used by all report versions."""
+
+        verdict = str(automatic_verdict).upper()
+        if verdict not in {"PASS", "FAIL", "INCOMPLETE", "ABORTED"}:
+            raise ResultStoreError(f"unsupported automatic verdict: {verdict}")
+        snapshot_json = _json(snapshot)
+        snapshot_sha256 = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+        now = _utc_now()
+        with self.transaction() as connection:
+            if connection.execute(
+                """
+                SELECT 1 FROM devices
+                WHERE batch_id = ? AND serial_number = ?
+                """,
+                (batch_id, serial_number),
+            ).fetchone() is None:
+                raise ResultStoreError(f"unknown device: {serial_number}")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO report_snapshots(
+                        batch_id, serial_number, report_id, automatic_verdict,
+                        snapshot_json, snapshot_sha256, created_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        batch_id,
+                        serial_number,
+                        _required_text(report_id, "report_id", 255),
+                        verdict,
+                        snapshot_json,
+                        snapshot_sha256,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ResultStoreError(
+                    f"report snapshot is already frozen: {serial_number}"
+                ) from exc
+            self._insert_event(
+                connection,
+                batch_id,
+                None,
+                "device_report_snapshot_frozen",
+                {
+                    "serial_number": serial_number,
+                    "report_id": report_id,
+                    "automatic_verdict": verdict,
+                    "snapshot_sha256": snapshot_sha256,
+                },
+            )
+        return self.get_report_snapshot(batch_id, serial_number)
+
+    def get_report_snapshot(
+        self, batch_id: str, serial_number: str
+    ) -> dict[str, Any]:
+        row = self._fetchone(
+            """
+            SELECT * FROM report_snapshots
+            WHERE batch_id = ? AND serial_number = ?
+            """,
+            (batch_id, serial_number),
+        )
+        if row is None:
+            raise ResultStoreError(f"report snapshot is not frozen: {serial_number}")
+        return _row_dict(row)
+
+    def record_report_artifact(
+        self,
+        batch_id: str,
+        serial_number: str,
+        *,
+        version: int,
+        status: str,
+        final_verdict: str,
+        document_path: str = "",
+        document_sha256: str = "",
+        evidence_path: str = "",
+        evidence_sha256: str = "",
+        manifest_path: str = "",
+        error: str = "",
+    ) -> dict[str, Any]:
+        if version not in {1, 2}:
+            raise ResultStoreError("report version must be 1 or 2")
+        if status not in {
+            "not_generated", "generated_v1", "reviewed_v2", "generation_failed"
+        }:
+            raise ResultStoreError(f"unsupported report status: {status}")
+        now = _utc_now()
+        with self.transaction() as connection:
+            snapshot = connection.execute(
+                """
+                SELECT 1 FROM report_snapshots
+                WHERE batch_id = ? AND serial_number = ?
+                """,
+                (batch_id, serial_number),
+            ).fetchone()
+            if snapshot is None:
+                raise ResultStoreError(f"report snapshot is not frozen: {serial_number}")
+            existing = connection.execute(
+                """
+                SELECT status FROM report_artifacts
+                WHERE batch_id = ? AND serial_number = ? AND version = ?
+                """,
+                (batch_id, serial_number, version),
+            ).fetchone()
+            if existing is not None and existing["status"] != "generation_failed":
+                raise ResultStoreError(
+                    f"report version already exists: {serial_number} V{version:02d}"
+                )
+            try:
+                if existing is not None:
+                    connection.execute(
+                        """
+                        DELETE FROM report_artifacts
+                        WHERE batch_id = ? AND serial_number = ? AND version = ?
+                        """,
+                        (batch_id, serial_number, version),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO report_artifacts(
+                        batch_id, serial_number, version, status, final_verdict,
+                        document_path, document_sha256, evidence_path,
+                        evidence_sha256, manifest_path, error, created_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        batch_id, serial_number, version, status,
+                        str(final_verdict).upper(), str(document_path),
+                        str(document_sha256), str(evidence_path),
+                        str(evidence_sha256), str(manifest_path), str(error), now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ResultStoreError(
+                    f"report version already exists: {serial_number} V{version:02d}"
+                ) from exc
+            self._insert_event(
+                connection,
+                batch_id,
+                None,
+                "device_report_status_changed",
+                {
+                    "serial_number": serial_number,
+                    "version": version,
+                    "status": status,
+                    "final_verdict": str(final_verdict).upper(),
+                    "error": str(error),
+                },
+            )
+        return self.get_report_artifact(batch_id, serial_number, version)
+
+    def get_report_artifact(
+        self, batch_id: str, serial_number: str, version: int
+    ) -> dict[str, Any]:
+        row = self._fetchone(
+            """
+            SELECT * FROM report_artifacts
+            WHERE batch_id = ? AND serial_number = ? AND version = ?
+            """,
+            (batch_id, serial_number, int(version)),
+        )
+        if row is None:
+            raise ResultStoreError(
+                f"report artifact is missing: {serial_number} V{version:02d}"
+            )
+        return _row_dict(row)
+
+    def list_report_artifacts(
+        self, batch_id: str, serial_number: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        if serial_number is None:
+            sql = """
+                SELECT * FROM report_artifacts
+                WHERE batch_id = ? ORDER BY serial_number, version
+            """
+            parameters: Sequence[Any] = (batch_id,)
+        else:
+            sql = """
+                SELECT * FROM report_artifacts
+                WHERE batch_id = ? AND serial_number = ? ORDER BY version
+            """
+            parameters = (batch_id, serial_number)
+        return [_row_dict(row) for row in self._fetchall(sql, parameters)]
+
+    def create_report_review(
+        self,
+        batch_id: str,
+        serial_number: str,
+        *,
+        reviewer: str,
+        final_verdict: str,
+        reason: str,
+        source_version: int = 1,
+    ) -> dict[str, Any]:
+        reviewer_text = _required_text(reviewer, "reviewer", 128)
+        reason_text = _required_text(reason, "review reason", 2000)
+        verdict = str(final_verdict).upper()
+        if verdict not in {"PASS", "FAIL"}:
+            raise ResultStoreError("review verdict must be PASS or FAIL")
+        now = _utc_now()
+        with self.transaction() as connection:
+            snapshot = connection.execute(
+                """
+                SELECT automatic_verdict FROM report_snapshots
+                WHERE batch_id = ? AND serial_number = ?
+                """,
+                (batch_id, serial_number),
+            ).fetchone()
+            if snapshot is None:
+                raise ResultStoreError(f"report snapshot is not frozen: {serial_number}")
+            if snapshot["automatic_verdict"] not in {"PASS", "FAIL"}:
+                raise ResultStoreError("incomplete or aborted results cannot be approved")
+            artifact = connection.execute(
+                """
+                SELECT 1 FROM report_artifacts
+                WHERE batch_id = ? AND serial_number = ? AND version = ?
+                  AND status = 'generated_v1'
+                """,
+                (batch_id, serial_number, int(source_version)),
+            ).fetchone()
+            if artifact is None:
+                raise ResultStoreError("a generated V1 report is required for review")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO report_reviews(
+                        batch_id, serial_number, source_version,
+                        automatic_verdict, final_verdict, reviewer, reason,
+                        reviewed_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        batch_id, serial_number, int(source_version),
+                        snapshot["automatic_verdict"], verdict,
+                        reviewer_text, reason_text, now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ResultStoreError(
+                    f"report review already exists: {serial_number}"
+                ) from exc
+            self._insert_event(
+                connection,
+                batch_id,
+                None,
+                "device_report_reviewed",
+                {
+                    "serial_number": serial_number,
+                    "source_version": source_version,
+                    "automatic_verdict": snapshot["automatic_verdict"],
+                    "final_verdict": verdict,
+                    "reviewer": reviewer_text,
+                    "reason": reason_text,
+                },
+            )
+        return self.get_report_review(batch_id, serial_number)
+
+    def get_report_review(self, batch_id: str, serial_number: str) -> dict[str, Any]:
+        row = self._fetchone(
+            """
+            SELECT * FROM report_reviews
+            WHERE batch_id = ? AND serial_number = ?
+            """,
+            (batch_id, serial_number),
+        )
+        if row is None:
+            raise ResultStoreError(f"report review is missing: {serial_number}")
+        return _row_dict(row)
+
     def transition_attempt(
         self,
         attempt_id: int,
@@ -936,6 +1238,48 @@ class ProductionResultStore:
             event_type TEXT NOT NULL,
             payload_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS report_snapshots(
+            batch_id TEXT NOT NULL,
+            serial_number TEXT NOT NULL,
+            report_id TEXT NOT NULL,
+            automatic_verdict TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            snapshot_sha256 TEXT NOT NULL,
+            created_utc TEXT NOT NULL,
+            PRIMARY KEY(batch_id, serial_number),
+            FOREIGN KEY(batch_id, serial_number)
+                REFERENCES devices(batch_id, serial_number) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS report_artifacts(
+            batch_id TEXT NOT NULL,
+            serial_number TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            final_verdict TEXT NOT NULL,
+            document_path TEXT NOT NULL DEFAULT '',
+            document_sha256 TEXT NOT NULL DEFAULT '',
+            evidence_path TEXT NOT NULL DEFAULT '',
+            evidence_sha256 TEXT NOT NULL DEFAULT '',
+            manifest_path TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '',
+            created_utc TEXT NOT NULL,
+            PRIMARY KEY(batch_id, serial_number, version),
+            FOREIGN KEY(batch_id, serial_number)
+                REFERENCES report_snapshots(batch_id, serial_number) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS report_reviews(
+            batch_id TEXT NOT NULL,
+            serial_number TEXT NOT NULL,
+            source_version INTEGER NOT NULL,
+            automatic_verdict TEXT NOT NULL,
+            final_verdict TEXT NOT NULL,
+            reviewer TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            reviewed_utc TEXT NOT NULL,
+            PRIMARY KEY(batch_id, serial_number),
+            FOREIGN KEY(batch_id, serial_number)
+                REFERENCES report_snapshots(batch_id, serial_number) ON DELETE CASCADE
+        );
         CREATE INDEX IF NOT EXISTS idx_attempts_batch ON attempts(batch_id);
         CREATE INDEX IF NOT EXISTS idx_events_batch ON events(batch_id, event_id);
         """
@@ -949,6 +1293,7 @@ class ProductionResultStore:
                     "INSERT INTO schema_info(key, value) VALUES ('schema_version', ?)",
                     (str(_SCHEMA_VERSION),),
                 )
+                existing = {"value": str(_SCHEMA_VERSION)}
             elif int(existing["value"]) == 1:
                 self._connection.execute(
                     "ALTER TABLE devices ADD COLUMN device_uid TEXT NOT NULL DEFAULT ''"
@@ -959,6 +1304,11 @@ class ProductionResultStore:
                 self._connection.execute(
                     "ALTER TABLE devices ADD COLUMN mac_source INTEGER"
                 )
+                self._connection.execute(
+                    "UPDATE schema_info SET value = '2' WHERE key = 'schema_version'"
+                )
+                existing = {"value": "2"}
+            if int(existing["value"]) == 2:
                 self._connection.execute(
                     "UPDATE schema_info SET value = ? WHERE key = 'schema_version'",
                     (str(_SCHEMA_VERSION),),
@@ -1088,6 +1438,7 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
         "participant_ids_json",
         "payload_json",
         "value_json",
+        "snapshot_json",
     ):
         if key in value and value[key] not in (None, ""):
             value[key] = json.loads(value[key])

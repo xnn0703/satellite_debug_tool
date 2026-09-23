@@ -6,6 +6,15 @@ from .coordinators import (
     FixtureSessionCoordinator,
     FixtureSessionState,
 )
+from .configuration import (
+    PowerSupplyProfile,
+    ProductTestTemplate,
+    ProductionConfigurationError,
+    ProductionConfigurationStore,
+    REGISTERED_POWER_DRIVERS,
+    ResolvedProductionConfiguration,
+    StationProfile,
+)
 
 from .fixtures import (
     FixtureAdapter,
@@ -63,8 +72,16 @@ from .models import (
     AttemptStatus,
     BatchStatus,
     EvidenceLevel,
+    ReportStatus,
     FixtureAction,
     FixtureActionStatus,
+)
+from .reporting import (
+    ProductionReportService,
+    ReportArtifact,
+    ReportBranding,
+    automatic_device_verdict,
+    sanitize_path_component,
 )
 from .motion_platform import (
     AbsoluteMoveRunner,
@@ -95,6 +112,14 @@ from .ms6222_protocol import (
     ms6222_crc32_valid,
 )
 from .ms6222_worker import Ms6222SerialWorker, Ms6222WorkerStatistics
+from .ms6222_debug import (
+    Ms6222Conclusion,
+    Ms6222ControlLease,
+    Ms6222DebugError,
+    Ms6222LeaseHandle,
+    Ms6222SessionRecorder,
+    Ms6222SessionResult,
+)
 from .navigation import (
     ExternalInsApplicability,
     ExternalInsGate,
@@ -110,9 +135,18 @@ from .power_supply import (
     PowerSupplyConfig,
     PowerSupplyError,
     PowerSupplyState,
+    PowerValidationPolicy,
     ScpiLineCodec,
     SocketScpiTransport,
+    psw80_27_validation_policy,
 )
+from .power_debug import (
+    PowerDebugError,
+    PowerDebugOperation,
+    PowerDebugSessionRecorder,
+    PowerSupplyDebugWorker,
+)
+from .production_power import ProductionPowerWorker
 from .recipe import ProductionRecipe, RecipeValidationError
 from .result_store import ProductionResultStore, ResultStoreError
 
@@ -168,34 +202,56 @@ __all__ = [
     "MotionPlatformError",
     "MotionTrajectoryRunner",
     "Ms6222FrameEnvelope",
+    "Ms6222Conclusion",
+    "Ms6222ControlLease",
+    "Ms6222DebugError",
     "Ms6222FrameType",
     "Ms6222GnssRecord",
     "Ms6222InsRecord",
     "Ms6222ParserStatistics",
     "Ms6222RawImuRecord",
+    "Ms6222LeaseHandle",
     "Ms6222SerialWorker",
+    "Ms6222SessionRecorder",
+    "Ms6222SessionResult",
     "Ms6222StreamParser",
     "Ms6222WorkerStatistics",
     "PlatformPose",
     "PlatformSendResult",
     "PowerActionResult",
     "PowerCommandRecord",
+    "PowerDebugError",
+    "PowerDebugOperation",
+    "PowerDebugSessionRecorder",
     "PowerEvidenceLevel",
     "PowerIdentity",
     "PowerMeasurement",
     "PowerSupplyConfig",
     "PowerSupplyError",
     "PowerSupplyState",
+    "PowerValidationPolicy",
+    "PowerSupplyDebugWorker",
+    "PowerSupplyProfile",
+    "ProductTestTemplate",
+    "ProductionConfigurationError",
+    "ProductionConfigurationStore",
     "ProductionRecipe",
+    "ProductionPowerWorker",
     "ProductionResultStore",
     "RecipeValidationError",
     "ReferenceStatus",
+    "ReportArtifact",
+    "ReportBranding",
+    "ReportStatus",
     "ResultStoreError",
+    "REGISTERED_POWER_DRIVERS",
+    "ResolvedProductionConfiguration",
     "SineAxis",
     "ScpiLineCodec",
     "SocketScpiTransport",
     "TrajectoryRunStatistics",
     "TimedAttitude",
+    "StationProfile",
     "UdpFleetHub",
     "serialize_a6",
     "serialize_a6t",
@@ -210,4 +266,8 @@ __all__ = [
     "ms6222_crc32_valid",
     "quaternion_attitude_error",
     "validate_sine_profile",
+    "psw80_27_validation_policy",
+    "ProductionReportService",
+    "automatic_device_verdict",
+    "sanitize_path_component",
 ]
