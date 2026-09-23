@@ -9,6 +9,11 @@ from PySide6.QtWidgets import QApplication
 
 from satellite_debug_tool.core.comm import DeviceConnectionPhase
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.external_power_monitor import (
+    EXTERNAL_POWER_SAMPLE_EVENT,
+    ExternalPowerSample,
+)
+from satellite_debug_tool.core.production.power_supply import PowerIdentity
 from satellite_debug_tool.core.product import CustomerRecordingState
 from satellite_debug_tool.core.protocol import (
     CmdType,
@@ -141,6 +146,51 @@ def test_customer_recording_waits_for_exact_ack_and_restores_on_stop(
     assert sdb.metadata["capture_profile"] == "support_full"
     assert sdb.quality["complete"] is True
 
+
+def test_customer_recording_persists_external_power_metadata(
+    app, settings: Settings, tmp_path: Path, monkeypatch
+) -> None:
+    view, _worker = _ready_view(settings)
+    target = tmp_path / "support-power.sdb"
+    monkeypatch.setattr(
+        "satellite_debug_tool.ui.live_view.QFileDialog.getSaveFileName",
+        lambda *_args, **_kwargs: (str(target), ""),
+    )
+    view.toggle_customer_recording()
+    request_id = view._capture_pending_id
+    assert request_id is not None
+    view._on_capture_response(_response(request_id))
+
+    sample = ExternalPowerSample(
+        host_timestamp_ns=1_800_000_000_123_456_789,
+        monotonic_ns=123,
+        connection_generation=2,
+        identity=PowerIdentity(
+            "GW-INSTEK", "PSW 80-27", "PSW1234", "1.70", "raw"
+        ),
+        voltage_v=12.04,
+        current_a=1.25,
+        power_w=15.05,
+        output_enabled=True,
+        operation_condition=1,
+        questionable_condition=0,
+        protection_tripped=False,
+    )
+    assert view.record_external_power_sample(sample)
+
+    view.toggle_customer_recording()
+    sdb = DataImporter.open_sdb(target)
+    power_events = [
+        event
+        for event in sdb.metadata_events
+        if event.get("event") == EXTERNAL_POWER_SAMPLE_EVENT
+    ]
+    assert len(power_events) == 1
+    assert power_events[0]["host_timestamp_ns"] == sample.host_timestamp_ns
+    assert power_events[0]["connection_generation"] == 2
+    assert power_events[0]["voltage_v"] == pytest.approx(12.04)
+    assert power_events[0]["current_a"] == pytest.approx(1.25)
+    assert power_events[0]["power_w"] == pytest.approx(15.05)
 
 def test_full_capture_timeout_requests_customer_profile_restore(
     app, settings: Settings, tmp_path: Path, monkeypatch

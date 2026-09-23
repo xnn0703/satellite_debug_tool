@@ -7,6 +7,11 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from satellite_debug_tool.core.data import DataStore, GnssStore, OrbitStore, StateStore
+from satellite_debug_tool.core.external_power_monitor import (
+    ExternalPowerSample,
+    ExternalPowerStore,
+)
+from satellite_debug_tool.core.production.power_supply import PowerIdentity
 from satellite_debug_tool.core.product import (
     Availability,
     CustomerRecordingState,
@@ -188,6 +193,50 @@ def test_customer_overview_renders_afd01_values_and_empty_components(app, monkey
     assert view._component_details["converter"].text() == (
         f"— · — · — · {tr('Not supported')}"
     )
+    assert tuple(view._component_widgets) == (
+        "converter",
+        "tx_array",
+        "rx_array",
+        "external_power",
+    )
+
+
+def test_customer_overview_renders_shared_external_power_and_uses_presenter(app) -> None:
+    live = _LiveDouble()
+    store = ExternalPowerStore()
+    anchors: list[object] = []
+    view = CustomerOverviewView(
+        live,
+        _SettingsDouble(),
+        enable_3d=False,
+        external_power_store=store,
+        external_power_presenter=anchors.append,
+    )
+    store.apply_sample(
+        ExternalPowerSample(
+            host_timestamp_ns=1_800_000_000_000_000_000,
+            monotonic_ns=1,
+            connection_generation=1,
+            identity=PowerIdentity(
+                "GW-INSTEK", "PSW 80-27", "PSW1234", "1.70", "raw"
+            ),
+            voltage_v=12.04,
+            current_a=1.25,
+            power_w=15.05,
+            output_enabled=True,
+            operation_condition=1,
+            questionable_condition=0,
+            protection_tripped=False,
+        )
+    )
+
+    view.refresh()
+    view._component_widgets["external_power"].click()
+
+    assert view._component_details["external_power"].text() == (
+        f"{tr('Online')} · 12.04 V · 1.250 A · 15.05 W"
+    )
+    assert anchors == [view._component_widgets["external_power"]]
 
 
 def test_customer_overview_overlays_array_sky_and_converts_native_beam(app) -> None:

@@ -480,6 +480,7 @@ def test_customer_workspace_translates_deferred_text_and_fits_minimum_window(
     assert [button.text() for button in customer._nav_buttons] == [
         "总览",
         "射频控制",
+        "网络测试",
         "回放",
         "维护",
     ]

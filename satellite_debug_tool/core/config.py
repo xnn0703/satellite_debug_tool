@@ -59,6 +59,20 @@ class Settings:
         # 不再作为运行期权威状态源。
         "udp": {},
         "device_udp": {"local_port": 45678},
+        "external_power": {"host": ""},
+        "iperf": {
+            "executable": "",
+            "server": "60.205.157.141",
+            "local_host": "",
+            "protocol": "udp",
+            "direction": "both",
+            "ul_port": 5201,
+            "dl_port": 5202,
+            "ul_rate": "491K",
+            "dl_rate": "200K",
+            "continuous": True,
+            "duration_hours": 24.0,
+        },
         "customer": {"devices": [], "active_endpoint": None},
         "config_migrations": {
             "device_udp_port_v1": True,
@@ -79,6 +93,7 @@ class Settings:
             "log_dir": "",        # Log Tab 导入 WindTerm .log 的默认目录
             "firmware_dir": "",   # Device Tab OTA 选择 .bin 的默认目录
             "production_dir": "",  # 批量试产数据库、SDB 和报告输出根目录
+            "production_report_dir": "",  # 每台设备正式报告与证据归档根目录
         },
         "production": {
             "last_operator": "",
@@ -87,6 +102,18 @@ class Settings:
             "device_port": 4004,
             "max_devices": 4,
             "fixture_profile_id": "",
+            "ms6222_port": "",
+            "product_template_id": "",
+            "station_profile_id": "",
+            "device_count": 1,
+            "report_branding": {
+                "company_name": "",
+                "logo_path": "",
+                "header": "",
+                "footer": "",
+                "tester_role": "",
+                "reviewer_role": "",
+            },
         },
         # M10 F1/F2：chart UX 持久化
         "chart": {

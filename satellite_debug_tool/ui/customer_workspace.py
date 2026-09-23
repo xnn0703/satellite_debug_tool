@@ -23,6 +23,7 @@ from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_playback_view import CustomerPlaybackView
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
+from satellite_debug_tool.ui.customer_iperf_view import CustomerIperfView
 from satellite_debug_tool.ui.customer_device_list import (
     CustomerDeviceList,
     CustomerDeviceSnapshot,
@@ -100,6 +101,7 @@ class CustomerWorkspace(QWidget):
     _PAGE_DEFS = (
         ("overview", tr_source("Overview"), "grid"),
         ("rf", tr_source("RF control"), "sliders"),
+        ("iperf", tr_source("Network test"), "activity"),
         ("playback", tr_source("Playback"), "history"),
         ("maintenance", tr_source("Maintenance"), "settings"),
     )
@@ -113,6 +115,10 @@ class CustomerWorkspace(QWidget):
         *,
         device_directory=None,
         page_bundle_factory=None,
+        external_power_store=None,
+        external_power_presenter=None,
+        iperf_controller=None,
+        iperf_store=None,
     ) -> None:
         super().__init__(parent)
         if (device_directory is None) != (page_bundle_factory is None):
@@ -124,6 +130,10 @@ class CustomerWorkspace(QWidget):
         self._device_provider = device_view if callable(device_view) else lambda: device_view
         self._device_directory = device_directory
         self._page_bundle_factory = page_bundle_factory
+        self._external_power_store = external_power_store
+        self._external_power_presenter = external_power_presenter
+        self._iperf_controller = iperf_controller
+        self._iperf_store = iperf_store
         self._multi_device_enabled = device_directory is not None
         self._theme = "dark"
         self._scale = "small"
@@ -158,6 +168,10 @@ class CustomerWorkspace(QWidget):
         return self._playback_host.ensure_view()
 
     @property
+    def iperf_test(self) -> QWidget:
+        return self._iperf_host.ensure_view()
+
+    @property
     def maintenance(self) -> Optional[QWidget]:
         if self._multi_device_enabled:
             self._maintenance = self._maintenance_pages.ensure_active_view()
@@ -181,6 +195,18 @@ class CustomerWorkspace(QWidget):
     def _create_playback(self) -> CustomerPlaybackView:
         self._playback = CustomerPlaybackView(self._settings)
         return self._playback
+
+    def _create_iperf(self) -> QWidget:
+        if self._iperf_controller is None or self._iperf_store is None:
+            self._iperf = _PendingCustomerPage("Network test is unavailable")
+        else:
+            self._iperf = CustomerIperfView(
+                self._iperf_controller,
+                self._iperf_store,
+                self._external_power_store,
+                self._settings,
+            )
+        return self._iperf
 
     def _create_maintenance(self) -> CustomerMaintenanceView:
         self._maintenance = CustomerMaintenanceView(
@@ -212,11 +238,18 @@ class CustomerWorkspace(QWidget):
         side.addWidget(self._section_label)
 
         self._stack = QStackedWidget()
-        self._overview = CustomerOverviewView(self._live, self._settings)
+        self._overview = CustomerOverviewView(
+            self._live,
+            self._settings,
+            external_power_store=self._external_power_store,
+            external_power_presenter=self._external_power_presenter,
+        )
         self._rf_control: Optional[CustomerRfControlView] = None
+        self._iperf: Optional[QWidget] = None
         self._playback: Optional[CustomerPlaybackView] = None
         self._maintenance: Optional[CustomerMaintenanceView] = None
         self._rf_host = LazyViewHost(self._create_rf_control)
+        self._iperf_host = LazyViewHost(self._create_iperf)
         self._playback_host = LazyViewHost(self._create_playback)
         self._maintenance_host = LazyViewHost(self._create_maintenance)
         overview_scroll = _ViewportFitScrollArea()
@@ -237,6 +270,15 @@ class CustomerWorkspace(QWidget):
         )
         rf_scroll.setWidget(self._rf_host)
 
+        iperf_scroll = QScrollArea()
+        iperf_scroll.setObjectName("customerIperfScroll")
+        iperf_scroll.setWidgetResizable(True)
+        iperf_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        iperf_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        iperf_scroll.setWidget(self._iperf_host)
+
         maintenance_scroll = QScrollArea()
         maintenance_scroll.setObjectName("customerMaintenanceScroll")
         maintenance_scroll.setWidgetResizable(True)
@@ -249,6 +291,7 @@ class CustomerWorkspace(QWidget):
         pages = (
             overview_scroll,
             rf_scroll,
+            iperf_scroll,
             self._playback_host,
             maintenance_scroll,
         )
@@ -256,6 +299,7 @@ class CustomerWorkspace(QWidget):
             (
                 self._overview,
                 self._rf_host,
+                self._iperf_host,
                 self._playback_host,
                 self._maintenance_host,
             )
@@ -280,6 +324,7 @@ class CustomerWorkspace(QWidget):
         root.addWidget(self._stack, 1)
         self._overview.status_message.connect(self.status_message)
         self._rf_host.status_message.connect(self.status_message)
+        self._iperf_host.status_message.connect(self.status_message)
         self._playback_host.status_message.connect(self.status_message)
         self._maintenance_host.status_message.connect(self.status_message)
         self.set_page(0)
@@ -329,9 +374,11 @@ class CustomerWorkspace(QWidget):
 
         self._overview: Optional[QWidget] = None
         self._rf_control: Optional[QWidget] = None
+        self._iperf: Optional[QWidget] = None
         self._playback: Optional[CustomerPlaybackView] = None
         self._maintenance: Optional[QWidget] = None
         self._playback_host = LazyViewHost(self._create_playback)
+        self._iperf_host = LazyViewHost(self._create_iperf)
 
         overview_scroll = _ViewportFitScrollArea()
         overview_scroll.setObjectName("customerOverviewScroll")
@@ -351,6 +398,15 @@ class CustomerWorkspace(QWidget):
         )
         rf_scroll.setWidget(self._rf_pages)
 
+        iperf_scroll = QScrollArea()
+        iperf_scroll.setObjectName("customerIperfScroll")
+        iperf_scroll.setWidgetResizable(True)
+        iperf_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        iperf_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        iperf_scroll.setWidget(self._iperf_host)
+
         maintenance_scroll = QScrollArea()
         maintenance_scroll.setObjectName("customerMaintenanceScroll")
         maintenance_scroll.setWidgetResizable(True)
@@ -364,6 +420,7 @@ class CustomerWorkspace(QWidget):
         pages = (
             overview_scroll,
             rf_scroll,
+            iperf_scroll,
             self._playback_host,
             maintenance_scroll,
         )
@@ -371,6 +428,7 @@ class CustomerWorkspace(QWidget):
             (
                 self._overview_pages,
                 self._rf_pages,
+                self._iperf_host,
                 self._playback_host,
                 self._maintenance_pages,
             )
@@ -393,6 +451,7 @@ class CustomerWorkspace(QWidget):
 
         root.addWidget(self._sidebar)
         root.addWidget(self._stack, 1)
+        self._iperf_host.status_message.connect(self.status_message)
         self._playback_host.status_message.connect(self.status_message)
         self._connect_directory_signal("devices_changed", self._refresh_directory)
         self._connect_directory_signal(
@@ -565,6 +624,7 @@ class CustomerWorkspace(QWidget):
             self.deactivate_view()
             for host in (
                 self._rf_host,
+                self._iperf_host,
                 self._playback_host,
                 self._maintenance_host,
             ):
@@ -585,6 +645,7 @@ class CustomerWorkspace(QWidget):
             self._maintenance_pages,
         ):
             page_stack.shutdown()
+        self._iperf_host.shutdown()
         self._playback_host.shutdown()
         self._shutdown_done = True
         return True
@@ -612,11 +673,13 @@ class CustomerWorkspace(QWidget):
             self._device_list.set_theme(theme, scale)
             self._overview_pages.set_theme(theme, scale)
             self._rf_pages.set_theme(theme, scale)
+            self._iperf_host.set_theme(theme, scale)
             self._playback_host.set_theme(theme, scale)
             self._maintenance_pages.set_theme(theme, scale)
         else:
             self._overview.set_theme(theme, scale)
             self._rf_host.set_theme(theme, scale)
+            self._iperf_host.set_theme(theme, scale)
             self._playback_host.set_theme(theme, scale)
             self._maintenance_host.set_theme(theme, scale)
         self._refresh_nav_icons()
@@ -639,5 +702,12 @@ class CustomerWorkspace(QWidget):
             self._device_list.retranslate_ui()
             self._overview_pages.retranslate_ui()
             self._rf_pages.retranslate_ui()
+            self._iperf_host.retranslate_ui()
             self._playback_host.retranslate_ui()
             self._maintenance_pages.retranslate_ui()
+        else:
+            self._overview.retranslate_ui()
+            self._rf_host.retranslate_ui()
+            self._iperf_host.retranslate_ui()
+            self._playback_host.retranslate_ui()
+            self._maintenance_host.retranslate_ui()

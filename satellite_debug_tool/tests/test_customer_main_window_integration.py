@@ -14,6 +14,11 @@ from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.protocol import CmdType, build_frame
 from satellite_debug_tool.ui.engineering_session_host import ENGINEERING_SHARED_UDP
 from satellite_debug_tool.ui.main_window import MainWindow
+from satellite_debug_tool.ui.settings_dialog import (
+    SETTINGS_SCOPE_CUSTOMER,
+    SETTINGS_SCOPE_ENGINEERING,
+    SETTINGS_SCOPE_PRODUCTION,
+)
 
 
 def _free_udp_port() -> int:
@@ -195,6 +200,65 @@ def test_corrupt_device_settings_block_production_start_gate(
         assert reason.strip()
     finally:
         settings._device_configuration_blocked = False
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_workspace_switch_controls_external_power_and_settings_scope(
+    qapplication_session,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    qapp = qapplication_session
+    settings, _endpoints = _configured_settings(tmp_path, monkeypatch)
+    window = MainWindow(settings=settings)
+
+    class _MonitorDouble:
+        def __init__(self) -> None:
+            self.active_calls: list[bool] = []
+
+        def set_active(self, active: bool) -> None:
+            self.active_calls.append(bool(active))
+
+        def configure(self, _host: str) -> None:
+            return None
+
+        def shutdown(self) -> bool:
+            return True
+
+    monitor = _MonitorDouble()
+    window._external_power_monitor = monitor
+    scopes: list[str] = []
+
+    class _SettingsDialogDouble:
+        def __init__(self, *_args, scope: str, **_kwargs) -> None:
+            scopes.append(scope)
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(
+        "satellite_debug_tool.ui.main_window.SettingsDialog",
+        _SettingsDialogDouble,
+    )
+
+    try:
+        for index in (0, 1, 2):
+            window._workspace.setCurrentIndex(index)
+            qapp.processEvents()
+            window._on_open_settings()
+
+        assert scopes == [
+            SETTINGS_SCOPE_CUSTOMER,
+            SETTINGS_SCOPE_ENGINEERING,
+            SETTINGS_SCOPE_PRODUCTION,
+        ]
+        assert monitor.active_calls[-2:] == [False, False]
+        window._workspace.setCurrentIndex(0)
+        qapp.processEvents()
+        assert monitor.active_calls[-1] is True
+    finally:
         window.close()
         window.deleteLater()
         qapp.processEvents()

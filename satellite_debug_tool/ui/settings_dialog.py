@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt
@@ -21,6 +22,14 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
     QWidget,
+)
+
+
+SETTINGS_SCOPE_CUSTOMER = "customer"
+SETTINGS_SCOPE_ENGINEERING = "engineering"
+SETTINGS_SCOPE_PRODUCTION = "production"
+_SETTINGS_SCOPES = frozenset(
+    (SETTINGS_SCOPE_CUSTOMER, SETTINGS_SCOPE_ENGINEERING, SETTINGS_SCOPE_PRODUCTION)
 )
 
 from satellite_debug_tool.core.config import Settings, SettingsSaveError
@@ -51,11 +60,15 @@ class SettingsDialog(QDialog):
         parent: Optional[QWidget] = None,
         profile_store: Optional[ProfileStore] = None,
         device_udp_port_editable: Optional[Callable[[], bool]] = None,
+        scope: str = SETTINGS_SCOPE_PRODUCTION,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._profile_store = profile_store
         self._device_udp_port_editable = device_udp_port_editable
+        self._scope = str(scope)
+        if self._scope not in _SETTINGS_SCOPES:
+            raise ValueError(f"unknown settings scope: {scope}")
         self._recovery_active = bool(
             settings.read_only_recovery or settings.device_configuration_blocked
         )
@@ -98,6 +111,39 @@ class SettingsDialog(QDialog):
         device_udp_row.addWidget(self._device_udp_port)
         device_udp_row.addStretch(1)
         outer.addLayout(device_udp_row)
+
+        self._external_power_section = QWidget()
+        external_power_layout = QVBoxLayout(self._external_power_section)
+        external_power_layout.setContentsMargins(0, 0, 0, 0)
+        external_power_layout.setSpacing(7)
+        self._external_power_title = QLabel(tr("External power"))
+        external_power_layout.addWidget(self._external_power_title)
+        external_power_row = QHBoxLayout()
+        self._external_power_host_label = QLabel(tr("Power supply IPv4:"))
+        self._external_power_host_label.setMinimumWidth(120)
+        self._external_power_host = QLineEdit(
+            str(self._settings.get("external_power.host", ""))
+        )
+        self._external_power_host.setPlaceholderText(
+            tr("Not configured; monitoring is disabled")
+        )
+        self._external_power_port = QLabel("2268")
+        self._external_power_port.setToolTip(tr("Fixed read-only SCPI port"))
+        external_power_row.addWidget(self._external_power_host_label)
+        external_power_row.addWidget(self._external_power_host, 1)
+        self._external_power_port_label = QLabel(tr("Port:"))
+        external_power_row.addWidget(self._external_power_port_label)
+        external_power_row.addWidget(self._external_power_port)
+        external_power_layout.addLayout(external_power_row)
+        self._external_power_hint = QLabel(
+            tr("Read-only monitoring: voltage, current and status; output is never controlled.")
+        )
+        self._external_power_hint.setWordWrap(True)
+        external_power_layout.addWidget(self._external_power_hint)
+        self._external_power_section.setVisible(
+            self._scope == SETTINGS_SCOPE_CUSTOMER
+        )
+        outer.addWidget(self._external_power_section)
 
         self._recovery_frame = QFrame()
         self._recovery_frame.setObjectName("settingsRecoveryFrame")
@@ -208,6 +254,68 @@ class SettingsDialog(QDialog):
         chart_row.addWidget(self._btn_chart_groups)
         outer.addLayout(chart_row)
 
+        self._production_section = QWidget()
+        production_layout = QVBoxLayout(self._production_section)
+        production_layout.setContentsMargins(0, 0, 0, 0)
+        production_layout.setSpacing(10)
+        production_row = QHBoxLayout()
+        self._production_configuration_label = QLabel(tr("Production configurations:"))
+        self._btn_production_configurations = QPushButton(
+            tr("Manage production configurations...")
+        )
+        self._btn_production_configurations.clicked.connect(
+            self._on_open_production_configurations
+        )
+        production_row.addWidget(self._production_configuration_label)
+        production_row.addStretch(1)
+        production_row.addWidget(self._btn_production_configurations)
+        production_layout.addLayout(production_row)
+
+        self._production_report_title = QLabel(tr("Production report"))
+        production_layout.addWidget(self._production_report_title)
+        self._report_root_edit = self._make_row(
+            production_layout,
+            tr("Report output folder:"),
+            self._settings.get("paths.production_report_dir", ""),
+            "report",
+        )
+        branding = self._settings.get("production.report_branding", {})
+        if not isinstance(branding, dict):
+            branding = {}
+        self._report_company = QLineEdit(str(branding.get("company_name", "")))
+        self._report_logo = QLineEdit(str(branding.get("logo_path", "")))
+        self._report_header = QLineEdit(str(branding.get("header", "")))
+        self._report_footer = QLineEdit(str(branding.get("footer", "")))
+        self._report_tester_role = QLineEdit(str(branding.get("tester_role", "")))
+        self._report_reviewer_role = QLineEdit(str(branding.get("reviewer_role", "")))
+        for label_text, editor in (
+            (tr("Company name:"), self._report_company),
+            (tr("Report header:"), self._report_header),
+            (tr("Report footer:"), self._report_footer),
+            (tr("Tester role:"), self._report_tester_role),
+            (tr("Reviewer role:"), self._report_reviewer_role),
+        ):
+            row = QHBoxLayout()
+            label = QLabel(label_text)
+            label.setMinimumWidth(120)
+            row.addWidget(label)
+            row.addWidget(editor, 1)
+            production_layout.addLayout(row)
+        logo_row = QHBoxLayout()
+        logo_label = QLabel(tr("Report logo:"))
+        logo_label.setMinimumWidth(120)
+        logo_button = QPushButton(tr("Browse..."))
+        logo_button.setFixedWidth(80)
+        logo_button.clicked.connect(self._on_browse_report_logo)
+        logo_row.addWidget(logo_label)
+        logo_row.addWidget(self._report_logo, 1)
+        logo_row.addWidget(logo_button)
+        production_layout.addLayout(logo_row)
+        self._production_section.setVisible(
+            self._scope == SETTINGS_SCOPE_PRODUCTION
+        )
+        outer.addWidget(self._production_section)
+
         # M11：更新设置 section
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -237,6 +345,12 @@ class SettingsDialog(QDialog):
         skip_row = QHBoxLayout()
         self._lbl_skipped = QLabel()
         self._render_skipped_version()
+        self._production_configuration_label.setText(
+            tr("Production configurations:")
+        )
+        self._btn_production_configurations.setText(
+            tr("Manage production configurations...")
+        )
         skip_row.addWidget(self._lbl_skipped)
         skip_row.addStretch(1)
         self._btn_reset_skip = QPushButton(tr("Reset skipped version"))
@@ -293,7 +407,18 @@ class SettingsDialog(QDialog):
             "recording": tr("Select recording / playback folder"),
             "log": tr("Select Log import folder"),
             "firmware": tr("Select firmware folder"),
+            "report": tr("Select production report folder"),
         }[title_id]
+
+    def _on_browse_report_logo(self) -> None:
+        filename, _selected = QFileDialog.getOpenFileName(
+            self,
+            tr("Select report logo"),
+            self._report_logo.text().strip(),
+            tr("Image files (*.png *.jpg *.jpeg);;All files (*)"),
+        )
+        if filename:
+            self._report_logo.setText(filename)
 
     def _on_browse(self, edit: QLineEdit, title_id: str) -> None:
         current = edit.text().strip() or ""
@@ -304,10 +429,45 @@ class SettingsDialog(QDialog):
             edit.setText(directory)
 
     def _on_accept(self) -> None:
+        if self._scope == SETTINGS_SCOPE_CUSTOMER:
+            external_power_host = self._external_power_host.text().strip()
+            if external_power_host:
+                try:
+                    address = ipaddress.ip_address(external_power_host)
+                except ValueError:
+                    QMessageBox.warning(
+                        self,
+                        tr("Settings"),
+                        tr("External power host must be a valid IPv4 address."),
+                    )
+                    return
+                if address.version != 4:
+                    QMessageBox.warning(
+                        self,
+                        tr("Settings"),
+                        tr("External power host must be a valid IPv4 address."),
+                    )
+                    return
+            self._settings.set("external_power.host", external_power_host)
         # 写入 settings（去掉首尾空格，空字符串清空配置）
         self._settings.set("paths.recording_dir", self._recording_edit.text().strip())
         self._settings.set("paths.log_dir", self._log_edit.text().strip())
         self._settings.set("paths.firmware_dir", self._firmware_edit.text().strip())
+        if self._scope == SETTINGS_SCOPE_PRODUCTION:
+            self._settings.set(
+                "paths.production_report_dir", self._report_root_edit.text().strip()
+            )
+            self._settings.set(
+                "production.report_branding",
+                {
+                    "company_name": self._report_company.text().strip(),
+                    "logo_path": self._report_logo.text().strip(),
+                    "header": self._report_header.text().strip(),
+                    "footer": self._report_footer.text().strip(),
+                    "tester_role": self._report_tester_role.text().strip(),
+                    "reviewer_role": self._report_reviewer_role.text().strip(),
+                },
+            )
         # 地图 token
         self._settings.set("map.tianditu_token", self._tianditu_edit.text().strip())
         language = str(self._language_combo.currentData() or LANGUAGE_AUTO)
@@ -363,6 +523,23 @@ class SettingsDialog(QDialog):
         )
         self._export_recovery_btn.setText(tr("Export recovery evidence..."))
         self._rebuild_settings_btn.setText(tr("Rebuild device settings"))
+        self._production_configuration_label.setText(
+            tr("Production configurations:")
+        )
+        self._btn_production_configurations.setText(
+            tr("Manage production configurations...")
+        )
+        self._external_power_title.setText(tr("External power"))
+        self._external_power_host_label.setText(tr("Power supply IPv4:"))
+        self._external_power_host.setPlaceholderText(
+            tr("Not configured; monitoring is disabled")
+        )
+        self._external_power_port.setToolTip(tr("Fixed read-only SCPI port"))
+        self._external_power_port_label.setText(tr("Port:"))
+        self._external_power_hint.setText(
+            tr("Read-only monitoring: voltage, current and status; output is never controlled.")
+        )
+        self._production_report_title.setText(tr("Production report"))
         self._render_skipped_version()
 
     def _refresh_device_udp_port_editability(self) -> None:
@@ -456,3 +633,11 @@ class SettingsDialog(QDialog):
         if dlg.exec() == _QD.DialogCode.Accepted and hw is not None:
             # 触发 profile_changed → GroupedChart._on_profile_changed → _rebuild
             self._profile_store.profile_changed.emit(hw)
+
+    def _on_open_production_configurations(self) -> None:
+        from satellite_debug_tool.ui.production_configuration_dialog import (
+            ProductionConfigurationDialog,
+        )
+
+        dialog = ProductionConfigurationDialog(self)
+        dialog.exec()

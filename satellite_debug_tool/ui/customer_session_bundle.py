@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot
 
 from satellite_debug_tool.core.customer.device_directory import (
     CustomerDeviceSupplementalFacts,
@@ -36,12 +36,16 @@ class CustomerEndpointSessionBundle:
         status_sink: Optional[Callable[[str, int], None]] = None,
         facts_changed: Optional[Callable[[Endpoint], None]] = None,
         on_shutdown: Optional[Callable[[Endpoint, object], None]] = None,
+        external_power_store=None,
+        external_power_presenter: Optional[Callable[[object], None]] = None,
     ) -> None:
         self.endpoint = normalize_customer_endpoint(endpoint)
         self._settings = settings
         self._status_sink = status_sink
         self._facts_changed = facts_changed
         self._on_shutdown = on_shutdown
+        self._external_power_store = external_power_store
+        self._external_power_presenter = external_power_presenter
         self._theme = "dark"
         self._scale = "small"
         self._shutdown = False
@@ -111,7 +115,12 @@ class CustomerEndpointSessionBundle:
     def _create_overview(self) -> CustomerOverviewView:
         if self._overview is None:
             self._overview = self._finish_view(
-                CustomerOverviewView(self.live, self._settings)
+                CustomerOverviewView(
+                    self.live,
+                    self._settings,
+                    external_power_store=self._external_power_store,
+                    external_power_presenter=self._external_power_presenter,
+                )
             )
         return self._overview
 
@@ -274,12 +283,16 @@ class CustomerEndpointSessionBundleFactory(QObject):
         settings,
         session_directory,
         status_sink: Optional[Callable[[str, int], None]] = None,
+        external_power_store=None,
+        external_power_presenter: Optional[Callable[[object], None]] = None,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._session_directory = session_directory
         self._status_sink = status_sink
+        self._external_power_store = external_power_store
+        self._external_power_presenter = external_power_presenter
         self._device_directory = None
         self._bundles: dict[Endpoint, CustomerEndpointSessionBundle] = {}
         self._theme = "dark"
@@ -325,6 +338,8 @@ class CustomerEndpointSessionBundleFactory(QObject):
             status_sink=self._status_sink,
             facts_changed=self.device_changed.emit,
             on_shutdown=self._forget_bundle,
+            external_power_store=self._external_power_store,
+            external_power_presenter=self._external_power_presenter,
         )
         bundle.set_theme(self._theme, self._scale)
         self._bundles[normalized] = bundle
@@ -372,6 +387,11 @@ class CustomerEndpointSessionBundleFactory(QObject):
     def retranslate_ui(self) -> None:
         for bundle in self._bundles.values():
             bundle.retranslate_ui()
+
+    @Slot(object)
+    def record_external_power_sample(self, sample: object) -> None:
+        for bundle in self._bundles.values():
+            bundle.live.record_external_power_sample(sample)
 
     def shutdown_all(self) -> bool:
         for bundle in tuple(self._bundles.values()):

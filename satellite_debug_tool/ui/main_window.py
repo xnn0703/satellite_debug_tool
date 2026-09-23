@@ -7,6 +7,8 @@ its page is active.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -26,6 +28,11 @@ from PySide6.QtWidgets import (
 from satellite_debug_tool import __version__
 from satellite_debug_tool.core.comm import UdpEndpointBroker
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.external_power_monitor import (
+    ExternalPowerMonitor,
+    ExternalPowerStore,
+)
+from satellite_debug_tool.core.iperf_test import IperfTestController, IperfTestStore
 from satellite_debug_tool.core.customer import (
     CustomerDeviceDirectory,
     CustomerDeviceDirectoryError,
@@ -46,12 +53,18 @@ from satellite_debug_tool.ui.engineering_session_host import (
     ENGINEERING_SHARED_UDP,
     EngineeringSessionHost,
 )
+from satellite_debug_tool.ui.external_power_window import ExternalPowerHistoryWindow
 from satellite_debug_tool.ui.live_view import LiveView
 from satellite_debug_tool.ui.lazy_view_host import LazyViewHost
 from satellite_debug_tool.ui.log_view import LogView
 from satellite_debug_tool.ui.playback_view import PlaybackView
 from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
-from satellite_debug_tool.ui.settings_dialog import SettingsDialog
+from satellite_debug_tool.ui.settings_dialog import (
+    SETTINGS_SCOPE_CUSTOMER,
+    SETTINGS_SCOPE_ENGINEERING,
+    SETTINGS_SCOPE_PRODUCTION,
+    SettingsDialog,
+)
 from satellite_debug_tool.ui.tracking_simulator_view import TrackingSimulatorView
 from satellite_debug_tool.ui.update_dialog import (
     UpdateDialog,
@@ -102,6 +115,25 @@ class MainWindow(QMainWindow):
         theme_raw = self._settings.get("ui.theme", "dark")
         self._theme = self._normalize_theme(theme_raw)
         self._engineering_session_mode = ENGINEERING_SERIAL
+        self._external_power_store = ExternalPowerStore(self)
+        self._external_power_monitor = ExternalPowerMonitor(
+            self._external_power_store,
+            parent=self,
+        )
+        self._external_power_monitor.configure(
+            str(self._settings.get("external_power.host", ""))
+        )
+        self._external_power_window: ExternalPowerHistoryWindow | None = None
+        self._iperf_store = IperfTestStore(self)
+        self._iperf_controller = IperfTestController(
+            self._iperf_store,
+            self._external_power_store,
+            Path(self._settings.config_directory) / "iperf_sessions",
+            parent=self,
+        )
+        self._iperf_controller.active_changed.connect(
+            self._sync_external_power_activity
+        )
 
         # ---------- 顶部全局 gbar（品牌 + 居中 Tab 药丸 + 右侧控件，Mission Console） ----------
         self._build_global_bar()
@@ -122,7 +154,12 @@ class MainWindow(QMainWindow):
             settings=self._settings,
             session_directory=self._endpoint_directory,
             status_sink=self._on_status_message,
+            external_power_store=self._external_power_store,
+            external_power_presenter=self._show_external_power_history,
             parent=self,
+        )
+        self._external_power_store.sample_received.connect(
+            self._customer_bundle_factory.record_external_power_sample
         )
         self._customer_devices = CustomerDeviceDirectory(
             self._settings,
@@ -182,6 +219,10 @@ class MainWindow(QMainWindow):
             self._ensure_device_view,
             device_directory=self._customer_devices,
             page_bundle_factory=self._customer_bundle_factory,
+            external_power_store=self._external_power_store,
+            external_power_presenter=self._show_external_power_history,
+            iperf_controller=self._iperf_controller,
+            iperf_store=self._iperf_store,
         )
         self._customer.add_requested.connect(self._on_add_customer_device)
         self._customer.edit_requested.connect(self._on_edit_customer_device)
@@ -621,6 +662,8 @@ class MainWindow(QMainWindow):
             if hasattr(view, "set_theme"):
                 view.set_theme(theme, "small")
         self._customer_bundle_factory.set_theme(theme, "small")
+        if self._external_power_window is not None:
+            self._external_power_window.set_theme(theme, "small")
 
     def _style_global_bar(self, pal: dict):
         """gbar 品牌 + 药丸 Tab + 右侧图标按钮的主题样式。"""
@@ -706,6 +749,7 @@ class MainWindow(QMainWindow):
             deactivate_view(self._production_host)
 
         self._active_workspace_index = index
+        self._sync_external_power_activity()
         if index == 0:
             activate_view(self._customer)
         elif index == 1:
@@ -731,6 +775,14 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         if sb is not None:
             sb.showMessage(msg, timeout_ms)
+
+    def _sync_external_power_activity(self, *_args) -> None:
+        customer_visible = (
+            hasattr(self, "_workspace") and self._workspace.currentIndex() == 0
+        )
+        self._external_power_monitor.set_active(
+            customer_visible or self._iperf_controller.active
+        )
 
     def retranslate_ui(self) -> None:
         # Transient messages arrive already formatted. Clearing one on a locale
@@ -767,6 +819,8 @@ class MainWindow(QMainWindow):
         ):
             host.retranslate_ui()
         self._customer_bundle_factory.retranslate_ui()
+        if self._external_power_window is not None:
+            self._external_power_window.retranslate_ui()
 
     # ============================ 设置 ============================
 
@@ -842,13 +896,35 @@ class MainWindow(QMainWindow):
             if runtime is not None
             else getattr(self._live, "_profile_store", None)
         )
+        workspace_index = self._workspace.currentIndex()
+        scope = {
+            0: SETTINGS_SCOPE_CUSTOMER,
+            1: SETTINGS_SCOPE_ENGINEERING,
+            2: SETTINGS_SCOPE_PRODUCTION,
+        }.get(workspace_index, SETTINGS_SCOPE_CUSTOMER)
         dlg = SettingsDialog(
             self._settings,
             self,
             profile_store=profile_store,
             device_udp_port_editable=lambda: not self._udp_broker.has_active_demand,
+            scope=scope,
         )
-        dlg.exec()
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        if accepted and scope == SETTINGS_SCOPE_CUSTOMER:
+            self._external_power_monitor.configure(
+                str(self._settings.get("external_power.host", ""))
+            )
+        if self._production is not None:
+            self._production.refresh_production_configurations()
+
+    def _show_external_power_history(self, anchor: QWidget) -> None:
+        if self._external_power_window is None:
+            self._external_power_window = ExternalPowerHistoryWindow(
+                self._external_power_store,
+                theme=self._theme,
+                parent=self,
+            )
+        self._external_power_window.present_near(anchor)
 
     # ============================ M11 更新 ============================
 
@@ -897,6 +973,25 @@ class MainWindow(QMainWindow):
         if self._production is not None and not self._production.confirm_shutdown():
             event.ignore()
             return
+        if self._iperf_controller.active:
+            answer = QMessageBox.question(
+                self,
+                tr("Network test in progress"),
+                tr("Stop the active iperf3 test and exit?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        if not self._iperf_controller.shutdown():
+            QMessageBox.warning(
+                self,
+                tr("Network test"),
+                tr("iperf3 processes did not stop cleanly"),
+            )
+            event.ignore()
+            return
         if not self._shutdown_background_update_check():
             QMessageBox.warning(
                 self,
@@ -905,10 +1000,21 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+        if not self._external_power_monitor.shutdown():
+            QMessageBox.warning(
+                self,
+                tr("External power"),
+                tr("External power monitoring did not stop cleanly"),
+            )
+            event.ignore()
+            return
         # 工程串口 LiveView 独占自己的 worker。必须先确认线程已停止，再进入
         # customer/directory 的不可逆释放阶段；否则超时后 event.ignore() 会留下
         # 一个已被部分拆除、但窗口仍存活的进程组合。
         if not self._live.shutdown():
+            self._external_power_monitor.set_active(
+                self._workspace.currentIndex() == 0
+            )
             QMessageBox.warning(
                 self,
                 tr("Device operation in progress"),
@@ -917,6 +1023,9 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if not self._customer.shutdown():
+            self._external_power_monitor.set_active(
+                self._workspace.currentIndex() == 0
+            )
             QMessageBox.warning(
                 self,
                 tr("Device operation in progress"),

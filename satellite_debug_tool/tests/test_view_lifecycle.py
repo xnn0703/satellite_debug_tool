@@ -104,6 +104,7 @@ def test_heavy_pages_are_built_on_first_access(
     assert window._production is None
     assert not window._live.presentation_ready
     assert window._customer._rf_control is None
+    assert window._customer._iperf is None
     assert window._customer._playback is None
     assert window._customer._maintenance is None
 
@@ -115,6 +116,14 @@ def test_heavy_pages_are_built_on_first_access(
     window._customer.set_page("rf")
     assert window._customer._rf_control is first_rf
 
+    window._customer.set_page("iperf")
+    qapp.processEvents()
+    first_iperf = window._customer._iperf
+    assert first_iperf is not None
+    window._customer.set_page("overview")
+    window._customer.set_page("iperf")
+    assert window._customer._iperf is first_iperf
+
     window.unlock_engineering_for_session()
     assert window._live.presentation_ready
     window._tabs.setCurrentIndex(1)
@@ -124,6 +133,37 @@ def test_heavy_pages_are_built_on_first_access(
     window._tabs.setCurrentIndex(0)
     window._tabs.setCurrentIndex(1)
     assert window._playback is first_playback
+
+    window.close()
+    window.deleteLater()
+    qapp.processEvents()
+
+
+def test_active_iperf_keeps_external_power_monitor_active_across_workspaces(
+    qapplication_session, lifecycle_settings
+) -> None:
+    from dataclasses import replace
+
+    from satellite_debug_tool.core.iperf_test import IperfTestPhase
+    from satellite_debug_tool.ui.main_window import MainWindow
+
+    qapp = qapplication_session
+    window = MainWindow(settings=lifecycle_settings)
+    window.unlock_engineering_for_session()
+    window._workspace.setCurrentIndex(1)
+    assert not window._external_power_monitor.active
+
+    window._iperf_store.set_snapshot(
+        replace(window._iperf_store.snapshot, phase=IperfTestPhase.RUNNING)
+    )
+    window._iperf_controller.active_changed.emit(True)
+    assert window._external_power_monitor.active
+
+    window._iperf_store.set_snapshot(
+        replace(window._iperf_store.snapshot, phase=IperfTestPhase.STOPPED)
+    )
+    window._iperf_controller.active_changed.emit(False)
+    assert not window._external_power_monitor.active
 
     window.close()
     window.deleteLater()

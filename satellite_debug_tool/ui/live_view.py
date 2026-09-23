@@ -2518,6 +2518,25 @@ class LiveView(QWidget):
         self.recording_state_changed.emit(True, str(actual_target))
         return True
 
+    def record_external_power_sample(self, sample: object) -> bool:
+        """Append one shared external-power sample to an active customer SDB v3."""
+
+        if (
+            not self._is_recording
+            or not self._customer_recording
+            or self._recorder is None
+            or self._recorder.format_version != SDB_VERSION_V3
+        ):
+            return False
+        metadata_builder = getattr(sample, "metadata_event", None)
+        timestamp_ns = getattr(sample, "host_timestamp_ns", None)
+        if metadata_builder is None or timestamp_ns is None:
+            return False
+        return self._recorder.write_metadata_event(
+            metadata_builder(),
+            host_timestamp_ns=int(timestamp_ns),
+        )
+
     def _stop_recording(self, *, restore_customer_profile: bool) -> bool:
         recorder = self._recorder
         was_customer = self._customer_recording

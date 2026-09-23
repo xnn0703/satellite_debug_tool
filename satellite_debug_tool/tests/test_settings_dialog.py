@@ -59,6 +59,94 @@ class TestPathsSchema:
 
 
 class TestSettingsDialog:
+    def test_workspace_scopes_separate_customer_power_from_production(
+        self, qapp, tmp_settings
+    ):
+        from satellite_debug_tool.ui.settings_dialog import (
+            SETTINGS_SCOPE_CUSTOMER,
+            SETTINGS_SCOPE_ENGINEERING,
+            SETTINGS_SCOPE_PRODUCTION,
+            SettingsDialog,
+        )
+
+        customer = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_CUSTOMER)
+        engineering = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_ENGINEERING)
+        production = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_PRODUCTION)
+
+        assert not customer._external_power_section.isHidden()
+        assert customer._production_section.isHidden()
+        assert engineering._external_power_section.isHidden()
+        assert engineering._production_section.isHidden()
+        assert production._external_power_section.isHidden()
+        assert not production._production_section.isHidden()
+
+        customer.deleteLater()
+        engineering.deleteLater()
+        production.deleteLater()
+
+    def test_customer_scope_validates_and_persists_external_power_ipv4(
+        self, qapp, tmp_settings, monkeypatch
+    ):
+        from PySide6.QtWidgets import QMessageBox
+
+        from satellite_debug_tool.ui.settings_dialog import (
+            SETTINGS_SCOPE_CUSTOMER,
+            SettingsDialog,
+        )
+
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            QMessageBox,
+            "warning",
+            lambda _parent, _title, text: warnings.append(text),
+        )
+        dlg = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_CUSTOMER)
+        dlg._external_power_host.setText("invalid-host")
+        dlg._on_accept()
+        assert warnings
+        assert tmp_settings.get("external_power.host") == ""
+
+        dlg._external_power_host.setText("192.168.1.108")
+        dlg._on_accept()
+        assert tmp_settings.get("external_power.host") == "192.168.1.108"
+        dlg.deleteLater()
+
+        clear_dialog = SettingsDialog(
+            tmp_settings,
+            scope=SETTINGS_SCOPE_CUSTOMER,
+        )
+        clear_dialog._external_power_host.clear()
+        clear_dialog._on_accept()
+        assert tmp_settings.get("external_power.host") == ""
+        clear_dialog.deleteLater()
+
+    def test_hidden_production_fields_are_not_overwritten(
+        self, qapp, tmp_settings
+    ):
+        from satellite_debug_tool.ui.settings_dialog import (
+            SETTINGS_SCOPE_CUSTOMER,
+            SettingsDialog,
+        )
+
+        original_branding = {
+            "company_name": "SoftHertz",
+            "logo_path": "/logo.png",
+            "header": "H",
+            "footer": "F",
+            "tester_role": "T",
+            "reviewer_role": "R",
+        }
+        tmp_settings.set("paths.production_report_dir", "/reports")
+        tmp_settings.set("production.report_branding", original_branding)
+        dlg = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_CUSTOMER)
+        dlg._report_root_edit.setText("/must-not-save")
+        dlg._report_company.setText("must-not-save")
+        dlg._on_accept()
+
+        assert tmp_settings.get("paths.production_report_dir") == "/reports"
+        assert tmp_settings.get("production.report_branding") == original_branding
+        dlg.deleteLater()
+
     def test_init_loads_current_values(self, qapp, tmp_settings):
         """弹窗打开时 LineEdit 显示 settings 当前值。"""
         from satellite_debug_tool.ui.settings_dialog import SettingsDialog

@@ -175,6 +175,10 @@ def test_zero_device_state_does_not_construct_core_pages_and_playback_stays_glob
     assert workspace.active_endpoint is None
     assert workspace._overview_pages.empty_state.has_devices is False
     assert factory_calls == []
+
+    workspace.set_page("iperf")
+    assert workspace._page_ids[workspace._stack.currentIndex()] == "iperf"
+    assert factory_calls == []
     workspace._overview_pages.empty_state._add_button.click()
     assert add_events == [True]
 

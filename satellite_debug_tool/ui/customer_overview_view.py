@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import partial
 import math
-from typing import Optional
+from typing import Callable, Optional
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
@@ -24,6 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.comm import DeviceConnectionPhase
+from satellite_debug_tool.core.external_power_monitor import (
+    ExternalPowerPhase,
+    ExternalPowerStore,
+)
 from satellite_debug_tool.core.product import (
     Availability,
     ControlMode,
@@ -44,6 +48,7 @@ from satellite_debug_tool.ui.component_temperature_window import (
     ComponentTemperatureAnchor,
     ComponentTemperatureWindow,
 )
+from satellite_debug_tool.ui.external_power_window import ExternalPowerAnchor
 from satellite_debug_tool.ui.semantic_style import (
     set_semantic_properties,
     set_semantic_property,
@@ -264,12 +269,16 @@ class CustomerOverviewView(QWidget):
         *,
         enable_3d: bool = True,
         playback_mode: bool = False,
+        external_power_store: Optional[ExternalPowerStore] = None,
+        external_power_presenter: Optional[Callable[[QWidget], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._live = live_view
         self._settings = settings
         self._theme = "dark"
         self._playback_mode = bool(playback_mode)
+        self._external_power_store = external_power_store
+        self._external_power_presenter = external_power_presenter
         self._projector = LegacyV2Projector(
             live_view.profile_store(),
             live_view.data_store(),
@@ -286,6 +295,8 @@ class CustomerOverviewView(QWidget):
         self._view_active = False
         self._temperature_windows: dict[str, ComponentTemperatureWindow] = {}
         self._setup_ui(enable_3d)
+        if self._external_power_store is not None:
+            self._external_power_store.updated.connect(self._on_external_power_updated)
         self._live.connection_state_changed.connect(self._on_connection_changed)
         phase_signal = getattr(
             self._live, "device_connection_phase_changed", None
@@ -599,6 +610,27 @@ class CustomerOverviewView(QWidget):
             self._component_title_sources[key] = title
             self._component_layout.addWidget(item, 1)
 
+        power_item = ExternalPowerAnchor()
+        power_item.setObjectName("customerComponentItem")
+        power_item.activated.connect(self._show_external_power_history)
+        power_layout = QVBoxLayout(power_item)
+        power_layout.setContentsMargins(10, 1, 10, 1)
+        power_layout.setSpacing(1)
+        power_name = QLabel(tr("External power"))
+        power_name.setObjectName("customerComponentName")
+        power_name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        power_detail = QLabel(tr("Not configured"))
+        power_detail.setObjectName("customerComponentDetail")
+        power_detail.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        power_detail.setMinimumWidth(0)
+        power_detail.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        power_layout.addWidget(power_name)
+        power_layout.addWidget(power_detail)
+        self._component_widgets["external_power"] = power_item
+        self._component_names["external_power"] = power_name
+        self._component_details["external_power"] = power_detail
+        self._component_layout.addWidget(power_item, 1)
+
         self._root_layout.addWidget(self._signal_panel)
         self._root_layout.addWidget(self._component_panel)
         self._apply_density("dense")
@@ -871,6 +903,7 @@ class CustomerOverviewView(QWidget):
         self._refresh_model(snapshot)
         self._refresh_snr(snapshot)
         self._refresh_components(snapshot)
+        self._refresh_external_power()
 
     def activate_view(self) -> None:
         """Refresh and animate the customer overview while it is visible."""
@@ -1363,6 +1396,41 @@ class CustomerOverviewView(QWidget):
             self._temperature_windows[component_key] = window
         window.present_near(self._component_widgets[component_key])
 
+    @Slot()
+    def _on_external_power_updated(self) -> None:
+        if self._view_active:
+            self._refresh_external_power()
+
+    def _refresh_external_power(self) -> None:
+        store = self._external_power_store
+        if store is None:
+            text = tr("Not configured")
+        else:
+            snapshot = store.snapshot
+            if snapshot.phase is ExternalPowerPhase.UNCONFIGURED:
+                text = tr("Not configured")
+            elif snapshot.phase is ExternalPowerPhase.INACTIVE:
+                text = tr("Monitoring inactive")
+            elif snapshot.phase is ExternalPowerPhase.CONNECTING:
+                text = tr("Connecting")
+            elif snapshot.phase is ExternalPowerPhase.READ_FAILED:
+                text = tr("Read failed")
+            elif snapshot.sample is None:
+                text = tr("Data unavailable")
+            else:
+                sample = snapshot.sample
+                text = (
+                    f"{tr('Online')} · {sample.voltage_v:.2f} V · "
+                    f"{sample.current_a:.3f} A · {sample.power_w:.2f} W"
+                )
+        self._component_details["external_power"].setText(text)
+        self._component_details["external_power"].setToolTip(text)
+
+    @Slot()
+    def _show_external_power_history(self) -> None:
+        if self._external_power_presenter is not None:
+            self._external_power_presenter(self._component_widgets["external_power"])
+
     @staticmethod
     def _format_component_value(value: ProductValue[float], unit: str) -> str:
         if value.value is None:
@@ -1461,6 +1529,11 @@ class CustomerOverviewView(QWidget):
             component_item = self._component_widgets[key]
             if isinstance(component_item, ComponentTemperatureAnchor):
                 component_item.retranslate_ui()
+        self._component_names["external_power"].setText(tr("External power"))
+        power_item = self._component_widgets["external_power"]
+        if isinstance(power_item, ExternalPowerAnchor):
+            power_item.retranslate_ui()
+        self._refresh_external_power()
         for window in self._temperature_windows.values():
             window.retranslate_ui()
         for metric in self._beam_values.values():
