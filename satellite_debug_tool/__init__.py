@@ -4,7 +4,7 @@
 英文产品名：SoftHertz Phased-Array Terminal Tool
 """
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 __app_name_cn__ = "软赫卫星通信相控阵设备调试系统"
 __app_name_en__ = "SoftHertz Phased-Array Terminal Tool"
 __company_cn__ = "南京软赫电子"
