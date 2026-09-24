@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -59,24 +60,15 @@ class Settings:
         # 不再作为运行期权威状态源。
         "udp": {},
         "device_udp": {"local_port": 45678},
-        "external_power": {"host": ""},
+        # M28 起只保留主机级 iperf3 可执行文件；电源和测试参数归属客户设备。
         "iperf": {
             "executable": "",
-            "server": "60.205.157.141",
-            "local_host": "",
-            "protocol": "udp",
-            "direction": "both",
-            "ul_port": 5201,
-            "dl_port": 5202,
-            "ul_rate": "491K",
-            "dl_rate": "200K",
-            "continuous": True,
-            "duration_hours": 24.0,
         },
         "customer": {"devices": [], "active_endpoint": None},
         "config_migrations": {
             "device_udp_port_v1": True,
             "customer_devices_v1": True,
+            "customer_accessories_v1": True,
         },
         "ui": {
             "time_window": 10.0,
@@ -208,6 +200,7 @@ class Settings:
             raise DeviceSettingsMigrationError("settings root must be a JSON object")
         migrated = self._migrate_device_udp_port(config)
         migrated = self._migrate_customer_devices(config) or migrated
+        migrated = self._migrate_customer_accessories(config) or migrated
         ui = config.get("ui")
         if not isinstance(ui, dict) or "active_tab" not in ui:
             return migrated
@@ -248,7 +241,86 @@ class Settings:
         ):
             raise DeviceSettingsMigrationError(f"customer endpoint is not IPv4 unicast: {raw_ip}")
         port = cls._valid_port(value.get("port"))
-        return {"ip": str(ip), "port": port}
+        raw_id = str(value.get("id", "")).strip()
+        if raw_id:
+            try:
+                device_id = str(uuid.UUID(raw_id))
+            except ValueError as exc:
+                raise DeviceSettingsMigrationError(
+                    "customer device id must be a UUID"
+                ) from exc
+        else:
+            device_id = str(uuid.uuid4())
+        return {
+            "id": device_id,
+            "ip": str(ip),
+            "port": port,
+            "external_power": cls._normalize_external_power_profile(
+                value.get("external_power", {})
+            ),
+            "iperf": cls._normalize_device_iperf_profile(value.get("iperf", {})),
+        }
+
+    @staticmethod
+    def _normalize_external_power_profile(value: object) -> dict[str, object]:
+        if value is None:
+            value = {}
+        if not isinstance(value, dict):
+            raise DeviceSettingsMigrationError("external power profile must be an object")
+        host = str(value.get("host", "")).strip()
+        if host:
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError as exc:
+                raise DeviceSettingsMigrationError(
+                    "external power host must be an IPv4 address"
+                ) from exc
+            if address.version != 4 or address.is_unspecified or address.is_multicast:
+                raise DeviceSettingsMigrationError(
+                    "external power host must be an IPv4 address"
+                )
+            host = str(address)
+        try:
+            voltage = float(value.get("voltage_set_v", 12.0))
+            current = float(value.get("current_set_a", 12.0))
+        except (TypeError, ValueError) as exc:
+            raise DeviceSettingsMigrationError(
+                "external power setpoints must be numeric"
+            ) from exc
+        if not (0.0 < voltage <= 80.0 and 0.0 < current <= 27.0):
+            raise DeviceSettingsMigrationError("external power setpoints are out of range")
+        if voltage * current > 720.0:
+            raise DeviceSettingsMigrationError("external power setpoints exceed 720 W")
+        return {
+            "host": host,
+            "voltage_set_v": voltage,
+            "current_set_a": current,
+        }
+
+    @classmethod
+    def _normalize_device_iperf_profile(cls, value: object) -> dict[str, object]:
+        if value is None:
+            value = {}
+        if not isinstance(value, dict):
+            raise DeviceSettingsMigrationError("device iperf profile must be an object")
+        protocol = str(value.get("protocol", "udp")).strip().lower()
+        direction = str(value.get("direction", "both")).strip().lower()
+        if protocol not in {"udp", "tcp"}:
+            raise DeviceSettingsMigrationError("device iperf protocol must be udp or tcp")
+        if direction not in {"ul", "dl", "both"}:
+            raise DeviceSettingsMigrationError("device iperf direction is invalid")
+        return {
+            "server": str(value.get("server", "60.205.157.141")).strip(),
+            "local_host": str(value.get("local_host", "")).strip(),
+            "protocol": protocol,
+            "direction": direction,
+            "ul_port": cls._valid_port(value.get("ul_port", 5201)),
+            "dl_port": cls._valid_port(value.get("dl_port", 5202)),
+            "ul_rate": str(value.get("ul_rate", "491K")).strip(),
+            "dl_rate": str(value.get("dl_rate", "200K")).strip(),
+            "continuous": bool(value.get("continuous", True)),
+            "duration_hours": float(value.get("duration_hours", 24.0)),
+        }
 
     @classmethod
     def _normalize_customer_devices(cls, value: object) -> list[dict[str, object]]:
@@ -258,6 +330,7 @@ class Settings:
             raise DeviceSettingsMigrationError("customer.devices supports at most 4 endpoints")
         result: list[dict[str, object]] = []
         seen: set[tuple[str, int]] = set()
+        seen_ids: set[str] = set()
         for raw in value:
             item = cls._normalize_customer_device(raw)
             endpoint = (str(item["ip"]), int(item["port"]))
@@ -266,6 +339,12 @@ class Settings:
                     f"duplicate customer endpoint: {endpoint[0]}:{endpoint[1]}"
                 )
             seen.add(endpoint)
+            device_id = str(item["id"])
+            if device_id in seen_ids:
+                raise DeviceSettingsMigrationError(
+                    f"duplicate customer device id: {device_id}"
+                )
+            seen_ids.add(device_id)
             result.append(item)
         return result
 
@@ -277,10 +356,70 @@ class Settings:
     ) -> dict[str, object] | None:
         if value is None:
             return None
-        active = cls._normalize_customer_device(value)
+        active_record = cls._normalize_customer_device(value)
+        active = {"ip": active_record["ip"], "port": active_record["port"]}
         endpoint = (str(active["ip"]), int(active["port"]))
         members = {(str(item["ip"]), int(item["port"])) for item in devices}
         return active if endpoint in members else None
+
+    @classmethod
+    def _migrate_customer_accessories(cls, config: dict[str, Any]) -> bool:
+        migrations = config.setdefault("config_migrations", {})
+        if not isinstance(migrations, dict):
+            raise DeviceSettingsMigrationError("config_migrations must be an object")
+        customer = config.get("customer")
+        if not isinstance(customer, dict):
+            raise DeviceSettingsMigrationError("customer must be an object")
+        devices = customer.get("devices")
+        if not isinstance(devices, list):
+            raise DeviceSettingsMigrationError("customer.devices must be a list")
+        normalized = cls._normalize_customer_devices(devices)
+        power_owners: dict[str, str] = {}
+        for item in normalized:
+            profile = item["external_power"]
+            host = str(profile["host"]).strip()
+            if not host:
+                continue
+            previous = power_owners.get(host)
+            if previous is not None:
+                raise DeviceSettingsMigrationError(
+                    f"external power {host}:2268 is assigned to multiple customer devices"
+                )
+            power_owners[host] = str(item["id"])
+        changed = normalized != devices
+        customer["devices"] = normalized
+        if migrations.get("customer_accessories_v1") is True:
+            return changed
+
+        target: dict[str, object] | None = None
+        active = customer.get("active_endpoint")
+        if isinstance(active, dict):
+            target = next(
+                (
+                    item
+                    for item in normalized
+                    if item["ip"] == str(active.get("ip", ""))
+                    and item["port"] == active.get("port")
+                ),
+                None,
+            )
+        if target is None and len(normalized) == 1:
+            target = normalized[0]
+        legacy_power = config.pop("external_power", None)
+        legacy_iperf = config.get("iperf")
+        if target is not None:
+            if isinstance(legacy_power, dict):
+                target["external_power"] = cls._normalize_external_power_profile(
+                    legacy_power
+                )
+            if isinstance(legacy_iperf, dict):
+                target["iperf"] = cls._normalize_device_iperf_profile(legacy_iperf)
+        executable = ""
+        if isinstance(legacy_iperf, dict):
+            executable = str(legacy_iperf.get("executable", "")).strip()
+        config["iperf"] = {"executable": executable}
+        migrations["customer_accessories_v1"] = True
+        return True
 
     @classmethod
     def _migrate_device_udp_port(cls, config: dict[str, Any]) -> bool:
@@ -414,7 +553,7 @@ class Settings:
                     {"ip": udp["remote_ip"], "port": udp["remote_port"]}
                 )
                 devices = [item]
-                active = item
+                active = {"ip": item["ip"], "port": item["port"]}
             else:
                 raise DeviceSettingsMigrationError(
                     "legacy customer endpoint is incomplete"
@@ -693,6 +832,7 @@ class Settings:
         candidate["config_migrations"] = {
             "device_udp_port_v1": True,
             "customer_devices_v1": True,
+            "customer_accessories_v1": True,
         }
         payload = self._json_bytes(candidate)
         evidence_path = self._preserve_recovery_evidence()

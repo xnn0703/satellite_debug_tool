@@ -15,10 +15,11 @@ from satellite_debug_tool.ui.lazy_view_host import LazyViewHost
 from satellite_debug_tool.ui.view_lifecycle import activate_view, deactivate_view
 
 
-_SESSION_PAGE_IDS = frozenset(("overview", "rf", "maintenance"))
+_SESSION_PAGE_IDS = frozenset(("overview", "rf", "iperf", "maintenance"))
 _PAGE_ATTRIBUTE_ALIASES = {
     "overview": ("overview", "overview_view"),
     "rf": ("rf", "rf_control", "rf_view", "rf_control_view"),
+    "iperf": ("iperf", "iperf_view", "network_test"),
     "maintenance": ("maintenance", "maintenance_view"),
 }
 
@@ -35,11 +36,15 @@ class CustomerEndpointPageBundle:
     overview: object
     rf: object
     maintenance: object
+    iperf: object | None = None
 
     def page(self, page_id: str) -> object:
         if page_id not in _SESSION_PAGE_IDS:
             raise KeyError(page_id)
-        return getattr(self, page_id)
+        value = getattr(self, page_id)
+        if value is None:
+            raise AttributeError(f"customer page bundle has no {page_id!r} page")
+        return value
 
 
 class CustomerPageBundleAdapter:

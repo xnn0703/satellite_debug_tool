@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QEventLoop, QObject, QTimer, Signal, Slot
 
 from satellite_debug_tool.core.customer.device_directory import (
     CustomerDeviceSupplementalFacts,
@@ -14,11 +15,18 @@ from satellite_debug_tool.core.customer.device_directory import (
 from satellite_debug_tool.core.customer.session_binding import (
     CustomerEndpointSessionBinding,
 )
+from satellite_debug_tool.core.external_power_monitor import (
+    ExternalPowerMonitor,
+    ExternalPowerStore,
+)
+from satellite_debug_tool.core.iperf_test import IperfTestController, IperfTestStore
+from satellite_debug_tool.ui.customer_iperf_view import CustomerIperfView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
 from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
+from satellite_debug_tool.ui.external_power_window import ExternalPowerHistoryWindow
 from satellite_debug_tool.ui.tracking_simulator_view import TrackingSimulatorView
 from satellite_debug_tool.ui.view_lifecycle import deactivate_view
 
@@ -38,6 +46,9 @@ class CustomerEndpointSessionBundle:
         on_shutdown: Optional[Callable[[Endpoint, object], None]] = None,
         external_power_store=None,
         external_power_presenter: Optional[Callable[[object], None]] = None,
+        power_host_claim=None,
+        iperf_resource_claim=None,
+        iperf_resource_release=None,
     ) -> None:
         self.endpoint = normalize_customer_endpoint(endpoint)
         self._settings = settings
@@ -46,6 +57,10 @@ class CustomerEndpointSessionBundle:
         self._on_shutdown = on_shutdown
         self._external_power_store = external_power_store
         self._external_power_presenter = external_power_presenter
+        self._power_host_claim = power_host_claim
+        self._iperf_resource_claim = iperf_resource_claim
+        self._iperf_resource_release = iperf_resource_release
+        self._customer_active = True
         self._theme = "dark"
         self._scale = "small"
         self._shutdown = False
@@ -59,6 +74,60 @@ class CustomerEndpointSessionBundle:
             customer_binding=self.binding,
             defer_presentation=True,
         )
+        self.device_id = ""
+        self._power_profile: dict[str, object] = {}
+        self._iperf_profile: dict[str, object] = {}
+        self._power_monitor: Optional[ExternalPowerMonitor] = None
+        self._power_window: Optional[ExternalPowerHistoryWindow] = None
+        self._iperf_store: Optional[IperfTestStore] = None
+        self._iperf_controller: Optional[IperfTestController] = None
+        record_provider = getattr(device_directory, "device_record", None)
+        if callable(record_provider):
+            record = record_provider(self.endpoint)
+            self.device_id = str(record.get("id", ""))
+            self._power_profile = dict(record.get("external_power", {}))
+            self._iperf_profile = dict(record.get("iperf", {}))
+            self._external_power_store = ExternalPowerStore()
+            self._power_monitor = ExternalPowerMonitor(self._external_power_store)
+            self._power_monitor.configure(
+                str(self._power_profile.get("host", "")),
+                float(self._power_profile.get("voltage_set_v", 12.0)),
+                float(self._power_profile.get("current_set_a", 12.0)),
+            )
+            self._power_monitor.set_active(True)
+            self._iperf_store = IperfTestStore()
+            self._iperf_controller = IperfTestController(
+                self._iperf_store,
+                self._external_power_store,
+                Path(settings.config_directory) / "iperf_sessions" / self.device_id,
+                resource_claim=(
+                    (lambda config: self._iperf_resource_claim(self.endpoint, config))
+                    if self._iperf_resource_claim is not None
+                    else None
+                ),
+                resource_release=(
+                    (lambda: self._iperf_resource_release(self.endpoint))
+                    if self._iperf_resource_release is not None
+                    else None
+                ),
+            )
+            self._iperf_controller.active_changed.connect(
+                lambda _active: self._sync_power_activity()
+            )
+            self._external_power_store.sample_received.connect(
+                lambda sample: self.live.record_external_power_sample(
+                    sample,
+                    device_id=self.device_id,
+                    endpoint=self.endpoint,
+                )
+            )
+            self._power_monitor.action_finished.connect(
+                lambda outcome: self.live.record_external_power_action(
+                    outcome,
+                    device_id=self.device_id,
+                    endpoint=self.endpoint,
+                )
+            )
         self._live_status_slot = status_sink
         self._recording_facts_slot = None
         self._connection_facts_slot = None
@@ -85,6 +154,7 @@ class CustomerEndpointSessionBundle:
         self._overview: Optional[CustomerOverviewView] = None
         self._rf: Optional[CustomerRfControlView] = None
         self._maintenance: Optional[CustomerMaintenanceView] = None
+        self._iperf: Optional[CustomerIperfView] = None
         self._device: Optional[DeviceView] = None
         self._tracking: Optional[TrackingSimulatorView] = None
 
@@ -100,11 +170,16 @@ class CustomerEndpointSessionBundle:
     def maintenance(self):
         return self._create_maintenance
 
+    @property
+    def iperf(self):
+        return self._create_iperf
+
     def page(self, page_id: str):
         return {
             "overview": self._create_overview,
             "rf": self._create_rf,
             "maintenance": self._create_maintenance,
+            "iperf": self._create_iperf,
         }[page_id]
 
     def _finish_view(self, view):
@@ -119,7 +194,7 @@ class CustomerEndpointSessionBundle:
                     self.live,
                     self._settings,
                     external_power_store=self._external_power_store,
-                    external_power_presenter=self._external_power_presenter,
+                    external_power_presenter=self._show_external_power,
                 )
             )
         return self._overview
@@ -133,6 +208,69 @@ class CustomerEndpointSessionBundle:
                 )
             )
         return self._rf
+
+    def _create_iperf(self) -> CustomerIperfView:
+        if self._iperf is None:
+            if self._iperf_controller is None or self._iperf_store is None:
+                raise RuntimeError("device iperf owner is unavailable")
+            self._iperf = self._finish_view(
+                CustomerIperfView(
+                    self._iperf_controller,
+                    self._iperf_store,
+                    self._external_power_store,
+                    self._settings,
+                    device_id=self.device_id,
+                    endpoint=self.endpoint,
+                    profile_provider=lambda: dict(self._iperf_profile),
+                    save_profile=self._save_iperf_profile,
+                )
+            )
+            if self._status_sink is not None:
+                self._iperf.status_message.connect(self._status_sink)
+        return self._iperf
+
+    def _show_external_power(self, anchor) -> None:
+        if self._external_power_store is None:
+            return
+        if self._power_window is None:
+            self._power_window = ExternalPowerHistoryWindow(
+                self._external_power_store,
+                theme=self._theme,
+                monitor=self._power_monitor,
+                device_label=f"{self.endpoint[0]}:{self.endpoint[1]}",
+                profile=self._power_profile,
+                save_profile=self._save_power_profile,
+            )
+        self._power_window.present_near(anchor)
+
+    def _save_power_profile(self, profile: dict[str, object]) -> None:
+        host = str(profile.get("host", "")).strip()
+        if self._power_host_claim is not None:
+            self._power_host_claim(self.endpoint, host)
+        self.binding.directory.update_accessories(
+            self.endpoint,
+            external_power=profile,
+        )
+        self._power_profile = dict(profile)
+
+    def _save_iperf_profile(self, profile: dict[str, object]) -> None:
+        self.binding.directory.update_accessories(
+            self.endpoint,
+            iperf=profile,
+        )
+        self._iperf_profile = dict(profile)
+
+    def set_customer_active(self, active: bool) -> None:
+        self._customer_active = bool(active)
+        self._sync_power_activity()
+
+    def _sync_power_activity(self) -> None:
+        if self._power_monitor is None:
+            return
+        iperf_active = bool(
+            self._iperf_controller is not None and self._iperf_controller.active
+        )
+        self._power_monitor.set_active(self._customer_active or iperf_active)
 
     def device_view(self) -> DeviceView:
         if self._device is None:
@@ -188,6 +326,7 @@ class CustomerEndpointSessionBundle:
             self._overview,
             self._rf,
             self._maintenance,
+            self._iperf,
             self._device,
             self._tracking,
         ):
@@ -200,6 +339,7 @@ class CustomerEndpointSessionBundle:
             self._overview,
             self._rf,
             self._maintenance,
+            self._iperf,
             self._device,
             self._tracking,
         ):
@@ -213,6 +353,7 @@ class CustomerEndpointSessionBundle:
             self._overview,
             self._rf,
             self._maintenance,
+            self._iperf,
             self.live,
             self._device,
             self._tracking,
@@ -224,6 +365,12 @@ class CustomerEndpointSessionBundle:
                 return False
             if not self.live.shutdown():
                 return False
+        if self._iperf_controller is not None and not self._iperf_controller.shutdown():
+            return False
+        if self._power_monitor is not None and not self._power_monitor.shutdown():
+            return False
+        if self._power_window is not None:
+            self._power_window.close()
         self._shutdown = True
         if self._live_status_slot is not None:
             self._disconnect_signal(
@@ -253,6 +400,7 @@ class CustomerEndpointSessionBundle:
             self._overview,
             self._rf,
             self._maintenance,
+            self._iperf,
             self.live,
             self._device,
             self._tracking,
@@ -298,6 +446,8 @@ class CustomerEndpointSessionBundleFactory(QObject):
         self._theme = "dark"
         self._scale = "small"
         self._directory_devices_signal = None
+        self._customer_active = True
+        self._iperf_claims: dict[Endpoint, object] = {}
 
     def bind_device_directory(self, device_directory) -> None:
         if self._device_directory is not None:
@@ -340,7 +490,11 @@ class CustomerEndpointSessionBundleFactory(QObject):
             on_shutdown=self._forget_bundle,
             external_power_store=self._external_power_store,
             external_power_presenter=self._external_power_presenter,
+            power_host_claim=self._claim_power_host,
+            iperf_resource_claim=self._claim_iperf_resources,
+            iperf_resource_release=self._release_iperf_resources,
         )
+        bundle.set_customer_active(self._customer_active)
         bundle.set_theme(self._theme, self._scale)
         self._bundles[normalized] = bundle
         return bundle
@@ -354,6 +508,118 @@ class CustomerEndpointSessionBundleFactory(QObject):
     def _forget_bundle(self, endpoint: Endpoint, bundle: object) -> None:
         if self._bundles.get(endpoint) is bundle:
             self._bundles.pop(endpoint, None)
+
+    def _claim_power_host(self, owner: Endpoint, host: str) -> None:
+        normalized = str(host).strip()
+        if not normalized or self._device_directory is None:
+            return
+        for endpoint in self._device_directory.endpoints():
+            if endpoint == owner:
+                continue
+            record = self._device_directory.device_record(endpoint)
+            profile = record.get("external_power", {})
+            if isinstance(profile, dict) and str(profile.get("host", "")).strip() == normalized:
+                raise ValueError(
+                    f"external power {normalized}:2268 is already assigned to "
+                    f"{endpoint[0]}:{endpoint[1]}"
+                )
+
+    def _claim_iperf_resources(self, owner: Endpoint, config) -> None:
+        requested_ports = {
+            (config.server, config.protocol.value, config.ul_port)
+            if direction == "ul"
+            else (config.server, config.protocol.value, config.dl_port)
+            for direction in config.direction.members()
+        }
+        for endpoint, existing in self._iperf_claims.items():
+            if endpoint == owner:
+                continue
+            if existing.local_host == config.local_host:
+                raise ValueError(
+                    f"local IPv4 {config.local_host} is already used by "
+                    f"{endpoint[0]}:{endpoint[1]}"
+                )
+            existing_ports = {
+                (existing.server, existing.protocol.value, existing.ul_port)
+                if direction == "ul"
+                else (existing.server, existing.protocol.value, existing.dl_port)
+                for direction in existing.direction.members()
+            }
+            conflict = requested_ports & existing_ports
+            if conflict:
+                server, protocol, port = sorted(conflict)[0]
+                raise ValueError(
+                    f"iperf3 {server} {protocol} port {port} is already used by "
+                    f"{endpoint[0]}:{endpoint[1]}"
+                )
+        self._iperf_claims[owner] = config
+
+    def _release_iperf_resources(self, owner: Endpoint) -> None:
+        self._iperf_claims.pop(owner, None)
+
+    def set_customer_active(self, active: bool) -> None:
+        self._customer_active = bool(active)
+        for bundle in self._bundles.values():
+            bundle.set_customer_active(active)
+
+    @property
+    def any_iperf_active(self) -> bool:
+        return any(
+            bundle._iperf_controller is not None
+            and bundle._iperf_controller.active
+            for bundle in self._bundles.values()
+        )
+
+    @property
+    def any_power_action_pending(self) -> bool:
+        return any(
+            bundle._power_monitor is not None
+            and bundle._power_monitor.action_pending
+            for bundle in self._bundles.values()
+        )
+
+    def confirmed_power_outputs(self) -> tuple[Endpoint, ...]:
+        result: list[Endpoint] = []
+        for endpoint, bundle in self._bundles.items():
+            store = bundle._external_power_store
+            sample = store.snapshot.sample if store is not None else None
+            if sample is not None and sample.output_enabled:
+                result.append(endpoint)
+        return tuple(result)
+
+    def disable_confirmed_outputs(self, timeout_ms: int = 6000) -> bool:
+        from satellite_debug_tool.core.external_power_monitor import ExternalPowerAction
+
+        for endpoint in self.confirmed_power_outputs():
+            bundle = self._bundles[endpoint]
+            monitor = bundle._power_monitor
+            if monitor is None:
+                return False
+            loop = QEventLoop()
+            outcome_holder: list[object] = []
+
+            def finished(outcome) -> None:
+                if outcome.action is ExternalPowerAction.DISABLE:
+                    outcome_holder.append(outcome)
+                    loop.quit()
+
+            monitor.action_finished.connect(finished)
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(loop.quit)
+            try:
+                monitor.request_action(ExternalPowerAction.DISABLE)
+                timer.start(max(1, int(timeout_ms)))
+                loop.exec()
+            finally:
+                timer.stop()
+                try:
+                    monitor.action_finished.disconnect(finished)
+                except (RuntimeError, TypeError):
+                    pass
+            if not outcome_holder or not outcome_holder[-1].succeeded:
+                return False
+        return True
 
     def _reconcile_bundles(self) -> None:
         directory = self._device_directory
@@ -373,9 +639,33 @@ class CustomerEndpointSessionBundleFactory(QObject):
             business_state=(
                 "CAPTURE_PROFILE_RESYNC_REQUIRED"
                 if bundle is not None and bundle.live.capture_profile_resync_required
-                else ""
+                else (
+                    "NETWORK_TEST_RUNNING"
+                    if bundle is not None
+                    and bundle._iperf_controller is not None
+                    and bundle._iperf_controller.active
+                    else ""
+                )
             ),
             recording_active=bool(bundle is not None and bundle.recording_active),
+            operation_busy=bool(
+                bundle is not None
+                and (
+                    (
+                        bundle._iperf_controller is not None
+                        and bundle._iperf_controller.active
+                    )
+                    or (
+                        bundle._external_power_store is not None
+                        and bundle._external_power_store.snapshot.sample is not None
+                        and bundle._external_power_store.snapshot.sample.output_enabled
+                    )
+                    or (
+                        bundle._power_monitor is not None
+                        and bundle._power_monitor.action_pending
+                    )
+                )
+            ),
         )
 
     def set_theme(self, theme: str, scale: str = "small") -> None:
@@ -390,8 +680,8 @@ class CustomerEndpointSessionBundleFactory(QObject):
 
     @Slot(object)
     def record_external_power_sample(self, sample: object) -> None:
-        for bundle in self._bundles.values():
-            bundle.live.record_external_power_sample(sample)
+        # M28 samples are connected directly to their fixed endpoint bundle.
+        return None
 
     def shutdown_all(self) -> bool:
         for bundle in tuple(self._bundles.values()):

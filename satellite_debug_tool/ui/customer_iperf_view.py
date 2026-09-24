@@ -1,4 +1,4 @@
-"""Customer-facing global iperf3 power-test presentation."""
+"""Customer-facing endpoint-bound iperf3 power-test presentation."""
 
 from __future__ import annotations
 
@@ -74,6 +74,11 @@ class CustomerIperfView(QWidget):
         store: IperfTestStore,
         power_store,
         settings,
+        *,
+        device_id: str = "",
+        endpoint: tuple[str, int] | None = None,
+        profile_provider=None,
+        save_profile=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -81,6 +86,10 @@ class CustomerIperfView(QWidget):
         self._store = store
         self._power_store = power_store
         self._settings = settings
+        self._device_id = str(device_id)
+        self._endpoint = endpoint
+        self._profile_provider = profile_provider
+        self._save_profile = save_profile
         self._theme = "dark"
         self._active = False
         self._build_ui()
@@ -223,21 +232,29 @@ class CustomerIperfView(QWidget):
         return spin
 
     def _load_preferences(self) -> None:
+        profile = (
+            dict(self._profile_provider())
+            if self._profile_provider is not None
+            else {}
+        )
+        value = lambda key, default: profile.get(
+            key, self._settings.get(f"iperf.{key}", default)
+        )
         self._executable.setText(str(self._settings.get("iperf.executable", "")))
         if not self._executable.text().strip():
             from shutil import which
             self._executable.setText(which("iperf3") or "")
-        self._server.setText(str(self._settings.get("iperf.server", "60.205.157.141")))
-        self._refresh_local_addresses(str(self._settings.get("iperf.local_host", "")))
-        self._set_combo_data(self._protocol, str(self._settings.get("iperf.protocol", "udp")))
-        self._set_combo_data(self._direction, str(self._settings.get("iperf.direction", "both")))
-        self._ul_port.setValue(int(self._settings.get("iperf.ul_port", 5201)))
-        self._dl_port.setValue(int(self._settings.get("iperf.dl_port", 5202)))
-        self._ul_rate.setText(str(self._settings.get("iperf.ul_rate", "491K")))
-        self._dl_rate.setText(str(self._settings.get("iperf.dl_rate", "200K")))
-        continuous = bool(self._settings.get("iperf.continuous", True))
+        self._server.setText(str(value("server", "60.205.157.141")))
+        self._refresh_local_addresses(str(value("local_host", "")))
+        self._set_combo_data(self._protocol, str(value("protocol", "udp")))
+        self._set_combo_data(self._direction, str(value("direction", "both")))
+        self._ul_port.setValue(int(value("ul_port", 5201)))
+        self._dl_port.setValue(int(value("dl_port", 5202)))
+        self._ul_rate.setText(str(value("ul_rate", "491K")))
+        self._dl_rate.setText(str(value("dl_rate", "200K")))
+        continuous = bool(value("continuous", True))
         self._continuous.setChecked(continuous)
-        self._duration_hours.setValue(float(self._settings.get("iperf.duration_hours", 24.0)))
+        self._duration_hours.setValue(float(value("duration_hours", 24.0)))
         self._duration_hours.setEnabled(not continuous)
 
     def _refresh_local_addresses(self, selected: str = "") -> None:
@@ -277,6 +294,12 @@ class CustomerIperfView(QWidget):
             duration_seconds=(
                 0 if continuous else max(1, round(self._duration_hours.value() * 3600.0))
             ),
+            device_id=self._device_id,
+            device_endpoint=(
+                f"{self._endpoint[0]}:{self._endpoint[1]}"
+                if self._endpoint is not None
+                else ""
+            ),
         )
 
     @Slot()
@@ -309,8 +332,12 @@ class CustomerIperfView(QWidget):
             "continuous": config.continuous,
             "duration_hours": self._duration_hours.value(),
         }
-        for key, value in values.items():
-            self._settings.set(f"iperf.{key}", value)
+        self._settings.set("iperf.executable", values.pop("executable"))
+        if self._save_profile is not None:
+            self._save_profile(values)
+        else:
+            for key, value in values.items():
+                self._settings.set(f"iperf.{key}", value)
         self._settings.persist_preferences()
 
     @Slot()

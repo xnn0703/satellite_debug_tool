@@ -1,4 +1,4 @@
-"""Process-wide, read-only GW Instek PSW 80-27 monitoring."""
+"""Serialized GW Instek PSW80-27 monitoring and closed-loop control."""
 
 from __future__ import annotations
 
@@ -7,38 +7,28 @@ from dataclasses import dataclass
 from enum import Enum
 import ipaddress
 import math
-import socket
+import queue
 import time
-from typing import Callable, Optional, Protocol
+from typing import Callable, Optional
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from satellite_debug_tool.core.production.power_supply import (
     PowerIdentity,
-    PowerMeasurement,
+    PowerActionResult,
+    PowerSupplyConfig,
     PowerSupplyError,
-    ScpiLineCodec,
-    parse_bool,
-    parse_identity,
-    parse_int,
-    parse_measurement,
+    GwInstekPswAdapter,
+    psw80_27_validation_policy,
 )
 
 
 EXTERNAL_POWER_HISTORY_SECONDS = 30.0 * 60.0
 EXTERNAL_POWER_PORT = 2268
 EXTERNAL_POWER_SAMPLE_EVENT = "external_power_sample/v1"
-_READ_ONLY_QUERIES = frozenset(
-    {
-        "*IDN?",
-        "OUTP?",
-        "MEAS:ALL?",
-        "STAT:OPER:COND?",
-        "STAT:QUES:COND?",
-        "OUTP:PROT:TRIP?",
-    }
-)
+
+EXTERNAL_POWER_ACTION_EVENT = "external_power_action/v1"
 
 
 class ExternalPowerPhase(str, Enum):
@@ -52,6 +42,8 @@ class ExternalPowerPhase(str, Enum):
 @dataclass(frozen=True)
 class ExternalPowerConfig:
     host: str
+    voltage_set_v: float = 12.0
+    current_set_a: float = 12.0
     port: int = EXTERNAL_POWER_PORT
     connect_timeout_s: float = 2.0
     command_timeout_s: float = 2.0
@@ -68,6 +60,7 @@ class ExternalPowerConfig:
             raise PowerSupplyError("external power host must be an IPv4 address")
         if int(self.port) != EXTERNAL_POWER_PORT:
             raise PowerSupplyError("external power port must be 2268")
+        psw80_27_validation_policy(float(self.voltage_set_v), float(self.current_set_a))
         for name, value in (
             ("connect_timeout_s", self.connect_timeout_s),
             ("command_timeout_s", self.command_timeout_s),
@@ -78,6 +71,26 @@ class ExternalPowerConfig:
                 raise PowerSupplyError(f"{name} must be finite and positive")
         if not (64 <= int(self.max_line_bytes) <= 65536):
             raise PowerSupplyError("max_line_bytes must be 64..65536")
+
+    def supply_config(self) -> PowerSupplyConfig:
+        policy = psw80_27_validation_policy(
+            float(self.voltage_set_v), float(self.current_set_a)
+        )
+        return PowerSupplyConfig(
+            host=self.host,
+            port=self.port,
+            voltage_set_v=self.voltage_set_v,
+            current_set_a=self.current_set_a,
+            voltage_setpoint_tolerance_v=policy.voltage_setpoint_tolerance_v,
+            current_setpoint_tolerance_a=policy.current_setpoint_tolerance_a,
+            output_voltage_min_v=policy.output_voltage_min_v,
+            output_voltage_max_v=policy.output_voltage_max_v,
+            off_voltage_max_v=policy.off_voltage_max_v,
+            command_timeout_s=self.command_timeout_s,
+            connect_timeout_s=self.connect_timeout_s,
+            output_settle_timeout_s=3.0,
+            max_line_bytes=self.max_line_bytes,
+        )
 
 
 @dataclass(frozen=True)
@@ -125,131 +138,98 @@ class ExternalPowerSnapshot:
     error: str = ""
 
 
-class ReadOnlyPowerSession(Protocol):
-    @property
-    def identity(self) -> Optional[PowerIdentity]: ...
-
-    def connect(self) -> PowerIdentity: ...
-
-    def read_sample(self, generation: int) -> ExternalPowerSample: ...
-
-    def close(self) -> None: ...
+class ExternalPowerAction(str, Enum):
+    PREPARE = "prepare"
+    ENABLE = "enable"
+    DISABLE = "disable"
+    READ = "read"
 
 
-class PswReadOnlySession:
-    """A strict query-only PSW session with no command-writing surface."""
+@dataclass(frozen=True)
+class ExternalPowerActionOutcome:
+    action: ExternalPowerAction
+    action_id: str
+    succeeded: bool
+    sample: Optional[ExternalPowerSample] = None
+    error: str = ""
 
-    def __init__(
-        self,
-        config: ExternalPowerConfig,
-        *,
-        socket_factory: Callable[..., socket.socket] = socket.create_connection,
-        wall_clock_ns: Callable[[], int] = time.time_ns,
-        monotonic_clock_ns: Callable[[], int] = time.monotonic_ns,
-    ) -> None:
+    def metadata_event(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "event": EXTERNAL_POWER_ACTION_EVENT,
+            "action": self.action.value,
+            "action_id": self.action_id,
+            "succeeded": self.succeeded,
+            "error": self.error,
+        }
+        if self.sample is not None:
+            sample_payload = self.sample.metadata_event()
+            sample_payload.pop("event", None)
+            sample_payload.pop("host_timestamp_ns", None)
+            payload.update(sample_payload)
+        return payload
+
+
+class PswControlledSession:
+    """One adapter instance owns both polling and explicit control actions."""
+
+    def __init__(self, config: ExternalPowerConfig) -> None:
         config.validate()
-        self._config = config
-        self._socket_factory = socket_factory
-        self._wall_clock_ns = wall_clock_ns
-        self._monotonic_clock_ns = monotonic_clock_ns
-        self._socket: Optional[socket.socket] = None
-        self._codec = ScpiLineCodec(config.max_line_bytes)
-        self._identity: Optional[PowerIdentity] = None
+        self._adapter = GwInstekPswAdapter(config.supply_config())
 
     @property
     def identity(self) -> Optional[PowerIdentity]:
-        return self._identity
+        return self._adapter.identity
 
     def connect(self) -> PowerIdentity:
-        self.close()
-        try:
-            sock = self._socket_factory(
-                (self._config.host, self._config.port),
-                timeout=self._config.connect_timeout_s,
-            )
-            sock.settimeout(self._config.command_timeout_s)
-        except OSError as exc:
-            raise PowerSupplyError(f"cannot connect to external power supply: {exc}") from exc
-        self._socket = sock
-        try:
-            identity = parse_identity(self._query("*IDN?"))
-            if identity.manufacturer.strip().casefold() != "GW-INSTEK".casefold():
-                raise PowerSupplyError(
-                    f"unexpected external power manufacturer: {identity.manufacturer}"
-                )
-            if identity.model.strip().casefold() != "PSW 80-27".casefold():
-                raise PowerSupplyError(
-                    f"unexpected external power model: {identity.model}"
-                )
-        except Exception:
-            self.close()
-            raise
-        self._identity = identity
-        return identity
+        return self._adapter.connect()
 
     def read_sample(self, generation: int) -> ExternalPowerSample:
-        identity = self._identity
+        return self._sample(self._adapter.inspect(), generation)
+
+    def execute(
+        self,
+        action: ExternalPowerAction,
+        action_id: str,
+        generation: int,
+    ) -> ExternalPowerSample:
+        if action is ExternalPowerAction.PREPARE:
+            result = self._adapter.prepare_output_off(fixture_action_id=action_id)
+        elif action is ExternalPowerAction.ENABLE:
+            result = self._adapter.enable_output(fixture_action_id=action_id)
+        elif action is ExternalPowerAction.DISABLE:
+            result = self._adapter.disable_output(fixture_action_id=action_id)
+        elif action is ExternalPowerAction.READ:
+            result = self._adapter.inspect(fixture_action_id=action_id)
+        else:  # pragma: no cover - exhaustive enum guard
+            raise PowerSupplyError(f"unsupported external power action: {action}")
+        return self._sample(result, generation)
+
+    def close(self) -> None:
+        self._adapter.close()
+
+    def _sample(
+        self,
+        result: PowerActionResult,
+        generation: int,
+    ) -> ExternalPowerSample:
+        identity = self._adapter.identity
         if identity is None:
             raise PowerSupplyError("external power identity has not been verified")
-        output = parse_bool(self._query("OUTP?"))
-        measurement: PowerMeasurement = parse_measurement(self._query("MEAS:ALL?"))
-        operation = parse_int(self._query("STAT:OPER:COND?"))
-        questionable = parse_int(self._query("STAT:QUES:COND?"))
-        tripped = parse_bool(self._query("OUTP:PROT:TRIP?"))
-        voltage = float(measurement.voltage_v)
-        current = float(measurement.current_a)
-        power = voltage * current
-        if not all(math.isfinite(value) for value in (voltage, current, power)):
-            raise PowerSupplyError("external power measurement must be finite")
+        voltage = float(result.measurement.voltage_v)
+        current = float(result.measurement.current_a)
         return ExternalPowerSample(
-            host_timestamp_ns=self._wall_clock_ns(),
-            monotonic_ns=self._monotonic_clock_ns(),
+            host_timestamp_ns=time.time_ns(),
+            monotonic_ns=time.monotonic_ns(),
             connection_generation=int(generation),
             identity=identity,
             voltage_v=voltage,
             current_a=current,
-            power_w=power,
-            output_enabled=output,
-            operation_condition=operation,
-            questionable_condition=questionable,
-            protection_tripped=tripped,
+            power_w=voltage * current,
+            output_enabled=result.output_enabled,
+            operation_condition=result.operation_condition,
+            questionable_condition=result.questionable_condition,
+            protection_tripped=result.protection_tripped,
         )
-
-    def close(self) -> None:
-        sock, self._socket = self._socket, None
-        self._identity = None
-        self._codec.reset()
-        if sock is not None:
-            try:
-                sock.close()
-            except OSError:
-                pass
-
-    def _query(self, command: str) -> str:
-        normalized = str(command).strip().upper()
-        if normalized not in _READ_ONLY_QUERIES:
-            raise PowerSupplyError(f"external power query is not allowed: {command}")
-        sock = self._socket
-        if sock is None:
-            raise PowerSupplyError("external power supply is not connected")
-        try:
-            sock.sendall((normalized + "\n").encode("ascii"))
-            while True:
-                chunk = sock.recv(1024)
-                if not chunk:
-                    raise PowerSupplyError("external power supply closed the connection")
-                lines = self._codec.feed(chunk)
-                if not lines:
-                    continue
-                if len(lines) != 1 or self._codec.buffered_bytes:
-                    self._codec.reset()
-                    raise PowerSupplyError("unexpected extra external power response data")
-                response = lines[0].strip()
-                if not response:
-                    raise PowerSupplyError("external power query returned an empty response")
-                return response
-        except (OSError, PowerSupplyError) as exc:
-            raise PowerSupplyError(f"external power query failed: {exc}") from exc
 
 
 class ExternalPowerStore(QObject):
@@ -303,12 +283,13 @@ class ExternalPowerStore(QObject):
 class ExternalPowerWorker(QThread):
     state_changed = Signal(object)
     sample_ready = Signal(object)
+    action_finished = Signal(object)
 
     def __init__(
         self,
         config: ExternalPowerConfig,
         *,
-        session_factory: Callable[[ExternalPowerConfig], ReadOnlyPowerSession] = PswReadOnlySession,
+        session_factory: Callable[[ExternalPowerConfig], object] = PswControlledSession,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -316,6 +297,10 @@ class ExternalPowerWorker(QThread):
         self._config = config
         self._session_factory = session_factory
         self._initial_generation = 0
+        self._actions: queue.Queue[tuple[ExternalPowerAction, str]] = queue.Queue()
+
+    def request_action(self, action: ExternalPowerAction, action_id: str) -> None:
+        self._actions.put((ExternalPowerAction(action), str(action_id).strip()))
 
     def set_initial_generation(self, generation: int) -> None:
         if self.isRunning():
@@ -345,7 +330,34 @@ class ExternalPowerWorker(QThread):
                     )
                 )
                 while not self.isInterruptionRequested():
-                    self.sample_ready.emit(session.read_sample(generation))
+                    try:
+                        action, action_id = self._actions.get_nowait()
+                    except queue.Empty:
+                        action = None
+                    if action is None:
+                        self.sample_ready.emit(session.read_sample(generation))
+                    else:
+                        try:
+                            sample = session.execute(action, action_id, generation)
+                        except (OSError, PowerSupplyError, ValueError) as exc:
+                            self.action_finished.emit(
+                                ExternalPowerActionOutcome(
+                                    action=action,
+                                    action_id=action_id,
+                                    succeeded=False,
+                                    error=str(exc),
+                                )
+                            )
+                        else:
+                            self.sample_ready.emit(sample)
+                            self.action_finished.emit(
+                                ExternalPowerActionOutcome(
+                                    action=action,
+                                    action_id=action_id,
+                                    succeeded=True,
+                                    sample=sample,
+                                )
+                            )
                     if self._wait_interruptibly(self._config.poll_interval_s):
                         break
             except (OSError, PowerSupplyError, ValueError) as exc:
@@ -377,6 +389,8 @@ class ExternalPowerWorker(QThread):
 class ExternalPowerMonitor(QObject):
     """Own worker lifetime and preserve one Store across customer endpoint switches."""
 
+    action_finished = Signal(object)
+
     def __init__(
         self,
         store: ExternalPowerStore,
@@ -388,8 +402,11 @@ class ExternalPowerMonitor(QObject):
         self._store = store
         self._worker_factory = worker_factory
         self._host = ""
+        self._voltage_set_v = 12.0
+        self._current_set_a = 12.0
         self._active = False
         self._worker: Optional[ExternalPowerWorker] = None
+        self._pending_actions = 0
 
     @property
     def host(self) -> str:
@@ -399,14 +416,33 @@ class ExternalPowerMonitor(QObject):
     def active(self) -> bool:
         return self._active
 
-    def configure(self, host: str) -> None:
+    @property
+    def action_pending(self) -> bool:
+        return self._pending_actions > 0
+
+    def configure(
+        self,
+        host: str,
+        voltage_set_v: float = 12.0,
+        current_set_a: float = 12.0,
+    ) -> None:
         normalized = str(host).strip()
         if normalized:
-            ExternalPowerConfig(normalized).validate()
-        if normalized == self._host:
+            ExternalPowerConfig(
+                normalized,
+                voltage_set_v=float(voltage_set_v),
+                current_set_a=float(current_set_a),
+            ).validate()
+        if (
+            normalized == self._host
+            and float(voltage_set_v) == self._voltage_set_v
+            and float(current_set_a) == self._current_set_a
+        ):
             return
         self._stop_worker()
         self._host = normalized
+        self._voltage_set_v = float(voltage_set_v)
+        self._current_set_a = float(current_set_a)
         self._store.clear(
             host=normalized,
             phase=(
@@ -440,13 +476,28 @@ class ExternalPowerMonitor(QObject):
         self._active = False
         return self._stop_worker(timeout_ms=timeout_ms)
 
+    def request_action(self, action: ExternalPowerAction, action_id: str = "") -> None:
+        worker = self._worker
+        if worker is None or not worker.isRunning():
+            raise PowerSupplyError("external power supply is not connected")
+        token = str(action_id).strip() or f"customer-{time.time_ns()}"
+        self._pending_actions += 1
+        worker.request_action(action, token)
+
     def _sync_worker(self) -> None:
         if not self._active or not self._host or self._worker is not None:
             return
-        worker = self._worker_factory(ExternalPowerConfig(self._host))
+        worker = self._worker_factory(
+            ExternalPowerConfig(
+                self._host,
+                voltage_set_v=self._voltage_set_v,
+                current_set_a=self._current_set_a,
+            )
+        )
         worker.set_initial_generation(self._store.snapshot.generation)
         worker.state_changed.connect(self._store.apply_snapshot)
         worker.sample_ready.connect(self._store.apply_sample)
+        worker.action_finished.connect(self._on_action_finished)
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
         worker.start()
@@ -460,6 +511,7 @@ class ExternalPowerMonitor(QObject):
             return False
         if self._worker is worker:
             self._worker = None
+        self._pending_actions = 0
         worker.deleteLater()
         return True
 
@@ -468,18 +520,27 @@ class ExternalPowerMonitor(QObject):
         worker = self.sender()
         if worker is self._worker:
             self._worker = None
+        self._pending_actions = 0
+
+    @Slot(object)
+    def _on_action_finished(self, outcome: ExternalPowerActionOutcome) -> None:
+        self._pending_actions = max(0, self._pending_actions - 1)
+        self.action_finished.emit(outcome)
 
 
 __all__ = [
     "EXTERNAL_POWER_HISTORY_SECONDS",
     "EXTERNAL_POWER_PORT",
+    "EXTERNAL_POWER_ACTION_EVENT",
     "EXTERNAL_POWER_SAMPLE_EVENT",
     "ExternalPowerConfig",
+    "ExternalPowerAction",
+    "ExternalPowerActionOutcome",
     "ExternalPowerMonitor",
     "ExternalPowerPhase",
     "ExternalPowerSample",
     "ExternalPowerSnapshot",
     "ExternalPowerStore",
     "ExternalPowerWorker",
-    "PswReadOnlySession",
+    "PswControlledSession",
 ]

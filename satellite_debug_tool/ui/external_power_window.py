@@ -9,8 +9,13 @@ import pyqtgraph as pg
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QShowEvent
 from PySide6.QtWidgets import (
+    QDoubleSpinBox,
+    QFormLayout,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -19,6 +24,11 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.external_power_monitor import (
     EXTERNAL_POWER_HISTORY_SECONDS,
+    EXTERNAL_POWER_PORT,
+    ExternalPowerAction,
+    ExternalPowerActionOutcome,
+    ExternalPowerConfig,
+    ExternalPowerMonitor,
     ExternalPowerPhase,
     ExternalPowerSnapshot,
     ExternalPowerStore,
@@ -48,13 +58,17 @@ class ExternalPowerAnchor(QPushButton):
 
 
 class ExternalPowerHistoryWindow(QMainWindow):
-    """One process-wide top-level view over the process-wide power Store."""
+    """Device-bound power configuration, control, status, and history view."""
 
     def __init__(
         self,
         store: ExternalPowerStore,
         *,
         theme: str = "dark",
+        monitor: Optional[ExternalPowerMonitor] = None,
+        device_label: str = "",
+        profile: Optional[dict[str, object]] = None,
+        save_profile=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         flags = (
@@ -66,6 +80,9 @@ class ExternalPowerHistoryWindow(QMainWindow):
         super().__init__(parent, flags)
         self._store = store
         self._theme = str(theme)
+        self._monitor = monitor
+        self._device_label = str(device_label)
+        self._save_profile = save_profile
         self._positioned_once = False
 
         central = QWidget()
@@ -73,6 +90,63 @@ class ExternalPowerHistoryWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(7)
+
+        self._config_widget = QWidget()
+        config_layout = QFormLayout(self._config_widget)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        self._host = QLineEdit()
+        self._host.setPlaceholderText("192.168.1.18")
+        self._port = QLabel(str(EXTERNAL_POWER_PORT))
+        self._voltage = QDoubleSpinBox()
+        self._voltage.setRange(0.002, 80.0)
+        self._voltage.setDecimals(3)
+        self._voltage.setSuffix(" V")
+        self._current = QDoubleSpinBox()
+        self._current.setRange(0.002, 27.0)
+        self._current.setDecimals(3)
+        self._current.setSuffix(" A")
+        self._host_label = QLabel()
+        self._port_label = QLabel()
+        self._voltage_label = QLabel()
+        self._current_label = QLabel()
+        config_layout.addRow(self._host_label, self._host)
+        config_layout.addRow(self._port_label, self._port)
+        config_layout.addRow(self._voltage_label, self._voltage)
+        config_layout.addRow(self._current_label, self._current)
+        layout.addWidget(self._config_widget)
+
+        controls = QHBoxLayout()
+        self._save = QPushButton(tr("Save and connect"))
+        self._read = QPushButton(tr("Read status"))
+        self._prepare = QPushButton(tr("Apply settings and confirm OFF"))
+        self._enable = QPushButton(tr("Enable output"))
+        self._disable = QPushButton(tr("Disable output"))
+        for button in (
+            self._save,
+            self._read,
+            self._prepare,
+            self._enable,
+            self._disable,
+        ):
+            controls.addWidget(button)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+        self._save.clicked.connect(self._save_and_connect)
+        self._read.clicked.connect(
+            lambda: self._request_action(ExternalPowerAction.READ)
+        )
+        self._prepare.clicked.connect(
+            lambda: self._request_action(ExternalPowerAction.PREPARE)
+        )
+        self._enable.clicked.connect(
+            lambda: self._request_action(ExternalPowerAction.ENABLE)
+        )
+        self._disable.clicked.connect(
+            lambda: self._request_action(ExternalPowerAction.DISABLE)
+        )
+        if monitor is not None:
+            monitor.action_finished.connect(self._on_action_finished)
+        self.set_profile(profile or {})
 
         self._status = QLabel()
         self._status.setObjectName("externalPowerStatus")
@@ -100,11 +174,76 @@ class ExternalPowerHistoryWindow(QMainWindow):
         layout.addWidget(self._plot, 1)
 
         self.setCentralWidget(central)
-        self.resize(620, 340)
+        self.resize(1000, 560)
         self._store.updated.connect(self._on_store_updated)
         self.set_theme(self._theme)
         self.retranslate_ui()
         register_translatable(self)
+
+    def set_profile(self, profile: dict[str, object]) -> None:
+        self._host.setText(str(profile.get("host", "")))
+        self._voltage.setValue(float(profile.get("voltage_set_v", 12.0)))
+        self._current.setValue(float(profile.get("current_set_a", 12.0)))
+
+    @Slot()
+    def _save_and_connect(self) -> None:
+        profile = {
+            "host": self._host.text().strip(),
+            "voltage_set_v": self._voltage.value(),
+            "current_set_a": self._current.value(),
+        }
+        try:
+            if profile["host"]:
+                ExternalPowerConfig(**profile).validate()
+            if self._save_profile is not None:
+                self._save_profile(profile)
+            if self._monitor is not None:
+                self._monitor.configure(**profile)
+                self._monitor.set_active(True)
+        except Exception as exc:
+            QMessageBox.warning(self, tr("External power"), str(exc))
+
+    def _request_action(self, action: ExternalPowerAction) -> None:
+        if self._monitor is None:
+            return
+        if action is ExternalPowerAction.ENABLE:
+            answer = QMessageBox.question(
+                self,
+                tr("External power"),
+                tr("Enable the configured power output?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            self._monitor.request_action(action)
+        except Exception as exc:
+            QMessageBox.warning(self, tr("External power"), str(exc))
+
+    @Slot(object)
+    def _on_action_finished(self, outcome: ExternalPowerActionOutcome) -> None:
+        if outcome.succeeded:
+            confirmed = {
+                ExternalPowerAction.PREPARE: tr(
+                    "Command sent; output OFF and voltage/current setpoints confirmed"
+                ),
+                ExternalPowerAction.ENABLE: tr(
+                    "Command sent; output ON and voltage confirmed"
+                ),
+                ExternalPowerAction.DISABLE: tr(
+                    "Command sent; output OFF and discharge confirmed"
+                ),
+                ExternalPowerAction.READ: tr("Power status read and confirmed"),
+            }
+            self._status.setText(confirmed[outcome.action])
+        else:
+            self._status.setText(
+                tr(
+                    "Power action failed: {error}",
+                    error=outcome.error or "—",
+                )
+            )
 
     def present_near(self, anchor: QWidget) -> None:
         position_after_show = not self._positioned_once
@@ -227,11 +366,21 @@ class ExternalPowerHistoryWindow(QMainWindow):
             self._plot.getAxis(axis).setTextPen(pg.mkPen(palette["text_2"]))
 
     def retranslate_ui(self) -> None:
-        self.setWindowTitle(
-            " · ".join(
-                (tr("External power"), tr("Voltage / current"), tr("Last 30 minutes"))
-            )
+        title = " · ".join(
+            (tr("External power"), tr("Voltage / current"), tr("Last 30 minutes"))
         )
+        if self._device_label:
+            title = f"{self._device_label} · {title}"
+        self.setWindowTitle(title)
+        self._host_label.setText(tr("Power supply IPv4:"))
+        self._port_label.setText(tr("TCP port:"))
+        self._voltage_label.setText(tr("Set voltage:"))
+        self._current_label.setText(tr("Set current:"))
+        self._save.setText(tr("Save and connect"))
+        self._read.setText(tr("Read status"))
+        self._prepare.setText(tr("Apply settings and confirm OFF"))
+        self._enable.setText(tr("Enable output"))
+        self._disable.setText(tr("Disable output"))
         self._plot.setLabel("left", tr("Voltage"), units="V")
         self._plot.setLabel("right", tr("Current"), units="A")
         self._plot.setLabel("bottom", tr("Sample time"))

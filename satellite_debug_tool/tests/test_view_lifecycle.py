@@ -148,22 +148,25 @@ def test_active_iperf_keeps_external_power_monitor_active_across_workspaces(
     from satellite_debug_tool.ui.main_window import MainWindow
 
     qapp = qapplication_session
+    _configure_customer_endpoint(lifecycle_settings)
     window = MainWindow(settings=lifecycle_settings)
+    endpoint = window._customer_devices.active_endpoint()
+    bundle = window._customer_bundle_factory.bundle(endpoint)
     window.unlock_engineering_for_session()
     window._workspace.setCurrentIndex(1)
-    assert not window._external_power_monitor.active
+    assert not bundle._power_monitor.active
 
-    window._iperf_store.set_snapshot(
-        replace(window._iperf_store.snapshot, phase=IperfTestPhase.RUNNING)
+    bundle._iperf_store.set_snapshot(
+        replace(bundle._iperf_store.snapshot, phase=IperfTestPhase.RUNNING)
     )
-    window._iperf_controller.active_changed.emit(True)
-    assert window._external_power_monitor.active
+    bundle._iperf_controller.active_changed.emit(True)
+    assert bundle._power_monitor.active
 
-    window._iperf_store.set_snapshot(
-        replace(window._iperf_store.snapshot, phase=IperfTestPhase.STOPPED)
+    bundle._iperf_store.set_snapshot(
+        replace(bundle._iperf_store.snapshot, phase=IperfTestPhase.STOPPED)
     )
-    window._iperf_controller.active_changed.emit(False)
-    assert not window._external_power_monitor.active
+    bundle._iperf_controller.active_changed.emit(False)
+    assert not bundle._power_monitor.active
 
     window.close()
     window.deleteLater()

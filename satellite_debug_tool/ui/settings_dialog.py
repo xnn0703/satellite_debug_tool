@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt
@@ -111,39 +110,6 @@ class SettingsDialog(QDialog):
         device_udp_row.addWidget(self._device_udp_port)
         device_udp_row.addStretch(1)
         outer.addLayout(device_udp_row)
-
-        self._external_power_section = QWidget()
-        external_power_layout = QVBoxLayout(self._external_power_section)
-        external_power_layout.setContentsMargins(0, 0, 0, 0)
-        external_power_layout.setSpacing(7)
-        self._external_power_title = QLabel(tr("External power"))
-        external_power_layout.addWidget(self._external_power_title)
-        external_power_row = QHBoxLayout()
-        self._external_power_host_label = QLabel(tr("Power supply IPv4:"))
-        self._external_power_host_label.setMinimumWidth(120)
-        self._external_power_host = QLineEdit(
-            str(self._settings.get("external_power.host", ""))
-        )
-        self._external_power_host.setPlaceholderText(
-            tr("Not configured; monitoring is disabled")
-        )
-        self._external_power_port = QLabel("2268")
-        self._external_power_port.setToolTip(tr("Fixed read-only SCPI port"))
-        external_power_row.addWidget(self._external_power_host_label)
-        external_power_row.addWidget(self._external_power_host, 1)
-        self._external_power_port_label = QLabel(tr("Port:"))
-        external_power_row.addWidget(self._external_power_port_label)
-        external_power_row.addWidget(self._external_power_port)
-        external_power_layout.addLayout(external_power_row)
-        self._external_power_hint = QLabel(
-            tr("Read-only monitoring: voltage, current and status; output is never controlled.")
-        )
-        self._external_power_hint.setWordWrap(True)
-        external_power_layout.addWidget(self._external_power_hint)
-        self._external_power_section.setVisible(
-            self._scope == SETTINGS_SCOPE_CUSTOMER
-        )
-        outer.addWidget(self._external_power_section)
 
         self._recovery_frame = QFrame()
         self._recovery_frame.setObjectName("settingsRecoveryFrame")
@@ -429,26 +395,6 @@ class SettingsDialog(QDialog):
             edit.setText(directory)
 
     def _on_accept(self) -> None:
-        if self._scope == SETTINGS_SCOPE_CUSTOMER:
-            external_power_host = self._external_power_host.text().strip()
-            if external_power_host:
-                try:
-                    address = ipaddress.ip_address(external_power_host)
-                except ValueError:
-                    QMessageBox.warning(
-                        self,
-                        tr("Settings"),
-                        tr("External power host must be a valid IPv4 address."),
-                    )
-                    return
-                if address.version != 4:
-                    QMessageBox.warning(
-                        self,
-                        tr("Settings"),
-                        tr("External power host must be a valid IPv4 address."),
-                    )
-                    return
-            self._settings.set("external_power.host", external_power_host)
         # 写入 settings（去掉首尾空格，空字符串清空配置）
         self._settings.set("paths.recording_dir", self._recording_edit.text().strip())
         self._settings.set("paths.log_dir", self._log_edit.text().strip())
@@ -528,16 +474,6 @@ class SettingsDialog(QDialog):
         )
         self._btn_production_configurations.setText(
             tr("Manage production configurations...")
-        )
-        self._external_power_title.setText(tr("External power"))
-        self._external_power_host_label.setText(tr("Power supply IPv4:"))
-        self._external_power_host.setPlaceholderText(
-            tr("Not configured; monitoring is disabled")
-        )
-        self._external_power_port.setToolTip(tr("Fixed read-only SCPI port"))
-        self._external_power_port_label.setText(tr("Port:"))
-        self._external_power_hint.setText(
-            tr("Read-only monitoring: voltage, current and status; output is never controlled.")
         )
         self._production_report_title.setText(tr("Production report"))
         self._render_skipped_version()

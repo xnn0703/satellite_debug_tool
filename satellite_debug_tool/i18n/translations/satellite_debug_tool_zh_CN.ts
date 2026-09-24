@@ -4,8 +4,8 @@
 <context>
     <name></name>
     <message>
-        <location filename="../../ui/main_window.py" line="208"/>
-        <location filename="../../ui/main_window.py" line="371"/>
+        <location filename="../../ui/main_window.py" line="176"/>
+        <location filename="../../ui/main_window.py" line="339"/>
         <source>Live</source>
         <translation>实时</translation>
     </message>
@@ -16,27 +16,26 @@
     </message>
     <message>
         <location filename="../../ui/customer_workspace.py" line="104"/>
-        <location filename="../../ui/main_window.py" line="991"/>
         <source>Network test</source>
         <translation>网络测试</translation>
     </message>
     <message>
         <location filename="../../ui/customer_workspace.py" line="105"/>
-        <location filename="../../ui/main_window.py" line="209"/>
-        <location filename="../../ui/main_window.py" line="372"/>
+        <location filename="../../ui/main_window.py" line="177"/>
+        <location filename="../../ui/main_window.py" line="340"/>
         <source>Playback</source>
         <translation>回放</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_workspace.py" line="236"/>
-        <location filename="../../ui/customer_workspace.py" line="354"/>
-        <location filename="../../ui/customer_workspace.py" line="696"/>
+        <location filename="../../ui/customer_workspace.py" line="238"/>
+        <location filename="../../ui/customer_workspace.py" line="356"/>
+        <location filename="../../ui/customer_workspace.py" line="704"/>
         <source>Product operation</source>
         <translation>产品操作</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="81"/>
-        <location filename="../../ui/main_window.py" line="791"/>
+        <location filename="../../ui/main_window.py" line="73"/>
+        <location filename="../../ui/main_window.py" line="768"/>
         <source>SoftHertz Phased-Array Terminal Tool</source>
         <translation>软赫卫星通信相控阵设备调试系统</translation>
     </message>
@@ -63,8 +62,8 @@
     <message>
         <location filename="../../ui/customer_device_list.py" line="259"/>
         <location filename="../../ui/customer_device_list.py" line="420"/>
-        <location filename="../../ui/main_window.py" line="211"/>
-        <location filename="../../ui/main_window.py" line="374"/>
+        <location filename="../../ui/main_window.py" line="179"/>
+        <location filename="../../ui/main_window.py" line="342"/>
         <source>Device</source>
         <translation>设备</translation>
     </message>
@@ -73,8 +72,8 @@
         <location filename="../../ui/customer_device_list.py" line="422"/>
         <location filename="../../ui/customer_device_list.py" line="428"/>
         <location filename="../../ui/customer_device_list.py" line="429"/>
-        <location filename="../../ui/customer_endpoint_pages.py" line="223"/>
-        <location filename="../../ui/customer_endpoint_pages.py" line="224"/>
+        <location filename="../../ui/customer_endpoint_pages.py" line="228"/>
+        <location filename="../../ui/customer_endpoint_pages.py" line="229"/>
         <source>Add device</source>
         <translation>添加设备</translation>
     </message>
@@ -96,446 +95,425 @@
         <translation>无客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="212"/>
-        <location filename="../../ui/main_window.py" line="375"/>
+        <location filename="../../ui/main_window.py" line="180"/>
+        <location filename="../../ui/main_window.py" line="343"/>
         <source>Tracking Simulator</source>
         <translation>跟踪仿真器</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="357"/>
-        <location filename="../../ui/main_window.py" line="792"/>
+        <location filename="../../ui/main_window.py" line="325"/>
+        <location filename="../../ui/main_window.py" line="769"/>
         <source>SoftHertz</source>
         <translation>软赫 · SoftHertz</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="403"/>
-        <location filename="../../ui/main_window.py" line="814"/>
+        <location filename="../../ui/main_window.py" line="371"/>
+        <location filename="../../ui/main_window.py" line="791"/>
         <source>Choose an independent serial session or the selected customer UDP session</source>
         <translation>选择独立工程串口会话或当前客户 UDP 会话</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="417"/>
+        <location filename="../../ui/main_window.py" line="385"/>
         <source>Cycle theme: dark → high contrast → light</source>
         <translation>循环切换主题：深色 → 高对比 → 浅色</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="420"/>
-        <location filename="../../ui/main_window.py" line="999"/>
+        <location filename="../../ui/main_window.py" line="388"/>
+        <location filename="../../ui/main_window.py" line="984"/>
         <location filename="../../ui/update_dialog.py" line="212"/>
         <source>Check for updates</source>
         <translation>检查更新</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="424"/>
+        <location filename="../../ui/main_window.py" line="392"/>
         <source>Check for and download the latest version (startup checks can be configured in Settings)</source>
         <translation>手动检查并下载最新版本（启动检查可在设置中配置）</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="433"/>
+        <location filename="../../ui/main_window.py" line="401"/>
         <source>Configure default folders, updates, and language</source>
         <translation>配置默认目录、更新和语言</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="488"/>
+        <location filename="../../ui/main_window.py" line="456"/>
         <source>Stop the Engineering serial recording before switching mode</source>
         <translation>切换模式前请停止工程串口录制</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="490"/>
+        <location filename="../../ui/main_window.py" line="458"/>
         <source>Finish the Engineering serial device operation before switching mode</source>
         <translation>切换模式前请完成工程串口设备操作</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="492"/>
+        <location filename="../../ui/main_window.py" line="460"/>
         <source>Disconnect the Engineering serial session before switching mode</source>
         <translation>切换模式前请断开工程串口会话</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="496"/>
+        <location filename="../../ui/main_window.py" line="464"/>
         <source>Stop shared UDP recording before switching mode</source>
         <translation>切换模式前请停止共享 UDP 录制</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="498"/>
+        <location filename="../../ui/main_window.py" line="466"/>
         <source>Finish the shared UDP device operation before switching mode</source>
         <translation>切换模式前请完成共享 UDP 设备操作</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="556"/>
+        <location filename="../../ui/main_window.py" line="524"/>
         <source>Engineering diagnostics</source>
         <translation>工程诊断</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="558"/>
+        <location filename="../../ui/main_window.py" line="526"/>
         <source>Engineering diagnostics expose internal channels and device controls. Open them for this session?</source>
         <translation>工程诊断会显示内部通道和设备控制。是否在本次运行中打开？</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="582"/>
+        <location filename="../../ui/main_window.py" line="550"/>
+        <location filename="../../ui/main_window.py" line="563"/>
         <location filename="../../ui/production_workspace.py" line="305"/>
         <location filename="../../ui/production_workspace.py" line="2208"/>
         <source>Production batch test</source>
         <translation>小批试产测试</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="584"/>
+        <location filename="../../ui/main_window.py" line="552"/>
+        <source>Stop customer network tests and confirm all customer power outputs OFF before opening Production.</source>
+        <translation>进入试产前，请停止客户网络测试并确认所有客户电源输出已关闭。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/main_window.py" line="565"/>
         <source>M19-A is an engineering-preview evidence capture workspace. It does not execute the complete formal production-release workflow. Open it for this session?</source>
         <translation>M19-A 是工程预览版证据采集工作区，不执行完整的正式试产放行流程。是否在本次会话中打开？</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="829"/>
+        <location filename="../../ui/main_window.py" line="804"/>
         <source>Customer device configuration failed: {detail}</source>
         <translation>客户设备配置失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="831"/>
-        <location filename="../../ui/main_window.py" line="1056"/>
+        <location filename="../../ui/main_window.py" line="806"/>
+        <location filename="../../ui/main_window.py" line="1029"/>
         <source>Customer devices</source>
         <translation>客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="843"/>
-        <location filename="../../ui/main_window.py" line="858"/>
+        <location filename="../../ui/main_window.py" line="818"/>
+        <location filename="../../ui/main_window.py" line="833"/>
         <source>The existing customer device was selected</source>
         <translation>已选择现有客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="845"/>
+        <location filename="../../ui/main_window.py" line="820"/>
         <source>Customer device added</source>
         <translation>已添加客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="860"/>
+        <location filename="../../ui/main_window.py" line="835"/>
         <source>Customer device updated</source>
         <translation>已更新客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="866"/>
+        <location filename="../../ui/main_window.py" line="841"/>
         <source>Delete customer device</source>
         <translation>删除客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="868"/>
+        <location filename="../../ui/main_window.py" line="843"/>
         <source>Delete customer device {endpoint}?</source>
         <translation>确定删除客户设备 {endpoint} 吗？</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="881"/>
+        <location filename="../../ui/main_window.py" line="856"/>
         <source>Customer device deleted</source>
         <translation>已删除客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="964"/>
+        <location filename="../../ui/main_window.py" line="928"/>
         <source>New version {latest} is available (current: v{current}). Use Check for updates to install it.</source>
         <translation>发现新版本 {latest}（当前 v{current}）。请使用“检查更新”进行安装。</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="980"/>
+        <location filename="../../ui/main_window.py" line="948"/>
+        <source>Customer power output is ON for {targets}. Close the outputs before exiting?</source>
+        <translation>设备 {targets} 的客户电源输出已开启。退出前是否关闭输出？</translation>
+    </message>
+    <message>
+        <location filename="../../ui/main_window.py" line="966"/>
+        <source>One or more customer power outputs could not be confirmed OFF.</source>
+        <translation>一个或多个客户电源输出未能确认关闭。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/main_window.py" line="973"/>
         <source>Network test in progress</source>
         <translation>网络测试正在运行</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="981"/>
+        <location filename="../../ui/main_window.py" line="974"/>
         <source>Stop the active iperf3 test and exit?</source>
         <translation>停止正在运行的 iperf3 测试并退出吗？</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="992"/>
-        <source>iperf3 processes did not stop cleanly</source>
-        <translation>iperf3 进程未能正常停止</translation>
-    </message>
-    <message>
-        <location filename="../../ui/main_window.py" line="1000"/>
+        <location filename="../../ui/main_window.py" line="985"/>
         <source>Background update check did not stop cleanly</source>
         <translation>后台更新检查未能正常停止</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="1008"/>
-        <source>External power monitoring did not stop cleanly</source>
-        <translation>外接电源监测未能正常停止</translation>
-    </message>
-    <message>
-        <location filename="../../ui/main_window.py" line="1034"/>
+        <location filename="../../ui/main_window.py" line="1007"/>
         <source>Customer session shutdown did not complete; finish the active local operation and retry</source>
         <translation>客户会话尚未完成关闭；请结束当前本地操作后重试</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="1021"/>
-        <location filename="../../ui/main_window.py" line="1032"/>
-        <location filename="../../ui/main_window.py" line="1062"/>
-        <location filename="../../ui/main_window.py" line="1070"/>
+        <location filename="../../ui/main_window.py" line="996"/>
+        <location filename="../../ui/main_window.py" line="1005"/>
+        <location filename="../../ui/main_window.py" line="1035"/>
+        <location filename="../../ui/main_window.py" line="1043"/>
         <source>Device operation in progress</source>
         <translation>设备操作进行中</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="1022"/>
+        <location filename="../../ui/main_window.py" line="997"/>
         <source>The engineering transport did not stop cleanly</source>
         <translation>工程通信未正常停止</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="1063"/>
+        <location filename="../../ui/main_window.py" line="1036"/>
         <source>Shared device sessions still have active owners</source>
         <translation>共享设备会话仍有活动所有者</translation>
     </message>
     <message>
-        <location filename="../../ui/main_window.py" line="1071"/>
+        <location filename="../../ui/main_window.py" line="1044"/>
         <source>The shared UDP transport did not stop cleanly</source>
         <translation>共享 UDP 通信未正常停止</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="75"/>
-        <location filename="../../ui/settings_dialog.py" line="440"/>
-        <location filename="../../ui/settings_dialog.py" line="447"/>
-        <location filename="../../ui/settings_dialog.py" line="489"/>
-        <location filename="../../ui/settings_dialog.py" line="514"/>
-        <location filename="../../ui/settings_dialog.py" line="588"/>
-        <location filename="../../ui/settings_dialog.py" line="592"/>
-        <location filename="../../ui/settings_dialog.py" line="610"/>
-        <location filename="../../ui/settings_dialog.py" line="615"/>
+        <location filename="../../ui/settings_dialog.py" line="74"/>
+        <location filename="../../ui/settings_dialog.py" line="435"/>
+        <location filename="../../ui/settings_dialog.py" line="460"/>
+        <location filename="../../ui/settings_dialog.py" line="524"/>
+        <location filename="../../ui/settings_dialog.py" line="528"/>
+        <location filename="../../ui/settings_dialog.py" line="546"/>
+        <location filename="../../ui/settings_dialog.py" line="551"/>
         <source>Settings</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="85"/>
+        <location filename="../../ui/settings_dialog.py" line="84"/>
         <source>Language:</source>
         <translation>语言：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="88"/>
+        <location filename="../../ui/settings_dialog.py" line="87"/>
         <source>System default</source>
         <translation>跟随系统</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="89"/>
+        <location filename="../../ui/settings_dialog.py" line="88"/>
         <source>Simplified Chinese</source>
         <translation>简体中文</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="99"/>
-        <location filename="../../ui/settings_dialog.py" line="515"/>
+        <location filename="../../ui/settings_dialog.py" line="98"/>
+        <location filename="../../ui/settings_dialog.py" line="461"/>
         <source>Device UDP local port:</source>
         <translation>设备 UDP 本地端口：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="107"/>
-        <location filename="../../ui/settings_dialog.py" line="552"/>
+        <location filename="../../ui/settings_dialog.py" line="106"/>
+        <location filename="../../ui/settings_dialog.py" line="488"/>
         <source>Customer and production sessions share this UDP socket</source>
         <translation>客户与试产会话共用此 UDP 套接字</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="122"/>
-        <location filename="../../ui/settings_dialog.py" line="533"/>
+        <location filename="../../ui/external_power_window.py" line="375"/>
         <source>Power supply IPv4:</source>
         <translation>电源 IPv4：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="128"/>
-        <location filename="../../ui/settings_dialog.py" line="535"/>
-        <source>Not configured; monitoring is disabled</source>
-        <translation>未配置，监测已禁用</translation>
-    </message>
-    <message>
-        <location filename="../../ui/settings_dialog.py" line="131"/>
-        <location filename="../../ui/settings_dialog.py" line="537"/>
-        <source>Fixed read-only SCPI port</source>
-        <translation>固定的只读 SCPI 端口</translation>
-    </message>
-    <message>
-        <location filename="../../ui/settings_dialog.py" line="139"/>
-        <location filename="../../ui/settings_dialog.py" line="540"/>
-        <source>Read-only monitoring: voltage, current and status; output is never controlled.</source>
-        <translation>只读监测电压、电流和状态；不会控制电源输出。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/settings_dialog.py" line="153"/>
-        <location filename="../../ui/settings_dialog.py" line="517"/>
+        <location filename="../../ui/settings_dialog.py" line="119"/>
+        <location filename="../../ui/settings_dialog.py" line="463"/>
         <source>Device settings recovery required</source>
         <translation>设备设置需要恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="158"/>
+        <location filename="../../ui/settings_dialog.py" line="124"/>
         <source>Device settings cannot be used safely.</source>
         <translation>设备设置当前无法安全使用。</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="163"/>
-        <location filename="../../ui/settings_dialog.py" line="519"/>
+        <location filename="../../ui/settings_dialog.py" line="129"/>
+        <location filename="../../ui/settings_dialog.py" line="465"/>
         <source>Customer devices (one IPv4:port per line):</source>
         <translation>客户设备（每行一个 IPv4:端口）：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="180"/>
-        <location filename="../../ui/settings_dialog.py" line="522"/>
+        <location filename="../../ui/settings_dialog.py" line="146"/>
+        <location filename="../../ui/settings_dialog.py" line="468"/>
         <source>Type REBUILD_DEVICE_SETTINGS to rebuild:</source>
         <translation>输入 REBUILD_DEVICE_SETTINGS 以重建：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="187"/>
-        <location filename="../../ui/settings_dialog.py" line="524"/>
+        <location filename="../../ui/settings_dialog.py" line="153"/>
+        <location filename="../../ui/settings_dialog.py" line="470"/>
         <source>Export recovery evidence...</source>
         <translation>导出恢复证据...</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="189"/>
-        <location filename="../../ui/settings_dialog.py" line="525"/>
+        <location filename="../../ui/settings_dialog.py" line="155"/>
+        <location filename="../../ui/settings_dialog.py" line="471"/>
         <source>Rebuild device settings</source>
         <translation>重建设备设置</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="199"/>
+        <location filename="../../ui/settings_dialog.py" line="165"/>
         <source>Default folders used by file selection dialogs</source>
         <translation>文件选择对话框使用的默认目录</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="204"/>
+        <location filename="../../ui/settings_dialog.py" line="170"/>
         <source>Recording / playback folder:</source>
         <translation>录制 / 回放目录：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="209"/>
+        <location filename="../../ui/settings_dialog.py" line="175"/>
         <source>Log import folder:</source>
         <translation>Log 导入目录：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="214"/>
+        <location filename="../../ui/settings_dialog.py" line="180"/>
         <source>Firmware folder:</source>
         <translation>固件目录：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="221"/>
+        <location filename="../../ui/settings_dialog.py" line="187"/>
         <source>Tianditu token:</source>
         <translation>天地图 token：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="226"/>
+        <location filename="../../ui/settings_dialog.py" line="192"/>
         <source>Application key from lbs.tianditu.gov.cn (leave blank to use offline OSM)</source>
         <translation>lbs.tianditu.gov.cn 申请的应用密钥（留空使用 OSM 离线地图）</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="232"/>
+        <location filename="../../ui/settings_dialog.py" line="198"/>
         <source>Online Tianditu tile key (tk). Playback and Log maps use Tianditu with WGS-84 coordinates when configured; otherwise the app falls back to the offline OSM cache.</source>
         <translation>天地图在线瓦片密钥（tk）。配置后回放和 Log 地图使用 WGS-84 坐标的天地图；否则回落到 OSM 离线缓存。</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="243"/>
+        <location filename="../../ui/settings_dialog.py" line="209"/>
         <source>Chart groups:</source>
         <translation>图表分组：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="245"/>
+        <location filename="../../ui/settings_dialog.py" line="211"/>
         <source>Manage chart groups...</source>
         <translation>管理图表分组...</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="248"/>
+        <location filename="../../ui/settings_dialog.py" line="214"/>
         <source>Choose which channels share each subplot in grouped mode (saved separately for each hardware type)</source>
         <translation>自定义分组模式下哪些通道共用同一子图（按硬件型号分别保存）</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="262"/>
-        <location filename="../../ui/settings_dialog.py" line="349"/>
-        <location filename="../../ui/settings_dialog.py" line="527"/>
+        <location filename="../../ui/settings_dialog.py" line="228"/>
+        <location filename="../../ui/settings_dialog.py" line="315"/>
+        <location filename="../../ui/settings_dialog.py" line="473"/>
         <source>Production configurations:</source>
         <translation>试产配置：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="264"/>
-        <location filename="../../ui/settings_dialog.py" line="352"/>
-        <location filename="../../ui/settings_dialog.py" line="530"/>
+        <location filename="../../ui/settings_dialog.py" line="230"/>
+        <location filename="../../ui/settings_dialog.py" line="318"/>
+        <location filename="../../ui/settings_dialog.py" line="476"/>
         <source>Manage production configurations...</source>
         <translation>管理试产配置…</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="274"/>
-        <location filename="../../ui/settings_dialog.py" line="542"/>
+        <location filename="../../ui/settings_dialog.py" line="240"/>
+        <location filename="../../ui/settings_dialog.py" line="478"/>
         <source>Production report</source>
         <translation>试产报告</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="278"/>
+        <location filename="../../ui/settings_dialog.py" line="244"/>
         <source>Report output folder:</source>
         <translation>报告输出目录：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="292"/>
+        <location filename="../../ui/settings_dialog.py" line="258"/>
         <source>Company name:</source>
         <translation>公司名称：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="293"/>
+        <location filename="../../ui/settings_dialog.py" line="259"/>
         <source>Report header:</source>
         <translation>报告页眉：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="294"/>
+        <location filename="../../ui/settings_dialog.py" line="260"/>
         <source>Report footer:</source>
         <translation>报告页脚：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="295"/>
+        <location filename="../../ui/settings_dialog.py" line="261"/>
         <source>Tester role:</source>
         <translation>测试员角色：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="296"/>
+        <location filename="../../ui/settings_dialog.py" line="262"/>
         <source>Reviewer role:</source>
         <translation>审核员角色：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="305"/>
+        <location filename="../../ui/settings_dialog.py" line="271"/>
         <source>Report logo:</source>
         <translation>报告 Logo：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="324"/>
+        <location filename="../../ui/settings_dialog.py" line="290"/>
         <source>Automatic updates</source>
         <translation>自动更新</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="326"/>
+        <location filename="../../ui/settings_dialog.py" line="292"/>
         <source>Check for updates at startup</source>
         <translation>启动时后台检查更新</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="329"/>
+        <location filename="../../ui/settings_dialog.py" line="295"/>
         <source>When disabled, updates are checked only when requested manually</source>
         <translation>关闭后仅在手动请求时检查更新</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="334"/>
+        <location filename="../../ui/settings_dialog.py" line="300"/>
         <source>Check interval (hours):</source>
         <translation>检查间隔（小时）：</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="339"/>
+        <location filename="../../ui/settings_dialog.py" line="305"/>
         <source>Do not check again until this interval has elapsed</source>
         <translation>距上次检查不足此时长不会重复检查</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="356"/>
+        <location filename="../../ui/settings_dialog.py" line="322"/>
         <source>Reset skipped version</source>
         <translation>重置跳过版本</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="367"/>
+        <location filename="../../ui/settings_dialog.py" line="333"/>
         <source>Leave a folder blank to use the system default (the last opened location).
 Configuration file: ~/.satellite_debug_tool/settings.json</source>
         <translation>留空则使用系统默认（上次打开的位置）。
 配置文件：~/.satellite_debug_tool/settings.json</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="410"/>
+        <location filename="../../ui/settings_dialog.py" line="376"/>
         <source>Select production report folder</source>
         <translation>选择试产报告目录</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="441"/>
-        <location filename="../../ui/settings_dialog.py" line="448"/>
-        <source>External power host must be a valid IPv4 address.</source>
-        <translation>外接电源地址必须是有效的 IPv4 地址。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/settings_dialog.py" line="554"/>
+        <location filename="../../ui/settings_dialog.py" line="490"/>
         <source>Disconnect all UDP device sessions before changing this port</source>
         <translation>更改此端口前请断开所有 UDP 设备会话</translation>
     </message>
@@ -706,13 +684,13 @@ Configuration file: ~/.satellite_debug_tool/settings.json</source>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="676"/>
-        <location filename="../../ui/settings_dialog.py" line="416"/>
+        <location filename="../../ui/settings_dialog.py" line="382"/>
         <source>Select report logo</source>
         <translation>选择报告 Logo</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="678"/>
-        <location filename="../../ui/settings_dialog.py" line="418"/>
+        <location filename="../../ui/settings_dialog.py" line="384"/>
         <source>Image files (*.png *.jpg *.jpeg);;All files (*)</source>
         <translation>图片文件 (*.png *.jpg *.jpeg);;所有文件 (*)</translation>
     </message>
@@ -729,7 +707,7 @@ Configuration file: ~/.satellite_debug_tool/settings.json</source>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="754"/>
         <location filename="../../ui/production_configuration_dialog.py" line="771"/>
-        <location filename="../../ui/settings_dialog.py" line="581"/>
+        <location filename="../../ui/settings_dialog.py" line="517"/>
         <source>JSON files (*.json);;All files (*)</source>
         <translation>JSON 文件 (*.json);;所有文件 (*)</translation>
     </message>
@@ -739,22 +717,22 @@ Configuration file: ~/.satellite_debug_tool/settings.json</source>
         <translation>导出试产配置包</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="568"/>
+        <location filename="../../ui/settings_dialog.py" line="504"/>
         <source>Invalid customer device endpoint: {endpoint}</source>
         <translation>客户设备端点无效：{endpoint}</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="579"/>
+        <location filename="../../ui/settings_dialog.py" line="515"/>
         <source>Export recovery evidence</source>
         <translation>导出恢复证据</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="593"/>
+        <location filename="../../ui/settings_dialog.py" line="529"/>
         <source>Recovery evidence exported.</source>
         <translation>恢复证据已导出。</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="616"/>
+        <location filename="../../ui/settings_dialog.py" line="552"/>
         <source>Device settings rebuilt. Restart the application before connecting devices.</source>
         <translation>设备设置已重建。请重启应用后再连接设备。</translation>
     </message>
@@ -856,7 +834,7 @@ Configuration file: ~/.satellite_debug_tool/settings.json</source>
     <message>
         <location filename="../../ui/chart_group_dialog.py" line="164"/>
         <location filename="../../ui/connection_dialog.py" line="121"/>
-        <location filename="../../ui/settings_dialog.py" line="379"/>
+        <location filename="../../ui/settings_dialog.py" line="345"/>
         <source>OK</source>
         <translation>确定</translation>
     </message>
@@ -867,7 +845,7 @@ Configuration file: ~/.satellite_debug_tool/settings.json</source>
         <location filename="../../ui/control_panel_widget.py" line="147"/>
         <location filename="../../ui/customer_overview_view.py" line="660"/>
         <location filename="../../ui/fixture_debug_workspace.py" line="232"/>
-        <location filename="../../ui/settings_dialog.py" line="380"/>
+        <location filename="../../ui/settings_dialog.py" line="346"/>
         <location filename="../../ui/update_dialog.py" line="302"/>
         <source>Cancel</source>
         <translation>取消</translation>
@@ -930,7 +908,7 @@ Its channels will return to the unassigned list.</source>
         <translation>丢弃当前自定义分组并恢复 profile 的 group_id 划分？</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="392"/>
+        <location filename="../../ui/settings_dialog.py" line="358"/>
         <source>Not set; use the system default</source>
         <translation>未设置，使用系统默认</translation>
     </message>
@@ -1334,8 +1312,8 @@ Its channels will return to the unassigned list.</source>
         <location filename="../../ui/production_configuration_dialog.py" line="297"/>
         <location filename="../../ui/production_workspace.py" line="368"/>
         <location filename="../../ui/production_workspace.py" line="2224"/>
-        <location filename="../../ui/settings_dialog.py" line="307"/>
-        <location filename="../../ui/settings_dialog.py" line="393"/>
+        <location filename="../../ui/settings_dialog.py" line="273"/>
+        <location filename="../../ui/settings_dialog.py" line="359"/>
         <source>Browse...</source>
         <translation>浏览...</translation>
     </message>
@@ -1986,17 +1964,17 @@ Its channels will return to the unassigned list.</source>
         <translation>批次 {batch_id} 已创建</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="407"/>
+        <location filename="../../ui/settings_dialog.py" line="373"/>
         <source>Select recording / playback folder</source>
         <translation>选择录制/回放目录</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="408"/>
+        <location filename="../../ui/settings_dialog.py" line="374"/>
         <source>Select Log import folder</source>
         <translation>选择 Log 导入目录</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="409"/>
+        <location filename="../../ui/settings_dialog.py" line="375"/>
         <source>Select firmware folder</source>
         <translation>选择固件目录</translation>
     </message>
@@ -2036,7 +2014,7 @@ Azimuth/elevation is not valid yet</source>
     <message>
         <location filename="../../ui/gnss_widget.py" line="307"/>
         <location filename="../../ui/gnss_widget.py" line="366"/>
-        <location filename="../../ui/settings_dialog.py" line="506"/>
+        <location filename="../../ui/settings_dialog.py" line="452"/>
         <source>None</source>
         <translation>无</translation>
     </message>
@@ -2160,7 +2138,7 @@ Azimuth/elevation is not valid yet</source>
         <translation>频段图例：{items}</translation>
     </message>
     <message>
-        <location filename="../../ui/settings_dialog.py" line="508"/>
+        <location filename="../../ui/settings_dialog.py" line="454"/>
         <source>Skipped version: {version}</source>
         <translation>已跳过版本：{version}</translation>
     </message>
@@ -2326,8 +2304,8 @@ Azimuth/elevation is not valid yet</source>
         <translation>最近 5 分钟</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="44"/>
-        <location filename="../../ui/external_power_window.py" line="232"/>
+        <location filename="../../ui/external_power_window.py" line="54"/>
+        <location filename="../../ui/external_power_window.py" line="370"/>
         <location filename="../../ui/time_range_control.py" line="56"/>
         <source>Last 30 minutes</source>
         <translation>最近 30 分钟</translation>
@@ -2500,8 +2478,6 @@ Azimuth/elevation is not valid yet</source>
         <location filename="../../ui/connection_dialog.py" line="48"/>
         <location filename="../../ui/connection_dialog.py" line="116"/>
         <location filename="../../ui/live_view.py" line="751"/>
-        <location filename="../../ui/settings_dialog.py" line="134"/>
-        <location filename="../../ui/settings_dialog.py" line="538"/>
         <source>Port:</source>
         <translation>端口：</translation>
     </message>
@@ -2700,118 +2676,118 @@ group_id：{group_id}  flags：0x{flags:02X}
         <translation>已阻止</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="100"/>
-        <location filename="../../ui/customer_iperf_view.py" line="467"/>
+        <location filename="../../ui/customer_iperf_view.py" line="109"/>
+        <location filename="../../ui/customer_iperf_view.py" line="494"/>
         <source>Network test configuration</source>
         <translation>网络测试配置</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="106"/>
-        <location filename="../../ui/customer_iperf_view.py" line="468"/>
+        <location filename="../../ui/customer_iperf_view.py" line="115"/>
+        <location filename="../../ui/customer_iperf_view.py" line="495"/>
         <source>Browse</source>
         <translation>浏览</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="122"/>
-        <location filename="../../ui/customer_iperf_view.py" line="483"/>
+        <location filename="../../ui/customer_iperf_view.py" line="131"/>
+        <location filename="../../ui/customer_iperf_view.py" line="510"/>
         <source>Upload and download</source>
         <translation>上行和下行</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="123"/>
-        <location filename="../../ui/customer_iperf_view.py" line="484"/>
+        <location filename="../../ui/customer_iperf_view.py" line="132"/>
+        <location filename="../../ui/customer_iperf_view.py" line="511"/>
         <source>Upload only</source>
         <translation>仅上行</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="124"/>
-        <location filename="../../ui/customer_iperf_view.py" line="485"/>
+        <location filename="../../ui/customer_iperf_view.py" line="133"/>
+        <location filename="../../ui/customer_iperf_view.py" line="512"/>
         <source>Download only</source>
         <translation>仅下行</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="130"/>
-        <location filename="../../ui/customer_iperf_view.py" line="472"/>
+        <location filename="../../ui/customer_iperf_view.py" line="139"/>
+        <location filename="../../ui/customer_iperf_view.py" line="499"/>
         <source>Continuous test</source>
         <translation>持续测试</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="136"/>
-        <location filename="../../ui/customer_iperf_view.py" line="473"/>
+        <location filename="../../ui/customer_iperf_view.py" line="145"/>
+        <location filename="../../ui/customer_iperf_view.py" line="500"/>
         <source> h</source>
         <translation> 小时</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="143"/>
+        <location filename="../../ui/customer_iperf_view.py" line="152"/>
         <source>iperf3 executable</source>
         <translation>iperf3 可执行文件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="144"/>
+        <location filename="../../ui/customer_iperf_view.py" line="153"/>
         <source>Server IPv4</source>
         <translation>服务器 IPv4</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="145"/>
+        <location filename="../../ui/customer_iperf_view.py" line="154"/>
         <source>Satellite local IPv4</source>
         <translation>卫星网卡本地 IPv4</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="146"/>
+        <location filename="../../ui/customer_iperf_view.py" line="155"/>
         <source>Protocol</source>
         <translation>测试协议</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="147"/>
+        <location filename="../../ui/customer_iperf_view.py" line="156"/>
         <source>Test direction</source>
         <translation>测试方向</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="148"/>
+        <location filename="../../ui/customer_iperf_view.py" line="157"/>
         <source>Upload port</source>
         <translation>上行端口</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="149"/>
+        <location filename="../../ui/customer_iperf_view.py" line="158"/>
         <source>Upload bitrate</source>
         <translation>上行码率</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="150"/>
+        <location filename="../../ui/customer_iperf_view.py" line="159"/>
         <source>Download port</source>
         <translation>下行端口</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="151"/>
+        <location filename="../../ui/customer_iperf_view.py" line="160"/>
         <source>Download bitrate</source>
         <translation>下行码率</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="166"/>
-        <location filename="../../ui/customer_iperf_view.py" line="469"/>
+        <location filename="../../ui/customer_iperf_view.py" line="175"/>
+        <location filename="../../ui/customer_iperf_view.py" line="496"/>
         <source>Start test</source>
         <translation>开始测试</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="167"/>
-        <location filename="../../ui/customer_iperf_view.py" line="470"/>
+        <location filename="../../ui/customer_iperf_view.py" line="176"/>
+        <location filename="../../ui/customer_iperf_view.py" line="497"/>
         <source>Stop test</source>
         <translation>停止测试</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="168"/>
-        <location filename="../../ui/customer_iperf_view.py" line="471"/>
+        <location filename="../../ui/customer_iperf_view.py" line="177"/>
+        <location filename="../../ui/customer_iperf_view.py" line="498"/>
         <source>Open result folder</source>
         <translation>打开结果目录</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="179"/>
-        <location filename="../../ui/customer_iperf_view.py" line="476"/>
+        <location filename="../../ui/customer_iperf_view.py" line="188"/>
+        <location filename="../../ui/customer_iperf_view.py" line="503"/>
         <source>Current test</source>
         <translation>当前测试</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="183"/>
+        <location filename="../../ui/customer_iperf_view.py" line="192"/>
         <location filename="../../ui/customer_maintenance_view.py" line="203"/>
         <location filename="../../ui/customer_maintenance_view.py" line="1015"/>
         <location filename="../../ui/customer_overview_view.py" line="409"/>
@@ -2823,101 +2799,101 @@ group_id：{group_id}  flags：0x{flags:02X}
         <translation>状态</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="183"/>
+        <location filename="../../ui/customer_iperf_view.py" line="192"/>
         <source>Elapsed</source>
         <translation>已运行时间</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="184"/>
+        <location filename="../../ui/customer_iperf_view.py" line="193"/>
         <source>Actual local address</source>
         <translation>实际本地地址</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="184"/>
+        <location filename="../../ui/customer_iperf_view.py" line="193"/>
         <source>Power</source>
         <translation>实时功耗</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="185"/>
+        <location filename="../../ui/customer_iperf_view.py" line="194"/>
         <source>Upload</source>
         <translation>上行状态</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="185"/>
+        <location filename="../../ui/customer_iperf_view.py" line="194"/>
         <source>Download</source>
         <translation>下行状态</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="186"/>
+        <location filename="../../ui/customer_iperf_view.py" line="195"/>
         <source>Upload quality</source>
         <translation>上行质量</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="186"/>
+        <location filename="../../ui/customer_iperf_view.py" line="195"/>
         <source>Download quality</source>
         <translation>下行质量</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="204"/>
-        <location filename="../../ui/customer_iperf_view.py" line="488"/>
+        <location filename="../../ui/customer_iperf_view.py" line="213"/>
+        <location filename="../../ui/customer_iperf_view.py" line="515"/>
         <source>Throughput (Kbit/s)</source>
         <translation>吞吐量（Kbit/s）</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="205"/>
-        <location filename="../../ui/customer_iperf_view.py" line="489"/>
+        <location filename="../../ui/customer_iperf_view.py" line="214"/>
+        <location filename="../../ui/customer_iperf_view.py" line="516"/>
         <source>Power (W)</source>
         <translation>功率（W）</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="213"/>
-        <location filename="../../ui/customer_iperf_view.py" line="490"/>
+        <location filename="../../ui/customer_iperf_view.py" line="222"/>
+        <location filename="../../ui/customer_iperf_view.py" line="517"/>
         <source>Level</source>
         <translation>级别</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="213"/>
-        <location filename="../../ui/customer_iperf_view.py" line="490"/>
+        <location filename="../../ui/customer_iperf_view.py" line="222"/>
+        <location filename="../../ui/customer_iperf_view.py" line="517"/>
         <source>Event</source>
         <translation>测试事件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="289"/>
+        <location filename="../../ui/customer_iperf_view.py" line="312"/>
         <source>Cannot start: {error}</source>
         <translation>无法启动：{error}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="292"/>
+        <location filename="../../ui/customer_iperf_view.py" line="315"/>
         <source>iperf3 test started</source>
         <translation>iperf3 测试已启动</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="320"/>
+        <location filename="../../ui/customer_iperf_view.py" line="347"/>
         <source>Select iperf3 executable</source>
         <translation>选择 iperf3 可执行文件</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="372"/>
+        <location filename="../../ui/customer_iperf_view.py" line="399"/>
         <source>{phase} · {rate:.1f} Kbit/s · {size:.2f} MiB · sessions {sessions} / retries {retries}</source>
         <translation>{phase} · {rate:.1f} Kbit/s · {size:.2f} MiB · 会话 {sessions} / 重试 {retries}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="384"/>
+        <location filename="../../ui/customer_iperf_view.py" line="411"/>
         <source>jitter {value:.3f} ms</source>
         <translation>抖动 {value:.3f} ms</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="386"/>
+        <location filename="../../ui/customer_iperf_view.py" line="413"/>
         <source>loss {value:.2f}%</source>
         <translation>丢包 {value:.2f}%</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="388"/>
+        <location filename="../../ui/customer_iperf_view.py" line="415"/>
         <source>out-of-order {value}</source>
         <translation>乱序 {value}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="390"/>
+        <location filename="../../ui/customer_iperf_view.py" line="417"/>
         <source>retransmits {value}</source>
         <translation>重传 {value}</translation>
     </message>
@@ -2937,7 +2913,7 @@ group_id：{group_id}  flags：0x{flags:02X}
     <message>
         <location filename="../../ui/customer_maintenance_view.py" line="203"/>
         <location filename="../../ui/customer_maintenance_view.py" line="1015"/>
-        <location filename="../../ui/external_power_window.py" line="235"/>
+        <location filename="../../ui/external_power_window.py" line="384"/>
         <source>Voltage</source>
         <translation>电压</translation>
     </message>
@@ -3859,7 +3835,7 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/component_temperature_window.py" line="173"/>
-        <location filename="../../ui/customer_iperf_view.py" line="350"/>
+        <location filename="../../ui/customer_iperf_view.py" line="377"/>
         <location filename="../../ui/customer_overview_view.py" line="80"/>
         <source>Unavailable</source>
         <translation>不可用</translation>
@@ -3919,14 +3895,14 @@ A manually adjusted Y axis is shown in orange.</source>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="223"/>
         <location filename="../../ui/customer_overview_view.py" line="1032"/>
-        <location filename="../../ui/external_power_window.py" line="175"/>
+        <location filename="../../ui/external_power_window.py" line="314"/>
         <source>On</source>
         <translation>开启</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="223"/>
         <location filename="../../ui/customer_overview_view.py" line="1032"/>
-        <location filename="../../ui/external_power_window.py" line="175"/>
+        <location filename="../../ui/external_power_window.py" line="314"/>
         <source>Off</source>
         <translation>停用</translation>
     </message>
@@ -3969,11 +3945,13 @@ A manually adjusted Y axis is shown in orange.</source>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="619"/>
         <location filename="../../ui/customer_overview_view.py" line="1532"/>
-        <location filename="../../ui/external_power_window.py" line="44"/>
-        <location filename="../../ui/external_power_window.py" line="232"/>
-        <location filename="../../ui/main_window.py" line="1007"/>
-        <location filename="../../ui/settings_dialog.py" line="119"/>
-        <location filename="../../ui/settings_dialog.py" line="532"/>
+        <location filename="../../ui/external_power_window.py" line="54"/>
+        <location filename="../../ui/external_power_window.py" line="204"/>
+        <location filename="../../ui/external_power_window.py" line="212"/>
+        <location filename="../../ui/external_power_window.py" line="222"/>
+        <location filename="../../ui/external_power_window.py" line="370"/>
+        <location filename="../../ui/main_window.py" line="946"/>
+        <location filename="../../ui/main_window.py" line="965"/>
         <source>External power</source>
         <translation>外接电源</translation>
     </message>
@@ -4172,8 +4150,8 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>三维模型</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_iperf_view.py" line="213"/>
-        <location filename="../../ui/customer_iperf_view.py" line="490"/>
+        <location filename="../../ui/customer_iperf_view.py" line="222"/>
+        <location filename="../../ui/customer_iperf_view.py" line="517"/>
         <location filename="../../ui/grouped_chart_widget.py" line="350"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="845"/>
         <source>Time</source>
@@ -4343,7 +4321,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <location filename="../../ui/live_view.py" line="1511"/>
         <location filename="../../ui/live_view.py" line="1777"/>
         <location filename="../../ui/live_view.py" line="1879"/>
-        <location filename="../../ui/live_view.py" line="2908"/>
+        <location filename="../../ui/live_view.py" line="2950"/>
         <source>Device: {hardware}</source>
         <translation>设备：{hardware}</translation>
     </message>
@@ -4415,8 +4393,8 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/live_view.py" line="1878"/>
-        <location filename="../../ui/live_view.py" line="2896"/>
-        <location filename="../../ui/live_view.py" line="2910"/>
+        <location filename="../../ui/live_view.py" line="2938"/>
+        <location filename="../../ui/live_view.py" line="2952"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="854"/>
         <source>Disconnected</source>
         <translation>已断开</translation>
@@ -4460,7 +4438,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>录制</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2563"/>
+        <location filename="../../ui/live_view.py" line="2605"/>
         <source>Recording stopped</source>
         <translation>录制已停止</translation>
     </message>
@@ -4495,7 +4473,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     <message>
         <location filename="../../ui/customer_playback_view.py" line="194"/>
         <location filename="../../ui/live_view.py" line="2404"/>
-        <location filename="../../ui/live_view.py" line="2595"/>
+        <location filename="../../ui/live_view.py" line="2637"/>
         <location filename="../../ui/playback_view.py" line="238"/>
         <source>SDB files (*.sdb);;All files (*)</source>
         <translation>SDB 文件 (*.sdb);;所有文件 (*)</translation>
@@ -4543,7 +4521,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/live_view.py" line="2414"/>
-        <location filename="../../ui/live_view.py" line="2904"/>
+        <location filename="../../ui/live_view.py" line="2946"/>
         <location filename="../../ui/tracking_simulator_view.py" line="117"/>
         <source>Stop</source>
         <translation>停止</translation>
@@ -4634,12 +4612,12 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>未确认客户数据流恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2561"/>
+        <location filename="../../ui/live_view.py" line="2603"/>
         <source>Recording stopped with {count} dropped chunk(s)</source>
         <translation>录制已停止，丢失 {count} 个数据块</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2551"/>
+        <location filename="../../ui/live_view.py" line="2593"/>
         <source>Recording stop did not complete cleanly</source>
         <translation>录制停止过程未正常完成</translation>
     </message>
@@ -4655,15 +4633,15 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/live_view.py" line="730"/>
-        <location filename="../../ui/main_window.py" line="399"/>
-        <location filename="../../ui/main_window.py" line="811"/>
+        <location filename="../../ui/main_window.py" line="367"/>
+        <location filename="../../ui/main_window.py" line="788"/>
         <source>Shared customer UDP</source>
         <translation>共享客户 UDP</translation>
     </message>
     <message>
         <location filename="../../ui/live_view.py" line="732"/>
-        <location filename="../../ui/main_window.py" line="395"/>
-        <location filename="../../ui/main_window.py" line="807"/>
+        <location filename="../../ui/main_window.py" line="363"/>
+        <location filename="../../ui/main_window.py" line="784"/>
         <source>Engineering serial</source>
         <translation>工程串口</translation>
     </message>
@@ -4698,38 +4676,38 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>预留录制路径失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2593"/>
+        <location filename="../../ui/live_view.py" line="2635"/>
         <source>Import data into Live</source>
         <translation>导入数据到实时页</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2629"/>
+        <location filename="../../ui/live_view.py" line="2671"/>
         <source>Imported {count} DataReport record(s) from {path}</source>
         <translation>已从 {path} 导入 {count} 条 DataReport 记录</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2636"/>
+        <location filename="../../ui/live_view.py" line="2678"/>
         <source>Import failed: {detail}</source>
         <translation>导入失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2668"/>
+        <location filename="../../ui/live_view.py" line="2710"/>
         <source>Display cleared</source>
         <translation>显示已清空</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2744"/>
-        <location filename="../../ui/live_view.py" line="2914"/>
+        <location filename="../../ui/live_view.py" line="2786"/>
+        <location filename="../../ui/live_view.py" line="2956"/>
         <source>GNSS sky plot and signal-level C/N₀ — Live</source>
         <translation>GNSS 天空图与逐信号 C/N₀ — 实时</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2755"/>
+        <location filename="../../ui/live_view.py" line="2797"/>
         <source>The connected firmware does not advertise Orbit/TLE support</source>
         <translation>当前连接的固件未声明 Orbit/TLE 能力</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2771"/>
+        <location filename="../../ui/live_view.py" line="2813"/>
         <source>Satellite catalog and orbit prediction — Live</source>
         <translation>卫星目录与轨道预测 — 实时</translation>
     </message>
@@ -5620,7 +5598,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>正在上传 tle.txt：{percent}%</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2698"/>
+        <location filename="../../ui/live_view.py" line="2740"/>
         <location filename="../../ui/orbit_widget.py" line="486"/>
         <source>Orbit request {operation} failed: {status}</source>
         <translation>Orbit 请求 {operation} 失败：{status}</translation>
@@ -5631,7 +5609,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>tle.txt 已上传，已请求设备重扫目录</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2695"/>
+        <location filename="../../ui/live_view.py" line="2737"/>
         <location filename="../../ui/orbit_widget.py" line="501"/>
         <source>Tracking target accepted; TX state was not changed</source>
         <translation>设备已接受跟踪目标；发射状态未改变</translation>
@@ -6584,12 +6562,12 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>设备 UDP 端口：</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_endpoint_pages.py" line="220"/>
+        <location filename="../../ui/customer_endpoint_pages.py" line="225"/>
         <source>Select a customer device from the list</source>
         <translation>请从列表中选择客户设备</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_endpoint_pages.py" line="222"/>
+        <location filename="../../ui/customer_endpoint_pages.py" line="227"/>
         <source>No customer devices. Add a device to continue.</source>
         <translation>暂无客户设备。请添加设备后继续。</translation>
     </message>
@@ -6682,6 +6660,8 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>连接并识别</translation>
     </message>
     <message>
+        <location filename="../../ui/external_power_window.py" line="120"/>
+        <location filename="../../ui/external_power_window.py" line="380"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="196"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="822"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="879"/>
@@ -6695,6 +6675,8 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>开启输出...</translation>
     </message>
     <message>
+        <location filename="../../ui/external_power_window.py" line="123"/>
+        <location filename="../../ui/external_power_window.py" line="383"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="207"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="825"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="884"/>
@@ -6797,6 +6779,8 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>开启电源输出</translation>
     </message>
     <message>
+        <location filename="../../ui/external_power_window.py" line="121"/>
+        <location filename="../../ui/external_power_window.py" line="381"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="200"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="823"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="881"/>
@@ -6952,69 +6936,120 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>输出已确认关闭</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="44"/>
-        <location filename="../../ui/external_power_window.py" line="232"/>
+        <location filename="../../ui/external_power_window.py" line="54"/>
+        <location filename="../../ui/external_power_window.py" line="370"/>
         <source>Voltage / current</source>
         <translation>电压 / 电流</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="165"/>
+        <location filename="../../ui/external_power_window.py" line="229"/>
+        <source>Command sent; output OFF and voltage/current setpoints confirmed</source>
+        <translation>命令已发送；已确认输出关闭及电压/电流设定值</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="232"/>
+        <source>Command sent; output ON and voltage confirmed</source>
+        <translation>命令已发送；已确认输出开启及输出电压</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="235"/>
+        <source>Command sent; output OFF and discharge confirmed</source>
+        <translation>命令已发送；已确认输出关闭及电压释放</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="237"/>
+        <source>Power status read and confirmed</source>
+        <translation>电源状态已读取并确认</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="377"/>
+        <source>Set voltage:</source>
+        <translation>设定电压：</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="378"/>
+        <source>Set current:</source>
+        <translation>设定电流：</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="119"/>
+        <location filename="../../ui/external_power_window.py" line="379"/>
+        <source>Save and connect</source>
+        <translation>保存并连接</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="213"/>
+        <source>Enable the configured power output?</source>
+        <translation>是否开启已配置的电源输出？</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="243"/>
+        <source>Power action failed: {error}</source>
+        <translation>电源动作失败：{error}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="304"/>
         <source>External power is not configured</source>
         <translation>未配置外接电源</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="167"/>
+        <location filename="../../ui/external_power_window.py" line="306"/>
         <source>External power monitoring is inactive</source>
         <translation>外接电源监测未启用</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="169"/>
+        <location filename="../../ui/external_power_window.py" line="308"/>
         <source>Connecting to external power...</source>
         <translation>正在连接外接电源...</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="171"/>
+        <location filename="../../ui/external_power_window.py" line="310"/>
         <source>External power read failed: {detail}</source>
         <translation>外接电源读取失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="174"/>
+        <location filename="../../ui/external_power_window.py" line="313"/>
         <source>External power data is unavailable</source>
         <translation>外接电源数据不可用</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="176"/>
+        <location filename="../../ui/external_power_window.py" line="315"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="861"/>
         <source>Protection tripped</source>
         <translation>保护已触发</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="176"/>
+        <location filename="../../ui/external_power_window.py" line="315"/>
         <source>No protection trip</source>
         <translation>保护未触发</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="177"/>
+        <location filename="../../ui/external_power_window.py" line="316"/>
         <source>Output</source>
         <translation>输出</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="178"/>
+        <location filename="../../ui/external_power_window.py" line="317"/>
         <source>Operation status</source>
         <translation>运行状态</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="179"/>
+        <location filename="../../ui/external_power_window.py" line="318"/>
         <source>Questionable status</source>
         <translation>告警状态</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="236"/>
+        <location filename="../../ui/external_power_window.py" line="376"/>
+        <source>TCP port:</source>
+        <translation>TCP 端口：</translation>
+    </message>
+    <message>
+        <location filename="../../ui/external_power_window.py" line="385"/>
         <source>Current</source>
         <translation>电流</translation>
     </message>
     <message>
-        <location filename="../../ui/external_power_window.py" line="237"/>
+        <location filename="../../ui/external_power_window.py" line="386"/>
         <source>Sample time</source>
         <translation>采样时间</translation>
     </message>
@@ -7044,6 +7079,8 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>已观察到 DUT 启动</translation>
     </message>
     <message>
+        <location filename="../../ui/external_power_window.py" line="122"/>
+        <location filename="../../ui/external_power_window.py" line="382"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="883"/>
         <source>Enable output</source>
         <translation>开启输出</translation>

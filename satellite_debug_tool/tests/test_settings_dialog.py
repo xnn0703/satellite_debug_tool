@@ -73,52 +73,29 @@ class TestSettingsDialog:
         engineering = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_ENGINEERING)
         production = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_PRODUCTION)
 
-        assert not customer._external_power_section.isHidden()
+        assert not hasattr(customer, "_external_power_section")
         assert customer._production_section.isHidden()
-        assert engineering._external_power_section.isHidden()
+        assert not hasattr(engineering, "_external_power_section")
         assert engineering._production_section.isHidden()
-        assert production._external_power_section.isHidden()
+        assert not hasattr(production, "_external_power_section")
         assert not production._production_section.isHidden()
 
         customer.deleteLater()
         engineering.deleteLater()
         production.deleteLater()
 
-    def test_customer_scope_validates_and_persists_external_power_ipv4(
-        self, qapp, tmp_settings, monkeypatch
+    def test_customer_scope_does_not_write_global_external_power(
+        self, qapp, tmp_settings
     ):
-        from PySide6.QtWidgets import QMessageBox
-
         from satellite_debug_tool.ui.settings_dialog import (
             SETTINGS_SCOPE_CUSTOMER,
             SettingsDialog,
         )
 
-        warnings: list[str] = []
-        monkeypatch.setattr(
-            QMessageBox,
-            "warning",
-            lambda _parent, _title, text: warnings.append(text),
-        )
         dlg = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_CUSTOMER)
-        dlg._external_power_host.setText("invalid-host")
         dlg._on_accept()
-        assert warnings
-        assert tmp_settings.get("external_power.host") == ""
-
-        dlg._external_power_host.setText("192.168.1.108")
-        dlg._on_accept()
-        assert tmp_settings.get("external_power.host") == "192.168.1.108"
+        assert tmp_settings.get("external_power.host") is None
         dlg.deleteLater()
-
-        clear_dialog = SettingsDialog(
-            tmp_settings,
-            scope=SETTINGS_SCOPE_CUSTOMER,
-        )
-        clear_dialog._external_power_host.clear()
-        clear_dialog._on_accept()
-        assert tmp_settings.get("external_power.host") == ""
-        clear_dialog.deleteLater()
 
     def test_hidden_production_fields_are_not_overwritten(
         self, qapp, tmp_settings
@@ -239,10 +216,12 @@ class TestSettingsDialog:
             (directory / "settings.json").read_text(encoding="utf-8")
         )
         assert rebuilt["device_udp"]["local_port"] == 50100
-        assert rebuilt["customer"]["devices"] == [
-            {"ip": "192.168.1.13", "port": 4004},
-            {"ip": "192.168.1.12", "port": 4004},
+        devices = rebuilt["customer"]["devices"]
+        assert [(item["ip"], item["port"]) for item in devices] == [
+            ("192.168.1.13", 4004),
+            ("192.168.1.12", 4004),
         ]
+        assert len({item["id"] for item in devices}) == 2
         assert tuple(directory.glob("settings_recovery_*.json"))
         dlg.deleteLater()
 

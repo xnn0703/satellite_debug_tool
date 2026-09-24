@@ -10,7 +10,10 @@ from PySide6.QtWidgets import QApplication
 from satellite_debug_tool.core.comm import DeviceConnectionPhase
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.external_power_monitor import (
+    EXTERNAL_POWER_ACTION_EVENT,
     EXTERNAL_POWER_SAMPLE_EVENT,
+    ExternalPowerAction,
+    ExternalPowerActionOutcome,
     ExternalPowerSample,
 )
 from satellite_debug_tool.core.production.power_supply import PowerIdentity
@@ -176,7 +179,21 @@ def test_customer_recording_persists_external_power_metadata(
         questionable_condition=0,
         protection_tripped=False,
     )
-    assert view.record_external_power_sample(sample)
+    assert view.record_external_power_sample(
+        sample,
+        device_id="9e6810a8-593b-4e61-9850-bb3a6e7f1761",
+        endpoint=("192.168.1.12", 4004),
+    )
+    assert view.record_external_power_action(
+        ExternalPowerActionOutcome(
+            ExternalPowerAction.ENABLE,
+            "customer-enable-1",
+            True,
+            sample=sample,
+        ),
+        device_id="9e6810a8-593b-4e61-9850-bb3a6e7f1761",
+        endpoint=("192.168.1.12", 4004),
+    )
 
     view.toggle_customer_recording()
     sdb = DataImporter.open_sdb(target)
@@ -191,6 +208,19 @@ def test_customer_recording_persists_external_power_metadata(
     assert power_events[0]["voltage_v"] == pytest.approx(12.04)
     assert power_events[0]["current_a"] == pytest.approx(1.25)
     assert power_events[0]["power_w"] == pytest.approx(15.05)
+    assert power_events[0]["device_id"] == "9e6810a8-593b-4e61-9850-bb3a6e7f1761"
+    assert power_events[0]["device_endpoint"] == "192.168.1.12:4004"
+    action_events = [
+        event
+        for event in sdb.metadata_events
+        if event.get("event") == EXTERNAL_POWER_ACTION_EVENT
+    ]
+    assert len(action_events) == 1
+    assert action_events[0]["action"] == "enable"
+    assert action_events[0]["succeeded"] is True
+    assert action_events[0]["identity"]["serial_number"] == "PSW1234"
+    assert action_events[0]["device_id"] == "9e6810a8-593b-4e61-9850-bb3a6e7f1761"
+    assert action_events[0]["device_endpoint"] == "192.168.1.12:4004"
 
 def test_full_capture_timeout_requests_customer_profile_restore(
     app, settings: Settings, tmp_path: Path, monkeypatch

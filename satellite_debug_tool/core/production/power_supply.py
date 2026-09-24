@@ -580,10 +580,10 @@ class GwInstekPswAdapter:
         return self._identity
 
     def _validate_identity(self, identity: PowerIdentity) -> None:
-        expected_maker = _normalize_identity_field(self._config.expected_manufacturer)
-        actual_maker = _normalize_identity_field(identity.manufacturer)
-        expected_model = _normalize_identity_field(self._config.expected_model)
-        actual_model = _normalize_identity_field(identity.model)
+        expected_maker = normalize_power_identity_field(self._config.expected_manufacturer)
+        actual_maker = normalize_power_identity_field(identity.manufacturer)
+        expected_model = normalize_power_identity_field(self._config.expected_model)
+        actual_model = normalize_power_identity_field(identity.model)
         if expected_maker not in actual_maker:
             raise PowerSupplyError(f"unexpected power-supply manufacturer: {identity.manufacturer}")
         if expected_model not in actual_model:
@@ -718,7 +718,9 @@ def _format_number(value: float) -> str:
     return f"{float(value):.9f}".rstrip("0").rstrip(".")
 
 
-def _normalize_identity_field(value: str) -> str:
+def normalize_power_identity_field(value: str) -> str:
+    """Return the canonical comparison form used by every PSW identity owner."""
+
     return "".join(character for character in str(value).upper() if character.isalnum())
 
 
@@ -728,6 +730,7 @@ __all__ = [
     "PowerCommandRecord",
     "PowerEvidenceLevel",
     "PowerIdentity",
+    "normalize_power_identity_field",
     "PowerMeasurement",
     "PowerSupplyConfig",
     "PowerSupplyError",

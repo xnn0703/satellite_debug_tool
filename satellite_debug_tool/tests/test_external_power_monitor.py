@@ -1,8 +1,7 @@
-"""Read-only external PSW owner, Store and Customer presentation tests."""
+"""Device-bound external PSW owner, Store and Customer presentation tests."""
 
 from __future__ import annotations
 
-import socket
 from types import SimpleNamespace
 
 import pytest
@@ -12,46 +11,23 @@ from PySide6.QtWidgets import QWidget
 
 from satellite_debug_tool.core.external_power_monitor import (
     EXTERNAL_POWER_HISTORY_SECONDS,
+    ExternalPowerAction,
     ExternalPowerConfig,
     ExternalPowerPhase,
     ExternalPowerSample,
     ExternalPowerSnapshot,
     ExternalPowerStore,
     ExternalPowerWorker,
-    PswReadOnlySession,
 )
 from satellite_debug_tool.core.production.power_supply import (
     PowerIdentity,
     PowerSupplyError,
+    normalize_power_identity_field,
 )
 from satellite_debug_tool.ui.external_power_window import ExternalPowerHistoryWindow
 from satellite_debug_tool.ui.customer_session_bundle import (
     CustomerEndpointSessionBundleFactory,
 )
-
-
-class _SocketDouble:
-    def __init__(self, responses: list[bytes]) -> None:
-        self._responses = list(responses)
-        self.commands: list[str] = []
-        self.closed = False
-        self.timeout = 0.0
-
-    def settimeout(self, timeout: float) -> None:
-        self.timeout = float(timeout)
-
-    def sendall(self, payload: bytes) -> None:
-        command = payload.decode("ascii")
-        assert command.endswith("\n")
-        self.commands.append(command.rstrip("\n"))
-
-    def recv(self, _size: int) -> bytes:
-        if not self._responses:
-            raise socket.timeout("script exhausted")
-        return self._responses.pop(0)
-
-    def close(self) -> None:
-        self.closed = True
 
 
 def _identity() -> PowerIdentity:
@@ -78,90 +54,6 @@ def _sample(
         questionable_condition=0,
         protection_tripped=False,
     )
-
-
-def test_read_only_session_uses_only_fixed_query_whitelist_and_parses_sample() -> None:
-    sock = _SocketDouble(
-        [
-            b"GW-INSTEK,PSW 80-27,PSW1234,1.70\n",
-            b"1\n",
-            b"12.04,1.",
-            b"250\n",
-            b"4\n",
-            b"0\n",
-            b"0\n",
-        ]
-    )
-    session = PswReadOnlySession(
-        ExternalPowerConfig("192.168.1.108"),
-        socket_factory=lambda *_args, **_kwargs: sock,
-        wall_clock_ns=lambda: 1234,
-        monotonic_clock_ns=lambda: 5678,
-    )
-
-    identity = session.connect()
-    sample = session.read_sample(3)
-    session.close()
-
-    assert identity.serial_number == "PSW1234"
-    assert sample.voltage_v == pytest.approx(12.04)
-    assert sample.current_a == pytest.approx(1.25)
-    assert sample.power_w == pytest.approx(15.05)
-    assert sample.connection_generation == 3
-    assert sock.commands == [
-        "*IDN?",
-        "OUTP?",
-        "MEAS:ALL?",
-        "STAT:OPER:COND?",
-        "STAT:QUES:COND?",
-        "OUTP:PROT:TRIP?",
-    ]
-    assert all(command.endswith("?") for command in sock.commands)
-    assert sock.closed
-
-
-def test_read_only_session_rejects_wrong_identity_and_closes_socket() -> None:
-    sock = _SocketDouble([b"OTHER,PSW 80-27,PSW1234,1.70\n"])
-    session = PswReadOnlySession(
-        ExternalPowerConfig("192.168.1.108"),
-        socket_factory=lambda *_args, **_kwargs: sock,
-    )
-
-    with pytest.raises(PowerSupplyError, match="manufacturer"):
-        session.connect()
-
-    assert sock.closed
-    assert session.identity is None
-
-
-def test_read_only_session_reports_timeout_and_non_finite_measurement() -> None:
-    timeout_socket = _SocketDouble(
-        [b"GW-INSTEK,PSW 80-27,PSW1234,1.70\n"]
-    )
-    timeout_session = PswReadOnlySession(
-        ExternalPowerConfig("192.168.1.108"),
-        socket_factory=lambda *_args, **_kwargs: timeout_socket,
-    )
-    timeout_session.connect()
-    with pytest.raises(PowerSupplyError, match="timed out|script exhausted"):
-        timeout_session.read_sample(1)
-    timeout_session.close()
-
-    non_finite_socket = _SocketDouble(
-        [
-            b"GW-INSTEK,PSW 80-27,PSW1234,1.70\n",
-            b"1\n",
-            b"nan,1.0\n",
-        ]
-    )
-    non_finite_session = PswReadOnlySession(
-        ExternalPowerConfig("192.168.1.108"),
-        socket_factory=lambda *_args, **_kwargs: non_finite_socket,
-    )
-    non_finite_session.connect()
-    with pytest.raises(PowerSupplyError, match="non-finite|finite"):
-        non_finite_session.read_sample(1)
-    non_finite_session.close()
 
 
 def test_external_power_config_accepts_only_ipv4_and_fixed_port() -> None:
@@ -264,6 +156,53 @@ def test_worker_reconnects_with_new_generation_and_stops(
     assert all(session.closed for session in created)
 
 
+def test_worker_serializes_control_action_on_the_polling_session(
+    qapplication_session,
+) -> None:
+    executed: list[tuple[ExternalPowerAction, str, int]] = []
+
+    class _Session:
+        identity = _identity()
+
+        def connect(self):
+            return self.identity
+
+        def read_sample(self, generation: int):
+            return _sample(1, generation=generation)
+
+        def execute(self, action, action_id: str, generation: int):
+            executed.append((action, action_id, generation))
+            return _sample(2, voltage=0.0, current=0.0, generation=generation)
+
+        def close(self):
+            return None
+
+    worker = ExternalPowerWorker(
+        ExternalPowerConfig(
+            "192.168.1.108",
+            poll_interval_s=0.01,
+            reconnect_interval_s=0.01,
+        ),
+        session_factory=lambda _config: _Session(),
+    )
+    outcomes = []
+    worker.action_finished.connect(outcomes.append)
+    worker.start()
+    worker.request_action(ExternalPowerAction.DISABLE, "customer-disable-1")
+    timer = QElapsedTimer()
+    timer.start()
+    while not outcomes and timer.elapsed() < 1000:
+        QTest.qWait(5)
+    worker.requestInterruption()
+    assert worker.wait(1000)
+
+    assert executed == [
+        (ExternalPowerAction.DISABLE, "customer-disable-1", 1),
+    ]
+    assert outcomes[0].succeeded is True
+    assert outcomes[0].sample is not None
+
+
 def test_history_window_renders_voltage_and_current_and_reuses_native_window(
     qapplication_session,
 ) -> None:
@@ -293,7 +232,38 @@ def test_history_window_renders_voltage_and_current_and_reuses_native_window(
         anchor.close()
 
 
-def test_shared_sample_is_broadcast_only_to_existing_customer_bundles(
+def test_device_power_window_saves_its_own_profile(
+    qapplication_session,
+) -> None:
+    saved: list[dict[str, object]] = []
+    window = ExternalPowerHistoryWindow(
+        ExternalPowerStore(),
+        device_label="192.168.1.12:4004",
+        profile={
+            "host": "192.168.1.18",
+            "voltage_set_v": 12.0,
+            "current_set_a": 8.0,
+        },
+        save_profile=lambda profile: saved.append(dict(profile)),
+    )
+    window._host.setText("192.168.1.28")
+    window._voltage.setValue(13.5)
+    window._current.setValue(9.0)
+
+    window._save_and_connect()
+
+    assert saved == [
+        {
+            "host": "192.168.1.28",
+            "voltage_set_v": 13.5,
+            "current_set_a": 9.0,
+        }
+    ]
+    assert "192.168.1.12:4004" in window.windowTitle()
+    window.close()
+
+
+def test_legacy_global_sample_broadcast_is_removed(
     qapplication_session,
 ) -> None:
     class _Live:
@@ -320,5 +290,10 @@ def test_shared_sample_is_broadcast_only_to_existing_customer_bundles(
 
     factory.record_external_power_sample(sample)
 
-    assert recording.samples == [sample]
+    assert recording.samples == []
     assert idle.samples == []
+
+
+def test_identity_accepts_real_psw80_27_model_without_space() -> None:
+    assert normalize_power_identity_field("PSW80-27") == "PSW8027"
+    assert normalize_power_identity_field("PSW 80-27") == "PSW8027"

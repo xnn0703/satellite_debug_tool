@@ -19,6 +19,7 @@ from satellite_debug_tool.core.customer import (
     CustomerDeviceDirectory,
     CustomerDevicePersistenceError,
     CustomerDeviceSupplementalFacts,
+    CustomerDeviceValidationError,
 )
 from satellite_debug_tool.core.protocol import CmdType, build_frame
 from satellite_debug_tool.core.session import (
@@ -141,9 +142,48 @@ def test_add_duplicate_and_capacity_keep_stable_order_and_explicit_result(
         FOURTH_ENDPOINT,
     )
     assert session_directory.endpoints() == tuple(sorted(adapter.endpoints()))
-    assert customer_settings.get("customer.devices") == [
-        _entry(endpoint) for endpoint in adapter.endpoints()
-    ]
+    records = customer_settings.get("customer.devices")
+    assert [(item["ip"], item["port"]) for item in records] == list(
+        adapter.endpoints()
+    )
+    assert len({item["id"] for item in records}) == 4
+    adapter.shutdown()
+
+
+def test_accessory_profiles_are_independent_and_follow_endpoint_edit(
+    customer_settings,
+    session_directory,
+) -> None:
+    adapter = CustomerDeviceDirectory(customer_settings, session_directory)
+    adapter.add(AFD_ENDPOINT)
+    adapter.add(ESA_ENDPOINT)
+    first_id = adapter.device_id(AFD_ENDPOINT)
+    adapter.update_accessories(
+        AFD_ENDPOINT,
+        external_power={
+            "host": "192.168.1.18",
+            "voltage_set_v": 12.0,
+            "current_set_a": 8.0,
+        },
+        iperf={"server": "10.0.0.1", "local_host": "10.0.0.2"},
+    )
+
+    target = ("192.168.1.23", 4004)
+    adapter.edit(AFD_ENDPOINT, target)
+
+    assert adapter.device_id(target) == first_id
+    assert adapter.device_record(target)["external_power"]["host"] == "192.168.1.18"
+    assert adapter.device_record(ESA_ENDPOINT)["external_power"]["host"] == ""
+    assert adapter.device_record(target)["iperf"]["server"] == "10.0.0.1"
+    with pytest.raises(CustomerDeviceValidationError, match="already assigned"):
+        adapter.update_accessories(
+            ESA_ENDPOINT,
+            external_power={
+                "host": "192.168.1.18",
+                "voltage_set_v": 12.0,
+                "current_set_a": 8.0,
+            },
+        )
     adapter.shutdown()
 
 

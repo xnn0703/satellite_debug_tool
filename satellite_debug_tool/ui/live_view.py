@@ -2518,8 +2518,14 @@ class LiveView(QWidget):
         self.recording_state_changed.emit(True, str(actual_target))
         return True
 
-    def record_external_power_sample(self, sample: object) -> bool:
-        """Append one shared external-power sample to an active customer SDB v3."""
+    def record_external_power_sample(
+        self,
+        sample: object,
+        *,
+        device_id: str = "",
+        endpoint: tuple[str, int] | None = None,
+    ) -> bool:
+        """Append one device-bound external-power sample to customer SDB v3."""
 
         if (
             not self._is_recording
@@ -2532,8 +2538,44 @@ class LiveView(QWidget):
         timestamp_ns = getattr(sample, "host_timestamp_ns", None)
         if metadata_builder is None or timestamp_ns is None:
             return False
+        event = dict(metadata_builder())
+        if device_id:
+            event["device_id"] = str(device_id)
+        if endpoint is not None:
+            event["device_endpoint"] = f"{endpoint[0]}:{endpoint[1]}"
         return self._recorder.write_metadata_event(
-            metadata_builder(),
+            event,
+            host_timestamp_ns=int(timestamp_ns),
+        )
+
+    def record_external_power_action(
+        self,
+        outcome: object,
+        *,
+        device_id: str = "",
+        endpoint: tuple[str, int] | None = None,
+    ) -> bool:
+        """Append one device-bound external-power control result to customer SDB v3."""
+
+        if (
+            not self._is_recording
+            or not self._customer_recording
+            or self._recorder is None
+            or self._recorder.format_version != SDB_VERSION_V3
+        ):
+            return False
+        metadata_builder = getattr(outcome, "metadata_event", None)
+        if metadata_builder is None:
+            return False
+        event = dict(metadata_builder())
+        sample = getattr(outcome, "sample", None)
+        timestamp_ns = getattr(sample, "host_timestamp_ns", None) or time.time_ns()
+        if device_id:
+            event["device_id"] = str(device_id)
+        if endpoint is not None:
+            event["device_endpoint"] = f"{endpoint[0]}:{endpoint[1]}"
+        return self._recorder.write_metadata_event(
+            event,
             host_timestamp_ns=int(timestamp_ns),
         )
 

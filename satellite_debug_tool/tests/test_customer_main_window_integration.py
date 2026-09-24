@@ -214,21 +214,17 @@ def test_workspace_switch_controls_external_power_and_settings_scope(
     settings, _endpoints = _configured_settings(tmp_path, monkeypatch)
     window = MainWindow(settings=settings)
 
-    class _MonitorDouble:
+    class _AccessoryFactoryDouble:
         def __init__(self) -> None:
             self.active_calls: list[bool] = []
 
-        def set_active(self, active: bool) -> None:
+        def set_customer_active(self, active: bool) -> None:
             self.active_calls.append(bool(active))
 
-        def configure(self, _host: str) -> None:
-            return None
-
-        def shutdown(self) -> bool:
-            return True
-
-    monitor = _MonitorDouble()
-    window._external_power_monitor = monitor
+    accessory_factory = _AccessoryFactoryDouble()
+    window._customer_bundle_factory.set_customer_active = (
+        accessory_factory.set_customer_active
+    )
     scopes: list[str] = []
 
     class _SettingsDialogDouble:
@@ -254,10 +250,10 @@ def test_workspace_switch_controls_external_power_and_settings_scope(
             SETTINGS_SCOPE_ENGINEERING,
             SETTINGS_SCOPE_PRODUCTION,
         ]
-        assert monitor.active_calls[-2:] == [False, False]
+        assert accessory_factory.active_calls[-2:] == [False, False]
         window._workspace.setCurrentIndex(0)
         qapp.processEvents()
-        assert monitor.active_calls[-1] is True
+        assert accessory_factory.active_calls[-1] is True
     finally:
         window.close()
         window.deleteLater()

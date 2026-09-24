@@ -61,7 +61,13 @@ def test_legacy_endpoint_and_historical_default_ports_migrate_atomically(
     )
 
     endpoint = {"ip": "192.168.1.12", "port": 4004}
-    assert settings.get("customer.devices") == [endpoint]
+    devices = settings.get("customer.devices")
+    assert [(item["ip"], item["port"]) for item in devices] == [
+        (endpoint["ip"], endpoint["port"])
+    ]
+    assert devices[0]["id"]
+    assert devices[0]["external_power"]["host"] == ""
+    assert devices[0]["iperf"]["server"] == "60.205.157.141"
     assert settings.get("customer.active_endpoint") == endpoint
     assert settings.get("device_udp.local_port") == 45678
 
@@ -72,6 +78,70 @@ def test_legacy_endpoint_and_historical_default_ports_migrate_atomically(
     assert "remote_port" not in saved.get("udp", {})
     assert "local_port" not in saved.get("udp", {})
     assert "local_port" not in saved.get("production", {})
+
+
+def test_single_device_legacy_accessories_migrate_to_that_device(
+    tmp_path, monkeypatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        {
+            "customer": {
+                "devices": [{"ip": "192.168.1.12", "port": 4004}],
+                "active_endpoint": {"ip": "192.168.1.12", "port": 4004},
+            },
+            "external_power": {
+                "host": "192.168.1.18",
+                "voltage_set_v": 13.5,
+                "current_set_a": 8.0,
+            },
+            "iperf": {
+                "executable": "/opt/iperf3",
+                "server": "10.0.0.8",
+                "local_host": "10.0.0.12",
+                "ul_port": 6201,
+                "dl_port": 6202,
+            },
+        },
+    )
+
+    device = settings.get("customer.devices")[0]
+    assert device["external_power"]["host"] == "192.168.1.18"
+    assert device["external_power"]["voltage_set_v"] == pytest.approx(13.5)
+    assert device["iperf"]["server"] == "10.0.0.8"
+    assert device["iperf"]["ul_port"] == 6201
+    assert settings.get("iperf") == {"executable": "/opt/iperf3"}
+    assert settings.get("external_power") is None
+    reloaded = Settings()
+    assert reloaded.get("customer.devices") == settings.get("customer.devices")
+
+
+def test_multi_device_legacy_accessories_migrate_only_to_active_device(
+    tmp_path, monkeypatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        {
+            "customer": {
+                "devices": [
+                    {"ip": "192.168.1.12", "port": 4004},
+                    {"ip": "192.168.1.13", "port": 4004},
+                ],
+                "active_endpoint": {"ip": "192.168.1.13", "port": 4004},
+            },
+            "external_power": {"host": "192.168.1.28"},
+            "iperf": {"server": "10.0.0.28"},
+        },
+    )
+
+    first, active = settings.get("customer.devices")
+    assert first["external_power"]["host"] == ""
+    assert first["iperf"]["server"] == "60.205.157.141"
+    assert active["external_power"]["host"] == "192.168.1.28"
+    assert active["iperf"]["server"] == "10.0.0.28"
+    assert settings.get("config_migrations.customer_accessories_v1") is True
 
 
 @pytest.mark.parametrize(
@@ -544,14 +614,13 @@ def test_rebuild_preserves_evidence_and_commits_clean_snapshot(
     assert base64.b64decode(evidence["backup"]["payload_base64"]) == backup_bytes
     rebuilt = json.loads(path.read_text(encoding="utf-8"))
     assert rebuilt["device_udp"] == {"local_port": 50100}
-    assert rebuilt["customer"] == {
-        "devices": [endpoint],
-        "active_endpoint": endpoint,
-    }
-    assert rebuilt["config_migrations"] == {
-        "device_udp_port_v1": True,
-        "customer_devices_v1": True,
-    }
+    assert rebuilt["customer"]["active_endpoint"] == endpoint
+    rebuilt_device = rebuilt["customer"]["devices"][0]
+    assert (rebuilt_device["ip"], rebuilt_device["port"]) == (
+        endpoint["ip"], endpoint["port"]
+    )
+    assert rebuilt_device["id"]
+    assert rebuilt["config_migrations"]["customer_accessories_v1"] is True
     assert rebuilt.get("udp") == {}
     assert "local_port" not in rebuilt["production"]
     assert not settings.read_only_recovery
@@ -559,7 +628,11 @@ def test_rebuild_preserves_evidence_and_commits_clean_snapshot(
 
     reloaded = Settings()
     assert not reloaded.device_configuration_blocked
-    assert reloaded.get("customer.devices") == [endpoint]
+    reloaded_device = reloaded.get("customer.devices")[0]
+    assert (reloaded_device["ip"], reloaded_device["port"]) == (
+        endpoint["ip"], endpoint["port"]
+    )
+    assert reloaded_device["id"] == rebuilt_device["id"]
 
 
 def test_export_recovery_evidence_writes_verified_payload(tmp_path, monkeypatch) -> None:

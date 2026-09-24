@@ -12,6 +12,7 @@ import copy
 from dataclasses import dataclass
 from enum import Enum
 import ipaddress
+import uuid
 from typing import Any, Callable, Mapping, Optional, Protocol
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -224,6 +225,7 @@ class CustomerDeviceDirectory(QObject):
         self._owner_prefix = prefix
         self._subscription_hz = rate
         self._configured_endpoints: tuple[Endpoint, ...] = ()
+        self._records: dict[Endpoint, dict[str, object]] = {}
         self._active_endpoint: Optional[Endpoint] = None
         self._leases: dict[Endpoint, _ConfigurationLeaseProtocol] = {}
         self._attachments: dict[Endpoint, object] = {}
@@ -317,6 +319,7 @@ class CustomerDeviceDirectory(QObject):
                 )
             seen.add(endpoint)
             endpoints.append(endpoint)
+            self._records[endpoint] = copy.deepcopy(dict(raw))
         raw_active = self._settings.get("customer.active_endpoint", None)
         active: Optional[Endpoint] = None
         if raw_active is not None:
@@ -354,6 +357,64 @@ class CustomerDeviceDirectory(QObject):
 
     def endpoints(self) -> tuple[Endpoint, ...]:
         return self._configured_endpoints
+
+    def device_record(self, endpoint: Endpoint) -> dict[str, object]:
+        normalized = normalize_customer_endpoint(endpoint)
+        if normalized not in self._configured_endpoints:
+            raise CustomerDeviceNotFoundError("customer device is not configured")
+        return copy.deepcopy(self._records[normalized])
+
+    def device_id(self, endpoint: Endpoint) -> str:
+        return str(self.device_record(endpoint)["id"])
+
+    def update_accessories(
+        self,
+        endpoint: Endpoint,
+        *,
+        external_power: Optional[Mapping[str, object]] = None,
+        iperf: Optional[Mapping[str, object]] = None,
+    ) -> None:
+        self._assert_open_and_mutable()
+        normalized = normalize_customer_endpoint(endpoint)
+        if normalized not in self._configured_endpoints:
+            raise CustomerDeviceNotFoundError("customer device is not configured")
+        updated = copy.deepcopy(self._records[normalized])
+        if external_power is not None:
+            profile = copy.deepcopy(dict(external_power))
+            host = str(profile.get("host", "")).strip()
+            if host:
+                try:
+                    address = ipaddress.ip_address(host)
+                except ValueError as exc:
+                    raise CustomerDeviceValidationError(
+                        "external power host must be an IPv4 address"
+                    ) from exc
+                if address.version != 4 or address.is_unspecified or address.is_multicast:
+                    raise CustomerDeviceValidationError(
+                        "external power host must be an IPv4 address"
+                    )
+                host = str(address)
+                for other_endpoint, other_record in self._records.items():
+                    if other_endpoint == normalized:
+                        continue
+                    other_profile = other_record.get("external_power", {})
+                    if (
+                        isinstance(other_profile, Mapping)
+                        and str(other_profile.get("host", "")).strip() == host
+                    ):
+                        raise CustomerDeviceValidationError(
+                            f"external power {host}:2268 is already assigned to "
+                            f"{other_endpoint[0]}:{other_endpoint[1]}"
+                        )
+            profile["host"] = host
+            updated["external_power"] = profile
+        if iperf is not None:
+            updated["iperf"] = copy.deepcopy(dict(iperf))
+        records = dict(self._records)
+        records[normalized] = updated
+        self._persist_configuration(self._configured_endpoints, self._active_endpoint, records)
+        self._records = records
+        self.device_changed.emit(normalized)
 
     def active_endpoint(self) -> Optional[Endpoint]:
         return self._active_endpoint
@@ -644,13 +705,16 @@ class CustomerDeviceDirectory(QObject):
             raise CustomerDeviceCapacityError("customer device capacity is 4")
         lease = self._acquire_configuration(normalized)
         new_endpoints = (*self._configured_endpoints, normalized)
+        records = dict(self._records)
+        records[normalized] = self._new_record(normalized)
         previous_active = self._active_endpoint
         try:
-            self._persist_configuration(new_endpoints, normalized)
+            self._persist_configuration(new_endpoints, normalized, records)
         except Exception:
             lease.release()
             raise
         self._configured_endpoints = tuple(new_endpoints)
+        self._records = records
         self._active_endpoint = normalized
         self._leases[normalized] = lease
         self._wire_runtime(normalized)
@@ -693,16 +757,21 @@ class CustomerDeviceDirectory(QObject):
         source_index = self._configured_endpoints.index(source)
         replacement = list(self._configured_endpoints)
         replacement[source_index] = target
+        records = dict(self._records)
+        record = copy.deepcopy(records.pop(source))
+        record["ip"], record["port"] = target
+        records[target] = record
         previous_active = self._active_endpoint
         new_active = target if previous_active == source else previous_active
         try:
-            self._persist_configuration(tuple(replacement), new_active)
+            self._persist_configuration(tuple(replacement), new_active, records)
         except Exception:
             target_lease.release()
             raise
         source_lease = self._leases.pop(source)
         self._unwire_runtime(source)
         self._configured_endpoints = tuple(replacement)
+        self._records = records
         self._active_endpoint = new_active
         self._leases[target] = target_lease
         self._wire_runtime(target)
@@ -736,6 +805,8 @@ class CustomerDeviceDirectory(QObject):
         remaining = tuple(
             item for item in self._configured_endpoints if item != normalized
         )
+        records = dict(self._records)
+        records.pop(normalized, None)
         if previous_active != normalized:
             new_active = previous_active
         elif old_index < len(remaining):
@@ -744,10 +815,11 @@ class CustomerDeviceDirectory(QObject):
             new_active = remaining[-1]
         else:
             new_active = None
-        self._persist_configuration(remaining, new_active)
+        self._persist_configuration(remaining, new_active, records)
         lease = self._leases.pop(normalized)
         self._unwire_runtime(normalized)
         self._configured_endpoints = remaining
+        self._records = records
         self._active_endpoint = new_active
         if not lease.release():
             raise CustomerDeviceLeaseError("deleted endpoint configuration lease did not release")
@@ -784,6 +856,31 @@ class CustomerDeviceDirectory(QObject):
             raise CustomerDeviceBusyError("stop endpoint recording before Edit/Delete")
 
     @staticmethod
+    def _new_record(endpoint: Endpoint) -> dict[str, object]:
+        return {
+            "id": str(uuid.uuid4()),
+            "ip": endpoint[0],
+            "port": endpoint[1],
+            "external_power": {
+                "host": "",
+                "voltage_set_v": 12.0,
+                "current_set_a": 12.0,
+            },
+            "iperf": {
+                "server": "60.205.157.141",
+                "local_host": "",
+                "protocol": "udp",
+                "direction": "both",
+                "ul_port": 5201,
+                "dl_port": 5202,
+                "ul_rate": "491K",
+                "dl_rate": "200K",
+                "continuous": True,
+                "duration_hours": 24.0,
+            },
+        }
+
+    @staticmethod
     def _settings_entry(endpoint: Endpoint) -> dict[str, object]:
         return {"ip": endpoint[0], "port": endpoint[1]}
 
@@ -791,12 +888,17 @@ class CustomerDeviceDirectory(QObject):
         self,
         endpoints: tuple[Endpoint, ...],
         active: Optional[Endpoint],
+        records: Optional[Mapping[Endpoint, Mapping[str, object]]] = None,
     ) -> None:
         old_devices = copy.deepcopy(self._settings.get("customer.devices", []))
         old_active = copy.deepcopy(
             self._settings.get("customer.active_endpoint", None)
         )
-        new_devices = [self._settings_entry(endpoint) for endpoint in endpoints]
+        source_records = records if records is not None else self._records
+        new_devices = [
+            copy.deepcopy(dict(source_records.get(endpoint, self._new_record(endpoint))))
+            for endpoint in endpoints
+        ]
         new_active = self._settings_entry(active) if active is not None else None
         try:
             self._settings.set("customer.devices", new_devices)

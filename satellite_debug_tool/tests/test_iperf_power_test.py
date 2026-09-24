@@ -30,6 +30,9 @@ from satellite_debug_tool.core.iperf_test import (
     IperfValidationError,
 )
 from satellite_debug_tool.core.production.power_supply import PowerIdentity
+from satellite_debug_tool.ui.customer_session_bundle import (
+    CustomerEndpointSessionBundleFactory,
+)
 
 
 def _config(executable: str) -> IperfTestConfig:
@@ -75,6 +78,29 @@ def test_config_rejects_ambiguous_or_unsafe_inputs(tmp_path: Path) -> None:
         _config(str(executable)).__class__(
             **{**_config(str(executable)).__dict__, "ul_rate": "0"}
         ).validate()
+
+
+def test_multi_device_resource_claims_reject_shared_local_ip_and_server_port() -> None:
+    factory = CustomerEndpointSessionBundleFactory(
+        settings=object(),
+        session_directory=object(),
+    )
+    first = _config("/opt/iperf3")
+    factory._claim_iperf_resources(("192.168.1.12", 4004), first)
+
+    with pytest.raises(ValueError, match="local IPv4"):
+        factory._claim_iperf_resources(("192.168.1.13", 4004), first)
+
+    different_local = IperfTestConfig(
+        **{**first.__dict__, "local_host": "10.79.61.99"}
+    )
+    with pytest.raises(ValueError, match="port"):
+        factory._claim_iperf_resources(
+            ("192.168.1.13", 4004), different_local
+        )
+
+    factory._release_iperf_resources(("192.168.1.12", 4004))
+    factory._claim_iperf_resources(("192.168.1.13", 4004), different_local)
 
 
 def test_command_builder_keeps_directions_independent(

@@ -75,6 +75,8 @@ class IperfLanePhase(str, Enum):
 @dataclass(frozen=True)
 class IperfTestConfig:
     executable: str
+    device_id: str = ""
+    device_endpoint: str = ""
     server: str = "60.205.157.141"
     local_host: str = ""
     protocol: IperfProtocol = IperfProtocol.UDP
@@ -85,6 +87,8 @@ class IperfTestConfig:
     dl_rate: str = "200K"
     continuous: bool = True
     duration_seconds: int = 0
+    power_host: str = ""
+    power_identity: str = ""
 
     def validate(self) -> None:
         executable = Path(self.executable).expanduser()
@@ -390,12 +394,17 @@ class IperfTestController(QObject):
         store: IperfTestStore,
         power_store: ExternalPowerStore,
         root: Path,
+        resource_claim=None,
+        resource_release=None,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self.store = store
         self._power_store = power_store
         self._root = Path(root)
+        self._resource_claim = resource_claim
+        self._resource_release = resource_release
+        self._resource_claimed = False
         self._config: Optional[IperfTestConfig] = None
         self._writer: Optional[IperfSessionWriter] = None
         self._processes: dict[str, QProcess] = {}
@@ -448,8 +457,35 @@ class IperfTestController(QObject):
             raise IperfValidationError("an iperf3 test is already active")
         config.validate()
         self.inspect_executable(config.executable)
+        if self._resource_claim is not None:
+            self._resource_claim(config)
+            self._resource_claimed = True
+        power_snapshot = self._power_store.snapshot
+        power_identity = ""
+        if power_snapshot.identity is not None:
+            identity = power_snapshot.identity
+            power_identity = "|".join(
+                (
+                    identity.manufacturer,
+                    identity.model,
+                    identity.serial_number,
+                    identity.firmware,
+                )
+            )
+        config = replace(
+            config,
+            power_host=power_snapshot.host,
+            power_identity=power_identity,
+        )
         session_id = time.strftime("%Y%m%d_%H%M%S") + f"_{time.time_ns() % 1_000_000_000:09d}"
-        writer = IperfSessionWriter(self._root, session_id, config)
+        try:
+            writer = IperfSessionWriter(self._root, session_id, config)
+        except Exception:
+            if self._resource_claimed:
+                self._resource_claimed = False
+                if self._resource_release is not None:
+                    self._resource_release()
+            raise
         self._config = config
         self._writer = writer
         self._stopping = False
@@ -811,6 +847,10 @@ class IperfTestController(QObject):
         if self._writer is not None:
             self._writer.event("info", "test_finished", message, outcome=phase.value)
             self._writer.finalize(phase.value, message, snapshot)
+        if self._resource_claimed:
+            self._resource_claimed = False
+            if self._resource_release is not None:
+                self._resource_release()
         self.active_changed.emit(False)
 
     def _emit_event(self, level: str, code: str, message: str, **extra: object) -> None:
