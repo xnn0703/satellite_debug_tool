@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<DCSParser xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <偏航角系数>5</偏航角系数>
+  <俯仰角系数>5</俯仰角系数>
+  <横滚角系数>5</横滚角系数>
+  <高度>35</高度>
+</DCSParser>

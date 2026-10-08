@@ -377,12 +377,13 @@ def test_manifest_rejects_unsafe_name_and_non_integer_size(
     assert raised.value.code is FirmwarePackageErrorCode.FORMAT
 
 
-def test_release_builder_uses_registered_afd01c_identity(
-    tmp_path: Path, signing_material
+@pytest.mark.parametrize("product", ("AFD01A", "AFD01B2", "AFD01C"))
+def test_release_builder_uses_registered_variant_identity(
+    tmp_path: Path, signing_material, product: str
 ) -> None:
     private, _keys = signing_material
-    firmware = tmp_path / "afd01c_application.bin"
-    firmware.write_bytes(b"AFD01C-FIRMWARE" * 64)
+    firmware = tmp_path / f"{product.lower()}_application.bin"
+    firmware.write_bytes(product.encode() * 64)
     private_path = tmp_path / "release-key.pem"
     private_path.write_bytes(
         private.private_bytes(
@@ -391,7 +392,7 @@ def test_release_builder_uses_registered_afd01c_identity(
             serialization.NoEncryption(),
         )
     )
-    output = tmp_path / "afd01c.sfpkg"
+    output = tmp_path / f"{product.lower()}.sfpkg"
     command = [
         sys.executable,
         str(Path(__file__).resolve().parents[2] / "tools" / "build_signed_firmware_package.py"),
@@ -402,7 +403,7 @@ def test_release_builder_uses_registered_afd01c_identity(
         "--key-id",
         " release-2026 ",
         "--product",
-        "AFD01C",
+        product,
         "--version",
         "0.0.131",
     ]
@@ -418,13 +419,13 @@ def test_release_builder_uses_registered_afd01c_identity(
     )
     package = verify_firmware_package(
         output,
-        expected_product="AFD01C",
-        expected_hardware="afd01c",
+        expected_product=product,
+        expected_hardware=product.lower(),
         current_version="V0.0.130 beta e9b8b64396a3.d",
         trusted_keys={"release-2026": TrustedFirmwareKey("release-2026", public)},
     )
-    assert package.product == "AFD01C"
-    assert package.hardware_types == ("afd01c",)
+    assert package.product == product
+    assert package.hardware_types == (product.lower(),)
 
 
 def test_release_builder_rejects_unregistered_product(

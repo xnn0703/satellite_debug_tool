@@ -36,6 +36,9 @@ REM ---- validate translation catalogs and compiled QM ----
 echo [build_windows] Validating TS/QM translation resources...
 "%PY%" scripts\update_translations.py check || goto :err
 
+echo [build_windows] Validating bundled platform service...
+"%PY%" scripts\verify_platform_service_assets.py "satellite_debug_tool\resources\vendor\lingjing_platform_service\2604" || goto :err
+
 REM ---- clean ----
 if exist build rmdir /s /q build
 if exist dist  rmdir /s /q dist
@@ -45,6 +48,9 @@ echo [build_windows] Building main app...
 
 echo [build_windows] Verifying built-in 3D models...
 "%PY%" scripts\verify_model_assets.py "dist\SatelliteDebugTool" || goto :err
+
+echo [build_windows] Verifying packaged platform service...
+"%PY%" scripts\verify_platform_service_assets.py "dist\SatelliteDebugTool\_internal\satellite_debug_tool\resources\vendor\lingjing_platform_service\2604" || goto :err
 
 echo [build_windows] Building updater (M11)...
 "%PY%" -m PyInstaller --noconfirm updater.spec || goto :err

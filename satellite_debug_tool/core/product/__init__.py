@@ -21,6 +21,7 @@ from .support_policy import (
     customer_service_state,
     product_identity_matches,
     production_product_policy,
+    production_product_policies,
     production_recipe_product_policy,
 )
 from .source_resolver import (
@@ -90,6 +91,7 @@ __all__ = [
     "customer_service_state",
     "product_identity_matches",
     "production_product_policy",
+    "production_product_policies",
     "production_recipe_product_policy",
     "pending_product_snapshot",
     "stamp_snapshot_received",

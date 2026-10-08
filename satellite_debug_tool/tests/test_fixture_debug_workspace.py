@@ -63,6 +63,161 @@ def _settings(tmp_path: Path, monkeypatch):
     return settings
 
 
+def test_registered_model_installation_configuration_keeps_internal_id_read_only(
+    qapp,
+) -> None:
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureProfileDialog
+
+    profile = fixture_model_presets()[0].create_profile()
+    dialog = FixtureProfileDialog(profile)
+
+    assert dialog._model_combo.currentData() == "lingjing-a6-200mm"
+    assert not dialog._model_combo.isEnabled()
+    assert dialog._profile_id.isReadOnly()
+    assert dialog._host.isReadOnly()
+    assert all(box.isEnabled() for box in dialog._sign_boxes.values())
+    dialog.close()
+
+
+def test_fixture_workspace_selects_model_and_materializes_internal_profile(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.core.production import (
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = Settings()
+    profile_store = FixtureProfileStore(tmp_path / "profiles-model")
+    workspace = FixtureDebugWorkspace(
+        settings,
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-model"),
+        session_root=tmp_path / "sessions-model",
+        motion_only=True,
+    )
+
+    assert workspace._model_combo.count() == 1
+    assert workspace._model_combo.currentText() == "南京灵境六自由度平台（200 mm）"
+    assert workspace.profile is not None
+    assert workspace.profile.model_id == "lingjing-a6-200mm"
+    assert workspace.profile.profile_id == "lingjing-a6-200mm-01"
+    assert profile_store.load("lingjing-a6-200mm-01") == workspace.profile
+    assert settings.get("production.fixture_profile_id") == "lingjing-a6-200mm-01"
+    assert not hasattr(workspace, "_profile_new")
+    assert not hasattr(workspace, "_profile_reload")
+    workspace.shutdown()
+    workspace.close()
+
+
+def test_fixture_workspace_upgrades_driver_endpoint_to_platform_service(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from dataclasses import replace
+
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.core.production import (
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+        fixture_model_preset,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = Settings()
+    settings.set("production.fixture_profile_id", "lingjing-a6-200mm-01")
+    profile_store = FixtureProfileStore(tmp_path / "profiles-endpoint-upgrade")
+    old_profile = replace(
+        fixture_model_preset("lingjing-a6-200mm").create_profile(),
+        host="192.168.15.201",
+        pitch_sign=-1,
+    )
+    profile_store.save(old_profile)
+
+    workspace = FixtureDebugWorkspace(
+        settings,
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-endpoint-upgrade"),
+        session_root=tmp_path / "sessions-endpoint-upgrade",
+        motion_only=True,
+    )
+
+    assert workspace.profile is not None
+    assert workspace.profile.revision == 2
+    assert workspace.profile.host == "192.168.15.101"
+    assert workspace.profile.pitch_sign == -1
+    assert workspace.profile.center_pose == old_profile.center_pose
+    assert profile_store.load(old_profile.profile_id) == workspace.profile
+    workspace.shutdown()
+    workspace.close()
+
+
+def test_windows_platform_service_listener_is_required_before_motion_session(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.core.production import (
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+        LingjingPlatformServiceController,
+        PlatformServiceState,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = Settings()
+    controller = LingjingPlatformServiceController(
+        resource_root=tmp_path / "missing-service-resource",
+        runtime_root=tmp_path / "service-runtime",
+        platform_name="win32",
+        local_ip_provider=lambda: {"192.168.15.49"},
+        listener_provider=lambda: (),
+    )
+    workspace = FixtureDebugWorkspace(
+        settings,
+        FixtureControlLease(),
+        profile_store=FixtureProfileStore(tmp_path / "profiles-service-gate"),
+        calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-service-gate"),
+        session_root=tmp_path / "sessions-service-gate",
+        platform_service=controller,
+        motion_only=True,
+    )
+    for check in workspace._safety_checks:
+        check.setChecked(True)
+
+    controller.ensure_running()
+    assert controller.snapshot.state == PlatformServiceState.FAILED
+    assert not workspace._session_start.isEnabled()
+    assert "192.168.15.101" in workspace._service_status.text()
+
+    controller._publish(
+        PlatformServiceState.LISTENING,
+        "UDP 9800 is listening",
+        pid=4102,
+        owned=True,
+        runtime_dir=tmp_path / "service-runtime",
+    )
+    assert workspace._session_start.isEnabled()
+
+    workspace.shutdown()
+    workspace.close()
+
+
 def test_engineering_session_requires_no_batch_dut_or_reference(
     qapp,
     tmp_path: Path,

@@ -269,6 +269,29 @@ def test_afd01c_accepts_only_matching_signed_product(
     assert afd01_device.loaded is None
 
 
+@pytest.mark.parametrize("product", ("AFD01A", "AFD01B2"))
+def test_new_afd01_variant_ota_accepts_only_its_signed_product(
+    app, tmp_path: Path, signing_material, product: str
+) -> None:
+    private, keys = signing_material
+    products = ("AFD01", "AFD01A", "AFD01B2", "AFD01C")
+    packages = {}
+    for name in products:
+        path = tmp_path / f"{name.lower()}.sfpkg"
+        _package(path, private, hardware=name.lower(), product=name)
+        packages[name] = path
+
+    live = _LiveDouble(
+        hardware_type=product.lower(), product_identity=product, service_protocol=8
+    )
+    device = _DeviceDouble()
+    view = CustomerMaintenanceView(live, device, _SettingsDouble(), trusted_keys=keys)
+    for name, path in packages.items():
+        device.loaded = None
+        assert view.load_package(path) is (name == product)
+        assert (device.loaded is not None) is (name == product)
+
+
 def test_ota_requires_matching_debug_and_product_identity(
     app, tmp_path: Path, signing_material
 ) -> None:

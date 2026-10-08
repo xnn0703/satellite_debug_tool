@@ -219,10 +219,12 @@ def test_identified_session_is_registered_and_recording_armed(
     workspace.close()
 
 
-def test_afd01c_recipe_registers_matching_device(
+@pytest.mark.parametrize("product", ("afd01a", "afd01b2", "afd01c"))
+def test_afd01_variant_recipe_registers_matching_device(
     qapp,
     settings,
     tmp_path: Path,
+    product: str,
 ) -> None:
     import time
 
@@ -232,9 +234,9 @@ def test_afd01c_recipe_registers_matching_device(
 
     workspace = ProductionWorkspace(settings)
     assert workspace.load_recipe_file(
-        _write_recipe(tmp_path / "afd01c.json", product="afd01c")
+        _write_recipe(tmp_path / f"{product}.json", product=product)
     )
-    workspace._batch_id_edit.setText("PILOT-AFD01C")
+    workspace._batch_id_edit.setText(f"PILOT-{product.upper()}")
     workspace._operator_edit.setText("operator-a")
     workspace._output_edit.setText(str(tmp_path / "output"))
     workspace.create_batch()
@@ -242,8 +244,8 @@ def test_afd01c_recipe_registers_matching_device(
         FleetDatagram(
             endpoint=("127.0.0.1", 4004),
             data=_identity(
-                "AFD01C-UI-001",
-                model="AFD01C",
+                f"{product.upper()}-UI-001",
+                model=product.upper(),
                 service_protocol=8,
             ),
             wall_time_ns=time.time_ns(),
@@ -252,9 +254,9 @@ def test_afd01c_recipe_registers_matching_device(
     )
     qapp.processEvents()
 
-    devices = workspace.result_store.list_devices("PILOT-AFD01C")
+    devices = workspace.result_store.list_devices(f"PILOT-{product.upper()}")
     assert [(item["serial_number"], item["hardware_type"]) for item in devices] == [
-        ("AFD01C-UI-001", "AFD01C")
+        (f"{product.upper()}-UI-001", product.upper())
     ]
     assert workspace._start_button.isEnabled()
     workspace.close()

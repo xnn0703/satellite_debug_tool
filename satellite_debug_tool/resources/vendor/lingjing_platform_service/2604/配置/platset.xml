@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<ClassPlatset xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <数据包间隔>50</数据包间隔>
+  <记录姿态数据>false</记录姿态数据>
+  <绕X轴旋转角度最大值>15</绕X轴旋转角度最大值>
+  <绕Y轴旋转角度最大值>15</绕Y轴旋转角度最大值>
+  <绕Z轴旋转角度最大值>15</绕Z轴旋转角度最大值>
+  <X左右运动最大值>200</X左右运动最大值>
+  <Y前后运动最大值>200</Y前后运动最大值>
+  <Z上下运动最大值>200</Z上下运动最大值>
+  <使能X左右运动>true</使能X左右运动>
+  <使能Y前后运动>true</使能Y前后运动>
+  <使能Z上下运动>true</使能Z上下运动>
+  <使能RX旋转>true</使能RX旋转>
+  <使能RY旋转>true</使能RY旋转>
+  <使能RZ旋转>true</使能RZ旋转>
+  <调试模式>false</调试模式>
+  <使能仿真>false</使能仿真>
+</ClassPlatset>

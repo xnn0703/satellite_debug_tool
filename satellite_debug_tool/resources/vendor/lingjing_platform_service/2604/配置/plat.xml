@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-16"?>
+<PlatParameter xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <六轴平台上平台短边>50</六轴平台上平台短边>
+  <六轴平台上平台外接圆直径>430</六轴平台上平台外接圆直径>
+  <六轴平台下平台短边>50</六轴平台下平台短边>
+  <六轴平台下平台外接圆直径>600</六轴平台下平台外接圆直径>
+  <曲柄轴初始角>0</曲柄轴初始角>
+  <Q6电机输出轴最大角>120</Q6电机输出轴最大角>
+  <Q6电机臂平面与X轴夹角>
+    <double>180</double>
+    <double>0</double>
+    <double>300</double>
+    <double>120</double>
+    <double>60</double>
+    <double>240</double>
+  </Q6电机臂平面与X轴夹角>
+  <EnableOriginPos>false</EnableOriginPos>
+  <PlatDriverType>ECMEthcat</PlatDriverType>
+  <DriverEx>192.168.15.201</DriverEx>
+  <DOF>6</DOF>
+  <Legtype>电缸</Legtype>
+  <是否使用旋转电机>false</是否使用旋转电机>
+  <旋转电机单位角度脉冲数>1</旋转电机单位角度脉冲数>
+  <轴固定长度>425</轴固定长度>
+  <轴最大伸长量>200</轴最大伸长量>
+  <曲柄转动1度脉冲数>1000</曲柄转动1度脉冲数>
+  <曲柄短臂长度>150</曲柄短臂长度>
+  <曲柄长臂长度>580</曲柄长臂长度>
+  <电缸伸长1毫米脉冲数>1000</电缸伸长1毫米脉冲数>
+  <电子齿轮比>39.5</电子齿轮比>
+  <三轴平台底边长度>350</三轴平台底边长度>
+  <三轴平台底边高>80</三轴平台底边高>
+  <三轴时仅使能二轴>false</三轴时仅使能二轴>
+  <ObjectOrigin>
+    <double>0</double>
+    <double>0</double>
+    <double>0</double>
+  </ObjectOrigin>
+  <是否使用手动输入的坐标>false</是否使用手动输入的坐标>
+  <Offset>
+    <double>0</double>
+    <double>0</double>
+    <double>0</double>
+    <double>0</double>
+  </Offset>
+</PlatParameter>

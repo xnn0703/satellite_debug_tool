@@ -15,6 +15,8 @@ _IDENTITY_PLACEHOLDERS = frozenset({
     "unsupported",
     "not supported",
     "afd01-dev",
+    "afd01a-dev",
+    "afd01b2-dev",
     "afd01c-dev",
     "esa01-dev",
     "不支持",

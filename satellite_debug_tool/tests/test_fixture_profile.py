@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from satellite_debug_tool.core.production.fixture_profile import (
     FixtureProfileError,
     FixtureProfileStore,
     WorkstationFixtureProfile,
+    fixture_model_preset,
 )
 from satellite_debug_tool.core.production.motion_platform import (
     AbsoluteMoveRunner,
@@ -73,6 +75,71 @@ def test_profile_hash_roundtrip_and_revision_conflict(tmp_path: Path) -> None:
         store.save(replace(profile, revision=2), expected_revision=2)
     store.save(replace(profile, revision=2), expected_revision=1)
     assert store.load("fixture-a").revision == 2
+
+
+def test_lingjing_model_preset_generates_confirmed_site_defaults() -> None:
+    preset = fixture_model_preset("lingjing-a6-200mm")
+    profile = preset.create_profile()
+
+    assert preset.display_name == "南京灵境六自由度平台（200 mm）"
+    assert profile.model_id == preset.model_id
+    assert profile.profile_id == "lingjing-a6-200mm-01"
+    assert (profile.host, profile.port) == ("192.168.15.101", 9800)
+    assert profile.calibration_id == "PENDING-lingjing-a6-200mm-01-R1"
+    assert profile.center_pose.z_mm == 100.0
+    assert profile.reset_pose.z_mm == 0.0
+    assert (profile.z_min_mm, profile.z_max_mm) == (0.0, 100.0)
+    assert profile.minimum_duration_ms == 50
+    assert profile.roll_limits == FixtureAxisLimits(30.0, 2.0, 0.3, 30.0, 50.0)
+    assert profile.pitch_limits == FixtureAxisLimits(30.0, 2.0, 0.3, 30.0, 50.0)
+    assert profile.yaw_limits == FixtureAxisLimits(30.0, 2.0, 0.2, 20.0, 20.0)
+    profile.validate()
+
+
+def test_model_preset_reconciles_service_endpoint_and_preserves_installation_facts() -> None:
+    preset = fixture_model_preset("lingjing-a6-200mm")
+    old = replace(
+        preset.create_profile(),
+        revision=4,
+        host="192.168.15.201",
+        calibration_id="lingjing-site-calibration-r2",
+        roll_sign=-1,
+        yaw_sign=-1,
+    )
+
+    reconciled = preset.reconcile_profile(old)
+
+    assert reconciled.revision == 5
+    assert (reconciled.host, reconciled.port) == ("192.168.15.101", 9800)
+    assert reconciled.calibration_id == "lingjing-site-calibration-r2"
+    assert (reconciled.roll_sign, reconciled.pitch_sign, reconciled.yaw_sign) == (-1, 1, -1)
+    assert reconciled.center_pose == old.center_pose
+    assert reconciled.z_max_mm == old.z_max_mm
+    assert preset.reconcile_profile(reconciled) is reconciled
+
+
+def test_v1_profile_is_hash_checked_before_migration_to_custom_v2() -> None:
+    payload = _profile().to_payload()
+    payload["schema_version"] = 1
+    payload.pop("model_id")
+    payload["sha256"] = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    migrated = WorkstationFixtureProfile.from_mapping(payload)
+
+    assert migrated.schema_version == 2
+    assert migrated.model_id == "custom"
+    assert migrated.host == "192.168.1.50"
+
+    payload["platform"]["endpoint"]["host"] = "192.168.15.201"
+    with pytest.raises(FixtureProfileError, match="does not match"):
+        WorkstationFixtureProfile.from_mapping(payload)
 
 
 def test_profile_requires_hash_and_rejects_tampering(tmp_path: Path) -> None:

@@ -130,8 +130,18 @@ def test_recipe_product_is_persisted_as_the_registered_canonical_value() -> None
 
 def test_recipe_products_are_resolved_from_the_registered_policy() -> None:
     assert production_recipe_product_policy("AFD01") is not None
+    assert production_recipe_product_policy("AFD01A") is not None
+    assert production_recipe_product_policy("AFD01B2") is not None
     assert production_recipe_product_policy("AFD01C") is not None
     assert production_recipe_product_policy("ESA01") is None
+
+
+@pytest.mark.parametrize("product", ("afd01a", "afd01b2"))
+def test_new_afd01_variants_have_independent_recipe_products(product: str) -> None:
+    payload = valid_recipe()
+    payload["product"] = product.upper()
+    recipe = ProductionRecipe.from_mapping(payload)
+    assert recipe.product == product
 
 
 def test_recipe_snapshot_is_canonical_and_immutable(tmp_path: Path) -> None:

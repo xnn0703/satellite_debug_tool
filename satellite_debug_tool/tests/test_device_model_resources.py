@@ -101,6 +101,51 @@ def test_afd01c_does_not_alias_the_afd01_model(tmp_path):
     ) is None
 
 
+def test_afd01a_prefers_own_override_then_original_builtin(tmp_path):
+    candidates = device_model_candidates(
+        "AFD01A", home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert candidates == (
+        tmp_path / ".satellite_debug_tool" / "models" / "afd01a.stl",
+        MODELS_DIR / "afd01a.stl",
+        tmp_path / ".satellite_debug_tool" / "models" / "afd01.stl",
+        MODELS_DIR / "afd01.stl",
+    )
+    loaded = load_first_device_model(
+        "AFD01A", lambda path: path.name, home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert loaded == (MODELS_DIR / "afd01.stl", "afd01.stl")
+
+    override = candidates[0]
+    override.parent.mkdir(parents=True)
+    override.write_bytes(b"afd01a-specific-model")
+    loaded = load_first_device_model(
+        "AFD01A", lambda path: path.read_bytes(), home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert loaded == (override, b"afd01a-specific-model")
+
+    override.unlink()
+    original_override = candidates[2]
+    original_override.write_bytes(b"original-afd01-model")
+    loaded = load_first_device_model(
+        "AFD01A", lambda path: path.read_bytes(), home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert loaded == (original_override, b"original-afd01-model")
+
+
+def test_afd01b2_keeps_independent_model_key(tmp_path):
+    candidates = device_model_candidates(
+        "AFD01B2", home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert candidates == (
+        tmp_path / ".satellite_debug_tool" / "models" / "afd01b2.stl",
+        MODELS_DIR / "afd01b2.stl",
+    )
+    assert load_first_device_model(
+        "AFD01B2", lambda path: path.read_bytes(), home=tmp_path, builtin_dir=MODELS_DIR
+    ) is None
+
+
 def test_model_change_clears_stale_mesh_when_target_has_no_model(
     monkeypatch,
 ) -> None:

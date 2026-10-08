@@ -136,6 +136,19 @@ def test_manual_controls_wait_for_manual_readback(app) -> None:
     assert view._rx_polar.model().item(3).isEnabled()
 
 
+@pytest.mark.parametrize("hardware_type", ("afd01a", "afd01b2"))
+def test_new_afd01_variant_rf_controls_follow_registered_service(
+    app, hardware_type: str
+) -> None:
+    live = _LiveDouble(hardware_type=hardware_type)
+    _seed_service(live, manual=True, service_protocol=8)
+    view = CustomerRfControlView(live)
+    view.activate_view()
+    assert live.customer_service_state().customer_service_ready
+    assert view._rx_freq.isEnabled()
+    assert view._tx_enable.isEnabled()
+
+
 def test_identity_and_capabilities_do_not_claim_control_service_online(app) -> None:
     live = _LiveDouble()
     live._products.feed(

@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<GyroSet xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <陀螺仪传感器串口号>COM5</陀螺仪传感器串口号>
+  <陀螺仪传感器波特率>460800</陀螺仪传感器波特率>
+  <陀螺仪运动平台高度>50</陀螺仪运动平台高度>
+  <陀螺仪Rx使能>false</陀螺仪Rx使能>
+  <陀螺仪Rx取反>false</陀螺仪Rx取反>
+  <陀螺仪Ry使能>false</陀螺仪Ry使能>
+  <陀螺仪Ry取反>false</陀螺仪Ry取反>
+  <陀螺仪Rz使能>false</陀螺仪Rz使能>
+  <陀螺仪Rz取反>false</陀螺仪Rz取反>
+</GyroSet>

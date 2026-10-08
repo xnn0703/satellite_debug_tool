@@ -39,6 +39,7 @@ from satellite_debug_tool.core.production import (
     StationProfile,
     psw80_27_validation_policy,
 )
+from satellite_debug_tool.core.product import production_product_policies
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 
 
@@ -158,8 +159,10 @@ class ProductionConfigurationDialog(QDialog):
         self._product_revision.setRange(1, 1_000_000)
         self._product_name = QLineEdit()
         self._product_type = QComboBox()
-        self._product_type.addItem("AFD01", "afd01")
-        self._product_type.addItem("AFD01C", "afd01c")
+        for policy in production_product_policies():
+            self._product_type.addItem(
+                policy.product_identity, policy.production_recipe_product
+            )
         self._product_voltage = self._double_spin(0.001, 80.0, " V")
         self._product_current = self._double_spin(0.001, 100.0, " A")
         self._firmware_value = QLineEdit()
