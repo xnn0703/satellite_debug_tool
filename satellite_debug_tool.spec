@@ -72,10 +72,17 @@ app_datas = [
         "satellite_debug_tool/ui/assets",
     ),
     (
-        str(ROOT / "satellite_debug_tool" / "resources"),
+        str(ROOT / "satellite_debug_tool" / "resources" / "firmware_signing_keys.json"),
         "satellite_debug_tool/resources",
     ),
 ]
+if sys.platform == "win32":
+    app_datas.append(
+        (
+            str(ROOT / "satellite_debug_tool" / "resources" / "vendor"),
+            "satellite_debug_tool/resources/vendor",
+        )
+    )
 if sys.platform == "darwin":
     app_datas.extend([
         (

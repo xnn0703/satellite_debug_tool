@@ -1,0 +1,145 @@
+{
+  "schema": "satellite.lingjing-platform-service",
+  "schema_version": 1,
+  "service_version": "2604",
+  "entrypoint": "ProConvert.exe",
+  "platform": "windows",
+  "architecture": "anycpu",
+  "files": [
+    {
+      "path": "MathNet.Numerics.dll",
+      "size": 1590272,
+      "sha256": "4c9803a4b0673b93a99a2237e35543be2f6741fbd54b0ff045cf92e877be09d4"
+    },
+    {
+      "path": "MoonSharp.Interpreter.dll",
+      "size": 366592,
+      "sha256": "1db76110f21698639f55d28e21bddb536c0c497ceb741dee49fedcca9bcd1588"
+    },
+    {
+      "path": "ProConvert.exe",
+      "size": 76800,
+      "sha256": "e6420b826fd5e0d2535a3afdd70dae3a2642c104222b14dbefc579f310ac592b"
+    },
+    {
+      "path": "ProConvert.exe.config",
+      "size": 2099,
+      "sha256": "2cde75430f39636ed43d475455e2e5b50b1d3bd4bbe83c7f4a9e870f57e4467a"
+    },
+    {
+      "path": "ScottPlot.WinForms.dll",
+      "size": 34304,
+      "sha256": "14e323070951b954c29b90172402ad0abc334c620e7e363bcfbb93b71c0dbd48"
+    },
+    {
+      "path": "ScottPlot.dll",
+      "size": 696320,
+      "sha256": "3185bdb14232ed1ccda98ca6537b3ae0676cd750e21b8bcb53a7a93419520871"
+    },
+    {
+      "path": "StewartPlat.dll",
+      "size": 153088,
+      "sha256": "ad9d0d364695cfb09267443bf4b9842ac4e761ab453f346da0c67cf4aa924744"
+    },
+    {
+      "path": "StewartPlat.dll.config",
+      "size": 947,
+      "sha256": "01d4e1cda540c27118501bd8017e2c36b0418c4515cfcad164ed54adb172867d"
+    },
+    {
+      "path": "SuperSocket.ClientEngine.dll",
+      "size": 49664,
+      "sha256": "a632ed6e1037b8d1f3e8981cbd748823f78ea09497bd61d27dde31c1efaa2309"
+    },
+    {
+      "path": "System.Buffers.dll",
+      "size": 20856,
+      "sha256": "accccfbe45d9f08ffeed9916e37b33e98c65be012cfff6e7fa7b67210ce1fefb"
+    },
+    {
+      "path": "System.Drawing.Common.dll",
+      "size": 44424,
+      "sha256": "0b1e23603f49613b623a82a2b04260642ab8b118d138726dda6556bead77b966"
+    },
+    {
+      "path": "System.Memory.dll",
+      "size": 142240,
+      "sha256": "bf3fb84664f4097f1a8a9bc71a51dcf8cf1a905d4080a4d290da1730866e856f"
+    },
+    {
+      "path": "System.Numerics.Vectors.dll",
+      "size": 115856,
+      "sha256": "1d3ef8698281e7cf7371d1554afef5872b39f96c26da772210a33da041ba1183"
+    },
+    {
+      "path": "System.Runtime.CompilerServices.Unsafe.dll",
+      "size": 16768,
+      "sha256": "66409f670315afe8610f17a4d3a1ee52d72b6a46c544cec97544e8385f90ad74"
+    },
+    {
+      "path": "System.ValueTuple.dll",
+      "size": 25232,
+      "sha256": "e905d102585b22c6df04f219af5cbdbfa7bc165979e9788b62df6dcc165e10f4"
+    },
+    {
+      "path": "log4net.config",
+      "size": 1376,
+      "sha256": "16f462799d8f28cfd89013c99f10e7dd8aaf8d18a7262cc7fac3b38980a4f85b"
+    },
+    {
+      "path": "log4net.dll",
+      "size": 295424,
+      "sha256": "6280a0ed1d2da5b659b242f22c5ed96a5261f2f39fc1ff6cbcbcb97f74920e20"
+    },
+    {
+      "path": "x64/libHarfBuzzSharp.dll",
+      "size": 1607208,
+      "sha256": "a54cfda99ffb965d4daa307c381763051ee638b629bfc0f424feb7a8046a7e36"
+    },
+    {
+      "path": "x64/libSkiaSharp.dll",
+      "size": 9414216,
+      "sha256": "9a0d95e8caaa852c70d085af6a40a744242172ad9ea3fd6bc7599875a8a1dbcd"
+    },
+    {
+      "path": "x86/libHarfBuzzSharp.dll",
+      "size": 1363512,
+      "sha256": "90a39415838bd125b71925c81eaa5a18b7d2cc0ab464d838d22dec3f5c34d36a"
+    },
+    {
+      "path": "x86/libSkiaSharp.dll",
+      "size": 7980600,
+      "sha256": "57500c7bb65f8db8d2ee40cc8f9736d950789912f7b1ec33944dad6c472c0d99"
+    },
+    {
+      "path": "配置/DCS.xml",
+      "size": 290,
+      "sha256": "ec1bc1cf29710ee39b543ceaa0f607462907f7323d382f2944a81a4ba950b295"
+    },
+    {
+      "path": "配置/XPlane.xml",
+      "size": 349,
+      "sha256": "01272b4e1d57b01036b65de48447865996d0935d5c0379e5af369beed33445f5"
+    },
+    {
+      "path": "配置/appset.xml",
+      "size": 1019,
+      "sha256": "927f3d99a7b4959808a95356d649874590f5a738783f6b3065734409d55f90f9"
+    },
+    {
+      "path": "配置/plat.xml",
+      "size": 1965,
+      "sha256": "eaead18830af2ce2799c73f47d7197954eb26b02f8d95c616949203ec190d761"
+    },
+    {
+      "path": "配置/platset.xml",
+      "size": 965,
+      "sha256": "a97aa7b0720b96cc1b9dec9b1bd03f9a4a6123aae6c9b2d14ea763eda9b55c0e"
+    },
+    {
+      "path": "配置/陀螺仪.xml",
+      "size": 632,
+      "sha256": "ac14197a03e7d0458eb92a9a37a75017b165ad233a506edbd7ce99f1f5eccc64"
+    }
+  ]
+}

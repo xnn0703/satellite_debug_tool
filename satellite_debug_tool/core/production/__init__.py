@@ -47,15 +47,26 @@ from .fixture_profile import (
     FixtureControlLease,
     FixtureLeaseError,
     FixtureLeaseHandle,
+    FixtureModelPreset,
     FixtureProfileError,
     FixtureProfileStore,
     WorkstationFixtureProfile,
+    fixture_model_preset,
+    fixture_model_presets,
+    pending_fixture_calibration_id,
 )
 from .fixture_session import (
+    create_fixture_session_zip,
     FixtureSessionConclusion,
     FixtureSessionError,
     FixtureSessionRecorder,
     FixtureSessionResult,
+)
+from .fixture_qualification import (
+    FixtureQualificationConfig,
+    FixtureQualificationController,
+    FixtureQualificationResult,
+    FixtureQualificationState,
 )
 from .fleet import (
     DeviceSession,
@@ -147,6 +158,14 @@ from .power_debug import (
     PowerSupplyDebugWorker,
 )
 from .production_power import ProductionPowerWorker
+from .platform_service import (
+    LingjingPlatformServiceController,
+    PlatformServiceError,
+    PlatformServiceSnapshot,
+    PlatformServiceState,
+    UdpListener,
+    deploy_platform_service,
+)
 from .recipe import ProductionRecipe, RecipeValidationError
 from .result_store import ProductionResultStore, ResultStoreError
 
@@ -187,8 +206,13 @@ __all__ = [
     "FixtureReadiness",
     "FixtureLeaseError",
     "FixtureLeaseHandle",
+    "FixtureModelPreset",
     "FixtureProfileError",
     "FixtureProfileStore",
+    "FixtureQualificationConfig",
+    "FixtureQualificationController",
+    "FixtureQualificationResult",
+    "FixtureQualificationState",
     "FixtureSessionConclusion",
     "FixtureSessionContext",
     "FixtureSessionCoordinator",
@@ -196,6 +220,10 @@ __all__ = [
     "FixtureSessionRecorder",
     "FixtureSessionResult",
     "FixtureSessionState",
+    "create_fixture_session_zip",
+    "fixture_model_preset",
+    "fixture_model_presets",
+    "pending_fixture_calibration_id",
     "GwInstekPswAdapter",
     "LingjingPlatformAdapter",
     "MotionPlatformConfig",
@@ -237,6 +265,12 @@ __all__ = [
     "ProductionConfigurationStore",
     "ProductionRecipe",
     "ProductionPowerWorker",
+    "LingjingPlatformServiceController",
+    "PlatformServiceError",
+    "PlatformServiceSnapshot",
+    "PlatformServiceState",
+    "UdpListener",
+    "deploy_platform_service",
     "ProductionResultStore",
     "RecipeValidationError",
     "ReferenceStatus",

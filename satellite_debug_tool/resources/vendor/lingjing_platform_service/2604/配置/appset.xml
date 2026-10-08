@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<ClassAppset xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <udp客户端IP />
+  <udp服务端口>9800</udp服务端口>
+  <udp转发>false</udp转发>
+  <udp转发IP>127.0.0.1</udp转发IP>
+  <udp转发端口>9900</udp转发端口>
+  <数据协议>默认</数据协议>
+  <数据包间隔>50</数据包间隔>
+  <旋转轴复位角度>0</旋转轴复位角度>
+  <最大旋转角>180</最大旋转角>
+  <最小旋转角>0</最小旋转角>
+  <udp数据反馈>false</udp数据反馈>
+  <显示姿态>true</显示姿态>
+  <Tcp按钮模块使能>false</Tcp按钮模块使能>
+  <Tcp按钮模块IP>192.168.15.5</Tcp按钮模块IP>
+  <Tcp按钮模块Port>502</Tcp按钮模块Port>
+  <陀螺仪控制>false</陀螺仪控制>
+  <播放动作文件>false</播放动作文件>
+  <动作文件目录>D:\MyProjects\LJ\软件工具\动作文件\动作文件\DONGZUO\0-11s.effx</动作文件目录>
+  <Log>true</Log>
+</ClassAppset>

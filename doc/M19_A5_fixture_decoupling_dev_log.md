@@ -13,9 +13,9 @@
 - 新增 `Ms6222SessionRecorder`，独立保存到 `~/.satellite_debug_tool/ms6222_sessions/`。会话包含 `configuration.json`、`raw_frames.jsonl`、`parsed_frames.csv`、`statistics.jsonl`、`events.jsonl`、`summary.json` 和带 SHA-256 的 `manifest.json`。
 - 新增 `Ms6222DebugWorkspace`：串口刷新/连接、合法帧确认、三类报文最新值、频率/有效率/解析错误、最近五分钟姿态曲线和独立采集会话。
 - Production Workspace 调整为“批次测试 / 摇摆台测试 / MS-6222 测试 / 电源测试”四个入口，均保持首次访问构建。
-- 生产入口中的摇摆台页面启用 `motion_only`，不再创建或展示 MS 串口 owner、参考状态、联合标定和误差图。历史联合夹具类与会话文件保持兼容。
+- M19-A9 已替换 `motion_only` 呈现：摇摆台页面恢复 MS 串口选择、联合资格测试和误差图，并通过独占租约与独立 MS 页面互斥。
 - 1024×600 使用可滚动 MS 页面，顶部连接和数据确认始终可见；摇摆台页面保留档案、安全门禁、单步、回中、复位和组合轨迹。
-- 联合标定和正式批次参考时间线尚未接入新的 MS 独占租约，按验收文档保持未完成状态。
+- 联合资格测试已接入 MS 独占租约；正式批次参考时间线仍按批次里程碑单独验收。
 
 ## 验证记录
 

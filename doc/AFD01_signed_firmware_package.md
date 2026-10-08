@@ -67,9 +67,10 @@ The command prints a public trust-store entry. Review and add that public entry
 to `firmware_signing_keys.json`, rebuild the application, and retain the private
 key only in the approved signing environment.
 
-AFD01C uses an independent signed product and hardware identity. Build its package
-explicitly; the signing tool derives the one registered hardware identity from
-`--product` and rejects unregistered product names:
+AFD01A, AFD01B2, and AFD01C use independent signed product and hardware
+identities. Build each package explicitly; the signing tool derives the one
+registered hardware identity from `--product` and rejects unregistered product
+names. For example:
 
 ```bash
 python3 tools/build_signed_firmware_package.py \
@@ -82,11 +83,16 @@ python3 tools/build_signed_firmware_package.py \
   --version-policy upgrade_only
 ```
 
-The customer UI requires exact `AFD01/afd01` or `AFD01C/afd01c` identity
+Use `--product AFD01A` with an `afd01a` image and `--product AFD01B2` with an
+`afd01b2` image. AFD01A retains the original AFD01 user-facing behavior, but
+its device and firmware identities are distinct.
+
+The customer UI requires exact `AFD01/afd01`, `AFD01A/afd01a`,
+`AFD01B2/afd01b2`, or `AFD01C/afd01c` identity
 matching, a registered Product Service version, and a non-placeholder production
 serial number or MCU UID. When Debug META and Product Service both report firmware,
 their semantic versions must agree before selection. When both report a production
-serial number, those serials must also agree. AFD01 and AFD01C packages are never
+serial number, those serials must also agree. Packages for these four identities are never
 interchangeable.
 
 `OTA_END=VERIFIED` proves transfer verification, not the running application.
@@ -103,5 +109,5 @@ endpoint cancels the transaction.
 
 Before customer release, verify the packaged application accepts a valid package
 and rejects unsigned, modified, wrong-product, wrong-hardware and disallowed-
-version packages, including both directions of AFD01/AFD01C cross-selection.
+version packages, including cross-selection among AFD01, AFD01A, AFD01B2, and AFD01C.
 Source-level pytest alone does not close this acceptance item.

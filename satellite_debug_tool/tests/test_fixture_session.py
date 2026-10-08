@@ -32,7 +32,7 @@ from satellite_debug_tool.tests.test_ms6222_protocol import _ins_frame
 
 
 def _profile() -> WorkstationFixtureProfile:
-    limits = FixtureAxisLimits(15.0, 2.0, 0.5, 30.0, 100.0)
+    limits = FixtureAxisLimits(15.0, 0.5, 30.0, 100.0)
     return WorkstationFixtureProfile(
         profile_id="fixture-a",
         revision=1,

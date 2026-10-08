@@ -13,6 +13,7 @@ import queue
 import threading
 from typing import Any, Mapping, Optional
 import uuid
+import zipfile
 
 from .fixture_analysis import (
     AttitudeComparison,
@@ -576,9 +577,33 @@ def _comparison_from_csv(row: Mapping[str, str]) -> AttitudeComparison:
     )
 
 
+def create_fixture_session_zip(session_dir: Path) -> Path:
+    """Create a self-contained field diagnostic archive beside a finalized session."""
+    source = Path(session_dir)
+    if not source.is_dir():
+        raise FixtureSessionError("fixture session directory does not exist")
+    manifest = source / "manifest.json"
+    if not manifest.is_file():
+        raise FixtureSessionError("fixture session manifest is missing")
+    output = source.with_name(f"{source.name}-diagnostics.zip")
+    temporary = output.with_suffix(".tmp")
+    with zipfile.ZipFile(
+        temporary,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+    ) as archive:
+        for path in sorted(source.rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(source.parent))
+    temporary.replace(output)
+    return output
+
+
 __all__ = [
     "FixtureSessionConclusion",
     "FixtureSessionError",
     "FixtureSessionRecorder",
     "FixtureSessionResult",
+    "create_fixture_session_zip",
 ]

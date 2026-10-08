@@ -54,6 +54,7 @@ from satellite_debug_tool.core.production import (
     FleetConfigurationError,
     FleetController,
     GwInstekPswAdapter,
+    LingjingPlatformServiceController,
     PowerSupplyConfig,
     ProductionPowerWorker,
     ProductionRecipe,
@@ -184,6 +185,9 @@ class ProductionWorkspace(QWidget):
         production_power_adapter_factory: Callable[
             [PowerSupplyConfig], GwInstekPswAdapter
         ] = GwInstekPswAdapter,
+        platform_service_controller: Optional[
+            LingjingPlatformServiceController
+        ] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
@@ -193,6 +197,10 @@ class ProductionWorkspace(QWidget):
         self._configuration_store = configuration_store or ProductionConfigurationStore()
         self._resolved_configuration: Optional[ResolvedProductionConfiguration] = None
         self._production_power_adapter_factory = production_power_adapter_factory
+        self._platform_service = (
+            platform_service_controller
+            or LingjingPlatformServiceController(parent=self)
+        )
         self._production_power_worker: Optional[ProductionPowerWorker] = None
         self._pending_power_participants: tuple[DeviceSession, ...] = ()
         self._power_record_count = 0
@@ -519,7 +527,9 @@ class ProductionWorkspace(QWidget):
         fixture = FixtureDebugWorkspace(
             self._settings,
             self._fixture_control_lease,
-            motion_only=True,
+            platform_service=self._platform_service,
+            reference_lease=self._ms6222_control_lease,
+            motion_only=False,
         )
         fixture.active_changed.connect(self._on_fixture_debug_active_changed)
         self._fixture_debug = fixture
@@ -2146,6 +2156,7 @@ class ProductionWorkspace(QWidget):
             if not self._fleet.shutdown_ready:
                 return False
         self._batch_coordinator.close()
+        self._platform_service.shutdown()
         return True
 
     def confirm_shutdown(self) -> bool:

@@ -41,7 +41,7 @@ python3 scripts/update_translations.py check
 
 | 索引 | 工作区 | 入口 | 备注 |
 |------|--------|------|------|
-| 0 | **Customer Workspace**（默认） | 直接进 | 面向已注册产品（AFD01 / AFD01C / ESA01）：左侧最多 4 台显式 UDP 设备，Overview / RF control / Network test / Playback / Maintenance。每个 endpoint 使用固定会话页面 bundle；Network test 是全局页面。 |
+| 0 | **Customer Workspace**（默认） | 直接进 | 面向已注册产品（AFD01 / AFD01A / AFD01B2 / AFD01C / ESA01）：左侧最多 4 台显式 UDP 设备，Overview / RF control / Network test / Playback / Maintenance。每个 endpoint 使用固定会话页面 bundle；Network test 是全局页面。 |
 | 1 | **Engineering Tabs**（Live / Playback / Log / Device） | `Ctrl+Shift+E` 首次确认后本会话解锁 | 内部诊断、协议解码、设备参数读写、OTA。 |
 | 2 | **Production Workspace**（批量试产） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | 批次测试 / 摇摆台测试 / MS-6222 测试 / 电源测试四页面；已有单设备 DOCX、证据 ZIP 和 V2 审核，完整自动测试编排仍在后续里程碑。 |
 
@@ -89,7 +89,9 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/data/` — `ChannelBuffer`、`DataStore`、`TelemetrySeriesStore`、`StateStore`、`EventLog` 与 GNSS/Orbit Store
 - `core/profile/` — `ProfileStore` + `ProfileCache`，设备 profile 驱动 UI；`semantics.py` 通道语义；`ins_yaw_display.py` 内部 INS 航向处理
 - `core/production/` — **M19/M21** 试产与夹具领域；`BatchCoordinator` / `FixtureSessionCoordinator` 统一状态迁移、资源租约和证据收尾，页面只发意图并呈现类型化状态
-- `core/production/ms6222_debug.py` — **M19-A.5** MS-6222 独立串口租约与工程证据会话；摇摆台单设备页面不持有参考串口，联合使用由正式批次/联合标定显式获取两项所有权
+- `core/production/ms6222_debug.py` — **M19-A.5/M19-A9** MS-6222 独立串口租约与工程证据会话；独立 MS 页面只采集参考，摇摆台自动资格测试显式获取摇摆台与 MS 两项所有权并生成联合诊断包
+- `core/production/platform_service.py` — **M19-A.8** Windows 灵境平台服务的资源校验、用户目录部署、单实例启动和 UDP 9800 监听状态 owner；macOS 保持远程 Windows 服务模式，UDP 监听不表示驱动已接受或平台已运动
+- `core/production/fixture_profile.py` — **M19-A.7** 摇摆台型号模板、v2 工作站档案、运行包线和控制租约；当前灵境六自由度平台的 A6/A6T 服务端点为 `192.168.15.101:9800`，原始 XML 的 `DriverEx=192.168.15.201` 只表示底层驱动地址；型号参数自动展开，现场只确认轴符号并由引导标定生成真实 calibration ID
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 Ed25519 验签（`firmware_package.py`）
 - `core/link_trace.py` — 帧 trace 日志
@@ -119,6 +121,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - 主题三档 `dark / dark_hc / light`，由 `S.palette()` 出语义色键（兼容键 + Mission Console 新语义键），顶栏图标按钮循环切换
 - 离线地图约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮
 - **客户多设备页面按 endpoint 固定绑定**——每个 endpoint bundle 复用 Directory 的唯一 Runtime/Core/Store；禁止把已有 widget/controller 动态 rebind 到另一 endpoint。工程“共享客户 UDP”复用当前 bundle，工程串口保持独立。
+- **AFD01 新型号身份**——后续出货的 AFD01A 沿用原 AFD01 的产品使用方式与 3D 几何，但 `afd01` / `afd01a` / `afd01b2` / `afd01c` 各自独立注册，按 Debug hw_type、Product Identity 与 service protocol 精确准入；recipe 和签名 OTA 包不互作别名。A/B2 仅接受 protocol 8，B2 未提供独立 STL 时使用占位模型。
 - **电源与网络测试按客户设备固定绑定**——`customer.devices[]` 使用稳定 `device_id` 保存各自电源和 iperf profile；编辑 endpoint 不改变归属。外接电源弹窗配置 IP/设定值并执行闭环控制，端口固定 2268；SDB 的 `external_power_sample/v1` 只写入对应设备并携带 `device_id`/endpoint。
 - **客户网络测试是设备级状态**——每个 endpoint bundle 拥有固定 `IperfTestController/Store`，切换页面不重绑、不停止后台测试；不同设备只在本地 IPv4和服务端端口不冲突时并行，应用退出前逐个完成进程和证据收尾。
 - 全局设置弹窗按 Customer / Engineering / Production scope 呈现；客户和工程 scope 不显示试产配置与试产报告，Production scope 保留这些业务设置。
@@ -149,7 +152,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **Windows 一键打包**：`scripts\build_windows.bat`（PyInstaller + `verify_model_assets.py` 校验 3D 模型 + updater 嵌入 + `Compress-Archive` 出 zip）
 - **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，7z 分卷上传 GitHub Release；推 master/main 触发 `ci-only-build` 上传 artifact 不发版）
 - **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 兼容性问题，强制本地脚本。updater 二进制仍嵌入但 mac 平台不发版，触发频率为零
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.3.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.4.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；mac 本地手动 `./scripts/build_macos.sh`
 - **`release.config.json`** 配 GitHub owner/repo/api；updater 用 `release_config.py` 读取
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
@@ -165,9 +168,10 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - 本文件（`AGENTS.md`）— **当前工程约定与架构的唯一权威入口**；代码、协议或里程碑演进后同步更新本文件
 - `doc/DEBUG设备协议接口规范_v2.md` — **协议权威规范**
 - `doc/M22_AFD01C_upper_pc_adaptation_*.md` — 当前 AFD01C 上位机适配范围、证据与未完成真机边界
+- `doc/M29_AFD01A_B2_upper_pc_*.md` — AFD01A/B2 接入计划、验收及真机边界
 - `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
-- `doc/M7_*.md` ~ `doc/M28_*.md` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配、M23 部件温度窗口、M24 Tracking 仿真、M25 客户多设备共享会话、M25R 会话恢复简化、M26 外接电源监测、M27 iperf3 功耗测试、M28 客户设备独立电源与 iperf3）
+- `doc/M7_*.md` ~ `doc/M29_*.md` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配、M23 部件温度窗口、M24 Tracking 仿真、M25 客户多设备共享会话、M25R 会话恢复简化、M26 外接电源监测、M27 iperf3 功耗测试、M28 客户设备独立电源与 iperf3、M29 AFD01A/B2 产品接入）
 - `doc/development_log.md` — M1–M6 实施日志
 - `doc/acceptance_log.md` — F-/A- 系列验收跟踪
 - `doc/i18n_terms.md` — 中英术语表

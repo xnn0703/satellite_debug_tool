@@ -13,7 +13,7 @@ from satellite_debug_tool.core.production import (
 
 
 def _profile() -> WorkstationFixtureProfile:
-    limits = FixtureAxisLimits(15.0, 2.0, 0.5, 30.0, 100.0)
+    limits = FixtureAxisLimits(15.0, 0.5, 30.0, 100.0)
     return WorkstationFixtureProfile(
         profile_id="fixture-control",
         revision=1,
@@ -60,9 +60,9 @@ def test_stop_finishes_current_interval_drops_queue_and_does_not_center(
     worker.stop_sequence()
     assert _wait_until(qapp, lambda: len(results) == 1)
 
-    assert time.monotonic() - stop_started >= 0.15
+    assert time.monotonic() - stop_started >= 0.35
     assert len(sent) == 1
-    assert sent[0].startswith(b"@A6T:2,0,0,0,0,100,200#")
+    assert sent[0] == b"@A6T:4,0,0,0,0,100,400#"
     assert results[0].stopped
     worker.shutdown()
     assert worker.wait(2000)

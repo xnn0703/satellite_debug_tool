@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import ipaddress
 import json
@@ -17,8 +17,10 @@ from .motion_platform import MotionPlatformConfig, MotionPlatformError, Platform
 
 
 FIXTURE_PROFILE_SCHEMA = "satellite.fixture-profile"
-FIXTURE_PROFILE_SCHEMA_VERSION = 1
+FIXTURE_PROFILE_SCHEMA_VERSION = 3
+LEGACY_FIXTURE_PROFILE_SCHEMA_VERSIONS = frozenset({1, 2})
 _PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class FixtureProfileError(ValueError):
@@ -32,7 +34,6 @@ class FixtureLeaseError(RuntimeError):
 @dataclass(frozen=True)
 class FixtureAxisLimits:
     abs_angle_deg: float
-    max_step_deg: float
     max_frequency_hz: Optional[float]
     max_velocity_deg_s: Optional[float]
     max_acceleration_deg_s2: Optional[float]
@@ -50,7 +51,6 @@ class FixtureAxisLimits:
 
     def validate(self, axis: str) -> None:
         _positive_finite(f"{axis}.abs_angle_deg", self.abs_angle_deg)
-        _positive_finite(f"{axis}.max_step_deg", self.max_step_deg)
         for name, value in (
             ("max_frequency_hz", self.max_frequency_hz),
             ("max_velocity_deg_s", self.max_velocity_deg_s),
@@ -64,7 +64,6 @@ class FixtureAxisLimits:
         try:
             result = cls(
                 abs_angle_deg=_required_float(payload, "abs_angle_deg"),
-                max_step_deg=_required_float(payload, "max_step_deg"),
                 max_frequency_hz=_optional_float(payload.get("max_frequency_hz")),
                 max_velocity_deg_s=_optional_float(payload.get("max_velocity_deg_s")),
                 max_acceleration_deg_s2=_optional_float(
@@ -79,11 +78,156 @@ class FixtureAxisLimits:
     def to_mapping(self) -> dict[str, Optional[float]]:
         return {
             "abs_angle_deg": self.abs_angle_deg,
-            "max_step_deg": self.max_step_deg,
             "max_frequency_hz": self.max_frequency_hz,
             "max_velocity_deg_s": self.max_velocity_deg_s,
             "max_acceleration_deg_s2": self.max_acceleration_deg_s2,
         }
+
+
+@dataclass(frozen=True)
+class FixtureModelPreset:
+    model_id: str
+    display_name: str
+    profile_id_prefix: str
+    host: str
+    port: int
+    center_z_mm: float
+    reset_z_mm: float
+    z_min_mm: float
+    z_max_mm: float
+    minimum_duration_ms: int
+    roll_limits: FixtureAxisLimits
+    pitch_limits: FixtureAxisLimits
+    yaw_limits: FixtureAxisLimits
+
+    def validate(self) -> None:
+        if not _MODEL_ID_RE.fullmatch(self.model_id):
+            raise FixtureProfileError("fixture model_id is not a safe identifier")
+        if not self.display_name.strip():
+            raise FixtureProfileError("fixture model display_name is required")
+        if not _PROFILE_ID_RE.fullmatch(self.profile_id_prefix):
+            raise FixtureProfileError("fixture model profile_id_prefix is invalid")
+        try:
+            ipaddress.IPv4Address(self.host)
+        except ipaddress.AddressValueError as exc:
+            raise FixtureProfileError("fixture model host must be a strict IPv4 address") from exc
+        if isinstance(self.port, bool) or not isinstance(self.port, int) or not (1 <= self.port <= 65535):
+            raise FixtureProfileError("fixture model port must be within 1..65535")
+        if self.minimum_duration_ms <= 0:
+            raise FixtureProfileError("fixture model minimum_duration_ms must be positive")
+        if self.z_min_mm > self.z_max_mm:
+            raise FixtureProfileError("fixture model Z limits are invalid")
+        if not self.z_min_mm <= self.center_z_mm <= self.z_max_mm:
+            raise FixtureProfileError("fixture model center Z is outside its limits")
+        if not self.z_min_mm <= self.reset_z_mm <= self.z_max_mm:
+            raise FixtureProfileError("fixture model reset Z is outside its limits")
+        for axis, limits in self.axis_limits.items():
+            limits.validate(axis)
+            if not limits.periodic_complete:
+                raise FixtureProfileError(f"fixture model {axis} operating envelope is incomplete")
+
+    @property
+    def axis_limits(self) -> dict[str, FixtureAxisLimits]:
+        return {
+            "roll": self.roll_limits,
+            "pitch": self.pitch_limits,
+            "yaw": self.yaw_limits,
+        }
+
+    def create_profile(self, profile_id: Optional[str] = None) -> "WorkstationFixtureProfile":
+        self.validate()
+        resolved_profile_id = str(profile_id or f"{self.profile_id_prefix}-01")
+        return WorkstationFixtureProfile(
+            profile_id=resolved_profile_id,
+            revision=1,
+            host=self.host,
+            port=self.port,
+            center_pose=PlatformPose(0, 0, 0, 0, 0, self.center_z_mm),
+            reset_pose=PlatformPose(0, 0, 0, 0, 0, self.reset_z_mm),
+            roll_limits=self.roll_limits,
+            pitch_limits=self.pitch_limits,
+            yaw_limits=self.yaw_limits,
+            calibration_id=pending_fixture_calibration_id(resolved_profile_id),
+            z_min_mm=self.z_min_mm,
+            z_max_mm=self.z_max_mm,
+            minimum_duration_ms=self.minimum_duration_ms,
+            model_id=self.model_id,
+        )
+
+    def reconcile_profile(
+        self,
+        profile: "WorkstationFixtureProfile",
+    ) -> "WorkstationFixtureProfile":
+        """Apply current model-owned facts while preserving installation-owned facts."""
+        self.validate()
+        profile.validate()
+        if profile.model_id != self.model_id:
+            raise FixtureProfileError("fixture profile model_id does not match preset")
+        expected = self.create_profile(profile.profile_id)
+        model_owned_matches = all(
+            (
+                profile.host == expected.host,
+                profile.port == expected.port,
+                profile.center_pose == expected.center_pose,
+                profile.reset_pose == expected.reset_pose,
+                profile.roll_limits == expected.roll_limits,
+                profile.pitch_limits == expected.pitch_limits,
+                profile.yaw_limits == expected.yaw_limits,
+                profile.z_min_mm == expected.z_min_mm,
+                profile.z_max_mm == expected.z_max_mm,
+                profile.minimum_duration_ms == expected.minimum_duration_ms,
+            )
+        )
+        if model_owned_matches:
+            return profile
+        return replace(
+            profile,
+            revision=profile.revision + 1,
+            host=expected.host,
+            port=expected.port,
+            center_pose=expected.center_pose,
+            reset_pose=expected.reset_pose,
+            roll_limits=expected.roll_limits,
+            pitch_limits=expected.pitch_limits,
+            yaw_limits=expected.yaw_limits,
+            z_min_mm=expected.z_min_mm,
+            z_max_mm=expected.z_max_mm,
+            minimum_duration_ms=expected.minimum_duration_ms,
+        )
+
+
+_LINGJING_A6_200MM_PRESET = FixtureModelPreset(
+    model_id="lingjing-a6-200mm",
+    display_name="南京灵境六自由度平台（200 mm）",
+    profile_id_prefix="lingjing-a6-200mm",
+    host="192.168.15.101",
+    port=9800,
+    center_z_mm=100.0,
+    reset_z_mm=0.0,
+    z_min_mm=0.0,
+    z_max_mm=100.0,
+    minimum_duration_ms=20,
+    roll_limits=FixtureAxisLimits(30.0, 0.3, 30.0, 50.0),
+    pitch_limits=FixtureAxisLimits(30.0, 0.3, 30.0, 50.0),
+    yaw_limits=FixtureAxisLimits(30.0, 0.2, 20.0, 20.0),
+)
+
+
+def fixture_model_presets() -> tuple[FixtureModelPreset, ...]:
+    return (_LINGJING_A6_200MM_PRESET,)
+
+
+def fixture_model_preset(model_id: str) -> FixtureModelPreset:
+    for preset in fixture_model_presets():
+        if preset.model_id == str(model_id):
+            return preset
+    raise FixtureProfileError(f"unsupported fixture model: {model_id}")
+
+
+def pending_fixture_calibration_id(profile_id: str) -> str:
+    if not _PROFILE_ID_RE.fullmatch(str(profile_id)):
+        raise FixtureProfileError("fixture profile_id is not a safe path component")
+    return f"PENDING-{profile_id}-R1"
 
 
 @dataclass(frozen=True)
@@ -104,6 +248,7 @@ class WorkstationFixtureProfile:
     z_min_mm: float = 0.0
     z_max_mm: float = 100.0
     minimum_duration_ms: int = 50
+    model_id: str = "custom"
     schema: str = FIXTURE_PROFILE_SCHEMA
     schema_version: int = FIXTURE_PROFILE_SCHEMA_VERSION
 
@@ -123,6 +268,8 @@ class WorkstationFixtureProfile:
             raise FixtureProfileError("unsupported fixture profile schema")
         if self.schema_version != FIXTURE_PROFILE_SCHEMA_VERSION:
             raise FixtureProfileError("unsupported fixture profile schema version")
+        if not _MODEL_ID_RE.fullmatch(self.model_id):
+            raise FixtureProfileError("fixture model_id is not a safe identifier")
         if not _PROFILE_ID_RE.fullmatch(self.profile_id):
             raise FixtureProfileError("fixture profile_id is not a safe path component")
         if (
@@ -163,19 +310,11 @@ class WorkstationFixtureProfile:
             yaw_abs_limit_deg=self.yaw_limits.abs_angle_deg,
             z_min_mm=self.z_min_mm,
             z_max_mm=self.z_max_mm,
-            max_step_deg=min(
-                self.roll_limits.max_step_deg,
-                self.pitch_limits.max_step_deg,
-                self.yaw_limits.max_step_deg,
-            ),
             minimum_duration_ms=self.minimum_duration_ms,
             roll_sign=self.roll_sign,
             pitch_sign=self.pitch_sign,
             yaw_sign=self.yaw_sign,
             calibration_id=self.calibration_id,
-            roll_max_step_deg=self.roll_limits.max_step_deg,
-            pitch_max_step_deg=self.pitch_limits.max_step_deg,
-            yaw_max_step_deg=self.yaw_limits.max_step_deg,
             roll_max_frequency_hz=self.roll_limits.max_frequency_hz,
             pitch_max_frequency_hz=self.pitch_limits.max_frequency_hz,
             yaw_max_frequency_hz=self.yaw_limits.max_frequency_hz,
@@ -193,6 +332,7 @@ class WorkstationFixtureProfile:
             "schema": self.schema,
             "schema_version": self.schema_version,
             "profile_id": self.profile_id,
+            "model_id": self.model_id,
             "revision": self.revision,
             "platform": {
                 "endpoint": {"host": self.host, "port": self.port},
@@ -223,6 +363,26 @@ class WorkstationFixtureProfile:
         *,
         verify_hash: bool = True,
     ) -> "WorkstationFixtureProfile":
+        schema_version = _required_int(payload, "schema_version")
+        if str(payload.get("schema", "")) != FIXTURE_PROFILE_SCHEMA:
+            raise FixtureProfileError("unsupported fixture profile schema")
+        if schema_version not in {
+            *LEGACY_FIXTURE_PROFILE_SCHEMA_VERSIONS,
+            FIXTURE_PROFILE_SCHEMA_VERSION,
+        }:
+            raise FixtureProfileError("unsupported fixture profile schema version")
+        stored_hash = str(payload.get("sha256", ""))
+        if verify_hash:
+            if not stored_hash:
+                raise FixtureProfileError("fixture profile SHA-256 is missing")
+            if schema_version in LEGACY_FIXTURE_PROFILE_SCHEMA_VERSIONS:
+                legacy_payload = dict(payload)
+                legacy_payload.pop("sha256", None)
+                legacy_hash = hashlib.sha256(
+                    _canonical_json(legacy_payload).encode("utf-8")
+                ).hexdigest()
+                if stored_hash != legacy_hash:
+                    raise FixtureProfileError("fixture profile SHA-256 does not match")
         try:
             platform = _require_mapping(payload, "platform")
             endpoint = _require_mapping(platform, "endpoint")
@@ -230,9 +390,14 @@ class WorkstationFixtureProfile:
             z_limits = _require_mapping(platform, "z_limits_mm")
             axis_limits = _require_mapping(platform, "axis_limits")
             profile = cls(
-                schema=str(payload["schema"]),
-                schema_version=_required_int(payload, "schema_version"),
+                schema=FIXTURE_PROFILE_SCHEMA,
+                schema_version=FIXTURE_PROFILE_SCHEMA_VERSION,
                 profile_id=str(payload["profile_id"]),
+                model_id=(
+                    str(payload["model_id"])
+                    if schema_version >= 2
+                    else "custom"
+                ),
                 revision=_required_int(payload, "revision"),
                 host=str(endpoint["host"]),
                 port=_required_int(endpoint, "port"),
@@ -258,10 +423,7 @@ class WorkstationFixtureProfile:
         except (KeyError, TypeError, ValueError) as exc:
             raise FixtureProfileError(f"invalid fixture profile: {exc}") from exc
         profile.validate()
-        stored_hash = str(payload.get("sha256", ""))
-        if verify_hash:
-            if not stored_hash:
-                raise FixtureProfileError("fixture profile SHA-256 is missing")
+        if verify_hash and schema_version == FIXTURE_PROFILE_SCHEMA_VERSION:
             if stored_hash != profile.sha256:
                 raise FixtureProfileError("fixture profile SHA-256 does not match")
         return profile
@@ -441,7 +603,11 @@ __all__ = [
     "FixtureControlLease",
     "FixtureLeaseError",
     "FixtureLeaseHandle",
+    "FixtureModelPreset",
     "FixtureProfileError",
     "FixtureProfileStore",
     "WorkstationFixtureProfile",
+    "fixture_model_preset",
+    "fixture_model_presets",
+    "pending_fixture_calibration_id",
 ]

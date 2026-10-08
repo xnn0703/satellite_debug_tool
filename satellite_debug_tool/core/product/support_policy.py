@@ -43,6 +43,21 @@ _CUSTOMER_PRODUCT_POLICIES = {
         customer_ota_product="AFD01",
         production_recipe_product="afd01",
     ),
+    # New shipments retain the original AFD01 hardware layout with a distinct identity.
+    "afd01a": CustomerProductPolicy(
+        "afd01a",
+        "AFD01A",
+        frozenset({8}),
+        customer_ota_product="AFD01A",
+        production_recipe_product="afd01a",
+    ),
+    "afd01b2": CustomerProductPolicy(
+        "afd01b2",
+        "AFD01B2",
+        frozenset({8}),
+        customer_ota_product="AFD01B2",
+        production_recipe_product="afd01b2",
+    ),
     # AFD01C is a separate product/firmware identity introduced at protocol v8.
     "afd01c": CustomerProductPolicy(
         "afd01c",
@@ -71,6 +86,16 @@ def production_product_policy(hardware_type: Optional[str]) -> Optional[Customer
     if policy is None or policy.production_recipe_product is None:
         return None
     return policy
+
+
+def production_product_policies() -> tuple[CustomerProductPolicy, ...]:
+    """Return the registered production products in display order."""
+
+    return tuple(
+        policy
+        for policy in _CUSTOMER_PRODUCT_POLICIES.values()
+        if policy.production_recipe_product is not None
+    )
 
 
 def production_recipe_product_policy(

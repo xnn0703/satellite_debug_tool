@@ -561,14 +561,15 @@ def test_unsupported_hardware_never_becomes_identified() -> None:
     controller.stop()
 
 
-def test_afd01c_protocol_v8_becomes_identified() -> None:
+@pytest.mark.parametrize("model", ("AFD01A", "AFD01B2", "AFD01C"))
+def test_new_afd01_variants_protocol_v8_become_identified(model: str) -> None:
     controller = _controller()
     controller._on_datagram(
         _datagram(
             ("192.168.1.12", 4004),
             _identity(
-                "AFD01C-001",
-                model="AFD01C",
+                f"{model}-001",
+                model=model,
                 service_protocol=8,
             ),
         )
@@ -576,30 +577,31 @@ def test_afd01c_protocol_v8_becomes_identified() -> None:
 
     session = controller.sessions()[0]
     assert session.state == DeviceSessionState.IDENTIFIED
-    assert session.hardware_type == "AFD01C"
-    assert session.serial_number == "AFD01C-001"
+    assert session.hardware_type == model
+    assert session.serial_number == f"{model}-001"
     controller.stop()
 
 
-def test_supported_afd01c_without_serial_waits_for_identity_configuration() -> None:
+@pytest.mark.parametrize("model", ("AFD01A", "AFD01B2", "AFD01C"))
+def test_supported_new_afd01_variant_without_serial_waits_for_identity_configuration(model: str) -> None:
     controller = _controller()
     controller._on_datagram(
         _datagram(
             ("192.168.1.12", 4004),
-            _identity("", model="AFD01C", service_protocol=8),
+            _identity("", model=model, service_protocol=8),
         )
     )
 
     session = controller.sessions()[0]
     assert session.state == DeviceSessionState.IDENTITY_PENDING
-    assert session.hardware_type == "AFD01C"
+    assert session.hardware_type == model
     assert session.serial_number == ""
     controller.stop()
 
 
 @pytest.mark.parametrize(
     "serial_number",
-    ("-", "unknown", "AFD01-dev", "未配置"),
+    ("-", "unknown", "AFD01-dev", "AFD01A-dev", "AFD01B2-dev", "未配置"),
 )
 def test_placeholder_serial_never_becomes_a_production_identity(
     serial_number: str,

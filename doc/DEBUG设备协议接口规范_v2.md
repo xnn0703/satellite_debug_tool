@@ -7,8 +7,8 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
-| 最近修订 | 2026-08-30（0x2C 安装姿态读回与 AFD01 / AFD01C / ESA01 产品注册合同） |
-| 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / afd01c / esa01 / ufd45，后续新型号无需改协议） |
+| 最近修订 | 2026-09-28（AFD01A / AFD01B2 产品注册合同；帧格式未变） |
+| 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / afd01a / afd01b2 / afd01c / esa01 / ufd45，后续新型号无需改协议） |
 | 适用上位机 | 实现 DEBUG protocol v2 及相应产品扩展的 `satellite_debug_tool` |
 
 ---
@@ -31,7 +31,7 @@
 
 > **协议与具体设备完全解耦**。通道、状态字、事件的 ID、名称、单位、分组、枚举值——
 > **全部**由下位机通过 DEFINE 帧自描述。协议规范只定义**编码格式**，不规定"哪个 ID 必须是什么含义"。
-> 这样 afd01 / afd01c / esa01 / ufd45 / 未来新型号各自发各自的表，上位机可按自描述 Debug profile 呈现。
+> 这样 afd01 / afd01a / afd01b2 / afd01c / esa01 / ufd45 / 未来新型号各自发各自的表，上位机可按自描述 Debug profile 呈现。
 > 客户 Product Service、OTA 和试产准入仍必须使用显式注册的产品身份、协议版本和能力合同，不能从 Debug profile 名称推断。
 
 **兼容性**：v2 **完全取代 v1**，上下位机同步切换（本项目决定放弃 v1 兼容层以简化代码路径）。设备启动即发 `META_INFO`，上位机校验 `protocol_ver == 0x02`，否则断连并提示升级固件。
@@ -60,7 +60,7 @@
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
 
-`*` 命令空间分段分配：通用 Debug/GNSS/Tracking 为 `0x01..0x11`，Product Service（AFD01 / AFD01C / ESA01）为
+`*` 命令空间分段分配：通用 Debug/GNSS/Tracking 为 `0x01..0x11`，Product Service（AFD01 / AFD01A / AFD01B2 / AFD01C / ESA01）为
 `0x20..0x2C`，XESA01 Orbit 为 `0x30..0x31`；中间保留值不因图中范围而成为有效命令。
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
@@ -490,8 +490,11 @@ signal[N]:
 ### 5.16 产品服务扩展 (0x20~0x2C)
 
 **用途**：为客户工作台提供稳定的产品语义。该扩展复用 v2 帧包络，但不依赖动态
-`CHANNEL_DEFINE/STATE_DEFINE` 名称；工程 Debug 与产品服务可以同时存在。AFD01、AFD01C 与 ESA01 是
-当前正式登记的客户产品：AFD01 兼容 service protocol 2~8，AFD01C 只使用 protocol 8，ESA01 使用完整的 protocol 6。
+`CHANNEL_DEFINE/STATE_DEFINE` 名称；工程 Debug 与产品服务可以同时存在。上位机当前登记
+AFD01、AFD01A、AFD01B2、AFD01C 与 ESA01：旧 AFD01 兼容 service protocol 2~8；
+AFD01A、AFD01B2、AFD01C 使用 protocol 8；ESA01 使用完整的 protocol 6。
+AFD01A 是后续出货的原 AFD01 型号，仍使用独立 `afd01a` / `AFD01A` 设备身份；
+AFD01B2 使用 `afd01b2` / `AFD01B2`。四种 AFD01 产品的 OTA 包和试产 recipe 精确匹配各自身份。
 其他 `hw_type` 不支持客户 Product Service，收到 0x25 必须明确返回不支持，不能靠同名 Debug
 字段猜测产品能力。能力差异必须由 `valid_mask`、极化掩码和 feature flags 明确声明。
 

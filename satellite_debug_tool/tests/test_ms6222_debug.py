@@ -182,8 +182,10 @@ def test_production_workspace_has_lazy_motion_ms6222_and_power_pages(
     workspace.activate_view()
     workspace._switch_subpage(1)
     assert workspace._fixture_debug is not None
-    assert workspace._fixture_debug._motion_only
-    assert workspace._fixture_debug._serial_connect.isHidden()
+    assert not workspace._fixture_debug._motion_only
+    assert workspace._fixture_debug._reference_lease is workspace._ms6222_control_lease
+    assert not workspace._fixture_debug._serial_connect.isHidden()
+    assert not workspace._fixture_debug._qualification_group.isHidden()
     workspace._switch_subpage(2)
     assert workspace._ms6222_debug is not None
     assert workspace._subpages.currentIndex() == 2

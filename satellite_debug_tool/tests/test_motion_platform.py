@@ -29,7 +29,6 @@ def _config(**overrides) -> MotionPlatformConfig:
         "roll_abs_limit_deg": 15.0,
         "pitch_abs_limit_deg": 15.0,
         "yaw_abs_limit_deg": 30.0,
-        "max_step_deg": 5.0,
         "minimum_duration_ms": 50,
         "calibration_id": "LJ-A6-2026-001",
     }
@@ -113,8 +112,8 @@ def test_adapter_applies_axis_calibration_but_checks_logical_limits() -> None:
 
     with pytest.raises(MotionPlatformError, match="roll exceeds"):
         adapter.send_pose(PlatformPose(16, 0, 0), duration_ms=100)
-    with pytest.raises(MotionPlatformError, match="angular step"):
-        adapter.send_pose(PlatformPose(10, 0, 0), duration_ms=100)
+    full_range = adapter.send_pose(PlatformPose(10, 0, 0), duration_ms=100)
+    assert full_range.raw_command == b"@A6T:-10,0,0,0,0,100,100#"
     with pytest.raises(MotionPlatformError, match="X=0"):
         adapter.send_pose(PlatformPose(0, 0, 0, x_mm=1), duration_ms=100)
 
@@ -137,7 +136,7 @@ def test_reset_is_distinct_and_requires_explicit_confirmation() -> None:
 
 def test_combined_profile_phase_and_sixty_minute_point_count() -> None:
     profile = _profile(duration_s=3600.0)
-    assert profile.sample_count == 36_001
+    assert profile.sample_count == 36_000
     start = profile.pose_at(0.0)
     assert start.roll_deg == pytest.approx(0.0)
     assert start.pitch_deg == pytest.approx(1.0)
@@ -151,6 +150,7 @@ class _FakeClock:
     def __init__(self, send_cost_ms: int = 0) -> None:
         self.now_ns = 0
         self.send_cost_ns = send_cost_ms * 1_000_000
+        self.commands: list[bytes] = []
 
     def clock_ns(self) -> int:
         return self.now_ns
@@ -158,7 +158,8 @@ class _FakeClock:
     def sleep(self, seconds: float) -> None:
         self.now_ns += int(seconds * 1_000_000_000)
 
-    def sender(self, _data: bytes, _endpoint: tuple[str, int]) -> bool:
+    def sender(self, data: bytes, _endpoint: tuple[str, int]) -> bool:
+        self.commands.append(data)
         self.now_ns += self.send_cost_ns
         return True
 
@@ -184,19 +185,24 @@ def _runner(clock: _FakeClock) -> MotionTrajectoryRunner:
 def test_absolute_scheduler_sends_every_point_without_clock_drift() -> None:
     clock = _FakeClock(send_cost_ms=10)
     statistics = _runner(clock).run(_profile())
-    assert statistics.intended_points == 11
-    assert statistics.sent_points == 11
+    assert statistics.intended_points == 10
+    assert statistics.sent_points == 10
     assert statistics.skipped_points == 0
     assert statistics.failed_points == 0
     assert statistics.max_abs_jitter_ms == pytest.approx(0.0)
     assert statistics.coverage_ratio == pytest.approx(1.0)
+    assert not statistics.timing_fault
+    assert clock.commands[0].startswith(b"@A6T:0.156434")
+    assert clock.commands[-1].endswith(b",100#")
 
 
-def test_overdue_scheduler_skips_points_instead_of_bursting() -> None:
+def test_overdue_scheduler_stops_instead_of_bursting() -> None:
     clock = _FakeClock(send_cost_ms=250)
     statistics = _runner(clock).run(_profile())
-    assert statistics.intended_points == 11
+    assert statistics.intended_points == 10
     assert statistics.skipped_points > 0
     assert statistics.sent_points < statistics.intended_points
     assert statistics.sent_points + statistics.skipped_points == statistics.intended_points
     assert statistics.coverage_ratio < 1.0
+    assert statistics.timing_fault
+    assert "missed deadline" in statistics.timing_fault_details

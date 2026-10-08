@@ -81,6 +81,27 @@ def _settings(tmp_path: Path, monkeypatch):
     return settings
 
 
+def test_product_template_picker_lists_registered_production_products(
+    qapplication_session, tmp_path: Path
+) -> None:
+    from satellite_debug_tool.ui.production_configuration_dialog import ProductionConfigurationDialog
+
+    dialog = ProductionConfigurationDialog(
+        store=ProductionConfigurationStore(tmp_path / "configuration.json")
+    )
+    choices = {
+        dialog._product_type.itemData(index): dialog._product_type.itemText(index)
+        for index in range(dialog._product_type.count())
+    }
+    assert choices == {
+        "afd01": "AFD01",
+        "afd01a": "AFD01A",
+        "afd01b2": "AFD01B2",
+        "afd01c": "AFD01C",
+    }
+    dialog.close()
+
+
 def test_visual_selection_generates_afd01c_times_two_snapshot(
     qapplication_session,
     tmp_path: Path,

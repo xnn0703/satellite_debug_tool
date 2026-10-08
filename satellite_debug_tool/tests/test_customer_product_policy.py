@@ -21,6 +21,11 @@ from satellite_debug_tool.core.product import customer_ota_product_policy
         ("afd01", 2, True),
         ("afd01", 6, True),
         ("afd01", 8, True),
+        ("afd01a", 8, True),
+        ("afd01a", 7, False),
+        ("afd01b2", 8, True),
+        ("afd01b2", 7, False),
+        ("afd01b", 8, False),
         ("afd01c", 8, True),
         ("afd01c", 7, False),
         ("esa01", 6, True),
@@ -91,13 +96,19 @@ def test_esa01_requires_v6_product_service(qapplication_session) -> None:
     assert not state.rf_control_ready
 
 
-def test_debug_and_product_identity_must_match(qapplication_session) -> None:
+@pytest.mark.parametrize(
+    ("hardware_type", "product_identity"),
+    (("afd01a", "AFD01"), ("afd01b2", "AFD01C"), ("afd01c", "AFD01")),
+)
+def test_debug_and_product_identity_must_match(
+    qapplication_session, hardware_type: str, product_identity: str
+) -> None:
     profiles = ProfileStore()
-    profiles.apply_meta(MetaInfo(2, "0.1.253", "afd01c", "SN-TEST"))
+    profiles.apply_meta(MetaInfo(2, "0.1.253", hardware_type, "SN-TEST"))
     session = DeviceSessionCore(profile_store=profiles)
     session.attach_transport(object(), lambda _frame: True)
     session.product_store.feed(
-        ServiceIdentity(1, 1, 0x17, "AFD01", "SN-TEST", "0.1.253", "", 8)
+        ServiceIdentity(1, 1, 0x17, product_identity, "SN-TEST", "0.1.253", "", 8)
     )
     session.product_store.feed(
         ServiceFastState(
@@ -114,7 +125,7 @@ def test_debug_and_product_identity_must_match(qapplication_session) -> None:
 
 @pytest.mark.parametrize(
     ("hardware_type", "product_identity"),
-    (("afd01", "AFD01"), ("afd01c", "AFD01C")),
+    (("afd01", "AFD01"), ("afd01a", "AFD01A"), ("afd01b2", "AFD01B2"), ("afd01c", "AFD01C")),
 )
 def test_mount_configuration_requires_v8_and_device_capability(
     qapplication_session,
@@ -154,7 +165,7 @@ def test_mount_configuration_requires_v8_and_device_capability(
 
 @pytest.mark.parametrize(
     ("product_identity", "hardware_type"),
-    (("AFD01", "afd01"), ("afd01c", "afd01c")),
+    (("AFD01", "afd01"), ("AFD01A", "afd01a"), ("AFD01B2", "afd01b2"), ("afd01c", "afd01c")),
 )
 def test_customer_ota_policy_resolves_only_registered_exact_product(
     product_identity: str, hardware_type: str

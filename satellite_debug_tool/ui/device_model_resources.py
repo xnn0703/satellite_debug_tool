@@ -33,10 +33,16 @@ def device_model_candidates(
     user_home = Path.home() if home is None else Path(home)
     packaged_models = _BUILTIN_MODELS_DIR if builtin_dir is None else Path(builtin_dir)
     filename = f"{key}.stl"
-    return (
+    candidates = (
         user_home / ".satellite_debug_tool" / "models" / filename,
         packaged_models / filename,
     )
+    if key == "afd01a":
+        return candidates + (
+            user_home / ".satellite_debug_tool" / "models" / "afd01.stl",
+            packaged_models / "afd01.stl",
+        )
+    return candidates
 
 
 def load_first_device_model(
