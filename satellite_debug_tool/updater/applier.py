@@ -4,14 +4,16 @@
     1. merge_volumes(volumes, output) ：复制单个 7z，或合并旧版分卷
     2. verify_7z_magic(path)         ：头 6 字节 = 377abcaf271c，否则视为合并坏掉
     3. extract_to(archive, staging)  ：py7zr 解压到 staging dir
-    4. swap_install_dir(install, ext_root) ：
+    4. resolve_payload_root(staging, contract)：递归解析唯一完整应用载荷
+    5. swap_install_dir(install, payload_root) ：
          - 把 install_dir 改名 .bak
-         - 把 ext_root 移到 install 位置
+         - 把已验证的 payload_root 移到 install 位置
          - 成功后保留 .bak（用户可手动验证后清掉）；失败把 .bak 改回 install_dir
 """
 from __future__ import annotations
 
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,11 +39,26 @@ class ApplyResult:
     backup_dir: Path
 
 
+@dataclass(frozen=True)
+class PayloadContract:
+    """Files that identify exactly one installable application root."""
+
+    executable_name: str
+    updater_name: str
+    runtime_dir_name: str = "_internal"
+
+
 class Applier:
     """三步：merge → extract → swap。每步可独立调用，也可一站式 `apply()`。"""
 
-    def __init__(self, on_progress: Optional[ProgressCallback] = None):
+    def __init__(
+        self,
+        on_progress: Optional[ProgressCallback] = None,
+        *,
+        heartbeat_interval: float = 5.0,
+    ):
         self._on_progress = on_progress
+        self._heartbeat_interval = max(0.01, float(heartbeat_interval))
 
     # ---- 阶段 1：准备归档 ----
 
@@ -96,35 +113,76 @@ class Applier:
             raise ApplyError("apply_invalid_archive", path=str(archive))
         staging.mkdir(parents=True, exist_ok=True)
         self._progress("extract", 0.0)
+        finished = threading.Event()
+        started = time.monotonic()
+
+        def report_heartbeat() -> None:
+            while not finished.wait(self._heartbeat_interval):
+                self._progress("extracting", time.monotonic() - started)
+
+        heartbeat = threading.Thread(
+            target=report_heartbeat,
+            name="UpdaterExtractHeartbeat",
+            daemon=True,
+        )
+        heartbeat.start()
         try:
             import py7zr   # 延迟 import：updater 独立可执行不强依赖 py7zr 的子组件
             with py7zr.SevenZipFile(str(archive), mode="r") as z:
                 z.extractall(path=str(staging))
         except Exception as e:
             raise ApplyError("apply_extract_failed", str(e)) from e
+        finally:
+            finished.set()
+            heartbeat.join(timeout=self._heartbeat_interval + 0.5)
         self._progress("extract", 1.0)
         return staging
 
+    def resolve_payload_root(
+        self,
+        staging: Path,
+        contract: PayloadContract,
+    ) -> Path:
+        """Resolve exactly one complete application payload before old files move."""
+
+        self._progress("validate", 0.0)
+        candidates: list[Path] = []
+        for executable in staging.rglob(contract.executable_name):
+            root = executable.parent
+            if not (root / contract.updater_name).is_file():
+                continue
+            if not (root / contract.runtime_dir_name).is_dir():
+                continue
+            candidates.append(root.resolve())
+        unique = tuple(dict.fromkeys(candidates))
+        if not unique:
+            raise ApplyError(
+                "apply_payload_missing",
+                path=str(staging),
+                executable=contract.executable_name,
+            )
+        if len(unique) != 1:
+            raise ApplyError(
+                "apply_payload_ambiguous",
+                candidates=[str(path) for path in unique],
+            )
+        self._progress("validate", 1.0)
+        return unique[0]
+
     # ---- 阶段 3：原子替换 + rollback ----
 
-    def swap_install_dir(self, install_dir: Path, ext_root: Path,
+    def swap_install_dir(self, install_dir: Path, payload_root: Path,
                          backup_suffix: str = ".bak") -> ApplyResult:
-        """把 ext_root 移到 install_dir 位置；旧的 install_dir 改名为带后缀的备份。
-
-        ext_root 必须包含与 install_dir.name 一致的顶层目录，或本身就是要替换的内容。
-        - 情形 A：ext_root/SatelliteDebugTool.app 存在 → 用它替换 install_dir
-        - 情形 B：ext_root 自身就是 SatelliteDebugTool.app → 直接用 ext_root
+        """把已验证的 payload_root 移到 install_dir，失败时回滚旧版本。
 
         Args:
             install_dir: 当前要被替换的安装目录（.app 或 onedir）
-            ext_root: extract_to 解压出来的根目录（其中含真正的 app/dir）
+            payload_root: `resolve_payload_root()` 返回的唯一应用目录
             backup_suffix: 旧版备份后缀，默认 ".bak"
         """
-        # 找出实际要 mv 的源
-        candidate = ext_root / install_dir.name
-        source = candidate if candidate.exists() else ext_root
-        if not source.exists():
-            raise ApplyError("apply_source_missing", path=str(ext_root))
+        source = Path(payload_root)
+        if not source.is_dir():
+            raise ApplyError("apply_source_missing", path=str(payload_root))
 
         # 备份路径：与 install_dir 同级 + 时间戳，避免与历史 .bak 冲突
         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -155,8 +213,14 @@ class Applier:
 
     # ---- 一站式 ----
 
-    def apply(self, volumes: List[Path], install_dir: Path,
-              workdir: Path) -> ApplyResult:
+    def apply(
+        self,
+        volumes: List[Path],
+        install_dir: Path,
+        workdir: Path,
+        *,
+        payload_contract: PayloadContract,
+    ) -> ApplyResult:
         """一站式：merge → verify → extract → swap。
 
         workdir 用于放合并后的 7z 和 staging 解压目录；调用方负责事后清理。
@@ -166,7 +230,8 @@ class Applier:
         staging = workdir / "_staging"
         self.merge_volumes(volumes, merged)
         self.extract_to(merged, staging)
-        return self.swap_install_dir(install_dir, staging)
+        payload_root = self.resolve_payload_root(staging, payload_contract)
+        return self.swap_install_dir(install_dir, payload_root)
 
     # ---- 内部 ----
 

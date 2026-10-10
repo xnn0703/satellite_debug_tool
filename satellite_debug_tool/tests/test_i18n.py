@@ -276,6 +276,17 @@ def test_engineering_workspace_restores_tabs_and_shortcut_toggles(
         "Tracking Simulator",
     ]
     assert all(button.isVisible() for button in window._engineering_tab_pills)
+    assert window._engineering_fixture_button.isVisible()
+    assert window._engineering_fixture_button.text() == "Motion platform..."
+    window._engineering_fixture_button.click()
+    qapp.processEvents()
+    fixture_dialog = window._customer._fixture_dialog
+    assert fixture_dialog is not None and fixture_dialog.isVisible()
+    window._engineering_fixture_button.click()
+    qapp.processEvents()
+    assert window._customer._fixture_dialog is fixture_dialog
+    fixture_dialog.close()
+    qapp.processEvents()
     assert not hasattr(window, "_operation_pill")
     assert not hasattr(window, "_engineering_pill")
     assert not hasattr(window, "_exit_engineering_btn")

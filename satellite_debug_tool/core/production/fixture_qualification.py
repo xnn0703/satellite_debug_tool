@@ -18,7 +18,7 @@ from .fixture_analysis import (
     GuidedFixtureCalibration,
     TimedAttitude,
 )
-from .motion_platform import PlatformPose
+from satellite_debug_tool.core.motion_platform import PlatformPose
 
 
 class FixtureQualificationState(str, Enum):

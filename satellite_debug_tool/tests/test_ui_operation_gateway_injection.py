@@ -197,7 +197,7 @@ def test_customer_rf_and_maintenance_request_separate_gateways(
         live,
         device,
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
         operation_gateway_factory=factory.new_operation_gateway,
     )
 

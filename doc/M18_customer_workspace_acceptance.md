@@ -1,5 +1,8 @@
 # M18 Customer workspace acceptance
 
+> 历史说明：本文中的 Ed25519/签名包描述记录当时实现，客户固件包已由 M33 AES-256-GCM 认证解密模型替代。
+
+
 > Date: 2026-08-05
 >
 > Status: Software verification complete; AFD01 hardware and Windows acceptance pending

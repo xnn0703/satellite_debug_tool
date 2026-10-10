@@ -41,6 +41,7 @@ class CustomerEndpointSessionBundle:
         settings,
         device_directory,
         session_directory,
+        fixture_telemetry=None,
         status_sink: Optional[Callable[[str, int], None]] = None,
         facts_changed: Optional[Callable[[Endpoint], None]] = None,
         on_shutdown: Optional[Callable[[Endpoint, object], None]] = None,
@@ -72,6 +73,7 @@ class CustomerEndpointSessionBundle:
             settings,
             session_registry=session_directory,
             customer_binding=self.binding,
+            fixture_telemetry=fixture_telemetry,
             defer_presentation=True,
         )
         self.device_id = ""
@@ -430,6 +432,7 @@ class CustomerEndpointSessionBundleFactory(QObject):
         *,
         settings,
         session_directory,
+        fixture_telemetry=None,
         status_sink: Optional[Callable[[str, int], None]] = None,
         external_power_store=None,
         external_power_presenter: Optional[Callable[[object], None]] = None,
@@ -438,6 +441,7 @@ class CustomerEndpointSessionBundleFactory(QObject):
         super().__init__(parent)
         self._settings = settings
         self._session_directory = session_directory
+        self._fixture_telemetry = fixture_telemetry
         self._status_sink = status_sink
         self._external_power_store = external_power_store
         self._external_power_presenter = external_power_presenter
@@ -485,6 +489,7 @@ class CustomerEndpointSessionBundleFactory(QObject):
             settings=self._settings,
             device_directory=self._device_directory,
             session_directory=self._session_directory,
+            fixture_telemetry=self._fixture_telemetry,
             status_sink=self._status_sink,
             facts_changed=self.device_changed.emit,
             on_shutdown=self._forget_bundle,

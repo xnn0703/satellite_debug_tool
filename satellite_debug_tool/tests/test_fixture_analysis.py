@@ -65,7 +65,11 @@ def test_guided_calibration_recovers_axis_swap_sign_and_zero_offset() -> None:
     ).coordinate_valid
     assert not replace(
         result,
-        static_noise_std_deg=(0.1, 0.1, 1.1),
+        static_noise_std_deg=(0.01, 0.01, 0.101),
+    ).coordinate_valid
+    assert replace(
+        result,
+        static_noise_std_deg=(0.1, 0.1, 0.1),
     ).coordinate_valid
 
     repeated = calibration.evaluate(confirmed=True)
@@ -154,6 +158,7 @@ def test_static_and_dynamic_synthetic_metrics() -> None:
     assert dynamic["target_frequency_hz"] == pytest.approx(frequency, rel=0.03)
     assert dynamic["measured_frequency_hz"] == pytest.approx(frequency, rel=0.03)
     assert dynamic["estimated_phase_deg"] == pytest.approx(20.0, abs=1.0)
+    assert dynamic["estimated_delay_s"] == pytest.approx(-20.0 / 360.0 / frequency, abs=0.01)
     assert dynamic["cross_axis_coupling_ratio"]["pitch"] == pytest.approx(0.02, rel=0.1)
     static = compute_static_metrics(comparisons)
     assert static["valid"]

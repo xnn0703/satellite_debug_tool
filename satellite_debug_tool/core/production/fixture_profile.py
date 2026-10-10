@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import ipaddress
 import json
@@ -13,12 +13,17 @@ import threading
 from typing import Any, Mapping, Optional
 import uuid
 
-from .motion_platform import MotionPlatformConfig, MotionPlatformError, PlatformPose
+from satellite_debug_tool.core.motion_platform import (
+    MotionPlatformConfig,
+    MotionPlatformError,
+    PlatformPose,
+    PlatformGeometry,
+)
 
 
 FIXTURE_PROFILE_SCHEMA = "satellite.fixture-profile"
-FIXTURE_PROFILE_SCHEMA_VERSION = 3
-LEGACY_FIXTURE_PROFILE_SCHEMA_VERSIONS = frozenset({1, 2})
+FIXTURE_PROFILE_SCHEMA_VERSION = 4
+LEGACY_FIXTURE_PROFILE_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 _PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -89,13 +94,17 @@ class FixtureModelPreset:
     model_id: str
     display_name: str
     profile_id_prefix: str
-    host: str
-    port: int
+    local_ipv4: str
+    feedback_port: int
+    controller_ipv4: str
+    command_port: int
     center_z_mm: float
-    reset_z_mm: float
     z_min_mm: float
     z_max_mm: float
     minimum_duration_ms: int
+    roll_sign: int
+    pitch_sign: int
+    yaw_sign: int
     roll_limits: FixtureAxisLimits
     pitch_limits: FixtureAxisLimits
     yaw_limits: FixtureAxisLimits
@@ -108,19 +117,21 @@ class FixtureModelPreset:
         if not _PROFILE_ID_RE.fullmatch(self.profile_id_prefix):
             raise FixtureProfileError("fixture model profile_id_prefix is invalid")
         try:
-            ipaddress.IPv4Address(self.host)
+            ipaddress.IPv4Address(self.local_ipv4)
+            ipaddress.IPv4Address(self.controller_ipv4)
         except ipaddress.AddressValueError as exc:
             raise FixtureProfileError("fixture model host must be a strict IPv4 address") from exc
-        if isinstance(self.port, bool) or not isinstance(self.port, int) or not (1 <= self.port <= 65535):
-            raise FixtureProfileError("fixture model port must be within 1..65535")
+        for port in (self.feedback_port, self.command_port):
+            if isinstance(port, bool) or not isinstance(port, int) or not (1 <= port <= 65535):
+                raise FixtureProfileError("fixture model port must be within 1..65535")
         if self.minimum_duration_ms <= 0:
             raise FixtureProfileError("fixture model minimum_duration_ms must be positive")
+        if any(sign not in (-1, 1) for sign in (self.roll_sign, self.pitch_sign, self.yaw_sign)):
+            raise FixtureProfileError("fixture model axis signs must be -1 or 1")
         if self.z_min_mm > self.z_max_mm:
             raise FixtureProfileError("fixture model Z limits are invalid")
         if not self.z_min_mm <= self.center_z_mm <= self.z_max_mm:
             raise FixtureProfileError("fixture model center Z is outside its limits")
-        if not self.z_min_mm <= self.reset_z_mm <= self.z_max_mm:
-            raise FixtureProfileError("fixture model reset Z is outside its limits")
         for axis, limits in self.axis_limits.items():
             limits.validate(axis)
             if not limits.periodic_complete:
@@ -140,14 +151,18 @@ class FixtureModelPreset:
         return WorkstationFixtureProfile(
             profile_id=resolved_profile_id,
             revision=1,
-            host=self.host,
-            port=self.port,
+            local_ipv4=self.local_ipv4,
+            feedback_port=self.feedback_port,
+            controller_ipv4=self.controller_ipv4,
+            command_port=self.command_port,
             center_pose=PlatformPose(0, 0, 0, 0, 0, self.center_z_mm),
-            reset_pose=PlatformPose(0, 0, 0, 0, 0, self.reset_z_mm),
             roll_limits=self.roll_limits,
             pitch_limits=self.pitch_limits,
             yaw_limits=self.yaw_limits,
             calibration_id=pending_fixture_calibration_id(resolved_profile_id),
+            roll_sign=self.roll_sign,
+            pitch_sign=self.pitch_sign,
+            yaw_sign=self.yaw_sign,
             z_min_mm=self.z_min_mm,
             z_max_mm=self.z_max_mm,
             minimum_duration_ms=self.minimum_duration_ms,
@@ -166,16 +181,16 @@ class FixtureModelPreset:
         expected = self.create_profile(profile.profile_id)
         model_owned_matches = all(
             (
-                profile.host == expected.host,
-                profile.port == expected.port,
                 profile.center_pose == expected.center_pose,
-                profile.reset_pose == expected.reset_pose,
                 profile.roll_limits == expected.roll_limits,
                 profile.pitch_limits == expected.pitch_limits,
                 profile.yaw_limits == expected.yaw_limits,
                 profile.z_min_mm == expected.z_min_mm,
                 profile.z_max_mm == expected.z_max_mm,
                 profile.minimum_duration_ms == expected.minimum_duration_ms,
+                profile.roll_sign == expected.roll_sign,
+                profile.pitch_sign == expected.pitch_sign,
+                profile.yaw_sign == expected.yaw_sign,
             )
         )
         if model_owned_matches:
@@ -183,16 +198,16 @@ class FixtureModelPreset:
         return replace(
             profile,
             revision=profile.revision + 1,
-            host=expected.host,
-            port=expected.port,
             center_pose=expected.center_pose,
-            reset_pose=expected.reset_pose,
             roll_limits=expected.roll_limits,
             pitch_limits=expected.pitch_limits,
             yaw_limits=expected.yaw_limits,
             z_min_mm=expected.z_min_mm,
             z_max_mm=expected.z_max_mm,
             minimum_duration_ms=expected.minimum_duration_ms,
+            roll_sign=expected.roll_sign,
+            pitch_sign=expected.pitch_sign,
+            yaw_sign=expected.yaw_sign,
         )
 
 
@@ -200,13 +215,18 @@ _LINGJING_A6_200MM_PRESET = FixtureModelPreset(
     model_id="lingjing-a6-200mm",
     display_name="南京灵境六自由度平台（200 mm）",
     profile_id_prefix="lingjing-a6-200mm",
-    host="192.168.15.101",
-    port=9800,
+    local_ipv4="192.168.15.101",
+    feedback_port=8410,
+    controller_ipv4="192.168.15.201",
+    command_port=7408,
     center_z_mm=100.0,
-    reset_z_mm=0.0,
     z_min_mm=0.0,
     z_max_mm=100.0,
     minimum_duration_ms=20,
+    # 软件统一采用设备 FRD；灵境控制器的 Roll/Yaw 正方向与 FRD 相反。
+    roll_sign=-1,
+    pitch_sign=1,
+    yaw_sign=-1,
     roll_limits=FixtureAxisLimits(30.0, 0.3, 30.0, 50.0),
     pitch_limits=FixtureAxisLimits(30.0, 0.3, 30.0, 50.0),
     yaw_limits=FixtureAxisLimits(30.0, 0.2, 20.0, 20.0),
@@ -234,10 +254,11 @@ def pending_fixture_calibration_id(profile_id: str) -> str:
 class WorkstationFixtureProfile:
     profile_id: str
     revision: int
-    host: str
-    port: int
+    local_ipv4: str
+    feedback_port: int
+    controller_ipv4: str
+    command_port: int
     center_pose: PlatformPose
-    reset_pose: PlatformPose
     roll_limits: FixtureAxisLimits
     pitch_limits: FixtureAxisLimits
     yaw_limits: FixtureAxisLimits
@@ -270,6 +291,8 @@ class WorkstationFixtureProfile:
             raise FixtureProfileError("unsupported fixture profile schema version")
         if not _MODEL_ID_RE.fullmatch(self.model_id):
             raise FixtureProfileError("fixture model_id is not a safe identifier")
+        if self.model_id not in {preset.model_id for preset in fixture_model_presets()}:
+            raise FixtureProfileError(f"unsupported fixture model: {self.model_id}")
         if not _PROFILE_ID_RE.fullmatch(self.profile_id):
             raise FixtureProfileError("fixture profile_id is not a safe path component")
         if (
@@ -279,9 +302,10 @@ class WorkstationFixtureProfile:
         ):
             raise FixtureProfileError("fixture profile revision must be a positive integer")
         try:
-            ipaddress.IPv4Address(self.host)
+            ipaddress.IPv4Address(self.local_ipv4)
+            ipaddress.IPv4Address(self.controller_ipv4)
         except ipaddress.AddressValueError as exc:
-            raise FixtureProfileError("fixture platform host must be a strict IPv4 address") from exc
+            raise FixtureProfileError("fixture platform endpoint must be a strict IPv4 address") from exc
         if not self.calibration_id.strip():
             raise FixtureProfileError("fixture calibration_id is required")
         for axis, limits in self.axis_limits.items():
@@ -299,12 +323,20 @@ class WorkstationFixtureProfile:
             "yaw": self.yaw_limits,
         }
 
+    @property
+    def geometry_sha256(self) -> str:
+        return hashlib.sha256(
+            _canonical_json(asdict(PlatformGeometry())).encode("utf-8")
+        ).hexdigest()
+
     def to_motion_config(self) -> MotionPlatformConfig:
         return MotionPlatformConfig(
-            host=self.host,
-            port=self.port,
+            model_id=self.model_id,
+            local_ipv4=self.local_ipv4,
+            feedback_port=self.feedback_port,
+            controller_ipv4=self.controller_ipv4,
+            command_port=self.command_port,
             center_pose=self.center_pose,
-            reset_pose=self.reset_pose,
             roll_abs_limit_deg=self.roll_limits.abs_angle_deg,
             pitch_abs_limit_deg=self.pitch_limits.abs_angle_deg,
             yaw_abs_limit_deg=self.yaw_limits.abs_angle_deg,
@@ -324,7 +356,6 @@ class WorkstationFixtureProfile:
             roll_max_acceleration_deg_s2=self.roll_limits.max_acceleration_deg_s2,
             pitch_max_acceleration_deg_s2=self.pitch_limits.max_acceleration_deg_s2,
             yaw_max_acceleration_deg_s2=self.yaw_limits.max_acceleration_deg_s2,
-            require_periodic_hard_limits=True,
         )
 
     def to_payload(self, *, include_hash: bool = False) -> dict[str, Any]:
@@ -335,9 +366,13 @@ class WorkstationFixtureProfile:
             "model_id": self.model_id,
             "revision": self.revision,
             "platform": {
-                "endpoint": {"host": self.host, "port": self.port},
+                "transport": {
+                    "local_ipv4": self.local_ipv4,
+                    "feedback_port": self.feedback_port,
+                    "controller_ipv4": self.controller_ipv4,
+                    "command_port": self.command_port,
+                },
                 "center_pose": _pose_mapping(self.center_pose),
-                "reset_pose": _pose_mapping(self.reset_pose),
                 "axis_signs": {
                     "roll": self.roll_sign,
                     "pitch": self.pitch_sign,
@@ -348,6 +383,10 @@ class WorkstationFixtureProfile:
                 "axis_limits": {
                     axis: limits.to_mapping()
                     for axis, limits in self.axis_limits.items()
+                },
+                "protocol": {
+                    "driver": "lingjing_udp_v1",
+                    "geometry_sha256": self.geometry_sha256,
                 },
             },
             "calibration_id": self.calibration_id,
@@ -385,10 +424,37 @@ class WorkstationFixtureProfile:
                     raise FixtureProfileError("fixture profile SHA-256 does not match")
         try:
             platform = _require_mapping(payload, "platform")
-            endpoint = _require_mapping(platform, "endpoint")
+            if schema_version == FIXTURE_PROFILE_SCHEMA_VERSION:
+                transport = _require_mapping(platform, "transport")
+                local_ipv4 = str(transport["local_ipv4"])
+                feedback_port = _required_int(transport, "feedback_port")
+                controller_ipv4 = str(transport["controller_ipv4"])
+                command_port = _required_int(transport, "command_port")
+            else:
+                # 旧版 endpoint 是厂家 9800 服务地址，不能解释为控制器地址。
+                model_id = str(payload.get("model_id", "custom"))
+                if model_id == _LINGJING_A6_200MM_PRESET.model_id:
+                    preset = _LINGJING_A6_200MM_PRESET
+                    local_ipv4 = preset.local_ipv4
+                    feedback_port = preset.feedback_port
+                    controller_ipv4 = preset.controller_ipv4
+                    command_port = preset.command_port
+                else:
+                    raise FixtureProfileError(
+                        "legacy custom fixture profile requires explicit direct-controller endpoints"
+                    )
             signs = _require_mapping(platform, "axis_signs")
             z_limits = _require_mapping(platform, "z_limits_mm")
             axis_limits = _require_mapping(platform, "axis_limits")
+            if schema_version == FIXTURE_PROFILE_SCHEMA_VERSION:
+                protocol = _require_mapping(platform, "protocol")
+                if str(protocol.get("driver", "")) != "lingjing_udp_v1":
+                    raise FixtureProfileError("unsupported motion-platform protocol driver")
+                expected_geometry_hash = hashlib.sha256(
+                    _canonical_json(asdict(PlatformGeometry())).encode("utf-8")
+                ).hexdigest()
+                if str(protocol.get("geometry_sha256", "")) != expected_geometry_hash:
+                    raise FixtureProfileError("motion-platform geometry SHA-256 does not match")
             profile = cls(
                 schema=FIXTURE_PROFILE_SCHEMA,
                 schema_version=FIXTURE_PROFILE_SCHEMA_VERSION,
@@ -399,10 +465,11 @@ class WorkstationFixtureProfile:
                     else "custom"
                 ),
                 revision=_required_int(payload, "revision"),
-                host=str(endpoint["host"]),
-                port=_required_int(endpoint, "port"),
+                local_ipv4=local_ipv4,
+                feedback_port=feedback_port,
+                controller_ipv4=controller_ipv4,
+                command_port=command_port,
                 center_pose=_pose_from_mapping(_require_mapping(platform, "center_pose")),
-                reset_pose=_pose_from_mapping(_require_mapping(platform, "reset_pose")),
                 roll_limits=FixtureAxisLimits.from_mapping(
                     "roll", _require_mapping(axis_limits, "roll")
                 ),

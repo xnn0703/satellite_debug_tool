@@ -29,13 +29,16 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.data import DataStore, EventLog, GnssStore, StateStore
 from satellite_debug_tool.core.playback import (
+    FixtureAlignmentSummary,
     PlaybackLoadResult,
     PlaybackLoadThread,
     build_engineering_playback,
+    fixture_attitude_channel_entries,
 )
 from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_GPS_LAT,
     CHANNEL_ROLE_GPS_LON,
+    CHANNEL_ROLE_ROLL,
     ProfileStore,
 )
 from satellite_debug_tool.core.protocol import (
@@ -85,6 +88,7 @@ class PlaybackView(QWidget):
         self._last_ts_ms: Optional[float] = None
         self._total_sec: float = 0.0
         self._loaded_count: int = 0
+        self._fixture_alignment = FixtureAlignmentSummary()
         self._series_provider = None
         self._load_thread: Optional[PlaybackLoadThread] = None
 
@@ -138,6 +142,9 @@ class PlaybackView(QWidget):
         self._total_label = QLabel(tr("Duration: —"))
         self._total_label.setFixedWidth(140)
         top_layout.addWidget(self._total_label)
+        self._fixture_label = QLabel(tr("Fixture attitude: —"))
+        self._fixture_label.setMinimumWidth(190)
+        top_layout.addWidget(self._fixture_label)
 
         self._range_ctl = TimeRangeControl()
         self._range_ctl.range_changed.connect(self._on_range_changed)
@@ -299,12 +306,27 @@ class PlaybackView(QWidget):
         self._first_ts_ms = None
         self._last_ts_ms = None
         self._loaded_count = result.provider.summary.report_count
+        self._fixture_alignment = result.fixture_alignment
         # 2) 恢复 profile（如有）
         hw = result.source_hw_type
         if result.profile is not None:
             new_hw = self._profile_store.import_dict(result.profile)
             if new_hw is not None:
                 hw = new_hw
+                if result.fixture_alignment.has_attitude:
+                    profile = self._profile_store.get_profile(hw)
+                    existing = [] if profile is None else profile.channel_list()
+                    attitude = self._profile_store.find_channel_by_role(
+                        hw,
+                        CHANNEL_ROLE_ROLL,
+                    )
+                    group_id = 0 if attitude is None else attitude.group_id
+                    table_ver = 1 if profile is None or profile.channel_table_ver is None else profile.channel_table_ver + 1
+                    self._profile_store.apply_channel_define(
+                        hw,
+                        table_ver,
+                        [*existing, *fixture_attitude_channel_entries(group_id, tr)],
+                    )
                 self._chart.set_hw_type(hw)
                 self._dashboard.set_hw_type(hw)
 
@@ -340,6 +362,7 @@ class PlaybackView(QWidget):
                 name=record.name,
                 event_id=record.event_id,
             )
+        self._add_fixture_gap_markers()
         # 之后 _on_range_changed 会切回手动模式（用户选预设/自定义时）
 
         # 6) UI 元信息
@@ -351,6 +374,7 @@ class PlaybackView(QWidget):
             duration=self._total_sec,
             count=self._loaded_count,
         )
+        self._refresh_fixture_alignment_label()
         mb_est = self._loaded_count * 8 * 12 / (1024 * 1024)   # 粗估 8ch × 12B/sample
         self.status_message.emit(
             tr(
@@ -397,6 +421,7 @@ class PlaybackView(QWidget):
                     name=record.name,
                     event_id=record.event_id,
                 )
+            self._add_fixture_gap_markers()
         # 关闭自动范围，使用显式 X 视窗
         self._chart.set_auto_range(False)
         self._chart.set_x_range_sec(start_sec, end_sec)
@@ -429,6 +454,18 @@ class PlaybackView(QWidget):
                 rec.timestamp_ms, rec.level,
                 name=rec.name, event_id=rec.event_id,
             )
+        self._add_fixture_gap_markers()
+
+    def _add_fixture_gap_markers(self) -> None:
+        for marker in self._fixture_alignment.gap_markers:
+            self._chart.add_event_marker(
+                marker.timestamp_ms,
+                2,
+                name=tr(
+                    "Fixture attitude gap: {reason}",
+                    reason=marker.reason,
+                ),
+            )
 
     def _on_clear_clicked(self) -> None:
         """M9：清空所有回放数据 + UI 状态，释放内存。"""
@@ -446,6 +483,7 @@ class PlaybackView(QWidget):
         self._last_ts_ms = None
         self._total_sec = 0.0
         self._loaded_count = 0
+        self._fixture_alignment = FixtureAlignmentSummary()
         self._gps_lat_id = None
         self._gps_lon_id = None
         # 3) 曲线 + 事件竖线
@@ -464,6 +502,7 @@ class PlaybackView(QWidget):
         # 6) UI 标签
         set_translatable_text("(no file loaded)", self._file_label)
         set_translatable_text("Duration: —", self._total_label)
+        self._refresh_fixture_alignment_label()
         self._range_ctl.set_total(0.0)
         # 7) 自身按钮
         self._clear_btn.setEnabled(False)
@@ -627,9 +666,27 @@ class PlaybackView(QWidget):
                 duration=self._total_sec,
                 count=self._loaded_count,
             )
+        self._refresh_fixture_alignment_label()
         if self._map_dock is not None:
             self._map_dock.setWindowTitle(tr("Map — Playback"))
         if self._gnss_dock is not None:
             self._gnss_dock.setWindowTitle(
                 tr("GNSS sky plot and signal-level C/N₀ — Playback")
             )
+
+    def _refresh_fixture_alignment_label(self) -> None:
+        summary = self._fixture_alignment
+        if summary.recorded_samples == 0:
+            self._fixture_label.setText(tr("Fixture attitude: —"))
+            return
+        self._fixture_label.setText(
+            tr(
+                "Fixture attitude: aligned {aligned}/{recorded} · unaligned {unaligned} · "
+                "invalid {invalid} · max anchor span {span:.1f} ms",
+                aligned=summary.aligned_samples,
+                recorded=summary.recorded_samples,
+                unaligned=summary.unaligned_samples,
+                invalid=summary.invalid_samples,
+                span=summary.maximum_anchor_span_ms,
+            )
+        )

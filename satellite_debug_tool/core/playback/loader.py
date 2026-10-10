@@ -27,6 +27,11 @@ from satellite_debug_tool.core.protocol import (
 from satellite_debug_tool.io.data_importer import DataImporter, SdbFile
 
 from .series_provider import PlaybackSeriesProvider
+from .fixture_attitude import (
+    FixtureAlignmentSummary,
+    HostUptimeAligner,
+    aligned_fixture_reports,
+)
 
 
 _GNSS_RECORDS = (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport)
@@ -50,6 +55,7 @@ class PlaybackLoadResult:
     gnss_records: tuple[FrameV2Record, ...]
     latest_identity: Optional[ServiceIdentity]
     source: str
+    fixture_alignment: FixtureAlignmentSummary
 
     def close(self) -> None:
         self.provider.close()
@@ -75,21 +81,29 @@ def build_engineering_playback(
 ) -> PlaybackLoadResult:
     sdb = DataImporter.open_sdb(path)
     provider = PlaybackSeriesProvider()
+    aligner = HostUptimeAligner()
     latest_state: Optional[StateReport] = None
     events: deque[EventReport] = deque(maxlen=_MAX_EVENT_RECORDS)
     gnss_records: deque[FrameV2Record] = deque(maxlen=_MAX_GNSS_RECORDS)
     try:
-        for ordinal, (_host_ns, record) in enumerate(sdb.iter_timed_records()):
+        for ordinal, (host_ns, record) in enumerate(sdb.iter_timed_records()):
             if ordinal % 256 == 0:
                 _check_cancelled(cancelled)
             if isinstance(record, DataReport):
                 provider.append_report(record)
+                aligner.add_anchor(host_ns, record.timestamp)
             elif isinstance(record, StateReport):
                 latest_state = record
             elif isinstance(record, EventReport):
                 events.append(record)
             elif isinstance(record, _GNSS_RECORDS):
                 gnss_records.append(record)
+        fixture_reports, fixture_alignment = aligned_fixture_reports(
+            sdb.metadata_events,
+            aligner,
+        )
+        for report in fixture_reports:
+            provider.append_report(report)
         provider.finalize()
         _profile_store, source_hw = _source_profile(sdb)
         return PlaybackLoadResult(
@@ -103,6 +117,7 @@ def build_engineering_playback(
             gnss_records=tuple(gnss_records),
             latest_identity=None,
             source="debug_v2",
+            fixture_alignment=fixture_alignment,
         )
     except BaseException:
         provider.close()
@@ -128,34 +143,45 @@ def build_customer_playback(
     )
     product_provider = PlaybackSeriesProvider()
     legacy_provider = PlaybackSeriesProvider()
+    product_aligner = HostUptimeAligner()
+    legacy_aligner = HostUptimeAligner()
     latest_identity: Optional[ServiceIdentity] = None
     gnss_records: deque[FrameV2Record] = deque(maxlen=_MAX_GNSS_RECORDS)
     try:
-        for ordinal, (_host_ns, record) in enumerate(sdb.iter_timed_records()):
+        for ordinal, (host_ns, record) in enumerate(sdb.iter_timed_records()):
             if ordinal % 256 == 0:
                 _check_cancelled(cancelled)
             if isinstance(record, (ServiceFastState, ServiceSlowState)):
                 report = product_projector.project(record)
                 if report is not None:
                     product_provider.append_report(report)
+                    product_aligner.add_anchor(host_ns, report.timestamp)
             elif isinstance(record, DataReport):
                 report = legacy_projector.project(record)
                 if report is not None:
                     legacy_provider.append_report(report)
+                    legacy_aligner.add_anchor(host_ns, report.timestamp)
             elif isinstance(record, ServiceIdentity):
                 latest_identity = record
             elif isinstance(record, _GNSS_RECORDS):
                 gnss_records.append(record)
-        product_summary = product_provider.finalize()
-        legacy_summary = legacy_provider.finalize()
-        if product_summary.report_count:
+        if product_provider.summary.report_count:
             provider = product_provider
+            aligner = product_aligner
             legacy_provider.close()
             source = "product_service"
         else:
             provider = legacy_provider
+            aligner = legacy_aligner
             product_provider.close()
             source = "legacy_v2"
+        fixture_reports, fixture_alignment = aligned_fixture_reports(
+            sdb.metadata_events,
+            aligner,
+        )
+        for report in fixture_reports:
+            provider.append_report(report)
+        provider.finalize()
         return PlaybackLoadResult(
             path=Path(path),
             sdb=sdb,
@@ -167,6 +193,7 @@ def build_customer_playback(
             gnss_records=tuple(gnss_records),
             latest_identity=latest_identity,
             source=source,
+            fixture_alignment=fixture_alignment,
         )
     except BaseException:
         product_provider.close()

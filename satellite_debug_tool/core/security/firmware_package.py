@@ -1,10 +1,4 @@
-"""Verification for customer OTA firmware packages.
-
-The archive is intentionally small and rigid. It contains exactly one manifest,
-one firmware image named by that manifest, and one detached Ed25519 signature.
-The signature authenticates canonical manifest bytes; the manifest SHA-256 and
-size fields bind the firmware image.
-"""
+"""AES-GCM customer firmware package creation, authentication, and decryption."""
 
 from __future__ import annotations
 
@@ -12,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import zipfile
 from dataclasses import dataclass
@@ -21,10 +16,14 @@ from pathlib import Path
 from typing import Mapping, Optional, Union
 
 
-PACKAGE_SCHEMA_VERSION = 1
+PACKAGE_SCHEMA_VERSION = 2
+PACKAGE_ALGORITHM = "AES-256-GCM"
 PACKAGE_MANIFEST_NAME = "manifest.json"
-PACKAGE_SIGNATURE_NAME = "signature.ed25519"
-PACKAGE_SIGNATURE_DOMAIN = b"SOFTHERTZ-AFD-FIRMWARE-PACKAGE\x00v1\x00"
+PACKAGE_PAYLOAD_NAME = "firmware.aesgcm"
+PACKAGE_AAD_DOMAIN = b"SOFTHERTZ-AFD-FIRMWARE-PACKAGE\x00v2\x00"
+AES_KEY_BYTES = 32
+AES_GCM_NONCE_BYTES = 12
+AES_GCM_TAG_BYTES = 16
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_FIRMWARE_BYTES = 4 * 1024 * 1024
 MAX_PACKAGE_BYTES = MAX_FIRMWARE_BYTES + MAX_MANIFEST_BYTES + 256 * 1024
@@ -32,9 +31,8 @@ MAX_PACKAGE_BYTES = MAX_FIRMWARE_BYTES + MAX_MANIFEST_BYTES + 256 * 1024
 
 class FirmwarePackageErrorCode(Enum):
     FORMAT = "format"
-    UNSIGNED = "unsigned"
     UNKNOWN_KEY = "unknown_key"
-    SIGNATURE_INVALID = "signature_invalid"
+    AUTHENTICATION_FAILED = "authentication_failed"
     HASH_MISMATCH = "hash_mismatch"
     SIZE_MISMATCH = "size_mismatch"
     PRODUCT_MISMATCH = "product_mismatch"
@@ -42,7 +40,7 @@ class FirmwarePackageErrorCode(Enum):
     VERSION_INVALID = "version_invalid"
     VERSION_NOT_ALLOWED = "version_not_allowed"
     CRYPTO_UNAVAILABLE = "crypto_unavailable"
-    TRUST_STORE_INVALID = "trust_store_invalid"
+    KEY_STORE_INVALID = "key_store_invalid"
 
 
 class FirmwarePackageError(ValueError):
@@ -53,9 +51,9 @@ class FirmwarePackageError(ValueError):
 
 
 @dataclass(frozen=True)
-class TrustedFirmwareKey:
+class FirmwareEncryptionKey:
     key_id: str
-    public_key: bytes
+    key: bytes
     label: str = ""
 
 
@@ -71,6 +69,11 @@ class FirmwarePackage:
     firmware_sha256: str
     key_id: str
     key_label: str
+    algorithm: str = PACKAGE_ALGORITHM
+
+
+def _package_error(code: FirmwarePackageErrorCode, detail: str):
+    raise FirmwarePackageError(code, detail)
 
 
 def _canonical_manifest(manifest: dict) -> bytes:
@@ -82,78 +85,10 @@ def _canonical_manifest(manifest: dict) -> bytes:
     ).encode("utf-8")
 
 
-def build_signed_manifest_message(manifest: dict) -> bytes:
-    """Return the exact bytes signed by release tooling."""
-    return PACKAGE_SIGNATURE_DOMAIN + _canonical_manifest(manifest)
+def build_encrypted_manifest_aad(manifest: dict) -> bytes:
+    """Return the exact authenticated metadata bytes for AES-GCM."""
 
-
-def _package_error(code: FirmwarePackageErrorCode, detail: str):
-    raise FirmwarePackageError(code, detail)
-
-
-def load_bundled_trusted_keys() -> dict[str, TrustedFirmwareKey]:
-    """Load immutable public keys bundled into the application artifact."""
-    try:
-        data = (
-            resources.files("satellite_debug_tool.resources")
-            .joinpath("firmware_signing_keys.json")
-            .read_text(encoding="utf-8")
-        )
-        document = json.loads(data)
-    except Exception as exc:
-        _package_error(
-            FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-            f"failed to load bundled trust store: {exc}",
-        )
-    if not isinstance(document, dict) or document.get("schema_version") != 1:
-        _package_error(
-            FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-            "unsupported trust-store schema",
-        )
-    entries = document.get("keys")
-    if not isinstance(entries, list):
-        _package_error(
-            FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-            "trust-store keys must be a list",
-        )
-    trusted: dict[str, TrustedFirmwareKey] = {}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            _package_error(
-                FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-                "trust-store key entry must be an object",
-            )
-        key_id = entry.get("key_id")
-        encoded = entry.get("public_key_base64")
-        if not isinstance(key_id, str) or not key_id or not isinstance(encoded, str):
-            _package_error(
-                FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-                "trust-store key_id/public_key_base64 is invalid",
-            )
-        key_id = key_id.strip()
-        if _MANIFEST_IDENTIFIER_PATTERN.fullmatch(key_id) is None:
-            _package_error(
-                FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-                "trust-store key_id is invalid",
-            )
-        try:
-            raw = base64.b64decode(encoded, validate=True)
-        except ValueError as exc:
-            _package_error(
-                FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-                f"invalid base64 public key for {key_id}: {exc}",
-            )
-        if len(raw) != 32 or key_id in trusted:
-            _package_error(
-                FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-                f"invalid or duplicate Ed25519 key {key_id}",
-            )
-        trusted[key_id] = TrustedFirmwareKey(
-            key_id=key_id,
-            public_key=raw,
-            label=str(entry.get("label") or key_id),
-        )
-    return trusted
+    return PACKAGE_AAD_DOMAIN + _canonical_manifest(manifest)
 
 
 _MAX_VERSION_TEXT_LENGTH = 128
@@ -191,6 +126,20 @@ _WINDOWS_RESERVED_FILENAMES = {
     *(f"LPT{index}" for index in range(1, 10)),
 }
 _WINDOWS_FORBIDDEN_FILENAME_CHARS = frozenset('<>:"/\\|?*')
+_MANIFEST_FIELDS = {
+    "schema_version",
+    "algorithm",
+    "product",
+    "hardware_types",
+    "version",
+    "version_policy",
+    "firmware",
+    "payload",
+    "firmware_size",
+    "firmware_sha256",
+    "key_id",
+    "nonce_base64",
+}
 
 
 def _prerelease_key(suffix: str) -> tuple[tuple[int, object], ...]:
@@ -210,7 +159,6 @@ def _prerelease_key(suffix: str) -> tuple[tuple[int, object], ...]:
                     FirmwarePackageErrorCode.VERSION_INVALID,
                     f"numeric prerelease identifier has a leading zero: {identifier!r}",
                 )
-            # The grammar bounds numeric identifiers before this conversion.
             result.append((0, int(identifier)))
         else:
             result.append((1, identifier.lower()))
@@ -295,12 +243,7 @@ def _check_version_policy(package_version: str, current_version: str, policy: st
 
 
 def firmware_versions_equal(package_version: str, device_wire_version: str) -> bool:
-    """Compare a package version with a device-reported wire version.
-
-    Package build metadata and device git/build identity are intentionally not
-    release-order evidence. Explicit alpha, beta and rc stages remain part of
-    the semantic version.
-    """
+    """Compare package and device versions while ignoring build identity."""
 
     return _package_version_key(package_version) == _version_key(device_wire_version)
 
@@ -334,16 +277,34 @@ def _validate_firmware_filename(firmware_name: str) -> None:
         or any(character in _WINDOWS_FORBIDDEN_FILENAME_CHARS for character in firmware_name)
         or any(ord(character) < 32 or 0x7F <= ord(character) <= 0x9F for character in firmware_name)
         or upper_stem in _WINDOWS_RESERVED_FILENAMES
-        or firmware_name.lower()
-        in {PACKAGE_MANIFEST_NAME.lower(), PACKAGE_SIGNATURE_NAME.lower()}
+        or firmware_name.lower() in {PACKAGE_MANIFEST_NAME.lower(), PACKAGE_PAYLOAD_NAME.lower()}
     ):
         _package_error(FirmwarePackageErrorCode.FORMAT, "firmware entry is invalid")
 
 
+def _decode_nonce(value: str) -> bytes:
+    try:
+        nonce = base64.b64decode(value, validate=True)
+    except (ValueError, TypeError) as exc:
+        _package_error(FirmwarePackageErrorCode.FORMAT, f"manifest nonce_base64 is invalid: {exc}")
+    if len(nonce) != AES_GCM_NONCE_BYTES:
+        _package_error(FirmwarePackageErrorCode.FORMAT, "manifest nonce length is invalid")
+    return nonce
+
+
 def validate_firmware_manifest_fields(
     manifest: dict,
-) -> tuple[str, tuple[str, ...], str, str, int, str, str, str]:
-    """Validate the manifest contract shared by the signer and verifier."""
+) -> tuple[str, tuple[str, ...], str, str, int, str, str, str, bytes]:
+    """Validate the manifest contract shared by the builder and verifier."""
+
+    if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_FIELDS:
+        _package_error(FirmwarePackageErrorCode.FORMAT, "manifest fields do not match schema v2")
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != PACKAGE_SCHEMA_VERSION:
+        _package_error(FirmwarePackageErrorCode.FORMAT, "unsupported package schema")
+    if manifest.get("algorithm") != PACKAGE_ALGORITHM:
+        _package_error(FirmwarePackageErrorCode.FORMAT, "unsupported firmware encryption algorithm")
+    if manifest.get("payload") != PACKAGE_PAYLOAD_NAME:
+        _package_error(FirmwarePackageErrorCode.FORMAT, "manifest payload is invalid")
 
     product = _required_string(manifest, "product")
     version = _required_string(manifest, "version")
@@ -356,10 +317,7 @@ def validate_firmware_manifest_fields(
 
     for name, value in (("product", product), ("key_id", key_id)):
         if _MANIFEST_IDENTIFIER_PATTERN.fullmatch(value) is None:
-            _package_error(
-                FirmwarePackageErrorCode.FORMAT,
-                f"manifest {name} is invalid",
-            )
+            _package_error(FirmwarePackageErrorCode.FORMAT, f"manifest {name} is invalid")
     _package_version_key(version)
     if version_policy not in {"upgrade_only", "allow_same", "allow_downgrade"}:
         _package_error(
@@ -384,6 +342,7 @@ def validate_firmware_manifest_fields(
     normalized_hardware = tuple(item.strip().lower() for item in hardware)
     if len(normalized_hardware) != len(set(normalized_hardware)):
         _package_error(FirmwarePackageErrorCode.FORMAT, "hardware_types contains duplicates")
+    nonce = _decode_nonce(_required_string(manifest, "nonce_base64"))
     return (
         product,
         normalized_hardware,
@@ -393,7 +352,110 @@ def validate_firmware_manifest_fields(
         firmware_name,
         firmware_sha256,
         key_id,
+        nonce,
     )
+
+
+def _validate_encryption_key(key_id: str, key: FirmwareEncryptionKey) -> None:
+    if (
+        not isinstance(key, FirmwareEncryptionKey)
+        or key.key_id != key_id
+        or not isinstance(key.key, bytes)
+        or len(key.key) != AES_KEY_BYTES
+    ):
+        _package_error(
+            FirmwarePackageErrorCode.KEY_STORE_INVALID,
+            f"invalid AES-256 key entry: {key_id}",
+        )
+
+
+def load_bundled_encryption_keys() -> dict[str, FirmwareEncryptionKey]:
+    """Load product AES keys bundled into the application artifact."""
+
+    try:
+        data = (
+            resources.files("satellite_debug_tool.resources")
+            .joinpath("firmware_encryption_keys.json")
+            .read_text(encoding="utf-8")
+        )
+        document = json.loads(data)
+    except Exception as exc:
+        _package_error(
+            FirmwarePackageErrorCode.KEY_STORE_INVALID,
+            f"failed to load bundled firmware key store: {exc}",
+        )
+    if not isinstance(document, dict) or document.get("schema_version") != 1:
+        _package_error(FirmwarePackageErrorCode.KEY_STORE_INVALID, "unsupported firmware key-store schema")
+    entries = document.get("keys")
+    if not isinstance(entries, list) or not entries:
+        _package_error(FirmwarePackageErrorCode.KEY_STORE_INVALID, "firmware key store is empty or invalid")
+    keys: dict[str, FirmwareEncryptionKey] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"key_id", "label", "key_base64"}:
+            _package_error(FirmwarePackageErrorCode.KEY_STORE_INVALID, "firmware key entry is invalid")
+        key_id = entry.get("key_id")
+        encoded = entry.get("key_base64")
+        if (
+            not isinstance(key_id, str)
+            or _MANIFEST_IDENTIFIER_PATTERN.fullmatch(key_id) is None
+            or not isinstance(encoded, str)
+            or key_id in keys
+        ):
+            _package_error(FirmwarePackageErrorCode.KEY_STORE_INVALID, "firmware key identity is invalid")
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except ValueError as exc:
+            _package_error(FirmwarePackageErrorCode.KEY_STORE_INVALID, f"invalid AES key {key_id}: {exc}")
+        key = FirmwareEncryptionKey(key_id, raw, str(entry.get("label") or key_id))
+        _validate_encryption_key(key_id, key)
+        keys[key_id] = key
+    return keys
+
+
+def create_firmware_package_bytes(
+    firmware: bytes,
+    *,
+    firmware_name: str,
+    product: str,
+    hardware_types: tuple[str, ...],
+    version: str,
+    version_policy: str,
+    encryption_key: FirmwareEncryptionKey,
+    nonce: Optional[bytes] = None,
+) -> tuple[dict, bytes]:
+    """Create an authenticated manifest and encrypted payload entirely in memory."""
+
+    payload = bytes(firmware)
+    actual_nonce = os.urandom(AES_GCM_NONCE_BYTES) if nonce is None else bytes(nonce)
+    manifest = {
+        "schema_version": PACKAGE_SCHEMA_VERSION,
+        "algorithm": PACKAGE_ALGORITHM,
+        "product": str(product).strip(),
+        "hardware_types": [str(value).strip() for value in hardware_types],
+        "version": str(version).strip(),
+        "version_policy": str(version_policy),
+        "firmware": str(firmware_name),
+        "payload": PACKAGE_PAYLOAD_NAME,
+        "firmware_size": len(payload),
+        "firmware_sha256": hashlib.sha256(payload).hexdigest(),
+        "key_id": encryption_key.key_id,
+        "nonce_base64": base64.b64encode(actual_nonce).decode("ascii"),
+    }
+    validate_firmware_manifest_fields(manifest)
+    _validate_encryption_key(encryption_key.key_id, encryption_key)
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError as exc:
+        _package_error(
+            FirmwarePackageErrorCode.CRYPTO_UNAVAILABLE,
+            f"AES-GCM dependency is unavailable: {exc}",
+        )
+    encrypted = AESGCM(encryption_key.key).encrypt(
+        actual_nonce,
+        payload,
+        build_encrypted_manifest_aad(manifest),
+    )
+    return manifest, encrypted
 
 
 _ZIP_OPERATION_ERRORS = (zipfile.BadZipFile, KeyError, OSError, RuntimeError)
@@ -415,20 +477,14 @@ def _zip_info(archive: zipfile.ZipFile, name: str) -> zipfile.ZipInfo:
     try:
         return archive.getinfo(name)
     except _ZIP_OPERATION_ERRORS as exc:
-        _package_error(
-            FirmwarePackageErrorCode.FORMAT,
-            f"invalid package entry {name!r}: {exc}",
-        )
+        _package_error(FirmwarePackageErrorCode.FORMAT, f"invalid package entry {name!r}: {exc}")
 
 
 def _zip_read(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     try:
         return archive.read(info)
     except _ZIP_OPERATION_ERRORS as exc:
-        _package_error(
-            FirmwarePackageErrorCode.FORMAT,
-            f"invalid package entry {info.filename!r}: {exc}",
-        )
+        _package_error(FirmwarePackageErrorCode.FORMAT, f"invalid package entry {info.filename!r}: {exc}")
 
 
 def verify_firmware_package(
@@ -436,12 +492,13 @@ def verify_firmware_package(
     *,
     expected_product: str,
     expected_hardware: str,
-    current_version: str,
-    trusted_keys: Optional[Mapping[str, TrustedFirmwareKey]] = None,
+    current_version: Optional[str],
+    encryption_keys: Optional[Mapping[str, FirmwareEncryptionKey]] = None,
 ) -> FirmwarePackage:
-    """Authenticate and validate a customer firmware package without extracting it."""
+    """Authenticate, decrypt, and validate a customer package without extracting it."""
+
     package_path = Path(path)
-    keys = dict(load_bundled_trusted_keys() if trusted_keys is None else trusted_keys)
+    keys = dict(load_bundled_encryption_keys() if encryption_keys is None else encryption_keys)
     try:
         package_size = package_path.stat().st_size
     except OSError as exc:
@@ -458,25 +515,20 @@ def verify_firmware_package(
         names = [info.filename for info in infos]
         if len(names) != len(set(names)):
             _package_error(FirmwarePackageErrorCode.FORMAT, "duplicate archive entry")
-        if PACKAGE_MANIFEST_NAME not in names:
-            _package_error(FirmwarePackageErrorCode.FORMAT, "manifest.json is missing")
-        if PACKAGE_SIGNATURE_NAME not in names:
-            _package_error(FirmwarePackageErrorCode.UNSIGNED, "signature.ed25519 is missing")
+        if set(names) != {PACKAGE_MANIFEST_NAME, PACKAGE_PAYLOAD_NAME}:
+            _package_error(FirmwarePackageErrorCode.FORMAT, "package entries do not match schema v2")
         manifest_info = _zip_info(archive, PACKAGE_MANIFEST_NAME)
+        payload_info = _zip_info(archive, PACKAGE_PAYLOAD_NAME)
+        if manifest_info.flag_bits & 0x1 or payload_info.flag_bits & 0x1:
+            _package_error(FirmwarePackageErrorCode.FORMAT, "ZIP entry encryption is unsupported")
         if manifest_info.file_size > MAX_MANIFEST_BYTES:
             _package_error(FirmwarePackageErrorCode.FORMAT, "manifest is too large")
-        manifest_bytes = _zip_read(archive, manifest_info)
+        if not (AES_GCM_TAG_BYTES < payload_info.file_size <= MAX_FIRMWARE_BYTES + AES_GCM_TAG_BYTES):
+            _package_error(FirmwarePackageErrorCode.FORMAT, "encrypted firmware size is invalid")
         try:
-            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            manifest = json.loads(_zip_read(archive, manifest_info).decode("utf-8"))
         except Exception as exc:
             _package_error(FirmwarePackageErrorCode.FORMAT, f"invalid manifest JSON: {exc}")
-        if (
-            not isinstance(manifest, dict)
-            or type(manifest.get("schema_version")) is not int
-            or manifest.get("schema_version") != PACKAGE_SCHEMA_VERSION
-        ):
-            _package_error(FirmwarePackageErrorCode.FORMAT, "unsupported package schema")
-
         (
             product,
             normalized_hardware,
@@ -486,71 +538,38 @@ def verify_firmware_package(
             firmware_name,
             firmware_sha256,
             key_id,
+            nonce,
         ) = validate_firmware_manifest_fields(manifest)
-        if (
-            firmware_name not in names
-        ):
-            _package_error(FirmwarePackageErrorCode.FORMAT, "firmware entry is invalid")
-        expected_entries = {PACKAGE_MANIFEST_NAME, PACKAGE_SIGNATURE_NAME, firmware_name}
-        if set(names) != expected_entries:
-            _package_error(FirmwarePackageErrorCode.FORMAT, "package contains unexpected entries")
-
-        firmware_info = _zip_info(archive, firmware_name)
-        if firmware_info.file_size > MAX_FIRMWARE_BYTES:
-            _package_error(FirmwarePackageErrorCode.FORMAT, "firmware image is too large")
-        if firmware_info.flag_bits & 0x1:
-            _package_error(FirmwarePackageErrorCode.FORMAT, "encrypted ZIP entries are unsupported")
-        firmware = _zip_read(archive, firmware_info)
+        if payload_info.file_size != firmware_size + AES_GCM_TAG_BYTES:
+            _package_error(FirmwarePackageErrorCode.SIZE_MISMATCH, "encrypted firmware size mismatch")
+        key = keys.get(key_id)
+        if key is None:
+            _package_error(FirmwarePackageErrorCode.UNKNOWN_KEY, f"unknown firmware encryption key: {key_id}")
+        _validate_encryption_key(key_id, key)
+        encrypted = _zip_read(archive, payload_info)
+        try:
+            from cryptography.exceptions import InvalidTag
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        except ImportError as exc:
+            _package_error(
+                FirmwarePackageErrorCode.CRYPTO_UNAVAILABLE,
+                f"AES-GCM dependency is unavailable: {exc}",
+            )
+        try:
+            firmware = AESGCM(key.key).decrypt(
+                nonce,
+                encrypted,
+                build_encrypted_manifest_aad(manifest),
+            )
+        except InvalidTag:
+            _package_error(FirmwarePackageErrorCode.AUTHENTICATION_FAILED, "firmware package authentication failed")
         if len(firmware) != firmware_size:
             _package_error(FirmwarePackageErrorCode.SIZE_MISMATCH, "firmware size mismatch")
         actual_hash = hashlib.sha256(firmware).hexdigest()
         if not hmac.compare_digest(actual_hash, firmware_sha256):
             _package_error(FirmwarePackageErrorCode.HASH_MISMATCH, "firmware SHA-256 mismatch")
 
-        signature_info = _zip_info(archive, PACKAGE_SIGNATURE_NAME)
-        if signature_info.flag_bits & 0x1 or signature_info.file_size != 64:
-            _package_error(FirmwarePackageErrorCode.UNSIGNED, "invalid Ed25519 signature length")
-        signature = _zip_read(archive, signature_info)
-        trusted_key = keys.get(key_id)
-        if trusted_key is None:
-            _package_error(FirmwarePackageErrorCode.UNKNOWN_KEY, f"untrusted signing key: {key_id}")
-        if (
-            not isinstance(trusted_key, TrustedFirmwareKey)
-            or trusted_key.key_id != key_id
-            or not isinstance(trusted_key.public_key, bytes)
-            or len(trusted_key.public_key) != 32
-        ):
-            _package_error(
-                FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-                f"invalid trusted key entry: {key_id}",
-            )
-        try:
-            from cryptography.exceptions import InvalidSignature
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        except ImportError as exc:
-            _package_error(
-                FirmwarePackageErrorCode.CRYPTO_UNAVAILABLE,
-                f"Ed25519 verification dependency is unavailable: {exc}",
-            )
-        try:
-            public_key = Ed25519PublicKey.from_public_bytes(trusted_key.public_key)
-        except (TypeError, ValueError) as exc:
-            _package_error(
-                FirmwarePackageErrorCode.TRUST_STORE_INVALID,
-                f"invalid Ed25519 public key {key_id}: {exc}",
-            )
-        try:
-            public_key.verify(
-                signature,
-                build_signed_manifest_message(manifest),
-            )
-        except InvalidSignature:
-            _package_error(
-                FirmwarePackageErrorCode.SIGNATURE_INVALID,
-                "firmware package signature is invalid",
-            )
-
-    if product.lower() != expected_product.strip().lower():
+    if product.casefold() != expected_product.strip().casefold():
         _package_error(
             FirmwarePackageErrorCode.PRODUCT_MISMATCH,
             f"package product {product!r} does not match {expected_product!r}",
@@ -560,7 +579,8 @@ def verify_firmware_package(
             FirmwarePackageErrorCode.HARDWARE_MISMATCH,
             f"package does not support hardware {expected_hardware!r}",
         )
-    _check_version_policy(version, current_version, version_policy)
+    if current_version is not None:
+        _check_version_policy(version, current_version, version_policy)
     return FirmwarePackage(
         path=package_path,
         product=product,
@@ -571,5 +591,5 @@ def verify_firmware_package(
         firmware=firmware,
         firmware_sha256=firmware_sha256,
         key_id=key_id,
-        key_label=trusted_key.label,
+        key_label=key.label,
     )

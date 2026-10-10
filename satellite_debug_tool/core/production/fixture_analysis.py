@@ -19,6 +19,7 @@ import numpy as np
 
 _CALIBRATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+CALIBRATION_REFERENCE_STABILITY_LIMIT_DEG = 0.1
 
 
 class FixtureAnalysisError(ValueError):
@@ -123,7 +124,8 @@ class FixtureCalibration:
                 for value in self.cross_coupling_ratio
             )
             and all(
-                math.isfinite(value) and value <= 1.0
+                math.isfinite(value)
+                and value <= CALIBRATION_REFERENCE_STABILITY_LIMIT_DEG
                 for value in self.static_noise_std_deg
             )
         )
@@ -639,7 +641,7 @@ def compute_dynamic_metrics(
         ),
         "estimated_phase_deg": phase_deg,
         "estimated_delay_s": (
-            phase_deg / 360.0 / target_frequency
+            -phase_deg / 360.0 / target_frequency
             if phase_deg is not None and target_frequency
             else None
         ),

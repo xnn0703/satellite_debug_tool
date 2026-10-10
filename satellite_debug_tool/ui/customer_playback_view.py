@@ -20,9 +20,11 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.data import DataStore, GnssStore
 from satellite_debug_tool.core.playback import (
+    FixtureAlignmentSummary,
     PlaybackLoadResult,
     PlaybackLoadThread,
     build_customer_playback,
+    fixture_attitude_channel_entries,
 )
 from satellite_debug_tool.core.product import (
     CUSTOMER_PLAYBACK_HW_TYPE,
@@ -94,6 +96,7 @@ class CustomerPlaybackView(QWidget):
         self._loaded_version: Optional[int] = None
         self._loaded_quality: dict = {}
         self._metadata_events: tuple[dict, ...] = ()
+        self._fixture_alignment = FixtureAlignmentSummary()
         self._first_ts_ms: Optional[float] = None
         self._last_ts_ms: Optional[float] = None
         self._total_sec = 0.0
@@ -178,10 +181,13 @@ class CustomerPlaybackView(QWidget):
         self._profile_store.apply_meta(
             MetaInfo(2, "", CUSTOMER_PLAYBACK_HW_TYPE, "")
         )
+        entries = customer_channel_entries(_customer_channel_name)
+        if self._fixture_alignment.has_attitude:
+            entries.extend(fixture_attitude_channel_entries(0, tr))
         self._profile_store.apply_channel_define(
             CUSTOMER_PLAYBACK_HW_TYPE,
             1,
-            customer_channel_entries(_customer_channel_name),
+            entries,
         )
         self._chart.set_hw_type(CUSTOMER_PLAYBACK_HW_TYPE)
 
@@ -263,12 +269,14 @@ class CustomerPlaybackView(QWidget):
         self._loaded_version = sdb.version
         self._loaded_quality = dict(sdb.quality)
         self._metadata_events = tuple(sdb.metadata_events)
+        self._fixture_alignment = result.fixture_alignment
         self._identity_parts = self._resolve_identity(
             sdb,
             source_profile,
             source_hw,
             result.latest_identity,
         )
+        self._refresh_customer_profile()
 
         self._range_ctl.set_total(self._total_sec)
         self._reset_chart()
@@ -327,6 +335,7 @@ class CustomerPlaybackView(QWidget):
         self._chart.set_hw_type(CUSTOMER_PLAYBACK_HW_TYPE)
         self._chart.set_auto_range(True)
         self._chart.refresh(self._data_store)
+        self._add_fixture_gap_markers()
         if self._first_ts_ms is not None and self._last_ts_ms is not None:
             start = self._first_ts_ms / 1000.0
             end = self._last_ts_ms / 1000.0
@@ -351,6 +360,7 @@ class CustomerPlaybackView(QWidget):
             self._chart.set_time_origin_ms(0.0)
             self._chart.set_auto_range(False)
             self._chart.refresh(self._data_store)
+            self._add_fixture_gap_markers()
         uptime_origin = self._first_ts_ms / 1000.0
         self._chart.set_x_range_sec(
             uptime_origin + start_sec,
@@ -360,6 +370,17 @@ class CustomerPlaybackView(QWidget):
     def _on_chart_mode_changed(self, _mode: str) -> None:
         if self._loaded_count:
             self._reset_chart()
+
+    def _add_fixture_gap_markers(self) -> None:
+        for marker in self._fixture_alignment.gap_markers:
+            self._chart.add_event_marker(
+                marker.timestamp_ms,
+                2,
+                name=tr(
+                    "Fixture attitude gap: {reason}",
+                    reason=marker.reason,
+                ),
+            )
 
     def clear(self) -> None:
         self._data_store.clear()
@@ -371,11 +392,13 @@ class CustomerPlaybackView(QWidget):
         self._loaded_version = None
         self._loaded_quality = {}
         self._metadata_events = ()
+        self._fixture_alignment = FixtureAlignmentSummary()
         self._first_ts_ms = None
         self._last_ts_ms = None
         self._total_sec = 0.0
         self._loaded_count = 0
         self._identity_parts = ("", "", "")
+        self._refresh_customer_profile()
         self._range_ctl.set_total(0.0)
         self._reset_chart()
         self._gnss_btn.setEnabled(False)
@@ -441,6 +464,20 @@ class CustomerPlaybackView(QWidget):
             self._quality_label.setText(tr("SDB v2 · capture quality unavailable"))
         else:
             self._quality_label.setText("—")
+        alignment = self._fixture_alignment
+        if alignment.recorded_samples:
+            self._quality_label.setText(
+                self._quality_label.text()
+                + tr(
+                    " · Fixture aligned {aligned}/{recorded}, unaligned {unaligned}, "
+                    "invalid {invalid}, max anchor span {span:.1f} ms",
+                    aligned=alignment.aligned_samples,
+                    recorded=alignment.recorded_samples,
+                    unaligned=alignment.unaligned_samples,
+                    invalid=alignment.invalid_samples,
+                    span=alignment.maximum_anchor_span_ms,
+                )
+            )
         set_semantic_property(
             self._quality_label,
             "complete", complete and dropped == 0 and interruptions == 0

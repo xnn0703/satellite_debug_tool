@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
+from serial.tools import list_ports
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -35,11 +37,16 @@ from satellite_debug_tool.core.production import (
     ProductTestTemplate,
     ProductionConfigurationError,
     ProductionConfigurationStore,
+    ReferenceSensorProfile,
     REGISTERED_POWER_DRIVERS,
     StationProfile,
+    fixture_model_preset,
+    fixture_model_presets,
+    FixtureProfileError,
     psw80_27_validation_policy,
 )
 from satellite_debug_tool.core.product import production_product_policies
+from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 
 
@@ -108,27 +115,66 @@ class ProductionConfigurationDialog(QDialog):
         parent: Optional[QWidget] = None,
         *,
         store: Optional[ProductionConfigurationStore] = None,
+        settings: Optional[Settings] = None,
     ) -> None:
         super().__init__(parent)
         self._form_labels: list[tuple[QLabel, str]] = []
         self._translated_buttons: list[tuple[QPushButton, str]] = []
         self._store = store or ProductionConfigurationStore()
+        self._settings = settings
         self._products: list[ProductTestTemplate] = []
         self._powers: list[PowerSupplyProfile] = []
         self._stations: list[StationProfile] = []
+        self._references: list[ReferenceSensorProfile] = []
+        self._motions = []
         self.changed = False
         self._power_test_worker: Optional[PowerSupplyDebugWorker] = None
         self.setWindowTitle(tr("Production configurations"))
         self.setMinimumSize(720, 610)
         self._build_ui()
+        self._migrate_legacy_ms6222_port()
         self._reload_catalog()
         register_translatable(self)
+
+    def _migrate_legacy_ms6222_port(self) -> None:
+        settings = self._settings
+        if settings is None:
+            return
+        if settings.get("config_migrations.production_fixture_profiles_v2", False) is True:
+            return
+        legacy_port = str(settings.get("production.ms6222_port", "") or "").strip()
+        try:
+            products, powers, references, stations = self._store.load_full_catalog()
+            motions = self._store.fixture_profile_store.list_profiles()
+            eligible = [
+                item for item in motions if not item.calibration_id.startswith("PENDING-")
+            ]
+            if legacy_port and not references and len(eligible) == 1:
+                motion = eligible[0]
+                self._store.calibration_store.load(motion.calibration_id)
+                reference = ReferenceSensorProfile(
+                    profile_id="ms6222-main",
+                    revision=1,
+                    display_name="MS-6222",
+                    driver_id="ms6222_serial_v1",
+                    serial_port=legacy_port,
+                    baud_rate=460800,
+                    installation_id="ms6222-main-installation",
+                    calibration_id=motion.calibration_id,
+                )
+                self._store.save_catalog(products, powers, stations, [reference])
+            settings.set("config_migrations.production_fixture_profiles_v2", True)
+            settings.persist_preferences()
+        except (ProductionConfigurationError, FixtureProfileError, OSError, ValueError):
+            return
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         self._tabs = QTabWidget()
         self._tabs.addTab(self._build_product_tab(), tr("Product templates"))
         self._tabs.addTab(self._build_power_tab(), tr("Power profiles"))
+        self._tabs.addTab(self._build_motion_tab(), tr("Motion platform profiles"))
+        self._tabs.addTab(self._build_reference_tab(), tr("MS-6222 profiles"))
         self._tabs.addTab(self._build_station_tab(), tr("Station profiles"))
         root.addWidget(self._tabs, 1)
 
@@ -289,8 +335,8 @@ class ProductionConfigurationDialog(QDialog):
         self._station_revision.setRange(1, 1_000_000)
         self._station_name = QLineEdit()
         self._station_power = QComboBox()
-        self._motion_profile_id = QLineEdit()
-        self._reference_profile_id = QLineEdit()
+        self._station_motion = QComboBox()
+        self._station_reference = QComboBox()
         self._branch_count = QSpinBox()
         self._branch_count.setRange(1, 4)
         self._branch_current = self._double_spin(0.001, 100.0, " A")
@@ -309,8 +355,8 @@ class ProductionConfigurationDialog(QDialog):
             ("Revision", self._station_revision),
             ("Display name", self._station_name),
             ("Power profile", self._station_power),
-            ("Motion profile ID", self._motion_profile_id),
-            ("Reference profile ID", self._reference_profile_id),
+            ("Motion profile ID", self._station_motion),
+            ("Reference profile ID", self._station_reference),
             ("Power branch count", self._branch_count),
             ("Per-branch current", self._branch_current),
             ("Report company", self._report_company),
@@ -345,6 +391,108 @@ class ProductionConfigurationDialog(QDialog):
         root.addLayout(actions)
         return page
 
+    def _build_motion_tab(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        self._motion_select = QComboBox()
+        self._motion_select.currentIndexChanged.connect(self._load_motion_form)
+        root.addWidget(self._motion_select)
+        form = QFormLayout()
+        self._motion_id = QLineEdit()
+        self._motion_revision = QSpinBox()
+        self._motion_revision.setRange(1, 1_000_000)
+        self._motion_model = QComboBox()
+        for preset in fixture_model_presets():
+            self._motion_model.addItem(preset.display_name, preset.model_id)
+        self._motion_local_host = QLineEdit()
+        self._motion_feedback_port = QSpinBox()
+        self._motion_feedback_port.setRange(1, 65535)
+        self._motion_controller_host = QLineEdit()
+        self._motion_command_port = QSpinBox()
+        self._motion_command_port.setRange(1, 65535)
+        self._motion_calibration = QComboBox()
+        for label, widget in (
+            ("Profile ID", self._motion_id),
+            ("Revision", self._motion_revision),
+            ("Motion platform model", self._motion_model),
+            ("Local feedback IPv4", self._motion_local_host),
+            ("Feedback UDP port", self._motion_feedback_port),
+            ("Controller IPv4", self._motion_controller_host),
+            ("Command UDP port", self._motion_command_port),
+            ("Coordinate calibration", self._motion_calibration),
+        ):
+            self._add_form_row(form, label, widget)
+        root.addLayout(form)
+        root.addStretch(1)
+        actions = QHBoxLayout()
+        new_button = QPushButton(tr("New"))
+        self._translated_buttons.append((new_button, "New"))
+        new_button.clicked.connect(self._new_motion)
+        save_button = QPushButton(tr("Save"))
+        self._translated_buttons.append((save_button, "Save"))
+        save_button.clicked.connect(self._save_motion)
+        actions.addWidget(new_button)
+        actions.addWidget(save_button)
+        actions.addStretch(1)
+        root.addLayout(actions)
+        return page
+
+    def _build_reference_tab(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        self._reference_select = QComboBox()
+        self._reference_select.currentIndexChanged.connect(self._load_reference_form)
+        root.addWidget(self._reference_select)
+        form = QFormLayout()
+        self._reference_id = QLineEdit()
+        self._reference_revision = QSpinBox()
+        self._reference_revision.setRange(1, 1_000_000)
+        self._reference_name = QLineEdit()
+        self._reference_port = QComboBox()
+        self._reference_port.setEditable(True)
+        self._reference_baud = QSpinBox()
+        self._reference_baud.setRange(460800, 460800)
+        self._reference_installation = QLineEdit()
+        self._reference_serial = QLineEdit()
+        self._reference_calibration = QComboBox()
+        self._reference_freshness = self._double_spin(0.05, 60.0, " s")
+        self._reference_std = self._double_spin(0.001, 30.0, " deg")
+        self._reference_stability = self._double_spin(0.1, 60.0, " s")
+        for port in list_ports.comports():
+            self._reference_port.addItem(port.device, port.device)
+        for label, widget in (
+            ("Profile ID", self._reference_id),
+            ("Revision", self._reference_revision),
+            ("Display name", self._reference_name),
+            ("Serial port", self._reference_port),
+            ("Baud rate", self._reference_baud),
+            ("Installation ID", self._reference_installation),
+            ("Expected serial number", self._reference_serial),
+            ("Coordinate calibration", self._reference_calibration),
+            ("Freshness timeout", self._reference_freshness),
+            ("Maximum attitude standard deviation", self._reference_std),
+            ("Stability window", self._reference_stability),
+        ):
+            self._add_form_row(form, label, widget)
+        root.addLayout(form)
+        root.addStretch(1)
+        actions = QHBoxLayout()
+        new_button = QPushButton(tr("New"))
+        self._translated_buttons.append((new_button, "New"))
+        new_button.clicked.connect(self._new_reference)
+        save_button = QPushButton(tr("Save"))
+        self._translated_buttons.append((save_button, "Save"))
+        save_button.clicked.connect(self._save_reference)
+        delete_button = QPushButton(tr("Delete"))
+        self._translated_buttons.append((delete_button, "Delete"))
+        delete_button.clicked.connect(self._delete_reference)
+        actions.addWidget(new_button)
+        actions.addWidget(save_button)
+        actions.addWidget(delete_button)
+        actions.addStretch(1)
+        root.addLayout(actions)
+        return page
+
     @staticmethod
     def _double_spin(minimum: float, maximum: float, suffix: str) -> QDoubleSpinBox:
         editor = QDoubleSpinBox()
@@ -362,7 +510,9 @@ class ProductionConfigurationDialog(QDialog):
         self.setWindowTitle(tr("Production configurations"))
         self._tabs.setTabText(0, tr("Product templates"))
         self._tabs.setTabText(1, tr("Power profiles"))
-        self._tabs.setTabText(2, tr("Station profiles"))
+        self._tabs.setTabText(2, tr("Motion platform profiles"))
+        self._tabs.setTabText(3, tr("MS-6222 profiles"))
+        self._tabs.setTabText(4, tr("Station profiles"))
         self._import_button.setText(tr("Import configuration package..."))
         self._export_button.setText(tr("Export configuration package..."))
         self._dialog_buttons.button(QDialogButtonBox.Close).setText(tr("Close"))
@@ -377,19 +527,23 @@ class ProductionConfigurationDialog(QDialog):
 
     def _reload_catalog(self) -> None:
         try:
-            products, powers, stations = self._store.load_catalog()
+            products, powers, references, stations = self._store.load_full_catalog()
         except ProductionConfigurationError as exc:
             QMessageBox.critical(self, tr("Production configurations"), str(exc))
             return
         self._products = list(products)
         self._powers = list(powers)
+        self._references = list(references)
         self._stations = list(stations)
+        self._motions = list(self._store.fixture_profile_store.list_profiles())
         self._refresh_selectors()
 
     def _refresh_selectors(self) -> None:
         selections = (
             (self._product_select, self._products, "template_id", "display_name"),
             (self._power_select, self._powers, "profile_id", "display_name"),
+            (self._motion_select, self._motions, "profile_id", "profile_id"),
+            (self._reference_select, self._references, "profile_id", "display_name"),
             (self._station_select, self._stations, "station_profile_id", "display_name"),
         )
         for combo, values, id_name, display_name in selections:
@@ -411,13 +565,31 @@ class ProductionConfigurationDialog(QDialog):
         index = self._station_power.findData(selected_power)
         if index >= 0:
             self._station_power.setCurrentIndex(index)
+        for combo, values, id_name, label_name in (
+            (self._station_motion, self._motions, "profile_id", "profile_id"),
+            (self._station_reference, self._references, "profile_id", "display_name"),
+        ):
+            selected = combo.currentData()
+            combo.clear()
+            for value in values:
+                combo.addItem(getattr(value, label_name), getattr(value, id_name))
+            index = combo.findData(selected)
+            if index >= 0:
+                combo.setCurrentIndex(index)
         self._load_product_form()
         self._load_power_form()
+        self._load_motion_form()
+        self._load_reference_form()
         self._load_station_form()
 
     def _persist(self) -> bool:
         try:
-            self._store.save_catalog(self._products, self._powers, self._stations)
+            self._store.save_catalog(
+                self._products,
+                self._powers,
+                self._stations,
+                self._references,
+            )
         except ProductionConfigurationError as exc:
             QMessageBox.critical(self, tr("Production configurations"), str(exc))
             return False
@@ -625,6 +797,148 @@ class ProductionConfigurationDialog(QDialog):
         self._powers = [item for item in self._powers if item.profile_id != selected]
         self._persist()
 
+    def _calibrations(self):
+        values = []
+        seen = set()
+        for motion in self._motions:
+            for calibration in self._store.calibration_store.list_for_profile(
+                motion.profile_id
+            ):
+                if calibration.confirmed and calibration.calibration_id not in seen:
+                    seen.add(calibration.calibration_id)
+                    values.append(calibration)
+        return values
+
+    def _refresh_calibration_selectors(self, selected: str = "") -> None:
+        calibrations = self._calibrations()
+        for combo in (self._motion_calibration, self._reference_calibration):
+            current = selected or str(combo.currentData() or "")
+            combo.clear()
+            for calibration in calibrations:
+                combo.addItem(calibration.calibration_id, calibration.calibration_id)
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index >= 0 else (0 if combo.count() else -1))
+
+    def _load_motion_form(self, *_args) -> None:
+        item = next(
+            (value for value in self._motions if value.profile_id == self._motion_select.currentData()),
+            None,
+        )
+        if item is None:
+            return
+        self._motion_id.setText(item.profile_id)
+        self._motion_revision.setValue(item.revision)
+        self._motion_model.setCurrentIndex(max(0, self._motion_model.findData(item.model_id)))
+        self._motion_local_host.setText(item.local_ipv4)
+        self._motion_feedback_port.setValue(item.feedback_port)
+        self._motion_controller_host.setText(item.controller_ipv4)
+        self._motion_command_port.setValue(item.command_port)
+        self._refresh_calibration_selectors(item.calibration_id)
+
+    def _new_motion(self) -> None:
+        preset = fixture_model_preset(str(self._motion_model.currentData()))
+        item = preset.create_profile()
+        self._motion_select.setCurrentIndex(-1)
+        self._motion_id.setText(item.profile_id)
+        self._motion_revision.setValue(1)
+        self._motion_local_host.setText(item.local_ipv4)
+        self._motion_feedback_port.setValue(item.feedback_port)
+        self._motion_controller_host.setText(item.controller_ipv4)
+        self._motion_command_port.setValue(item.command_port)
+        self._refresh_calibration_selectors()
+
+    def _save_motion(self) -> None:
+        try:
+            preset = fixture_model_preset(str(self._motion_model.currentData()))
+            current = next(
+                (item for item in self._motions if item.profile_id == self._motion_id.text().strip()),
+                None,
+            )
+            base = preset.create_profile(self._motion_id.text().strip())
+            item = replace(
+                base,
+                revision=self._motion_revision.value(),
+                local_ipv4=self._motion_local_host.text().strip(),
+                feedback_port=self._motion_feedback_port.value(),
+                controller_ipv4=self._motion_controller_host.text().strip(),
+                command_port=self._motion_command_port.value(),
+                calibration_id=str(self._motion_calibration.currentData() or base.calibration_id),
+            )
+            item.validate()
+            self._store.fixture_profile_store.save(
+                item,
+                expected_revision=(current.revision if current is not None else None),
+            )
+        except (FixtureProfileError, ProductionConfigurationError) as exc:
+            QMessageBox.critical(self, tr("Production configurations"), str(exc))
+            return
+        self.changed = True
+        self._reload_catalog()
+
+    def _load_reference_form(self, *_args) -> None:
+        item = next(
+            (value for value in self._references if value.profile_id == self._reference_select.currentData()),
+            None,
+        )
+        if item is None:
+            return
+        self._reference_id.setText(item.profile_id)
+        self._reference_revision.setValue(item.revision)
+        self._reference_name.setText(item.display_name)
+        index = self._reference_port.findData(item.serial_port)
+        if index < 0:
+            self._reference_port.addItem(item.serial_port, item.serial_port)
+            index = self._reference_port.findData(item.serial_port)
+        self._reference_port.setCurrentIndex(index)
+        self._reference_baud.setValue(item.baud_rate)
+        self._reference_installation.setText(item.installation_id)
+        self._reference_serial.setText(item.serial_number)
+        self._refresh_calibration_selectors(item.calibration_id)
+        self._reference_freshness.setValue(item.freshness_timeout_s)
+        self._reference_std.setValue(item.max_attitude_std_deg)
+        self._reference_stability.setValue(item.stability_window_s)
+
+    def _new_reference(self) -> None:
+        self._reference_select.setCurrentIndex(-1)
+        self._reference_id.setText("ms6222-main")
+        self._reference_revision.setValue(1)
+        self._reference_name.setText("MS-6222")
+        self._reference_installation.setText("ms6222-main-installation")
+        self._reference_serial.clear()
+        self._reference_freshness.setValue(1.0)
+        self._reference_std.setValue(1.0)
+        self._reference_stability.setValue(2.0)
+        self._refresh_calibration_selectors()
+
+    def _save_reference(self) -> None:
+        item = ReferenceSensorProfile(
+            profile_id=self._reference_id.text().strip(),
+            revision=self._reference_revision.value(),
+            display_name=self._reference_name.text().strip(),
+            driver_id="ms6222_serial_v1",
+            serial_port=self._reference_port.currentText().strip(),
+            baud_rate=self._reference_baud.value(),
+            installation_id=self._reference_installation.text().strip(),
+            serial_number=self._reference_serial.text().strip(),
+            calibration_id=str(self._reference_calibration.currentData() or ""),
+            freshness_timeout_s=self._reference_freshness.value(),
+            max_attitude_std_deg=self._reference_std.value(),
+            stability_window_s=self._reference_stability.value(),
+        )
+        self._replace(self._references, item, "profile_id")
+
+    def _delete_reference(self) -> None:
+        selected = self._reference_select.currentData()
+        if any(item.reference_profile_id == selected for item in self._stations):
+            QMessageBox.critical(
+                self,
+                tr("Production configurations"),
+                tr("The reference profile is referenced by a station profile."),
+            )
+            return
+        self._references = [item for item in self._references if item.profile_id != selected]
+        self._persist()
+
     def _load_station_form(self, *_args) -> None:
         item = next(
             (
@@ -642,8 +956,12 @@ class ProductionConfigurationDialog(QDialog):
         self._station_power.setCurrentIndex(
             max(0, self._station_power.findData(item.power_profile_id))
         )
-        self._motion_profile_id.setText(item.motion_profile_id)
-        self._reference_profile_id.setText(item.reference_profile_id)
+        self._station_motion.setCurrentIndex(
+            max(0, self._station_motion.findData(item.motion_profile_id))
+        )
+        self._station_reference.setCurrentIndex(
+            max(0, self._station_reference.findData(item.reference_profile_id))
+        )
         self._branch_count.setValue(item.branch_count)
         self._branch_current.setValue(item.branch_current_a)
         branding = item.report_branding
@@ -661,8 +979,8 @@ class ProductionConfigurationDialog(QDialog):
         self._station_revision.setValue(1)
         self._station_name.clear()
         self._station_power.setCurrentIndex(0)
-        self._motion_profile_id.clear()
-        self._reference_profile_id.clear()
+        self._station_motion.setCurrentIndex(0)
+        self._station_reference.setCurrentIndex(0)
         self._branch_count.setValue(1)
         self._branch_current.setValue(1.0)
         self._report_company.clear()
@@ -704,8 +1022,8 @@ class ProductionConfigurationDialog(QDialog):
             revision=self._station_revision.value(),
             display_name=self._station_name.text().strip(),
             power_profile_id=str(self._station_power.currentData() or ""),
-            motion_profile_id=self._motion_profile_id.text().strip(),
-            reference_profile_id=self._reference_profile_id.text().strip(),
+            motion_profile_id=str(self._station_motion.currentData() or ""),
+            reference_profile_id=str(self._station_reference.currentData() or ""),
             branch_count=self._branch_count.value(),
             branch_current_a=self._branch_current.value(),
             report_branding={

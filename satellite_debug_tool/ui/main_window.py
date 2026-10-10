@@ -24,6 +24,11 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool import __version__
+from satellite_debug_tool.updater.handoff import (
+    UpdateLaunchRequest,
+    launch_updater,
+)
+from satellite_debug_tool.updater.status import write_update_status
 from satellite_debug_tool.core.comm import UdpEndpointBroker
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.customer import (
@@ -33,6 +38,7 @@ from satellite_debug_tool.core.customer import (
 from satellite_debug_tool.core.session import (
     EndpointSessionDirectory,
 )
+from satellite_debug_tool.core.production import FixtureRuntime
 from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.customer_workspace import CustomerWorkspace
@@ -76,6 +82,7 @@ class MainWindow(QMainWindow):
         self.setMinimumHeight(600)
 
         self._settings = settings or Settings()
+        self._pending_update_request: UpdateLaunchRequest | None = None
         # M7：一次性清掉历史遗留 settings key（attitude 已迁移到全自动；
         # ui.font_scale 已固化为 small，UI 不再暴露调节入口）
         cleaned = False
@@ -107,6 +114,7 @@ class MainWindow(QMainWindow):
         theme_raw = self._settings.get("ui.theme", "dark")
         self._theme = self._normalize_theme(theme_raw)
         self._engineering_session_mode = ENGINEERING_SERIAL
+        self._fixture_runtime = FixtureRuntime(self)
 
         # ---------- 顶部全局 gbar（品牌 + 居中 Tab 药丸 + 右侧控件，Mission Console） ----------
         self._build_global_bar()
@@ -126,6 +134,7 @@ class MainWindow(QMainWindow):
         self._customer_bundle_factory = CustomerEndpointSessionBundleFactory(
             settings=self._settings,
             session_directory=self._endpoint_directory,
+            fixture_telemetry=self._fixture_runtime.telemetry,
             status_sink=self._on_status_message,
             parent=self,
         )
@@ -142,6 +151,7 @@ class MainWindow(QMainWindow):
         self._tabs.setDocumentMode(True)
         self._live = LiveView(
             settings=self._settings,
+            fixture_telemetry=self._fixture_runtime.telemetry,
             serial_only=True,
             defer_presentation=True,
         )
@@ -191,6 +201,7 @@ class MainWindow(QMainWindow):
             external_power_presenter=None,
             iperf_controller=None,
             iperf_store=None,
+            fixture_runtime=self._fixture_runtime,
         )
         self._customer.add_requested.connect(self._on_add_customer_device)
         self._customer.edit_requested.connect(self._on_edit_customer_device)
@@ -287,6 +298,7 @@ class MainWindow(QMainWindow):
             session_registry=self._session_registry,
             broker=self._udp_broker,
             session_directory=self._endpoint_directory,
+            fixture_runtime=self._fixture_runtime,
         )
         return self._production
 
@@ -375,6 +387,13 @@ class MainWindow(QMainWindow):
         )
         self._engineering_mode_combo.hide()
         row.addWidget(self._engineering_mode_combo)
+        self._engineering_fixture_button = QPushButton(tr("Motion platform..."))
+        self._engineering_fixture_button.setProperty("variant", "ghost")
+        self._engineering_fixture_button.clicked.connect(
+            self._open_engineering_fixture_dialog
+        )
+        self._engineering_fixture_button.hide()
+        row.addWidget(self._engineering_fixture_button)
         row.addStretch(1)
 
         # 右：主题切换 + 检查更新 + 设置（图标按钮）
@@ -437,6 +456,7 @@ class MainWindow(QMainWindow):
 
         self._tab_pillbar.setVisible(engineering_active)
         self._engineering_mode_combo.setVisible(engineering_active)
+        self._engineering_fixture_button.setVisible(engineering_active)
         for tab_index, button in enumerate(self._engineering_tab_pills):
             button.setVisible(engineering_active)
             button.setChecked(engineering_active and tab_index == current_tab)
@@ -449,6 +469,9 @@ class MainWindow(QMainWindow):
         self._tabs.setCurrentIndex(index)
         # 重复点击当前页不会触发 currentChanged，需要主动恢复药丸选中态。
         self._sync_tab_pills()
+
+    def _open_engineering_fixture_dialog(self) -> None:
+        self._customer.open_fixture_dialog()
 
     def _engineering_mode_block_reason(self, target_mode: str) -> str:
         if target_mode == ENGINEERING_SHARED_UDP:
@@ -562,9 +585,8 @@ class MainWindow(QMainWindow):
             self,
             tr("Production batch test"),
             tr(
-                "M19-A is an engineering-preview evidence capture workspace. It does "
-                "not execute the complete formal production-release workflow. Open "
-                "it for this session?"
+                "Open the production batch workspace? Fixture actions require the "
+                "selected station profile and live preflight confirmation."
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -767,6 +789,7 @@ class MainWindow(QMainWindow):
         # change avoids leaving stale-language text without rebuilding any view.
         self.setWindowTitle(tr("SoftHertz Phased-Array Terminal Tool"))
         self._brand_text.setText(tr("SoftHertz"))
+        self._engineering_fixture_button.setText(tr("Motion platform..."))
         sb = self.statusBar()
         if sb is not None:
             sb.clearMessage()
@@ -897,6 +920,27 @@ class MainWindow(QMainWindow):
         """点击 🔄 检查更新：手动触发，弹 UpdateDialog 立即开始检查。"""
         dlg = UpdateDialog(self._settings, parent=self, auto_start=True)
         dlg.exec()
+        request = dlg.launch_request
+        if request is not None:
+            self._pending_update_request = request
+            self.close()
+
+    def _reject_close(self, event, reason: str) -> None:
+        request = self._pending_update_request
+        self._pending_update_request = None
+        if request is not None:
+            try:
+                write_update_status(
+                    request.status_path,
+                    "failed",
+                    stage="main_shutdown",
+                    detail=reason,
+                    target_version=request.target_version,
+                    install_dir=str(request.install_dir),
+                )
+            except OSError:
+                pass
+        event.ignore()
 
     def _kick_silent_update_check(self):
         """启动后 2s 调用：根据 settings.update.auto_check 决定是否后台静默检查。"""
@@ -936,7 +980,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._production is not None and not self._production.confirm_shutdown():
-            event.ignore()
+            self._reject_close(event, "production shutdown was not confirmed")
             return
         active_outputs = self._customer_bundle_factory.confirmed_power_outputs()
         if active_outputs:
@@ -954,7 +998,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes,
             )
             if answer == QMessageBox.StandardButton.Cancel:
-                event.ignore()
+                self._reject_close(event, "power shutdown was cancelled")
                 return
             if (
                 answer == QMessageBox.StandardButton.Yes
@@ -965,7 +1009,7 @@ class MainWindow(QMainWindow):
                     tr("External power"),
                     tr("One or more customer power outputs could not be confirmed OFF."),
                 )
-                event.ignore()
+                self._reject_close(event, "power output could not be confirmed off")
                 return
         if self._customer_bundle_factory.any_iperf_active:
             answer = QMessageBox.question(
@@ -976,7 +1020,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Cancel,
             )
             if answer != QMessageBox.StandardButton.Yes:
-                event.ignore()
+                self._reject_close(event, "network-test shutdown was cancelled")
                 return
         if not self._shutdown_background_update_check():
             QMessageBox.warning(
@@ -984,7 +1028,7 @@ class MainWindow(QMainWindow):
                 tr("Check for updates"),
                 tr("Background update check did not stop cleanly"),
             )
-            event.ignore()
+            self._reject_close(event, "background update check did not stop")
             return
         # 工程串口 LiveView 独占自己的 worker。必须先确认线程已停止，再进入
         # customer/directory 的不可逆释放阶段；否则超时后 event.ignore() 会留下
@@ -996,7 +1040,7 @@ class MainWindow(QMainWindow):
                 tr("Device operation in progress"),
                 tr("The engineering transport did not stop cleanly"),
             )
-            event.ignore()
+            self._reject_close(event, "engineering transport did not stop")
             return
         if not self._customer.shutdown():
             self._sync_external_power_activity()
@@ -1008,7 +1052,7 @@ class MainWindow(QMainWindow):
                     "local operation and retry"
                 ),
             )
-            event.ignore()
+            self._reject_close(event, "customer session shutdown did not complete")
             return
         active = self._active_workspace_index
         if active == 0:
@@ -1027,7 +1071,7 @@ class MainWindow(QMainWindow):
             self._customer_devices.shutdown()
         except CustomerDeviceDirectoryError as exc:
             QMessageBox.warning(self, tr("Customer devices"), str(exc))
-            event.ignore()
+            self._reject_close(event, str(exc))
             return
         if not self._endpoint_directory.shutdown():
             QMessageBox.warning(
@@ -1035,7 +1079,7 @@ class MainWindow(QMainWindow):
                 tr("Device operation in progress"),
                 tr("Shared device sessions still have active owners"),
             )
-            event.ignore()
+            self._reject_close(event, "shared device sessions still have active owners")
             return
         if not self._udp_broker.shutdown():
             QMessageBox.warning(
@@ -1043,6 +1087,32 @@ class MainWindow(QMainWindow):
                 tr("Device operation in progress"),
                 tr("The shared UDP transport did not stop cleanly"),
             )
-            event.ignore()
+            self._reject_close(event, "shared UDP transport did not stop")
             return
+        request = self._pending_update_request
+        self._pending_update_request = None
+        if request is not None:
+            try:
+                launch_updater(request)
+            except OSError as exc:
+                try:
+                    write_update_status(
+                        request.status_path,
+                        "failed",
+                        stage="launching_updater",
+                        detail=str(exc),
+                        target_version=request.target_version,
+                        install_dir=str(request.install_dir),
+                    )
+                except OSError:
+                    pass
+                QMessageBox.critical(
+                    self,
+                    tr("Check for updates"),
+                    tr(
+                        "Failed to start updater: {detail}\nLog: {log}",
+                        detail=exc,
+                        log=request.log_path,
+                    ),
+                )
         super().closeEvent(event)

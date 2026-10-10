@@ -10,4 +10,4 @@ python-docx>=1.1  # 试产单设备正式 Word 报告
 py7zr>=0.20    # 7z 分卷解压（updater）
 psutil>=5.9    # updater 等主进程退出
 certifi>=2024.2  # updater HTTPS CA bundle（跨平台）
-cryptography>=42.0  # 客户 OTA Ed25519 固件包验签
+cryptography>=42.0  # 客户 OTA AES-256-GCM 固件包认证解密

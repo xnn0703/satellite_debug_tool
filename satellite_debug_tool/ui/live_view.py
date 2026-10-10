@@ -146,16 +146,22 @@ class LiveView(QWidget):
         *,
         session_registry: Optional[SessionRegistry] = None,
         customer_binding=None,
+        fixture_telemetry=None,
         serial_only: bool = False,
         defer_presentation: bool = False,
     ):
         super().__init__(parent)
         self._settings = settings
         self._customer_binding = customer_binding
+        self._fixture_telemetry = fixture_telemetry
         self._managed_runtime = (
             None if customer_binding is None else customer_binding.runtime
         )
         self._serial_only = bool(serial_only)
+        if fixture_telemetry is not None:
+            fixture_telemetry.sample_published.connect(
+                self.record_fixture_attitude_sample
+            )
 
         # ---------- 业务状态（原 MainWindow.__init__）----------
         self._worker = None
@@ -2163,7 +2169,7 @@ class LiveView(QWidget):
                 3000,
             )
             return
-        self._start_recording(format_version=2, customer=False)
+        self._start_recording(format_version=SDB_VERSION_V3, customer=False)
 
     def _set_customer_recording_state(
         self, state: CustomerRecordingState
@@ -2547,6 +2553,31 @@ class LiveView(QWidget):
             event,
             host_timestamp_ns=int(timestamp_ns),
         )
+
+    @Slot(object)
+    def record_fixture_attitude_sample(self, sample: object) -> bool:
+        """Append one shared fixture fact to this active SDB v3 recorder."""
+
+        if (
+            not self._is_recording
+            or self._recorder is None
+            or self._recorder.format_version != SDB_VERSION_V3
+        ):
+            return False
+        metadata_builder = getattr(sample, "metadata_event", None)
+        timestamp_ns = getattr(sample, "host_wall_time_ns", None)
+        if not callable(metadata_builder) or timestamp_ns is None:
+            return False
+        written = self._recorder.write_metadata_event(
+            dict(metadata_builder()),
+            host_timestamp_ns=int(timestamp_ns),
+        )
+        if not written:
+            self.status_message.emit(
+                tr("Fixture attitude recording has a data gap"),
+                4000,
+            )
+        return written
 
     def record_external_power_action(
         self,

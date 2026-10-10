@@ -11,7 +11,7 @@ import re
 import time
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -50,11 +50,13 @@ from satellite_debug_tool.core.production import (
     DeviceSessionState,
     ExternalInsApplicability,
     FixtureControlLease,
+    FixtureRuntime,
+    FixtureRuntimeFact,
+    FixtureRuntimeState,
     Ms6222ControlLease,
     FleetConfigurationError,
     FleetController,
     GwInstekPswAdapter,
-    LingjingPlatformServiceController,
     PowerSupplyConfig,
     ProductionPowerWorker,
     ProductionRecipe,
@@ -182,25 +184,23 @@ class ProductionWorkspace(QWidget):
         broker: Optional[UdpEndpointBroker] = None,
         session_directory: Optional[EndpointSessionDirectory] = None,
         configuration_store: Optional[ProductionConfigurationStore] = None,
+        fixture_runtime: Optional[FixtureRuntime] = None,
         production_power_adapter_factory: Callable[
             [PowerSupplyConfig], GwInstekPswAdapter
         ] = GwInstekPswAdapter,
-        platform_service_controller: Optional[
-            LingjingPlatformServiceController
-        ] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._session_registry = session_registry
         self._broker = broker
         self._session_directory = session_directory or session_registry
-        self._configuration_store = configuration_store or ProductionConfigurationStore()
+        self._fixture_runtime = fixture_runtime or FixtureRuntime(self)
+        self._configuration_store = configuration_store or ProductionConfigurationStore(
+            fixture_profile_store=self._fixture_runtime.profile_store,
+            calibration_store=self._fixture_runtime.calibration_store,
+        )
         self._resolved_configuration: Optional[ResolvedProductionConfiguration] = None
         self._production_power_adapter_factory = production_power_adapter_factory
-        self._platform_service = (
-            platform_service_controller
-            or LingjingPlatformServiceController(parent=self)
-        )
         self._production_power_worker: Optional[ProductionPowerWorker] = None
         self._pending_power_participants: tuple[DeviceSession, ...] = ()
         self._power_record_count = 0
@@ -221,8 +221,8 @@ class ProductionWorkspace(QWidget):
         self._participant_identity_keys: tuple[str, ...] = ()
         self._ignored_after_start: set[str] = set()
         self._fleet: Optional[FleetController] = None
-        self._fixture_control_lease = FixtureControlLease()
-        self._ms6222_control_lease = Ms6222ControlLease()
+        self._fixture_control_lease = self._fixture_runtime.fixture_lease
+        self._ms6222_control_lease = self._fixture_runtime.reference_lease
         self._batch_coordinator = BatchCoordinator(
             self._fixture_control_lease,
             parent=self,
@@ -232,6 +232,10 @@ class ProductionWorkspace(QWidget):
         self._view_active = False
         self._build_ui()
         self._configure_fleet()
+        self._fixture_runtime.telemetry.sample_published.connect(
+            self._record_fixture_attitude_sample
+        )
+        self._fixture_runtime.state_changed.connect(self._on_fixture_runtime_state)
         self._restore_setup_defaults()
         self._session_refresh_timer = QTimer(self)
         self._session_refresh_timer.setInterval(1000)
@@ -240,6 +244,12 @@ class ProductionWorkspace(QWidget):
         self._snr_refresh_timer.setInterval(200)
         self._snr_refresh_timer.timeout.connect(self._refresh_snr_charts)
         register_translatable(self)
+
+    @Slot(object)
+    def _record_fixture_attitude_sample(self, sample: object) -> None:
+        fleet = self._fleet
+        if fleet is not None:
+            fleet.record_fixture_attitude_sample(sample)
 
     @property
     def recipe(self) -> Optional[ProductionRecipe]:
@@ -321,8 +331,8 @@ class ProductionWorkspace(QWidget):
 
         self._preview_notice = QLabel(
             tr(
-                "M19-A engineering preview: evidence capture only; not approved for "
-                "formal production release."
+                "Formal automation uses the selected station profile. Starting a batch "
+                "requires complete fixture bindings and live preflight evidence."
             )
         )
         self._preview_notice.setObjectName("productionPreviewNotice")
@@ -527,11 +537,18 @@ class ProductionWorkspace(QWidget):
         fixture = FixtureDebugWorkspace(
             self._settings,
             self._fixture_control_lease,
-            platform_service=self._platform_service,
+            profile_store=self._fixture_runtime.profile_store,
+            calibration_store=self._fixture_runtime.calibration_store,
             reference_lease=self._ms6222_control_lease,
+            telemetry=self._fixture_runtime.telemetry,
             motion_only=False,
         )
         fixture.active_changed.connect(self._on_fixture_debug_active_changed)
+        fixture.runtime_state_changed.connect(self._on_fixture_page_runtime_state)
+        if self._resolved_configuration is not None:
+            fixture.select_reference_port(
+                self._resolved_configuration.reference_profile.serial_port
+            )
         self._fixture_debug = fixture
         return fixture
 
@@ -542,8 +559,18 @@ class ProductionWorkspace(QWidget):
         reference = Ms6222DebugWorkspace(
             self._settings,
             self._ms6222_control_lease,
+            profile_port=(
+                ""
+                if self._resolved_configuration is None
+                else self._resolved_configuration.reference_profile.serial_port
+            ),
         )
         reference.active_changed.connect(self._on_ms6222_debug_active_changed)
+        reference.runtime_state_changed.connect(self._on_fixture_page_runtime_state)
+        if self._resolved_configuration is not None:
+            reference.select_profile_port(
+                self._resolved_configuration.reference_profile.serial_port
+            )
         self._ms6222_debug = reference
         return reference
 
@@ -804,6 +831,7 @@ class ProductionWorkspace(QWidget):
         template_id = str(self._product_template_combo.currentData() or "")
         station_id = str(self._station_profile_combo.currentData() or "")
         if not template_id or not station_id:
+            self._fixture_runtime.clear_bindings()
             self._resolved_configuration = None
             if self._recipe_edit.text().strip() == "":
                 self._recipe = None
@@ -821,6 +849,7 @@ class ProductionWorkspace(QWidget):
             )
             recipe = ProductionRecipe.from_mapping(resolved.to_recipe_payload())
         except (ProductionConfigurationError, RecipeValidationError) as exc:
+            self._fixture_runtime.clear_bindings()
             self._resolved_configuration = None
             self._recipe = None
             self._apply_recipe_test_gates(None)
@@ -830,17 +859,29 @@ class ProductionWorkspace(QWidget):
             self._update_start_gate()
             return
         self._resolved_configuration = resolved
+        self._fixture_runtime.bind_configuration(resolved)
+        if self._fixture_debug is not None:
+            self._fixture_debug.select_reference_port(
+                resolved.reference_profile.serial_port
+            )
+        if self._ms6222_debug is not None:
+            self._ms6222_debug.select_profile_port(
+                resolved.reference_profile.serial_port
+            )
         self._recipe = recipe
         self._recipe_edit.clear()
         self._apply_recipe_test_gates(recipe)
         product = resolved.product_template
         power = resolved.power_profile
         station = resolved.station_profile
+        motion = resolved.motion_profile
+        reference = resolved.reference_profile
         self._configuration_summary.setText(
             tr(
                 "{product} × {count} | per device {voltage:g} V / {single_current:g} A | "
                 "combined {voltage:g} V / {total_current:g} A / {power_w:g} W | "
-                "power {power_model} at {host} | branches {branches} × {branch_current:g} A | "
+                "power {power_model} at {host} | motion {motion_host}:{motion_port} | "
+                "MS-6222 {serial_port} | branches {branches} × {branch_current:g} A | "
                 "configuration SHA-256 {sha}",
                 product=product.product.upper(),
                 count=resolved.device_count,
@@ -850,6 +891,9 @@ class ProductionWorkspace(QWidget):
                 power_w=resolved.total_power_w,
                 power_model=power.model,
                 host=power.host,
+                motion_host=motion.controller_ipv4,
+                motion_port=motion.command_port,
+                serial_port=reference.serial_port,
                 branches=station.branch_count,
                 branch_current=station.branch_current_a,
                 sha=resolved.sha256[:12],
@@ -862,17 +906,16 @@ class ProductionWorkspace(QWidget):
         )
         self.update_fixture_state(
             "motion",
-            state=tr("Configured") if station.motion_profile_id else tr("Not configured"),
-            evidence=station.motion_profile_id or "-",
+            state=tr("Configured"),
+            evidence=(
+                f"{motion.model_id} | {motion.controller_ipv4}:{motion.command_port} | "
+                f"feedback {motion.local_ipv4}:{motion.feedback_port}"
+            ),
         )
         self.update_fixture_state(
             "reference",
-            state=(
-                tr("Configured")
-                if station.reference_profile_id
-                else tr("Not configured")
-            ),
-            evidence=station.reference_profile_id or "-",
+            state=tr("Configured"),
+            evidence=f"{reference.serial_port} @ {reference.baud_rate}",
         )
         self.update_fixture_state(
             "vehicle",
@@ -1233,6 +1276,32 @@ class ProductionWorkspace(QWidget):
         self._set_item(self._fixture_table, row, 1, state)
         self._set_item(self._fixture_table, row, 2, evidence)
 
+    def _on_fixture_runtime_state(self, fact: FixtureRuntimeFact) -> None:
+        labels = {
+            FixtureRuntimeState.NEEDS_BINDING: tr("Needs binding"),
+            FixtureRuntimeState.CONFIGURED: tr("Configured"),
+            FixtureRuntimeState.CONNECTING: tr("Connecting"),
+            FixtureRuntimeState.CONNECTED: tr("Connected"),
+            FixtureRuntimeState.READY: tr("Ready"),
+            FixtureRuntimeState.RUNNING: tr("Running"),
+            FixtureRuntimeState.FAULT: tr("Failed"),
+        }
+        self.update_fixture_state(
+            fact.fixture,
+            state=labels[fact.state],
+            evidence=fact.evidence or "-",
+        )
+        self._update_start_gate()
+
+    def _on_fixture_page_runtime_state(
+        self, fixture: str, state: str, evidence: str
+    ) -> None:
+        self._fixture_runtime.set_state(
+            fixture,
+            FixtureRuntimeState(state),
+            evidence,
+        )
+
     def append_event(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._event_log.appendPlainText(f"[{timestamp}] {message}")
@@ -1453,6 +1522,18 @@ class ProductionWorkspace(QWidget):
             return (), tr("Create a batch before starting.")
         if self._batch.get("status") != BatchStatus.READY.value:
             return (), tr("The batch is not in the ready state.")
+        if self._resolved_configuration is not None:
+            for fixture, label in (
+                ("motion", tr("Motion platform")),
+                ("reference", tr("MS-6222 reference")),
+            ):
+                fact = self._fixture_runtime.fact(fixture)
+                if fact.state is not FixtureRuntimeState.READY:
+                    return (), tr(
+                        "{fixture} preflight state is {state}.",
+                        fixture=label,
+                        state=fact.state.value,
+                    )
         fleet = self._fleet
         if fleet is None:
             return (), tr("Device discovery is unavailable.")
@@ -2156,7 +2237,6 @@ class ProductionWorkspace(QWidget):
             if not self._fleet.shutdown_ready:
                 return False
         self._batch_coordinator.close()
-        self._platform_service.shutdown()
         return True
 
     def confirm_shutdown(self) -> bool:
@@ -2219,8 +2299,8 @@ class ProductionWorkspace(QWidget):
         self._title.setText(tr("Production batch test"))
         self._preview_notice.setText(
             tr(
-                "M19-A engineering preview: evidence capture only; not approved for "
-                "formal production release."
+                "Formal automation uses the selected station profile. Starting a batch "
+                "requires complete fixture bindings and live preflight evidence."
             )
         )
         self._setup_group.setTitle(tr("Batch setup"))

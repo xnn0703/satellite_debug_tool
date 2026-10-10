@@ -102,6 +102,45 @@ class TestUpdateDialogConstruct:
         assert dlg._stack.currentIndex() == 0
         dlg.deleteLater()
 
+    def test_download_completion_only_prepares_handoff_request(
+        self,
+        qapp,
+        tmp_settings,
+        tmp_path,
+        monkeypatch,
+    ):
+        from satellite_debug_tool.updater.checker import LatestRelease
+        from satellite_debug_tool.ui import update_dialog
+
+        install = tmp_path / "SatelliteDebugTool"
+        install.mkdir()
+        updater = install / "updater.exe"
+        updater.write_bytes(b"PE-updater")
+        volume = tmp_path / "release.7z"
+        volume.write_bytes(b"archive")
+        transaction = tmp_path / "updates" / "v2.0.0"
+        transaction.mkdir(parents=True)
+
+        dlg = update_dialog.UpdateDialog(tmp_settings, auto_start=False)
+        dlg._download_dir = transaction
+        dlg._latest = LatestRelease(
+            tag_name="v2.0.0",
+            body="",
+            html_url="https://example.invalid/release",
+            assets=[],
+        )
+        monkeypatch.setattr(update_dialog, "_detect_install_dir", lambda: install)
+        monkeypatch.setattr(update_dialog, "_detect_updater_exe", lambda: updater)
+
+        dlg._do_launch_updater([volume])
+
+        request = dlg.launch_request
+        assert request is not None
+        assert request.install_dir == install.resolve()
+        assert request.volumes == (volume.resolve(),)
+        assert request.status_path.is_file()
+        dlg.deleteLater()
+
 
 # ============================ SettingsDialog 更新设置往返 ============================
 

@@ -11,6 +11,53 @@ import time
 import pytest
 
 
+def test_attitude_plot_series_breaks_measurement_time_gaps() -> None:
+    from satellite_debug_tool.core.production import TimedAttitude
+    from satellite_debug_tool.ui.fixture_debug_workspace import _attitude_plot_series
+
+    samples = (
+        TimedAttitude(1_000_000_000, 1.0, 2.0, 3.0),
+        TimedAttitude(1_010_000_000, 1.1, 2.1, 3.1),
+        TimedAttitude(2_000_000_000, 1.2, 2.2, 3.2),
+    )
+    x, y = _attitude_plot_series(
+        samples,
+        axis="roll",
+        origin_ns=1_000_000_000,
+        break_time_gaps=True,
+    )
+
+    assert len(x) == 4
+    assert y[0] == pytest.approx(1.0)
+    assert y[1] == pytest.approx(1.1)
+    assert y[2] != y[2]
+    assert y[3] == pytest.approx(1.2)
+
+
+def test_fixture_attitude_plot_uses_one_shared_degree_axis_and_hides_unmapped_curves(
+    qapp,
+) -> None:
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureAttitudePlot
+
+    plot = FixtureAttitudePlot()
+    plot.set_coordinate_valid(False)
+
+    assert tuple(plot._plots) == ("combined",)
+    assert all(
+        not axis.getAxis("left").autoSIPrefix
+        for axis in plot._plots.values()
+    )
+    assert all(
+        curve.getViewBox() is plot._plot.vb
+        for curves in plot._curves.values()
+        for curve in curves.values()
+    )
+    assert not plot._curves["roll"]["target"].isVisible()
+    assert plot._curves["roll"]["measured"].isVisible()
+    assert not plot._curves["roll"]["error"].isVisible()
+    plot.close()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -42,10 +89,12 @@ def _profile():
     return WorkstationFixtureProfile(
         profile_id="fixture-ui",
         revision=1,
-        host="192.168.1.50",
-        port=9800,
+        model_id="lingjing-a6-200mm",
+        local_ipv4="192.168.15.101",
+        feedback_port=8410,
+        controller_ipv4="192.168.15.201",
+        command_port=7408,
         center_pose=PlatformPose(0, 0, 0, 0, 0, 100),
-        reset_pose=PlatformPose(0, 0, 0, 0, 0, 0),
         roll_limits=limits,
         pitch_limits=limits,
         yaw_limits=limits,
@@ -63,6 +112,250 @@ def _settings(tmp_path: Path, monkeypatch):
     return settings
 
 
+def _controller_factory(commands=None):
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    captured = commands if commands is not None else []
+    return lambda profile: ConfirmedMotionController(profile.to_motion_config(), captured)
+
+
+def test_trajectory_result_uses_nested_arrival_settlement() -> None:
+    from satellite_debug_tool.core.motion_platform import PlatformPose, TrajectoryResult
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+    from satellite_debug_tool.ui.fixture_debug_workspace import _settlement_result
+
+    controller = ConfirmedMotionController(_profile().to_motion_config())
+    arrival = controller.wait_for_target(PlatformPose(0, 0, 0))
+    trajectory = TrajectoryResult(
+        intended_points=1680,
+        sent_points=1680,
+        skipped_points=0,
+        maximum_lateness_ms=1.0,
+        stopped=False,
+        arrival=arrival,
+    )
+
+    assert _settlement_result(trajectory) is arrival
+    assert _settlement_result(trajectory).target_guard_passed
+
+
+def test_automatic_calibration_preview_can_be_confirmed_and_saved(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from satellite_debug_tool.core.production import (
+        FixtureCalibration,
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    profile_store = FixtureProfileStore(tmp_path / "profiles-confirmation")
+    profile_store.save(_profile())
+    calibration_store = FixtureCalibrationStore(tmp_path / "calibrations-confirmation")
+    workspace = FixtureDebugWorkspace(
+        _settings(tmp_path, monkeypatch),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=calibration_store,
+        session_root=tmp_path / "sessions-confirmation",
+        motion_only=True,
+    )
+    assert workspace.profile is not None
+    original_revision = workspace.profile.revision
+    preview = FixtureCalibration(
+        calibration_id="MS6222-CAL-AUTO-TEST",
+        profile_id=workspace.profile.profile_id,
+        profile_sha256=workspace.profile.sha256,
+        created_utc="2026-10-09T10:00:00+00:00",
+        sensor_axis_for_logical=("roll", "pitch", "yaw"),
+        logical_signs=(1, 1, 1),
+        zero_offsets_deg=(0.2, -0.5, 153.5),
+        response_matrix=((0.99, 0.01, 0.0), (0.0, 0.99, 0.01), (0.0, 0.0, 1.01)),
+        cross_coupling_ratio=(0.01, 0.01, 0.0),
+        static_noise_std_deg=(0.003, 0.003, 0.01),
+        sample_coverage_ratio=1.0,
+        confirmed=False,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    confirmed = workspace._confirm_calibration_preview(preview)
+
+    assert confirmed is not None and confirmed.coordinate_valid
+    assert workspace.profile.revision == original_revision + 1
+    assert workspace.profile.calibration_id == confirmed.calibration_id
+    assert calibration_store.load(confirmed.calibration_id) == confirmed
+    workspace.shutdown()
+    workspace.close()
+
+    restarted = FixtureDebugWorkspace(
+        _settings(tmp_path, monkeypatch),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=calibration_store,
+        session_root=tmp_path / "sessions-after-restart",
+        motion_only=True,
+    )
+    assert restarted.profile is not None
+    assert restarted.profile.calibration_id == confirmed.calibration_id
+    assert restarted._calibration == confirmed
+    assert restarted._attitude_plot._coordinate_valid
+    restarted.shutdown()
+    restarted.close()
+
+
+def test_unstable_center_reference_cannot_be_confirmed(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from satellite_debug_tool.core.production import (
+        FixtureCalibration,
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    profile_store = FixtureProfileStore(tmp_path / "profiles-unstable-reference")
+    profile_store.save(_profile())
+    calibration_store = FixtureCalibrationStore(tmp_path / "calibrations-unstable-reference")
+    workspace = FixtureDebugWorkspace(
+        _settings(tmp_path, monkeypatch),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=calibration_store,
+        session_root=tmp_path / "sessions-unstable-reference",
+        motion_only=True,
+    )
+    assert workspace.profile is not None
+    original_revision = workspace.profile.revision
+    preview = FixtureCalibration(
+        calibration_id="MS6222-CAL-UNSTABLE-TEST",
+        profile_id=workspace.profile.profile_id,
+        profile_sha256=workspace.profile.sha256,
+        created_utc="2026-10-09T10:00:00+00:00",
+        sensor_axis_for_logical=("roll", "pitch", "yaw"),
+        logical_signs=(1, 1, 1),
+        zero_offsets_deg=(0.2, -0.5, 153.5),
+        response_matrix=((0.99, 0.01, 0.0), (0.0, 0.99, 0.01), (0.0, 0.0, 1.01)),
+        cross_coupling_ratio=(0.01, 0.01, 0.0),
+        static_noise_std_deg=(0.003, 0.003, 0.647),
+        sample_coverage_ratio=1.0,
+        confirmed=False,
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, _title, message, *args, **kwargs: warnings.append(message),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: pytest.fail("unstable calibration must not reach confirmation"),
+    )
+
+    confirmed = workspace._confirm_calibration_preview(preview)
+
+    assert confirmed is None
+    assert warnings and "0.647" in warnings[0]
+    assert workspace.profile.revision == original_revision
+    assert workspace.profile.calibration_id == "fixture-axis-map-1"
+    assert not (tmp_path / "calibrations-unstable-reference" / f"{preview.calibration_id}.json").exists()
+    workspace.shutdown()
+    workspace.close()
+
+
+def test_trajectory_completion_records_execution_statistics(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.core.motion_platform import (
+        MotionActionOutcome,
+        MotionActionResult,
+        PlatformPose,
+        TrajectoryResult,
+    )
+    from satellite_debug_tool.core.production import (
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    profile_store = FixtureProfileStore(tmp_path / "profiles-trajectory-statistics")
+    profile_store.save(_profile())
+    workspace = FixtureDebugWorkspace(
+        _settings(tmp_path, monkeypatch),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=FixtureCalibrationStore(
+            tmp_path / "calibrations-trajectory-statistics"
+        ),
+        session_root=tmp_path / "sessions-trajectory-statistics",
+        motion_only=True,
+    )
+    events: list[tuple[str, str, dict]] = []
+    monkeypatch.setattr(
+        workspace,
+        "_append_event",
+        lambda message, *, event_type="workspace_event", details=None: events.append(
+            (message, event_type, details or {})
+        ),
+    )
+    arrival = MotionActionResult(
+        action="trajectory",
+        sent=True,
+        outcome=MotionActionOutcome.SETTLED,
+        motion_stopped=True,
+        target_guard_passed=True,
+        generation=0,
+        started_monotonic_ns=1,
+        settled_monotonic_ns=2,
+        target_pose=PlatformPose(0.0, 0.0, 0.0, z_mm=100.0),
+        target_pulses=(1, 1, 1, 1, 1, 1),
+        final_pulses=(1, 1, 1, 1, 1, 1),
+        errors_pulses=(0, 0, 0, 0, 0, 0),
+        stationary_spans_pulses=(0, 0, 0, 0, 0, 0),
+        maximum_error_pulses=0,
+        maximum_error_mm=0.0,
+        details="settled",
+    )
+    result = TrajectoryResult(
+        intended_points=4000,
+        sent_points=3999,
+        skipped_points=1,
+        maximum_lateness_ms=20.4,
+        stopped=False,
+        arrival=arrival,
+    )
+
+    workspace._on_control_finished("trajectory-test", result)
+
+    execution = next(item for item in events if item[1] == "trajectory_execution_completed")
+    assert "3999/4000" in execution[0]
+    assert execution[2] == {
+        "intended_points": 4000,
+        "sent_points": 3999,
+        "skipped_points": 1,
+        "maximum_lateness_ms": 20.4,
+    }
+    workspace.shutdown()
+    workspace.close()
+
+
 def test_registered_model_installation_configuration_keeps_internal_id_read_only(
     qapp,
 ) -> None:
@@ -75,9 +368,225 @@ def test_registered_model_installation_configuration_keeps_internal_id_read_only
     assert dialog._model_combo.currentData() == "lingjing-a6-200mm"
     assert not dialog._model_combo.isEnabled()
     assert dialog._profile_id.isReadOnly()
-    assert dialog._host.isReadOnly()
-    assert all(box.isEnabled() for box in dialog._sign_boxes.values())
+    assert dialog._local_ipv4.isReadOnly()
+    assert dialog._controller_ipv4.isReadOnly()
+    assert all(not box.isEnabled() for box in dialog._sign_boxes.values())
+    assert tuple(
+        int(dialog._sign_boxes[axis].currentData())
+        for axis in ("roll", "pitch", "yaw")
+    ) == (-1, 1, -1)
     dialog.close()
+
+
+def test_customer_mode_hides_maintenance_and_keeps_daily_pose_controls(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.core.production import (
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+        Ms6222ControlLease,
+        Ms6222FrameEnvelope,
+        Ms6222FrameType,
+        Ms6222InsRecord,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    profile_store = FixtureProfileStore(tmp_path / "profiles-customer-mode")
+    profile_store.save(_profile())
+    workspace = FixtureDebugWorkspace(
+        _settings(tmp_path, monkeypatch),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-customer-mode"),
+        reference_lease=Ms6222ControlLease(),
+        customer_mode=True,
+    )
+
+    assert workspace._model_combo.isEnabled() is False
+    assert workspace._installation_config.isHidden()
+    assert not workspace._trajectory_group.isHidden()
+    assert workspace._qualification_group.isHidden()
+    assert workspace._calibration_group.isHidden()
+    assert workspace._reset.isHidden()
+    assert not workspace._manual_group.isHidden()
+    assert not workspace._live_group.isHidden()
+    assert workspace._absolute_heading.objectName() == "fixtureAbsoluteHeading"
+    assert workspace._absolute_heading.text()
+    assert workspace._profile_group.title() == "摇摆台与姿态参考"
+    assert workspace._safety_group.title() == "运动控制安全确认"
+    assert workspace._session_start.text() == "开始控制会话"
+    assert workspace._trajectory_group.title() == "组合连续摇摆"
+    assert workspace._trajectory_start.text() == "开始组合摇摆"
+    assert workspace._stop.text() == "受控停止"
+    for axis, (enabled, amplitude, frequency, phase) in workspace._trajectory_axes.items():
+        enabled.setChecked(True)
+        amplitude.setValue({"roll": 2.0, "pitch": 1.5, "yaw": 1.0}[axis])
+        frequency.setValue(0.1)
+        phase.setValue({"roll": 0.0, "pitch": 90.0, "yaw": 180.0}[axis])
+    trajectory = workspace._trajectory_profile()
+    assert trajectory.roll.enabled and trajectory.pitch.enabled and trajectory.yaw.enabled
+    assert trajectory.total_duration_s == pytest.approx(80.0)
+    workspace._on_control_busy(True)
+    assert not workspace._preview_button.isEnabled()
+    assert all(
+        not widget.isEnabled()
+        for widgets in workspace._trajectory_axes.values()
+        for widget in widgets
+    )
+    workspace._on_control_busy(False)
+    assert workspace._preview_button.isEnabled()
+    invalid_record = Ms6222InsRecord(
+        gps_week=0,
+        gps_ms=0,
+        message_sequence=0,
+        time_state=0,
+        gnss_state=0,
+        fix_type=0,
+        ekf_state=0,
+        latitude_deg=0.0,
+        longitude_deg=0.0,
+        altitude_m=0.0,
+        height_m=0.0,
+        velocity_n_m_s=0.0,
+        velocity_e_m_s=0.0,
+        velocity_u_m_s=0.0,
+        roll_deg=0.0,
+        pitch_deg=0.0,
+        yaw_deg=153.5,
+        latitude_std=0.0,
+        longitude_std=0.0,
+        altitude_std=0.0,
+        velocity_n_std=0.0,
+        velocity_e_std=0.0,
+        velocity_u_std=0.0,
+        roll_std_deg=0.0,
+        pitch_std_deg=0.0,
+        yaw_std_deg=0.02,
+    )
+    workspace._on_ms_frame(
+        Ms6222FrameEnvelope(
+            frame_type=Ms6222FrameType.INSPVAXB,
+            raw=b"valid-crc-invalid-quality",
+            host_monotonic_ns=time.monotonic_ns(),
+            host_wall_time_ns=time.time_ns(),
+            crc_valid=True,
+            protocol_version=1,
+            record=invalid_record,
+        )
+    )
+    assert "不可用" in workspace._absolute_heading.text()
+    assert "153.500" not in workspace._absolute_heading.text()
+    assert workspace._session_end.text() == "结束控制会话"
+    workspace.retranslate_ui()
+    assert workspace._profile_group.title() == "摇摆台与姿态参考"
+    assert workspace._safety_group.title() == "运动控制安全确认"
+    assert workspace._session_start.text() == "开始控制会话"
+    assert workspace._trajectory_group.title() == "组合连续摇摆"
+    assert workspace._trajectory_start.text() == "开始组合摇摆"
+    workspace.shutdown()
+    workspace.close()
+
+
+def test_fixture_workspace_publishes_platform_target_and_invalid_reference_facts(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.core.motion_platform import MotionCommandEvent, PlatformPose
+    from satellite_debug_tool.core.production import (
+        FixtureAttitudeSource,
+        FixtureCalibrationStore,
+        FixtureControlLease,
+        FixtureProfileStore,
+        FixtureTelemetryBus,
+        Ms6222FrameEnvelope,
+        Ms6222FrameType,
+        Ms6222InsRecord,
+    )
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    profile_store = FixtureProfileStore(tmp_path / "profiles-telemetry")
+    profile_store.save(_profile())
+    telemetry = FixtureTelemetryBus()
+    published = []
+    telemetry.sample_published.connect(published.append)
+    workspace = FixtureDebugWorkspace(
+        Settings(),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-telemetry"),
+        telemetry=telemetry,
+        motion_only=True,
+    )
+    pose = PlatformPose(1.0, 2.0, 3.0, z_mm=100.0)
+    workspace._on_platform_send(
+        MotionCommandEvent(
+            action="pose",
+            raw_command=b"command",
+            target_pose=pose,
+            target_pulses=(1, 2, 3, 4, 5, 6),
+            duration_ms=1000,
+            monotonic_ns=time.monotonic_ns(),
+            generation=1,
+        ),
+        "pose",
+        7,
+    )
+    invalid_record = Ms6222InsRecord(
+        gps_week=0,
+        gps_ms=0,
+        message_sequence=0,
+        time_state=0,
+        gnss_state=0,
+        fix_type=0,
+        ekf_state=0,
+        latitude_deg=0.0,
+        longitude_deg=0.0,
+        altitude_m=0.0,
+        height_m=0.0,
+        velocity_n_m_s=0.0,
+        velocity_e_m_s=0.0,
+        velocity_u_m_s=0.0,
+        roll_deg=0.0,
+        pitch_deg=0.0,
+        yaw_deg=153.5,
+        latitude_std=0.0,
+        longitude_std=0.0,
+        altitude_std=0.0,
+        velocity_n_std=0.0,
+        velocity_e_std=0.0,
+        velocity_u_std=0.0,
+        roll_std_deg=0.01,
+        pitch_std_deg=0.01,
+        yaw_std_deg=0.02,
+    )
+    workspace._on_ms_frame(
+        Ms6222FrameEnvelope(
+            frame_type=Ms6222FrameType.INSPVAXB,
+            raw=b"invalid-quality",
+            host_monotonic_ns=time.monotonic_ns() + 30_000_000,
+            host_wall_time_ns=time.time_ns(),
+            crc_valid=True,
+            protocol_version=1,
+            record=invalid_record,
+        )
+    )
+
+    assert [sample.source for sample in published] == [
+        FixtureAttitudeSource.PLATFORM_TARGET,
+        FixtureAttitudeSource.MS6222_TRUE_HEADING,
+        FixtureAttitudeSource.MS6222_RELATIVE,
+    ]
+    assert published[0].metadata_event()["quality"]["fact"] == "command_sent"
+    assert not published[1].valid and not published[2].valid
+    assert published[2].invalid_reason == "reference_quality_invalid"
+    workspace.shutdown()
+    workspace.close()
 
 
 def test_fixture_workspace_selects_model_and_materializes_internal_profile(
@@ -166,7 +675,7 @@ def test_automatic_qualification_one_click_opens_reference_before_session(
     workspace.close()
 
 
-def test_fixture_workspace_upgrades_driver_endpoint_to_platform_service(
+def test_fixture_workspace_preserves_installation_endpoints_and_reconciles_model_facts(
     qapp,
     tmp_path: Path,
     monkeypatch,
@@ -188,7 +697,8 @@ def test_fixture_workspace_upgrades_driver_endpoint_to_platform_service(
     profile_store = FixtureProfileStore(tmp_path / "profiles-endpoint-upgrade")
     old_profile = replace(
         fixture_model_preset("lingjing-a6-200mm").create_profile(),
-        host="192.168.15.201",
+        local_ipv4="192.168.15.99",
+        command_port=9800,
         pitch_sign=-1,
     )
     profile_store.save(old_profile)
@@ -204,15 +714,18 @@ def test_fixture_workspace_upgrades_driver_endpoint_to_platform_service(
 
     assert workspace.profile is not None
     assert workspace.profile.revision == 2
-    assert workspace.profile.host == "192.168.15.101"
-    assert workspace.profile.pitch_sign == -1
+    assert workspace.profile.local_ipv4 == "192.168.15.99"
+    assert workspace.profile.feedback_port == 8410
+    assert workspace.profile.controller_ipv4 == "192.168.15.201"
+    assert workspace.profile.command_port == 9800
+    assert (workspace.profile.roll_sign, workspace.profile.pitch_sign, workspace.profile.yaw_sign) == (-1, 1, -1)
     assert workspace.profile.center_pose == old_profile.center_pose
     assert profile_store.load(old_profile.profile_id) == workspace.profile
     workspace.shutdown()
     workspace.close()
 
 
-def test_windows_platform_service_listener_is_required_before_motion_session(
+def test_motion_session_start_gate_uses_profile_and_safety_confirmation(
     qapp,
     tmp_path: Path,
     monkeypatch,
@@ -222,44 +735,23 @@ def test_windows_platform_service_listener_is_required_before_motion_session(
         FixtureCalibrationStore,
         FixtureControlLease,
         FixtureProfileStore,
-        LingjingPlatformServiceController,
-        PlatformServiceState,
     )
     from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
 
     monkeypatch.setenv("HOME", str(tmp_path))
     settings = Settings()
-    controller = LingjingPlatformServiceController(
-        resource_root=tmp_path / "missing-service-resource",
-        runtime_root=tmp_path / "service-runtime",
-        platform_name="win32",
-        local_ip_provider=lambda: {"192.168.15.49"},
-        listener_provider=lambda: (),
-    )
     workspace = FixtureDebugWorkspace(
         settings,
         FixtureControlLease(),
         profile_store=FixtureProfileStore(tmp_path / "profiles-service-gate"),
         calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-service-gate"),
         session_root=tmp_path / "sessions-service-gate",
-        platform_service=controller,
+        controller_factory=_controller_factory(),
         motion_only=True,
     )
     for check in workspace._safety_checks:
         check.setChecked(True)
 
-    controller.ensure_running()
-    assert controller.snapshot.state == PlatformServiceState.FAILED
-    assert not workspace._session_start.isEnabled()
-    assert "192.168.15.101" in workspace._service_status.text()
-
-    controller._publish(
-        PlatformServiceState.LISTENING,
-        "UDP 9800 is listening",
-        pid=4102,
-        owned=True,
-        runtime_dir=tmp_path / "service-runtime",
-    )
     assert workspace._session_start.isEnabled()
 
     workspace.shutdown()
@@ -289,7 +781,7 @@ def test_engineering_session_requires_no_batch_dut_or_reference(
         profile_store=profile_store,
         calibration_store=FixtureCalibrationStore(tmp_path / "calibrations"),
         session_root=tmp_path / "sessions",
-        control_sender=lambda data, endpoint: not commands.append((data, endpoint)),
+        controller_factory=_controller_factory(commands),
     )
 
     assert workspace.profile is not None
@@ -301,9 +793,15 @@ def test_engineering_session_requires_no_batch_dut_or_reference(
     session_dir = workspace.start_engineering_session()
     assert workspace.session_active
     assert workspace._ms_worker is None
+    assert _wait_until(
+        qapp,
+        lambda: workspace._control.controller.snapshot.state.value == "ready",
+    )
     workspace._control.submit_axis_move("roll", 4.0, total_duration_ms=300)
     assert _wait_until(qapp, lambda: len(workspace._run_summaries) == 1)
-    assert commands == [(b"@A6T:4,0,0,0,0,100,300#", ("192.168.1.50", 9800))]
+    assert len(commands) == 1
+    assert commands[0][0].startswith(b"\xAA\x55\x00\x1b\xC0")
+    assert commands[0][1] == ("192.168.15.201", 7408)
 
     workspace._begin_session_finish(
         conclusion=FixtureSessionConclusion.INCONCLUSIVE,
@@ -351,7 +849,7 @@ def test_finishing_keeps_ms_evidence_until_current_a6t_completion(
             tmp_path / "calibrations-finish-window"
         ),
         session_root=tmp_path / "sessions-finish-window",
-        control_sender=lambda _data, _endpoint: True,
+        controller_factory=_controller_factory(),
     )
     for check in workspace._safety_checks:
         check.setChecked(True)
@@ -413,7 +911,7 @@ def test_long_session_analysis_runs_outside_the_ui_thread(
             tmp_path / "calibrations-background-analysis"
         ),
         session_root=tmp_path / "sessions-background-analysis",
-        control_sender=lambda _data, _endpoint: True,
+        controller_factory=_controller_factory(),
     )
     for check in workspace._safety_checks:
         check.setChecked(True)
@@ -502,7 +1000,7 @@ def test_event_recording_failure_finalizes_session_as_incomplete(
             tmp_path / "calibrations-event-failure"
         ),
         session_root=tmp_path / "sessions-event-failure",
-        control_sender=lambda _data, _endpoint: True,
+        controller_factory=_controller_factory(),
     )
     for check in workspace._safety_checks:
         check.setChecked(True)
@@ -553,7 +1051,7 @@ def test_ms_frame_recording_failure_finalizes_session_as_incomplete(
         profile_store=profile_store,
         calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-ms-failure"),
         session_root=tmp_path / "sessions-ms-failure",
-        control_sender=lambda _data, _endpoint: True,
+        controller_factory=_controller_factory(),
     )
     for check in workspace._safety_checks:
         check.setChecked(True)
@@ -614,7 +1112,7 @@ def test_metric_finalization_failure_produces_incomplete_result(
             tmp_path / "calibrations-metric-failure"
         ),
         session_root=tmp_path / "sessions-metric-failure",
-        control_sender=lambda _data, _endpoint: True,
+        controller_factory=_controller_factory(),
     )
     for check in workspace._safety_checks:
         check.setChecked(True)
@@ -757,7 +1255,7 @@ def test_active_session_requires_close_confirmation(
         profile_store=profile_store,
         calibration_store=FixtureCalibrationStore(tmp_path / "calibrations-close"),
         session_root=tmp_path / "sessions-close",
-        control_sender=lambda _data, _endpoint: True,
+        controller_factory=_controller_factory(),
     )
     for check in workspace._safety_checks:
         check.setChecked(True)

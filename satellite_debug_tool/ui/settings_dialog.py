@@ -575,5 +575,5 @@ class SettingsDialog(QDialog):
             ProductionConfigurationDialog,
         )
 
-        dialog = ProductionConfigurationDialog(self)
+        dialog = ProductionConfigurationDialog(self, settings=self._settings)
         dialog.exec()

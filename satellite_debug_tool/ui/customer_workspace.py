@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
+from satellite_debug_tool.core.production import FixtureRuntime
 from satellite_debug_tool.ui import icons, styles as S
+from satellite_debug_tool.ui.customer_fixture_dialog import CustomerFixtureDialog
 from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_playback_view import CustomerPlaybackView
@@ -119,6 +121,7 @@ class CustomerWorkspace(QWidget):
         external_power_presenter=None,
         iperf_controller=None,
         iperf_store=None,
+        fixture_runtime: Optional[FixtureRuntime] = None,
     ) -> None:
         super().__init__(parent)
         if (device_directory is None) != (page_bundle_factory is None):
@@ -134,6 +137,8 @@ class CustomerWorkspace(QWidget):
         self._external_power_presenter = external_power_presenter
         self._iperf_controller = iperf_controller
         self._iperf_store = iperf_store
+        self._fixture_runtime = fixture_runtime
+        self._fixture_dialog: Optional[CustomerFixtureDialog] = None
         self._multi_device_enabled = device_directory is not None
         self._theme = "dark"
         self._scale = "small"
@@ -321,6 +326,7 @@ class CustomerWorkspace(QWidget):
             self._page_ids.append(page_id)
             self._stack.addWidget(page)
         side.addStretch(1)
+        self._add_fixture_button(side)
 
         root.addWidget(self._sidebar)
         root.addWidget(self._stack, 1)
@@ -451,6 +457,7 @@ class CustomerWorkspace(QWidget):
             self._page_ids.append(page_id)
             self._stack.addWidget(page)
         side.addStretch(1)
+        self._add_fixture_button(side)
 
         root.addWidget(self._sidebar)
         root.addWidget(self._stack, 1)
@@ -462,6 +469,28 @@ class CustomerWorkspace(QWidget):
         self._connect_directory_signal("device_changed", self._refresh_directory)
         self._refresh_directory()
         self.set_page(0)
+
+    def _add_fixture_button(self, layout: QVBoxLayout) -> None:
+        self._fixture_button = QPushButton(tr("Motion platform..."))
+        self._fixture_button.setObjectName("customerFixtureButton")
+        self._fixture_button.setEnabled(self._fixture_runtime is not None)
+        self._fixture_button.clicked.connect(self.open_fixture_dialog)
+        layout.addWidget(self._fixture_button)
+
+    def open_fixture_dialog(self) -> None:
+        if self._fixture_runtime is None:
+            return
+        dialog = self._fixture_dialog
+        if dialog is None:
+            dialog = CustomerFixtureDialog(self._settings, self._fixture_runtime, self)
+            dialog.finished.connect(self._clear_fixture_dialog)
+            self._fixture_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _clear_fixture_dialog(self, _result: int) -> None:
+        self._fixture_dialog = None
 
     def _connect_directory_signal(self, name: str, slot) -> None:
         signal = getattr(self._device_directory, name, None)
@@ -628,6 +657,13 @@ class CustomerWorkspace(QWidget):
     def shutdown(self) -> bool:
         if self._shutdown_done:
             return True
+        dialog = self._fixture_dialog
+        if dialog is not None:
+            if not dialog.workspace.confirm_shutdown():
+                return False
+            dialog.workspace.shutdown()
+            dialog.close()
+            self._fixture_dialog = None
         if not self._multi_device_enabled:
             self.deactivate_view()
             for host in (
@@ -702,6 +738,7 @@ class CustomerWorkspace(QWidget):
 
     def retranslate_ui(self) -> None:
         self._section_label.setText(tr("Product operation"))
+        self._fixture_button.setText(tr("Motion platform..."))
         for button, (_page_id, label, _icon_name) in zip(
             self._nav_buttons, self._PAGE_DEFS
         ):

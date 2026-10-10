@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -119,8 +120,7 @@ class TestRestartApp:
         assert captured[0][0][0] == "echo hi"
         assert captured[0][1].get("shell") is True
 
-    def test_no_executable_found_warns_only(self, updater_main, tmp_path, monkeypatch, caplog):
-        """install_dir 内没有可执行 → log.warning，不崩。"""
+    def test_no_executable_found_is_restart_failure(self, updater_main, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setattr(
             "subprocess.Popen",
@@ -128,11 +128,45 @@ class TestRestartApp:
         )
         empty = tmp_path / "Empty"
         empty.mkdir()
-        # 不应抛异常
-        updater_main.restart_app(empty)
+        with pytest.raises(OSError, match="No launchable executable"):
+            updater_main.restart_app(empty)
 
 
 class TestEndToEndMain:
+    def test_wait_timeout_persists_failed_stage(
+        self,
+        updater_main,
+        tmp_path,
+        monkeypatch,
+    ):
+        install = tmp_path / "SatelliteDebugTool"
+        install.mkdir()
+        volume = tmp_path / "release.7z"
+        volume.write_bytes(b"unused")
+        status = tmp_path / "update-status.json"
+        log = tmp_path / "updater.log"
+        monkeypatch.setattr(updater_main, "wait_for_pid", lambda *a, **kw: False)
+        monkeypatch.setattr(
+            updater_main,
+            "self_relocate_and_relaunch",
+            lambda *a, **kw: None,
+        )
+
+        rc = updater_main.main([
+            "--pid", "99999",
+            "--install-dir", str(install),
+            "--workdir", str(tmp_path / "work"),
+            "--log", str(log),
+            "--status", str(status),
+            "--target-version", "v-test",
+            "--volumes", str(volume),
+        ])
+
+        assert rc == 2
+        payload = json.loads(status.read_text(encoding="utf-8"))
+        assert payload["state"] == "failed"
+        assert payload["stage"] == "waiting_for_app_exit"
+
     def test_main_success_path(self, updater_main, tmp_path, monkeypatch):
         """端到端：构造 7z 分卷 + 假 install_dir → main() 返回 0。"""
         py7zr = pytest.importorskip("py7zr")
@@ -152,14 +186,17 @@ class TestEndToEndMain:
 
         # 3. 拦截 wait_for_pid 和 restart_app，不真等不真启
         monkeypatch.setattr(updater_main, "wait_for_pid", lambda *a, **kw: True)
-        monkeypatch.setattr(updater_main, "restart_app", lambda *a, **kw: None)
+        monkeypatch.setattr(updater_main, "restart_app", lambda *a, **kw: installed / "SatelliteDebugTool.exe")
         monkeypatch.setattr(updater_main, "self_relocate_and_relaunch", lambda *a, **kw: None)
 
         workdir = tmp_path / "_work"
+        status = tmp_path / "update-status.json"
         rc = updater_main.main([
             "--pid", "99999",
             "--install-dir", str(installed),
             "--workdir", str(workdir),
+            "--status", str(status),
+            "--target-version", "v-test",
             "--volumes", *(str(v) for v in vols),
         ])
         assert rc == 0
@@ -169,3 +206,4 @@ class TestEndToEndMain:
         backups = list(tmp_path.glob("MyApp.bak.*"))
         assert len(backups) == 1
         assert (backups[0] / "v.txt").read_text() == "OLD"
+        assert '"state": "completed"' in status.read_text(encoding="utf-8")

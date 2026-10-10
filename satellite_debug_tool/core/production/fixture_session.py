@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 import csv
@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import queue
 import threading
+import time
 from typing import Any, Mapping, Optional
 import uuid
 import zipfile
@@ -22,7 +23,7 @@ from .fixture_analysis import (
     iter_attitude_comparisons,
 )
 from .fixture_profile import WorkstationFixtureProfile
-from .motion_platform import PlatformSendResult
+from satellite_debug_tool.core.motion_platform import MotionCommandEvent
 from .ms6222_protocol import Ms6222FrameEnvelope
 
 
@@ -87,6 +88,10 @@ class FixtureSessionRecorder:
             "measurements": 0,
             "comparisons": 0,
             "events": 0,
+            "platform_feedback": 0,
+            "platform_events": 0,
+            "platform_controller_commands": 0,
+            "platform_actions": 0,
         }
 
     @property
@@ -116,6 +121,15 @@ class FixtureSessionRecorder:
             + "\n",
             encoding="utf-8",
         )
+        (self.session_dir / "motion_config.json").write_text(
+            json.dumps(
+                asdict(self.profile.to_motion_config()),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         self._write_manifest(status="incomplete", conclusion=FixtureSessionConclusion.INCONCLUSIVE)
         self._thread = threading.Thread(
             target=self._writer_main,
@@ -132,31 +146,46 @@ class FixtureSessionRecorder:
 
     def record_command(
         self,
-        result: PlatformSendResult,
+        result: MotionCommandEvent,
         *,
-        action: str,
         sequence: Optional[int] = None,
     ) -> None:
         self._enqueue(
             "command",
             {
-                "action": str(action),
+                "action": result.action,
                 "sequence": sequence,
                 "host_monotonic_ns": result.monotonic_ns,
-                "planned_completion_monotonic_ns": (
-                    result.monotonic_ns
-                    + int(result.duration_ms or 0) * 1_000_000
-                ),
-                "sent": result.sent,
+                "planned_completion_monotonic_ns": None,
+                "sent": True,
                 "duration_ms": result.duration_ms,
-                "logical_pose": asdict(result.logical_pose),
-                "command_pose": asdict(result.command_pose),
-                "raw_command_ascii": result.raw_command.decode("ascii", errors="replace"),
-                "evidence_level": result.evidence_level.value,
-                "error": result.error,
+                "logical_pose": asdict(result.target_pose) if result.target_pose else None,
+                "target_pulses": list(result.target_pulses),
+                "generation": result.generation,
+                "raw_command_hex": result.raw_command.hex(),
+                "evidence_level": "command_sent",
+                "error": "",
             },
         )
         self._counts["commands"] += 1
+
+    def record(self, stream: str, event_type: str, payload: object) -> None:
+        """接收运动平台组件的命令、反馈和状态证据。"""
+        kind = {
+            "feedback": "platform_feedback",
+            "events": "platform_events",
+            "commands": "platform_controller_commands",
+            "actions": "platform_actions",
+        }.get(str(stream))
+        if kind is None:
+            raise FixtureSessionError(f"unsupported motion evidence stream: {stream}")
+        self._enqueue(kind, {
+            "host_monotonic_ns": time.monotonic_ns(),
+            "host_wall_time_ns": time.time_ns(),
+            "event_type": str(event_type),
+            "payload": _evidence_json_value(payload),
+        })
+        self._counts[kind] += 1
 
     def record_ms_frame(self, envelope: Ms6222FrameEnvelope) -> None:
         payload = {
@@ -418,6 +447,18 @@ class FixtureSessionRecorder:
                 (self.session_dir / "platform_commands.jsonl").open(
                     "a", encoding="utf-8", buffering=1
                 ) as command_file,
+                (self.session_dir / "platform_controller_commands.jsonl").open(
+                    "a", encoding="utf-8", buffering=1
+                ) as controller_command_file,
+                (self.session_dir / "platform_feedback.jsonl").open(
+                    "a", encoding="utf-8", buffering=1
+                ) as controller_feedback_file,
+                (self.session_dir / "platform_state_events.jsonl").open(
+                    "a", encoding="utf-8", buffering=1
+                ) as controller_event_file,
+                (self.session_dir / "platform_actions.jsonl").open(
+                    "a", encoding="utf-8", buffering=1
+                ) as controller_action_file,
                 (self.session_dir / "ms6222_raw.jsonl").open(
                     "a", encoding="utf-8", buffering=1
                 ) as raw_file,
@@ -470,6 +511,14 @@ class FixtureSessionRecorder:
                         break
                     if kind == "command":
                         _write_json_line(command_file, payload)
+                    elif kind == "platform_controller_commands":
+                        _write_json_line(controller_command_file, payload)
+                    elif kind == "platform_feedback":
+                        _write_json_line(controller_feedback_file, payload)
+                    elif kind == "platform_events":
+                        _write_json_line(controller_event_file, payload)
+                    elif kind == "platform_actions":
+                        _write_json_line(controller_action_file, payload)
                     elif kind == "ms":
                         _write_json_line(raw_file, payload)
                         if payload["valid"] and payload["record"] is not None:
@@ -498,6 +547,10 @@ class FixtureSessionRecorder:
                     elif kind == "flush":
                         for file_object in (
                             command_file,
+                            controller_command_file,
+                            controller_feedback_file,
+                            controller_event_file,
+                            controller_action_file,
                             raw_file,
                             parsed_file,
                             comparison_file,
@@ -559,6 +612,20 @@ def _write_json_line(file_object, payload: Mapping[str, Any]) -> None:
     file_object.write(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
     )
+
+
+def _evidence_json_value(value: Any) -> Any:
+    if is_dataclass(value):
+        value = asdict(value)
+    if isinstance(value, bytes):
+        return {"hex": value.hex(), "size": len(value)}
+    if isinstance(value, Mapping):
+        return {str(key): _evidence_json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_evidence_json_value(item) for item in value]
+    if isinstance(value, Enum):
+        return value.value
+    return value
 
 
 def _comparison_from_csv(row: Mapping[str, str]) -> AttitudeComparison:

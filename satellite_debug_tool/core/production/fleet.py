@@ -764,6 +764,21 @@ class DeviceSession(QObject):
         recorder = self._recorder
         return recorder.write_control_frame(frame) if recorder is not None else False
 
+    def record_fixture_attitude_sample(self, sample: object) -> Optional[bool]:
+        """Write one shared fixture fact into this device-owned evidence SDB."""
+
+        recorder = self._recorder
+        if recorder is None:
+            return None
+        metadata_builder = getattr(sample, "metadata_event", None)
+        timestamp_ns = getattr(sample, "host_wall_time_ns", None)
+        if not callable(metadata_builder) or timestamp_ns is None:
+            return False
+        return recorder.write_metadata_event(
+            dict(metadata_builder()),
+            host_timestamp_ns=int(timestamp_ns),
+        )
+
     def rebind_endpoint(
         self,
         endpoint: Endpoint,
@@ -1119,6 +1134,26 @@ class FleetController(QObject):
                 and success
             )
         return success
+
+    def record_fixture_attitude_sample(self, sample: object) -> bool:
+        """Fan one fixture sample into every currently armed device recorder."""
+
+        failures = []
+        for session in self.sessions():
+            result = session.record_fixture_attitude_sample(sample)
+            if result is False:
+                failures.append(session)
+        if failures:
+            self.error.emit(
+                "fixture attitude evidence gap for "
+                + ", ".join(
+                    item.serial_number
+                    or f"{item.endpoint[0]}:{item.endpoint[1]}"
+                    for item in failures
+                )
+            )
+            return False
+        return True
 
     def freeze_batch_participants(
         self,

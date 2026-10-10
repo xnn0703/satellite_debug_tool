@@ -16,10 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -54,6 +51,10 @@ from satellite_debug_tool.updater.downloader import (
     Downloader,
 )
 from satellite_debug_tool.updater.errors import UpdaterError
+from satellite_debug_tool.updater.handoff import (
+    UpdateLaunchRequest,
+    prepare_update_launch_request,
+)
 
 
 log = logging.getLogger(__name__)
@@ -199,6 +200,7 @@ class UpdateDialog(QDialog):
 
         self._latest: Optional[LatestRelease] = None
         self._download_dir: Optional[Path] = None
+        self._launch_request: Optional[UpdateLaunchRequest] = None
 
         # 线程对象（每次操作 new 一次）
         self._check_thread: Optional[QThread] = None
@@ -497,7 +499,7 @@ class UpdateDialog(QDialog):
         QTimer.singleShot(100, lambda: self._do_launch_updater(volumes))
 
     def _do_launch_updater(self, volumes: List[Path]) -> None:
-        # 找 install_dir + updater 可执行
+        # 这里只冻结更新交接请求；应用关闭与 updater 启动由 MainWindow 持有。
         install_dir = _detect_install_dir()
         updater_exe = _detect_updater_exe()
         if install_dir is None or updater_exe is None:
@@ -510,42 +512,31 @@ class UpdateDialog(QDialog):
             )
             return
 
-        workdir = Path(tempfile.mkdtemp(prefix="satdbg_update_"))
-        log_path = workdir / "updater.log"
-
-        argv = [
-            str(updater_exe),
-            "--pid", str(os.getpid()),
-            "--install-dir", str(install_dir),
-            "--workdir", str(workdir),
-            "--log", str(log_path),
-            "--volumes", *(str(v) for v in volumes),
-        ]
-        log.info("Starting updater: %s", argv)
         try:
-            if sys.platform.startswith("win"):
-                # DETACHED_PROCESS = 0x08
-                subprocess.Popen(argv, creationflags=0x00000008, close_fds=True)
-            else:
-                subprocess.Popen(argv, start_new_session=True, close_fds=True)
-        except OSError as e:
-            self._show_error("Failed to start updater: {detail}", detail=e)
+            transaction_dir = self._download_dir
+            if transaction_dir is None:
+                raise ValueError("update download directory is unavailable")
+            target_version = "" if self._latest is None else self._latest.tag_name
+            self._launch_request = prepare_update_launch_request(
+                target_version=target_version,
+                install_dir=install_dir,
+                updater_executable=updater_exe,
+                volumes=volumes,
+                transaction_dir=transaction_dir,
+            )
+        except (OSError, ValueError) as exc:
+            self._show_error("Failed to prepare updater: {detail}", detail=exc)
             return
 
         set_translatable_text(
-            "✅ Updater started; the application will exit...",
+            "✅ Update is ready; closing the application safely...",
             self._lbl_launch_detail,
         )
-        # 留一点点时间显示提示，再退出
-        QTimer.singleShot(500, self._exit_app)
+        QTimer.singleShot(100, self.accept)
 
-    def _exit_app(self) -> None:
-        # 优雅退出：先关弹窗，让 main loop quit
-        self.accept()
-        from PySide6.QtWidgets import QApplication
-        QApplication.instance().quit()
-        # 兜底
-        QTimer.singleShot(200, lambda: sys.exit(0))
+    @property
+    def launch_request(self) -> Optional[UpdateLaunchRequest]:
+        return self._launch_request
 
     # ---------- 错误 / 清理 ----------
 

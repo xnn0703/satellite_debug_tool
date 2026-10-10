@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import pytest
 
@@ -12,6 +13,13 @@ from satellite_debug_tool.updater.applier import (
     Applier,
     ApplyError,
     ApplyResult,
+    PayloadContract,
+)
+
+
+WINDOWS_CONTRACT = PayloadContract(
+    executable_name="SatelliteDebugTool.exe",
+    updater_name="updater.exe",
 )
 
 
@@ -30,6 +38,10 @@ def _make_7z_with_app(tmp_path: Path, app_name: str = "SatelliteDebugTool.app",
     app_root.mkdir(parents=True)
     if not contents:
         contents = {"hello.txt": b"hello", "Contents/Info.plist": b"<plist/>"}
+    contents = dict(contents)
+    contents.setdefault("SatelliteDebugTool.exe", b"PE-new")
+    contents.setdefault("updater.exe", b"PE-updater")
+    contents.setdefault("_internal/runtime.bin", b"runtime")
     for rel, data in contents.items():
         f = app_root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +150,30 @@ class TestExtract:
         with pytest.raises(ApplyError):
             Applier().extract_to(tmp_path / "nope.7z", tmp_path / "_stage")
 
+    def test_extract_reports_elapsed_heartbeat(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        py7zr = pytest.importorskip("py7zr")
+        archive = _make_7z_with_app(tmp_path, app_name="MyApp")
+        original_extractall = py7zr.SevenZipFile.extractall
+
+        def slow_extractall(seven_zip, *args, **kwargs):
+            time.sleep(0.04)
+            return original_extractall(seven_zip, *args, **kwargs)
+
+        monkeypatch.setattr(py7zr.SevenZipFile, "extractall", slow_extractall)
+        captured = []
+        Applier(
+            on_progress=lambda stage, value: captured.append((stage, value)),
+            heartbeat_interval=0.01,
+        ).extract_to(archive, tmp_path / "_stage")
+
+        heartbeats = [value for stage, value in captured if stage == "extracting"]
+        assert heartbeats
+        assert all(value > 0 for value in heartbeats)
+
 
 # ============================ swap_install_dir ============================
 
@@ -151,11 +187,11 @@ class TestSwap:
         ext_app = ext_root / "MyApp"
         ext_app.mkdir(parents=True)
         (ext_app / "new.txt").write_text("new")
-        return installed, ext_root
+        return installed, ext_app
 
     def test_swap_success_creates_backup_and_replaces(self, tmp_path):
-        installed, ext_root = self._prepare(tmp_path)
-        result = Applier().swap_install_dir(installed, ext_root)
+        installed, payload_root = self._prepare(tmp_path)
+        result = Applier().swap_install_dir(installed, payload_root)
         assert isinstance(result, ApplyResult)
         # 替换后的 install_dir 含 new.txt 不含 old.txt
         assert (installed / "new.txt").exists()
@@ -171,7 +207,7 @@ class TestSwap:
         ext_app.mkdir(parents=True)
         (ext_app / "fresh.txt").write_text("fresh")
         installed = tmp_path / "MyApp"   # 不存在
-        result = Applier().swap_install_dir(installed, ext_root)
+        result = Applier().swap_install_dir(installed, ext_app)
         assert installed.exists()
         assert (installed / "fresh.txt").exists()
         # backup 也不应存在（因为没有旧版可备份）
@@ -222,8 +258,90 @@ class TestApplyFlow:
         (installed / "v.txt").write_text("OLD VERSION")
         # 4. 一站式 apply
         workdir = tmp_path / "_work"
-        result = Applier().apply(vols, installed, workdir)
+        result = Applier().apply(
+            vols,
+            installed,
+            workdir,
+            payload_contract=WINDOWS_CONTRACT,
+        )
         # 5. 验证
         assert (installed / "v.txt").read_bytes() == b"NEW VERSION"
         assert result.backup_dir.exists()
         assert (result.backup_dir / "v.txt").read_text() == "OLD VERSION"
+
+    def test_real_ci_wrapper_resolves_payload_before_swap(self, tmp_path):
+        py7zr = pytest.importorskip("py7zr")
+        source = tmp_path / "source" / "release" / "satellite_debug_tool-win-v1.4.0"
+        (source / "_internal").mkdir(parents=True)
+        (source / "SatelliteDebugTool.exe").write_bytes(b"PE-new")
+        (source / "updater.exe").write_bytes(b"PE-updater")
+        (source / "_internal" / "runtime.bin").write_bytes(b"runtime")
+        archive = tmp_path / "release.7z"
+        with py7zr.SevenZipFile(archive, mode="w") as seven_zip:
+            seven_zip.writeall(tmp_path / "source", arcname=".")
+        installed = tmp_path / "SatelliteDebugTool"
+        installed.mkdir()
+        (installed / "SatelliteDebugTool.exe").write_bytes(b"PE-old")
+
+        Applier().apply(
+            [archive],
+            installed,
+            tmp_path / "work",
+            payload_contract=WINDOWS_CONTRACT,
+        )
+
+        assert (installed / "SatelliteDebugTool.exe").read_bytes() == b"PE-new"
+        assert not (installed / "release").exists()
+
+    def test_missing_payload_is_rejected_before_installed_files_move(self, tmp_path):
+        py7zr = pytest.importorskip("py7zr")
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "readme.txt").write_text("not an app")
+        archive = tmp_path / "invalid.7z"
+        with py7zr.SevenZipFile(archive, mode="w") as seven_zip:
+            seven_zip.writeall(source, arcname=".")
+        installed = tmp_path / "SatelliteDebugTool"
+        installed.mkdir()
+        original = installed / "SatelliteDebugTool.exe"
+        original.write_bytes(b"PE-old")
+
+        with pytest.raises(ApplyError) as exc:
+            Applier().apply(
+                [archive],
+                installed,
+                tmp_path / "work",
+                payload_contract=WINDOWS_CONTRACT,
+            )
+
+        assert exc.value.code == "apply_payload_missing"
+        assert original.read_bytes() == b"PE-old"
+        assert not list(tmp_path.glob("SatelliteDebugTool.bak.*"))
+
+    def test_multiple_payloads_are_rejected_before_installed_files_move(self, tmp_path):
+        py7zr = pytest.importorskip("py7zr")
+        source = tmp_path / "source"
+        for name in ("first", "second"):
+            payload = source / name
+            (payload / "_internal").mkdir(parents=True)
+            (payload / "SatelliteDebugTool.exe").write_bytes(b"PE-new")
+            (payload / "updater.exe").write_bytes(b"PE-updater")
+            (payload / "_internal" / "runtime.bin").write_bytes(b"runtime")
+        archive = tmp_path / "ambiguous.7z"
+        with py7zr.SevenZipFile(archive, mode="w") as seven_zip:
+            seven_zip.writeall(source, arcname=".")
+        installed = tmp_path / "SatelliteDebugTool"
+        installed.mkdir()
+        original = installed / "SatelliteDebugTool.exe"
+        original.write_bytes(b"PE-old")
+
+        with pytest.raises(ApplyError) as exc:
+            Applier().apply(
+                [archive],
+                installed,
+                tmp_path / "work",
+                payload_contract=WINDOWS_CONTRACT,
+            )
+
+        assert exc.value.code == "apply_payload_ambiguous"
+        assert original.read_bytes() == b"PE-old"

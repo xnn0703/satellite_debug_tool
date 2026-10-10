@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "keys": [
+    {
+      "key_id": "afd-host-aes-2026",
+      "label": "AFD host package key 2026",
+      "key_base64": "Pv94e09K/REN0y+NQPOL7hDDOtsYNQrtgA8XvQoRlUE="
+    }
+  ]
+}

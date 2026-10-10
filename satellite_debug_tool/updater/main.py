@@ -31,6 +31,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from satellite_debug_tool.updater.status import write_update_status
+
 
 # ---------- 日志 ----------
 
@@ -50,6 +52,29 @@ def _setup_logging(log_path: Optional[Path] = None) -> None:
 
 
 log = logging.getLogger("updater")
+
+
+def _publish_status(path: Path, state: str, **details) -> None:
+    try:
+        write_update_status(path, state, **details)
+    except OSError as exc:
+        log.error("Could not persist updater state %s: %s", state, exc)
+
+
+def _show_windows_failure(stage: str, detail: str, log_path: Path) -> None:
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            f"自动更新失败\n\n失败阶段：{stage}\n原因：{detail}\n\n日志：{log_path}",
+            "SatelliteDebugTool Updater",
+            0x10,
+        )
+    except Exception:
+        pass
 
 
 # ---------- 等主进程退出 ----------
@@ -122,8 +147,8 @@ def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
     new_argv = [str(dst_exe)] + argv + ["--relocated"]
     log.info(f"relaunch: {new_argv}")
     if sys.platform.startswith("win"):
-        # DETACHED_PROCESS = 0x00000008
-        subprocess.Popen(new_argv, creationflags=0x00000008, close_fds=True)
+        # Relocated updater owns a visible progress console.
+        subprocess.Popen(new_argv, creationflags=0x00000010, close_fds=True)
     else:
         subprocess.Popen(new_argv, start_new_session=True, close_fds=True)
     sys.exit(0)
@@ -131,17 +156,17 @@ def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
 
 # ---------- 启动新版主程序 ----------
 
-def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> None:
+def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> Path:
     """升级完成后启动新版主程序。"""
     if restart_cmd:
         log.info("Using user-specified restart command: %s", restart_cmd)
         subprocess.Popen(restart_cmd, shell=True, close_fds=True)
-        return
+        return install_dir
 
     if sys.platform.startswith("darwin") and install_dir.suffix == ".app":
         log.info(f"open .app: {install_dir}")
         subprocess.Popen(["open", str(install_dir)], close_fds=True)
-        return
+        return install_dir
 
     # Windows / Linux：找 install_dir 下的同名可执行（onedir 模式约定）
     name = install_dir.name
@@ -158,8 +183,8 @@ def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> None:
                 subprocess.Popen([str(c)], creationflags=0x00000008, close_fds=True)
             else:
                 subprocess.Popen([str(c)], start_new_session=True, close_fds=True)
-            return
-    log.warning("No launchable executable found in install_dir=%s", install_dir)
+            return c
+    raise OSError(f"No launchable executable found in install_dir={install_dir}")
 
 
 # ---------- CLI ----------
@@ -179,6 +204,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Restart command after update (defaults to the platform install target)")
     parser.add_argument("--log", type=Path, default=None,
                         help="Log file path")
+    parser.add_argument("--status", type=Path, required=True,
+                        help="Persistent update transaction status path")
+    parser.add_argument("--target-version", type=str, required=True,
+                        help="Release version being installed")
     parser.add_argument("--wait-timeout", type=float, default=30.0,
                         help="Seconds to wait for the main process to exit")
     parser.add_argument("--relocated", action="store_true",
@@ -192,22 +221,119 @@ def main(argv: Optional[List[str]] = None) -> int:
         self_relocate_and_relaunch(args.install_dir, arguments)
 
     # 等主进程退出
+    _publish_status(
+        args.status,
+        "waiting_for_app_exit",
+        target_version=args.target_version,
+        install_dir=str(args.install_dir),
+        log_path=str(args.log or ""),
+    )
     if not wait_for_pid(args.pid, args.wait_timeout):
-        log.error("Main process did not exit before the timeout; update aborted")
+        detail = "Main process did not exit before the timeout; update aborted"
+        log.error(detail)
+        _publish_status(args.status, "failed", stage="waiting_for_app_exit", detail=detail)
+        _show_windows_failure(
+            "waiting_for_app_exit",
+            detail,
+            args.log or args.status.parent / "updater.log",
+        )
         return 2
 
     # 应用更新
-    from satellite_debug_tool.updater.applier import Applier, ApplyError
+    from satellite_debug_tool.updater.applier import (
+        Applier,
+        ApplyError,
+        PayloadContract,
+    )
+
+    stage_states = {
+        "merge": "merging",
+        "extract": "extracting",
+        "extracting": "extracting",
+        "validate": "validating_payload",
+        "swap": "swapping",
+    }
+    current_state = ""
+
+    def on_progress(stage: str, value: float) -> None:
+        nonlocal current_state
+        state = stage_states[stage]
+        if stage == "extracting":
+            log.info("extracting elapsed %.1fs", value)
+        else:
+            log.info("%s %.1f%%", stage, value * 100.0)
+        if state != current_state:
+            current_state = state
+            _publish_status(
+                args.status,
+                state,
+                target_version=args.target_version,
+                install_dir=str(args.install_dir),
+            )
+
     try:
-        applier = Applier(on_progress=lambda stage, pct: log.info(f"{stage} {pct*100:.1f}%"))
-        result = applier.apply(args.volumes, args.install_dir, args.workdir)
+        applier = Applier(on_progress=on_progress)
+        contract = PayloadContract(
+            executable_name="SatelliteDebugTool.exe",
+            updater_name="updater.exe",
+        )
+        result = applier.apply(
+            args.volumes,
+            args.install_dir,
+            args.workdir,
+            payload_contract=contract,
+        )
         log.info("Update completed; previous version backup: %s", result.backup_dir)
     except ApplyError as e:
         log.error("Update failed: %s", e)
+        _publish_status(
+            args.status,
+            "failed",
+            stage=current_state or "applying",
+            error_code=e.code,
+            detail=str(e),
+        )
+        _show_windows_failure(
+            current_state or "applying",
+            str(e),
+            args.log or args.status.parent / "updater.log",
+        )
         return 3
 
     # 启动新版
-    restart_app(args.install_dir, args.restart_cmd)
+    _publish_status(
+        args.status,
+        "restarting",
+        target_version=args.target_version,
+        install_dir=str(args.install_dir),
+        backup_dir=str(result.backup_dir),
+    )
+    try:
+        launched = restart_app(args.install_dir, args.restart_cmd)
+    except OSError as exc:
+        log.error("Updated files are installed but restart failed: %s", exc)
+        _publish_status(
+            args.status,
+            "failed",
+            stage="restarting",
+            detail=str(exc),
+            backup_dir=str(result.backup_dir),
+        )
+        _show_windows_failure(
+            "restarting",
+            str(exc),
+            args.log or args.status.parent / "updater.log",
+        )
+        return 1
+
+    _publish_status(
+        args.status,
+        "completed",
+        target_version=args.target_version,
+        install_dir=str(args.install_dir),
+        backup_dir=str(result.backup_dir),
+        launched=str(launched),
+    )
 
     # 清理 workdir（保留 backup_dir 让用户验证）
     try:

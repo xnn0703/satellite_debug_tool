@@ -22,10 +22,9 @@ from satellite_debug_tool.core.production.fixture_analysis import (
     FixtureCalibration,
     TimedAttitude,
 )
-from satellite_debug_tool.core.production.models import EvidenceLevel
-from satellite_debug_tool.core.production.motion_platform import (
+from satellite_debug_tool.core.motion_platform import (
+    MotionCommandEvent,
     PlatformPose,
-    PlatformSendResult,
 )
 from satellite_debug_tool.core.production.ms6222_protocol import Ms6222StreamParser
 from satellite_debug_tool.tests.test_ms6222_protocol import _ins_frame
@@ -36,10 +35,12 @@ def _profile() -> WorkstationFixtureProfile:
     return WorkstationFixtureProfile(
         profile_id="fixture-a",
         revision=1,
-        host="192.168.1.50",
-        port=9800,
+        model_id="lingjing-a6-200mm",
+        local_ipv4="192.168.15.101",
+        feedback_port=8410,
+        controller_ipv4="192.168.15.201",
+        command_port=7408,
         center_pose=PlatformPose(0, 0, 0, 0, 0, 100),
-        reset_pose=PlatformPose(0, 0, 0, 0, 0, 0),
         roll_limits=limits,
         pitch_limits=limits,
         yaw_limits=limits,
@@ -47,16 +48,16 @@ def _profile() -> WorkstationFixtureProfile:
     )
 
 
-def _command() -> PlatformSendResult:
+def _command() -> MotionCommandEvent:
     pose = PlatformPose(1, 2, 3)
-    return PlatformSendResult(
-        sent=True,
-        raw_command=b"@A6T:1,2,3,0,0,100,100#",
-        logical_pose=pose,
-        command_pose=pose,
+    return MotionCommandEvent(
+        action="absolute",
+        raw_command=bytes.fromhex("aa55001bc000640000000000000000000000000000000000000000000000fbfb"),
+        target_pose=pose,
+        target_pulses=(0, 0, 0, 0, 0, 0),
         duration_ms=100,
         monotonic_ns=123,
-        evidence_level=EvidenceLevel.COMMAND_SENT,
+        generation=1,
     )
 
 
@@ -65,7 +66,11 @@ def test_complete_session_contains_snapshot_evidence_and_hashes(tmp_path: Path) 
         _profile(), root=tmp_path, session_id="session-complete", operator="operator-a"
     )
     recorder.start()
-    recorder.record_command(_command(), action="absolute", sequence=1)
+    recorder.record_command(_command(), sequence=1)
+    recorder.record("commands", "sent", _command())
+    recorder.record("feedback", "received", {"raw": b"\xAA\x55", "generation": 1})
+    recorder.record("events", "state", {"state": "ready"})
+    recorder.record("actions", "completed", {"maximum_error_pulses": 0})
     envelope = next(event for event in Ms6222StreamParser().feed(_ins_frame()) if event.valid)
     recorder.record_ms_frame(envelope)
     recorder.record_event("note", "fixture moved")
@@ -95,6 +100,16 @@ def test_complete_session_contains_snapshot_evidence_and_hashes(tmp_path: Path) 
     assert "summary.json" in manifest["file_sha256"]
     assert (result.session_dir / "ms6222_parsed.csv").read_text(encoding="utf-8").count("\n") == 2
     assert (result.session_dir / "platform_commands.jsonl").is_file()
+    assert (result.session_dir / "platform_controller_commands.jsonl").is_file()
+    assert (result.session_dir / "platform_feedback.jsonl").is_file()
+    assert (result.session_dir / "platform_state_events.jsonl").is_file()
+    assert (result.session_dir / "platform_actions.jsonl").is_file()
+    assert (result.session_dir / "motion_config.json").is_file()
+    feedback = json.loads(
+        (result.session_dir / "platform_feedback.jsonl").read_text(encoding="utf-8")
+    )
+    assert feedback["host_monotonic_ns"] > 0
+    assert feedback["host_wall_time_ns"] > 0
     summary = json.loads(
         (result.session_dir / "summary.json").read_text(encoding="utf-8")
     )
@@ -105,7 +120,8 @@ def test_complete_session_contains_snapshot_evidence_and_hashes(tmp_path: Path) 
     command = json.loads(
         (result.session_dir / "platform_commands.jsonl").read_text(encoding="utf-8")
     )
-    assert command["planned_completion_monotonic_ns"] == 100_000_123
+    assert command["planned_completion_monotonic_ns"] is None
+    assert command["raw_command_hex"].startswith("aa55")
 
 
 def test_abort_keeps_incomplete_manifest_and_raw_frames(tmp_path: Path) -> None:

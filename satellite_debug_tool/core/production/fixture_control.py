@@ -1,4 +1,4 @@
-"""Background A6/A6T command scheduler for the fixture debug workspace."""
+"""夹具页面的运动平台组件线程适配层。"""
 
 from __future__ import annotations
 
@@ -11,17 +11,17 @@ import uuid
 
 from PySide6.QtCore import QThread, Signal, Slot
 
+from satellite_debug_tool.core.motion_platform import (
+    DirectMotionPlatformController,
+    MotionCommandEvent,
+    MotionPlatformError,
+    MotionPlatformState,
+    MotionTrajectoryRunner,
+    PlatformPose,
+    SineTrajectory,
+)
 from .fixture_profile import WorkstationFixtureProfile
 from .fixture_session import FixtureSessionRecorder
-from .motion_platform import (
-    AbsoluteMoveRunner,
-    CombinedSineProfile,
-    LingjingPlatformAdapter,
-    MotionPlatformError,
-    MotionTrajectoryRunner,
-    PlatformSendResult,
-    PlatformPose,
-)
 
 
 class FixtureControlRequestType(str, Enum):
@@ -29,7 +29,7 @@ class FixtureControlRequestType(str, Enum):
     ABSOLUTE_POSE = "absolute_pose"
     TRAJECTORY = "trajectory"
     CENTER = "center"
-    RESET = "reset"
+    HOME = "home"
     SHUTDOWN = "shutdown"
 
 
@@ -40,9 +40,11 @@ class FixtureControlRequest:
     axis: str = ""
     target_deg: float = 0.0
     duration_ms: int = 0
-    trajectory: Optional[CombinedSineProfile] = None
-    explicit_reset_confirmation: bool = False
+    trajectory: Optional[SineTrajectory] = None
     target_pose: Optional[PlatformPose] = None
+
+
+ControllerFactory = Callable[[WorkstationFixtureProfile], DirectMotionPlatformController]
 
 
 class FixtureControlWorker(QThread):
@@ -52,19 +54,28 @@ class FixtureControlWorker(QThread):
     request_failed = Signal(str, str)
     evidence_failed = Signal(str)
     busy_changed = Signal(bool)
+    snapshot_changed = Signal(object)
+    connected = Signal()
 
     def __init__(
         self,
         profile: WorkstationFixtureProfile,
         *,
-        sender: Optional[Callable[[bytes, tuple[str, int]], bool]] = None,
+        controller_factory: Optional[ControllerFactory] = None,
         recorder: Optional[FixtureSessionRecorder] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         profile.validate()
         self._profile = profile
-        self._adapter = LingjingPlatformAdapter(profile.to_motion_config(), sender=sender)
+        factory = controller_factory or (
+            lambda selected: DirectMotionPlatformController(
+                selected.to_motion_config(), recorder=recorder
+            )
+        )
+        self._controller = factory(profile)
+        self._controller.add_command_callback(self._handle_command)
+        self._controller.add_snapshot_callback(self.snapshot_changed.emit)
         self._queue: queue.Queue[FixtureControlRequest] = queue.Queue(maxsize=16)
         self._shutdown_event = threading.Event()
         self._current_stop_event = threading.Event()
@@ -74,8 +85,8 @@ class FixtureControlWorker(QThread):
         self._evidence_ready = True
 
     @property
-    def adapter(self) -> LingjingPlatformAdapter:
-        return self._adapter
+    def controller(self) -> DirectMotionPlatformController:
+        return self._controller
 
     @property
     def preflight_confirmed(self) -> bool:
@@ -88,84 +99,61 @@ class FixtureControlWorker(QThread):
     def confirm_preflight(self) -> None:
         if self.isRunning():
             raise MotionPlatformError("preflight must be confirmed before starting control")
-        self._adapter.confirm_preflight(
-            self._profile.calibration_id,
-            safety_confirmed=True,
-            center_confirmed=True,
-        )
         self._preflight_confirmed = True
 
     def clear_preflight(self) -> None:
-        self._adapter.clear_safety_confirmation()
         self._preflight_confirmed = False
 
-    def submit_axis_move(
-        self,
-        axis: str,
-        target_deg: float,
-        *,
-        total_duration_ms: int,
-    ) -> str:
-        return self._submit(
-            FixtureControlRequest(
-                request_id=uuid.uuid4().hex,
-                request_type=FixtureControlRequestType.ABSOLUTE_AXIS,
-                axis=str(axis),
-                target_deg=float(target_deg),
-                duration_ms=int(total_duration_ms),
-            )
-        )
+    def submit_axis_move(self, axis: str, target_deg: float, *, total_duration_ms: int) -> str:
+        return self._submit(FixtureControlRequest(
+            uuid.uuid4().hex,
+            FixtureControlRequestType.ABSOLUTE_AXIS,
+            axis=str(axis),
+            target_deg=float(target_deg),
+            duration_ms=int(total_duration_ms),
+        ))
 
-    def submit_trajectory(self, trajectory: CombinedSineProfile) -> str:
-        return self._submit(
-            FixtureControlRequest(
-                request_id=uuid.uuid4().hex,
-                request_type=FixtureControlRequestType.TRAJECTORY,
-                trajectory=trajectory,
-            )
-        )
+    def submit_trajectory(self, trajectory: SineTrajectory) -> str:
+        return self._submit(FixtureControlRequest(
+            uuid.uuid4().hex,
+            FixtureControlRequestType.TRAJECTORY,
+            trajectory=trajectory,
+        ))
 
-    def submit_pose(
-        self,
-        pose: PlatformPose,
-        *,
-        total_duration_ms: int,
-    ) -> str:
-        return self._submit(
-            FixtureControlRequest(
-                request_id=uuid.uuid4().hex,
-                request_type=FixtureControlRequestType.ABSOLUTE_POSE,
-                duration_ms=int(total_duration_ms),
-                target_pose=pose,
-            )
-        )
+    def submit_pose(self, pose: PlatformPose, *, total_duration_ms: int) -> str:
+        return self._submit(FixtureControlRequest(
+            uuid.uuid4().hex,
+            FixtureControlRequestType.ABSOLUTE_POSE,
+            duration_ms=int(total_duration_ms),
+            target_pose=pose,
+        ))
 
     def submit_center(self, *, duration_ms: int) -> str:
-        return self._submit(
-            FixtureControlRequest(
-                request_id=uuid.uuid4().hex,
-                request_type=FixtureControlRequestType.CENTER,
-                duration_ms=int(duration_ms),
-            )
-        )
+        return self._submit(FixtureControlRequest(
+            uuid.uuid4().hex,
+            FixtureControlRequestType.CENTER,
+            duration_ms=int(duration_ms),
+        ))
+
+    def submit_home(self) -> str:
+        return self._submit(FixtureControlRequest(uuid.uuid4().hex, FixtureControlRequestType.HOME))
 
     def submit_reset(self, *, duration_ms: int, explicit_confirmation: bool) -> str:
-        return self._submit(
-            FixtureControlRequest(
-                request_id=uuid.uuid4().hex,
-                request_type=FixtureControlRequestType.RESET,
-                duration_ms=int(duration_ms),
-                explicit_reset_confirmation=bool(explicit_confirmation),
-            )
-        )
+        if not explicit_confirmation:
+            raise MotionPlatformError("home requires explicit confirmation")
+        return self.submit_home()
 
     def _submit(self, request: FixtureControlRequest) -> str:
-        if not self._preflight_confirmed or not self._adapter.ready:
+        if not self._preflight_confirmed:
             raise MotionPlatformError("fixture control preflight is not confirmed")
         if not self._evidence_ready:
             raise MotionPlatformError("fixture evidence recording has failed")
         if not self.isRunning():
             raise MotionPlatformError("fixture control worker is not running")
+        if self._controller.snapshot.state != MotionPlatformState.READY:
+            raise MotionPlatformError(
+                f"motion platform is not ready: {self._controller.snapshot.state.value}"
+            )
         try:
             self._queue.put_nowait(request)
         except queue.Full as exc:
@@ -190,17 +178,24 @@ class FixtureControlWorker(QThread):
     def shutdown(self) -> None:
         self._shutdown_event.set()
         self.stop_sequence()
+        self._controller.close()
         try:
-            self._queue.put_nowait(
-                FixtureControlRequest(
-                    request_id=uuid.uuid4().hex,
-                    request_type=FixtureControlRequestType.SHUTDOWN,
-                )
-            )
+            self._queue.put_nowait(FixtureControlRequest(
+                uuid.uuid4().hex,
+                FixtureControlRequestType.SHUTDOWN,
+            ))
         except queue.Full:
             pass
 
     def run(self) -> None:
+        try:
+            self._controller.connect()
+        except Exception as exc:
+            self.request_failed.emit("", str(exc))
+            self._controller.close()
+            return
+        self.connected.emit()
+        self.snapshot_changed.emit(self._controller.snapshot)
         while not self._shutdown_event.is_set():
             try:
                 request = self._queue.get(timeout=0.1)
@@ -220,101 +215,58 @@ class FixtureControlWorker(QThread):
                 self.request_finished.emit(request.request_id, result)
             finally:
                 self.busy_changed.emit(False)
-        self._adapter.close()
+        self._controller.close()
 
     def _execute(self, request: FixtureControlRequest):
         if request.request_type == FixtureControlRequestType.ABSOLUTE_AXIS:
-            return AbsoluteMoveRunner(
-                self._adapter,
-                sleep=self._interruptible_sleep,
-            ).run_axis(
-                request.axis,
-                request.target_deg,
-                total_duration_ms=request.duration_ms,
-                stop_event=self._current_stop_event,
-                on_send=lambda result: self._handle_send(result, "absolute_axis"),
+            if request.axis not in {"roll", "pitch", "yaw"}:
+                raise MotionPlatformError("unsupported platform axis")
+            values = {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+            values[request.axis] = request.target_deg
+            pose = PlatformPose(
+                values["roll"], values["pitch"], values["yaw"],
+                z_mm=self._profile.center_pose.z_mm,
             )
-        if request.request_type == FixtureControlRequestType.TRAJECTORY:
-            if request.trajectory is None:
-                raise MotionPlatformError("trajectory request has no profile")
-            return MotionTrajectoryRunner(
-                self._adapter,
-                sleep=self._interruptible_sleep,
-            ).run(
-                request.trajectory,
-                stop_event=self._current_stop_event,
-                on_send=lambda result: self._handle_send(result, "trajectory"),
+            return self._controller.move_to(
+                pose, duration_ms=request.duration_ms, action="absolute_axis"
             )
         if request.request_type == FixtureControlRequestType.ABSOLUTE_POSE:
             if request.target_pose is None:
                 raise MotionPlatformError("absolute pose request has no target")
-            return AbsoluteMoveRunner(
-                self._adapter,
-                sleep=self._interruptible_sleep,
-            ).run_pose(
+            return self._controller.move_to(
                 request.target_pose,
-                total_duration_ms=request.duration_ms,
-                stop_event=self._current_stop_event,
-                on_send=lambda result: self._handle_send(result, "absolute_pose"),
+                duration_ms=request.duration_ms,
+                action="absolute_pose",
             )
         if request.request_type == FixtureControlRequestType.CENTER:
-            return AbsoluteMoveRunner(
-                self._adapter,
-                sleep=self._interruptible_sleep,
-            ).run_pose(
-                self._profile.center_pose,
-                total_duration_ms=request.duration_ms,
-                stop_event=self._current_stop_event,
-                on_send=lambda result: self._handle_send(result, "center"),
-            )
-        if request.request_type == FixtureControlRequestType.RESET:
-            if not request.explicit_reset_confirmation:
-                raise MotionPlatformError("reset to Z=0 requires explicit confirmation")
-            return AbsoluteMoveRunner(
-                self._adapter,
-                sleep=self._interruptible_sleep,
-            ).run_pose(
-                self._profile.reset_pose,
-                total_duration_ms=request.duration_ms,
-                stop_event=self._current_stop_event,
-                on_send=lambda result: self._handle_send(result, "reset"),
+            return self._controller.recover_to_center(duration_ms=request.duration_ms)
+        if request.request_type == FixtureControlRequestType.HOME:
+            return self._controller.home()
+        if request.request_type == FixtureControlRequestType.TRAJECTORY:
+            if request.trajectory is None:
+                raise MotionPlatformError("trajectory request has no profile")
+            return MotionTrajectoryRunner(self._controller).run(
+                request.trajectory, stop_event=self._current_stop_event
             )
         raise MotionPlatformError("unsupported fixture control request")
 
-    def _interruptible_sleep(self, seconds: float) -> None:
-        # A normal Stop must let the current A6T completion interval elapse.
-        # Process shutdown may wake the scheduler because no further command is
-        # sent and the platform continues the already-issued movement itself.
-        self._shutdown_event.wait(max(0.0, float(seconds)))
-
-    def _handle_send(self, result: PlatformSendResult, action: str) -> None:
+    def _handle_command(self, event: MotionCommandEvent) -> None:
         self._sequence += 1
-        self.send_result.emit(result, action, self._sequence)
+        self.send_result.emit(event, event.action, self._sequence)
         if self._recorder is not None:
             try:
-                self._recorder.record_command(
-                    result,
-                    action=action,
-                    sequence=self._sequence,
-                )
+                self._recorder.record_command(event, sequence=self._sequence)
             except Exception as exc:
                 self._fail_evidence(str(exc))
 
-    def _record_control_failure(
-        self,
-        request: FixtureControlRequest,
-        details: str,
-    ) -> None:
+    def _record_control_failure(self, request: FixtureControlRequest, details: str) -> None:
         if self._recorder is None or not self._evidence_ready:
             return
         try:
             self._recorder.record_event(
                 "control_failed",
                 details,
-                details={
-                    "request_id": request.request_id,
-                    "request_type": request.request_type.value,
-                },
+                details={"request_id": request.request_id, "request_type": request.request_type.value},
             )
         except Exception as exc:
             self._fail_evidence(str(exc))
@@ -328,8 +280,4 @@ class FixtureControlWorker(QThread):
         self.evidence_failed.emit(str(details))
 
 
-__all__ = [
-    "FixtureControlRequest",
-    "FixtureControlRequestType",
-    "FixtureControlWorker",
-]
+__all__ = ["ControllerFactory", "FixtureControlRequest", "FixtureControlRequestType", "FixtureControlWorker"]

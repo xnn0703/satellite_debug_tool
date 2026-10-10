@@ -34,6 +34,8 @@ pyqtgraph_datas, pyqtgraph_binaries, pyqtgraph_hidden = collect_all("pyqtgraph")
 # M11 fix: PyOpenGL（pyqtgraph.opengl 3D 姿态显示需要），全包确保 GLU/GL 子模块齐
 opengl_datas, opengl_binaries, opengl_hidden = collect_all("OpenGL")
 docx_datas, docx_binaries, docx_hidden = collect_all("docx")
+# AESGCM 在固件包路径内延迟导入；显式收集其绑定和后端，避免 Windows 冻结包遗漏。
+cryptography_datas, cryptography_binaries, cryptography_hidden = collect_all("cryptography")
 
 # ``collect_all("PySide6")`` also discovers standalone Qt development tools
 # (Designer, Assistant and Linguist). They are not runtime dependencies, and
@@ -72,17 +74,10 @@ app_datas = [
         "satellite_debug_tool/ui/assets",
     ),
     (
-        str(ROOT / "satellite_debug_tool" / "resources" / "firmware_signing_keys.json"),
+        str(ROOT / "satellite_debug_tool" / "resources" / "firmware_encryption_keys.json"),
         "satellite_debug_tool/resources",
     ),
 ]
-if sys.platform == "win32":
-    app_datas.append(
-        (
-            str(ROOT / "satellite_debug_tool" / "resources" / "vendor"),
-            "satellite_debug_tool/resources/vendor",
-        )
-    )
 if sys.platform == "darwin":
     app_datas.extend([
         (
@@ -110,16 +105,31 @@ if sys.platform == "darwin":
 a = Analysis(
     [ENTRY],
     pathex=[str(ROOT)],
-    binaries=pyside6_binaries + pyqtgraph_binaries + opengl_binaries + docx_binaries,
-    datas=pyside6_datas + pyqtgraph_datas + opengl_datas + docx_datas + app_datas + [
-        # M11：升级器需要知道去哪个仓库拉版本
-        (str(ROOT / "release.config.json"), "."),
-    ],
+    binaries=(
+        pyside6_binaries
+        + pyqtgraph_binaries
+        + opengl_binaries
+        + docx_binaries
+        + cryptography_binaries
+    ),
+    datas=(
+        pyside6_datas
+        + pyqtgraph_datas
+        + opengl_datas
+        + docx_datas
+        + cryptography_datas
+        + app_datas
+        + [
+            # M11：升级器需要知道去哪个仓库拉版本
+            (str(ROOT / "release.config.json"), "."),
+        ]
+    ),
     hiddenimports=(
         pyside6_hidden
         + pyqtgraph_hidden
         + opengl_hidden
         + docx_hidden
+        + cryptography_hidden
         + extra_hidden
         + [
             "serial.tools.list_ports",

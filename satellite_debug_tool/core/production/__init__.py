@@ -1,5 +1,12 @@
 """Production test-station domain services."""
 
+from .attitude_outer_loop import (
+    AttitudeOuterLoopConfig,
+    BoundedAttitudeOuterLoop,
+    OuterLoopDecision,
+    OuterLoopStatus,
+)
+
 from .coordinators import (
     BatchCoordinator,
     FixtureSessionContext,
@@ -11,6 +18,7 @@ from .configuration import (
     ProductTestTemplate,
     ProductionConfigurationError,
     ProductionConfigurationStore,
+    ReferenceSensorProfile,
     REGISTERED_POWER_DRIVERS,
     ResolvedProductionConfiguration,
     StationProfile,
@@ -24,6 +32,7 @@ from .fixtures import (
     ReferenceStatus,
 )
 from .fixture_analysis import (
+    CALIBRATION_REFERENCE_STABILITY_LIMIT_DEG,
     AttitudeComparison,
     CALIBRATION_SEQUENCE,
     CalibrationStage,
@@ -41,6 +50,13 @@ from .fixture_control import (
     FixtureControlRequest,
     FixtureControlRequestType,
     FixtureControlWorker,
+)
+from .fixture_runtime import FixtureRuntime, FixtureRuntimeFact, FixtureRuntimeState
+from .fixture_telemetry import (
+    FIXTURE_ATTITUDE_SCHEMA,
+    FixtureAttitudeSample,
+    FixtureAttitudeSource,
+    FixtureTelemetryBus,
 )
 from .fixture_profile import (
     FixtureAxisLimits,
@@ -94,21 +110,17 @@ from .reporting import (
     automatic_device_verdict,
     sanitize_path_component,
 )
-from .motion_platform import (
-    AbsoluteMoveRunner,
-    AbsoluteMoveStatistics,
-    CombinedSineProfile,
-    LingjingPlatformAdapter,
+from satellite_debug_tool.core.motion_platform import (
+    DirectMotionPlatformController,
     MotionPlatformConfig,
     MotionPlatformError,
+    MotionPlatformSnapshot,
+    MotionPlatformState,
     MotionTrajectoryRunner,
     PlatformPose,
-    PlatformSendResult,
     SineAxis,
-    TrajectoryRunStatistics,
-    serialize_a6,
-    serialize_a6t,
-    validate_sine_profile,
+    SineTrajectory as CombinedSineProfile,
+    validate_sine_trajectory as validate_sine_profile,
 )
 from .ms6222_protocol import (
     Ms6222FrameEnvelope,
@@ -158,22 +170,20 @@ from .power_debug import (
     PowerSupplyDebugWorker,
 )
 from .production_power import ProductionPowerWorker
-from .platform_service import (
-    LingjingPlatformServiceController,
-    PlatformServiceError,
-    PlatformServiceSnapshot,
-    PlatformServiceState,
-    UdpListener,
-    deploy_platform_service,
-)
 from .recipe import ProductionRecipe, RecipeValidationError
 from .result_store import ProductionResultStore, ResultStoreError
+from .run_coordinator import (
+    DeviceStepResult,
+    ProductionRunCoordinator,
+    ProductionRunState,
+    ProductionStepRequest,
+)
 
 __all__ = [
-    "AbsoluteMoveRunner",
-    "AbsoluteMoveStatistics",
     "AttitudeComparison",
     "AttemptPhase",
+    "AttitudeOuterLoopConfig",
+    "BoundedAttitudeOuterLoop",
     "AttemptStatus",
     "BatchCoordinator",
     "BatchStatus",
@@ -184,6 +194,7 @@ __all__ = [
     "ExternalInsApplicability",
     "ExternalInsGate",
     "DeviceSession",
+    "DeviceStepResult",
     "DeviceSessionState",
     "FleetConfigurationError",
     "FleetController",
@@ -200,6 +211,13 @@ __all__ = [
     "FixtureControlRequest",
     "FixtureControlRequestType",
     "FixtureControlWorker",
+    "FixtureRuntime",
+    "FixtureRuntimeFact",
+    "FixtureRuntimeState",
+    "FIXTURE_ATTITUDE_SCHEMA",
+    "FixtureAttitudeSample",
+    "FixtureAttitudeSource",
+    "FixtureTelemetryBus",
     "FixtureAdapter",
     "FixtureCoordinator",
     "FixtureCoordinatorError",
@@ -225,8 +243,9 @@ __all__ = [
     "fixture_model_presets",
     "pending_fixture_calibration_id",
     "GwInstekPswAdapter",
-    "LingjingPlatformAdapter",
     "MotionPlatformConfig",
+    "OuterLoopDecision",
+    "OuterLoopStatus",
     "MotionPlatformError",
     "MotionTrajectoryRunner",
     "Ms6222FrameEnvelope",
@@ -245,7 +264,6 @@ __all__ = [
     "Ms6222StreamParser",
     "Ms6222WorkerStatistics",
     "PlatformPose",
-    "PlatformSendResult",
     "PowerActionResult",
     "PowerCommandRecord",
     "PowerDebugError",
@@ -263,15 +281,13 @@ __all__ = [
     "ProductTestTemplate",
     "ProductionConfigurationError",
     "ProductionConfigurationStore",
+    "ReferenceSensorProfile",
     "ProductionRecipe",
     "ProductionPowerWorker",
-    "LingjingPlatformServiceController",
-    "PlatformServiceError",
-    "PlatformServiceSnapshot",
-    "PlatformServiceState",
-    "UdpListener",
-    "deploy_platform_service",
     "ProductionResultStore",
+    "ProductionRunCoordinator",
+    "ProductionRunState",
+    "ProductionStepRequest",
     "RecipeValidationError",
     "ReferenceStatus",
     "ReportArtifact",
@@ -283,12 +299,9 @@ __all__ = [
     "SineAxis",
     "ScpiLineCodec",
     "SocketScpiTransport",
-    "TrajectoryRunStatistics",
     "TimedAttitude",
     "StationProfile",
     "UdpFleetHub",
-    "serialize_a6",
-    "serialize_a6t",
     "evaluate_external_ins",
     "GuidedFixtureCalibration",
     "WorkstationFixtureProfile",

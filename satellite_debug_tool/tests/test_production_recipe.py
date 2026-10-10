@@ -26,8 +26,9 @@ def valid_recipe(*, duration_s: int = 3600) -> dict:
         "fixtures": {
             "power_profile": "pilot_line_power_01",
             "motion_platform": {
-                "driver": "lingjing_udp_v0_3",
-                "command_family": "A6T",
+                "driver": "lingjing_udp_v1",
+                "command_family": "binary_position_feedback",
+                "home_command": "controller_home",
                 "center_pose": {
                     "roll_deg": 0,
                     "pitch_deg": 0,
@@ -35,14 +36,6 @@ def valid_recipe(*, duration_s: int = 3600) -> dict:
                     "x_mm": 0,
                     "y_mm": 0,
                     "z_mm": 100,
-                },
-                "reset_pose": {
-                    "roll_deg": 0,
-                    "pitch_deg": 0,
-                    "yaw_deg": 0,
-                    "x_mm": 0,
-                    "y_mm": 0,
-                    "z_mm": 0,
                 },
                 "limits": {
                     "roll_abs_deg": 15,

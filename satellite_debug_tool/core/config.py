@@ -69,6 +69,7 @@ class Settings:
             "device_udp_port_v1": True,
             "customer_devices_v1": True,
             "customer_accessories_v1": True,
+            "production_fixture_profiles_v2": False,
         },
         "ui": {
             "time_window": 10.0,

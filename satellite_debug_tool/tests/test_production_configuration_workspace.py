@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 import time
 
@@ -10,10 +12,16 @@ from satellite_debug_tool.core.production import (
     FleetDatagram,
     GwInstekPswAdapter,
     PowerSupplyProfile,
+    ReferenceSensorProfile,
+    FixtureCalibration,
+    FixtureCalibrationStore,
+    FixtureProfileStore,
     ProductTestTemplate,
     ProductionConfigurationStore,
     StationProfile,
+    fixture_model_preset,
     ProductionPowerWorker,
+    FixtureRuntimeState,
     psw80_27_validation_policy,
     PowerSupplyConfig,
 )
@@ -25,7 +33,34 @@ from satellite_debug_tool.tests.test_production_fleet import _identity
 
 
 def _catalog(path: Path) -> ProductionConfigurationStore:
-    store = ProductionConfigurationStore(path)
+    fixture_root = path.parent / f"{path.stem}-fixture-profiles"
+    calibration_root = path.parent / f"{path.stem}-fixture-calibrations"
+    profile_store = FixtureProfileStore(fixture_root)
+    calibration_store = FixtureCalibrationStore(calibration_root)
+    motion = replace(
+        fixture_model_preset("lingjing-a6-200mm").create_profile("motion-main"),
+        calibration_id="MS6222-CAL-TEST-0001",
+    )
+    profile_store.save(motion)
+    calibration_store.save(FixtureCalibration(
+        calibration_id=motion.calibration_id,
+        profile_id=motion.profile_id,
+        profile_sha256=motion.sha256,
+        created_utc=datetime.now(timezone.utc).isoformat(),
+        sensor_axis_for_logical=("roll", "pitch", "yaw"),
+        logical_signs=(1, 1, 1),
+        zero_offsets_deg=(0.0, 0.0, 0.0),
+        response_matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        cross_coupling_ratio=(0.0, 0.0, 0.0),
+        static_noise_std_deg=(0.01, 0.01, 0.01),
+        sample_coverage_ratio=1.0,
+        confirmed=True,
+    ))
+    store = ProductionConfigurationStore(
+        path,
+        fixture_profile_store=profile_store,
+        calibration_store=calibration_store,
+    )
     product = ProductTestTemplate(
         template_id="afd01c-standard",
         revision=1,
@@ -68,7 +103,17 @@ def _catalog(path: Path) -> ProductionConfigurationStore:
         branch_count=4,
         branch_current_a=10,
     )
-    store.save_catalog([product], [power], [station])
+    reference = ReferenceSensorProfile(
+        profile_id="ms6222-main",
+        revision=1,
+        display_name="MS-6222 主参考",
+        driver_id="ms6222_serial_v1",
+        serial_port="COM7",
+        baud_rate=460800,
+        installation_id="ms6222-main-installation",
+        calibration_id=motion.calibration_id,
+    )
+    store.save_catalog([product], [power], [station], [reference])
     return store
 
 
@@ -79,6 +124,15 @@ def _settings(tmp_path: Path, monkeypatch):
     settings = Settings()
     settings.set("production.discovery_cidr", "127.0.0.1/32")
     return settings
+
+
+def _confirm_fixture_preflight(workspace) -> None:
+    workspace._fixture_runtime.set_state(
+        "motion", FixtureRuntimeState.READY, "controller feedback confirmed"
+    )
+    workspace._fixture_runtime.set_state(
+        "reference", FixtureRuntimeState.READY, "valid MS-6222 frames"
+    )
 
 
 def test_product_template_picker_lists_registered_production_products(
@@ -162,6 +216,7 @@ def test_afd01c_times_two_requires_exactly_two_ready_devices(
     workspace._operator_edit.setText("operator-a")
     workspace._output_edit.setText(str(tmp_path / "output"))
     workspace.create_batch()
+    _confirm_fixture_preflight(workspace)
 
     def add(index: int) -> None:
         workspace._fleet._on_datagram(
@@ -208,7 +263,7 @@ def test_settings_dialog_exposes_production_configuration_manager(
     qapplication_session.processEvents()
 
 
-def test_configuration_manager_creates_product_power_and_station_profiles(
+def test_configuration_manager_creates_product_and_power_profiles(
     qapplication_session,
     tmp_path: Path,
 ) -> None:
@@ -233,13 +288,6 @@ def test_configuration_manager_creates_product_power_and_station_profiles(
     dialog._power_serial.setText("GER120143")
     dialog._save_power()
 
-    dialog._new_station()
-    dialog._station_id.setText("line-1")
-    dialog._station_name.setText("一号工位")
-    dialog._branch_count.setValue(4)
-    dialog._branch_current.setValue(10.0)
-    dialog._save_station()
-
     products, powers, stations = store.load_catalog()
     assert [(item.product, item.supply_voltage_v, item.per_device_current_a) for item in products] == [
         ("afd01c", 12.0, 8.0)
@@ -247,9 +295,61 @@ def test_configuration_manager_creates_product_power_and_station_profiles(
     assert [(item.model, item.host, item.serial_number) for item in powers] == [
         ("PSW 80-27", "192.168.1.108", "GER120143")
     ]
-    assert [(item.power_profile_id, item.branch_count) for item in stations] == [
-        ("psw-main", 4)
+    assert stations == ()
+    dialog.close()
+    dialog.deleteLater()
+    qapplication_session.processEvents()
+
+
+def test_configuration_manager_exposes_motion_reference_and_station_bindings(
+    qapplication_session,
+    tmp_path: Path,
+) -> None:
+    from satellite_debug_tool.ui.production_configuration_dialog import (
+        ProductionConfigurationDialog,
+    )
+
+    store = _catalog(tmp_path / "catalog.json")
+    dialog = ProductionConfigurationDialog(store=store)
+
+    assert dialog._motion_select.currentData() == "motion-main"
+    assert dialog._motion_controller_host.text() == "192.168.15.201"
+    assert dialog._motion_command_port.value() == 7408
+    assert dialog._motion_local_host.text() == "192.168.15.101"
+    assert dialog._motion_feedback_port.value() == 8410
+    assert dialog._reference_select.currentData() == "ms6222-main"
+    assert dialog._reference_port.currentText() == "COM7"
+    assert dialog._reference_baud.value() == 460800
+    assert dialog._station_motion.currentData() == "motion-main"
+    assert dialog._station_reference.currentData() == "ms6222-main"
+    dialog.close()
+    dialog.deleteLater()
+    qapplication_session.processEvents()
+
+
+def test_legacy_ms6222_port_migrates_once_to_reference_profile(
+    qapplication_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.ui.production_configuration_dialog import (
+        ProductionConfigurationDialog,
+    )
+
+    store = _catalog(tmp_path / "catalog.json")
+    products, powers, _references, stations = store.load_full_catalog()
+    store.save_catalog(products, powers, stations, [])
+    settings = _settings(tmp_path / "settings-home", monkeypatch)
+    settings.set("production.ms6222_port", "COM11")
+    settings.set("config_migrations.production_fixture_profiles_v2", False)
+
+    dialog = ProductionConfigurationDialog(store=store, settings=settings)
+
+    _products, _powers, references, _stations = store.load_full_catalog()
+    assert [(item.profile_id, item.serial_port) for item in references] == [
+        ("ms6222-main", "COM11")
     ]
+    assert settings.get("config_migrations.production_fixture_profiles_v2") is True
     dialog.close()
     dialog.deleteLater()
     qapplication_session.processEvents()
@@ -365,6 +465,7 @@ def test_visual_batch_start_uses_selected_power_profile_and_exact_participants(
     workspace._operator_edit.setText("operator-a")
     workspace._output_edit.setText(str(tmp_path / "output"))
     workspace.create_batch()
+    _confirm_fixture_preflight(workspace)
     for index in (1, 2):
         workspace._fleet._on_datagram(
             FleetDatagram(

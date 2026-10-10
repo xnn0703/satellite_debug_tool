@@ -30,7 +30,16 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool.core.data import DataStore
 from satellite_debug_tool.core.data.data_store import channel_key
-from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.core.playback.fixture_attitude import (
+    MS6222_RELATIVE_CHANNELS,
+    PLATFORM_TARGET_CHANNELS,
+)
+from satellite_debug_tool.core.profile import (
+    CHANNEL_ROLE_PITCH,
+    CHANNEL_ROLE_ROLL,
+    CHANNEL_ROLE_YAW,
+    ProfileStore,
+)
 from satellite_debug_tool.core.protocol import ChannelDefEntry
 from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
@@ -63,6 +72,11 @@ _X_SCROLL_STEP_SEC = 1.0
 
 # combined 模式复用同一套高区分度调色板（统一视觉，避免两套色规则）
 _COMBINED_PALETTE = _DISTINCT_PALETTE
+_ATTITUDE_COLORS = {
+    "roll": "#5B8FF9",
+    "pitch": "#00B8A9",
+    "yaw": "#F6BD16",
+}
 
 
 def _group_title(group_id: int) -> str:
@@ -478,8 +492,11 @@ class GroupedChartWidget(QWidget):
         if ys.size == 0:
             return ys.astype(np.float32), 0.0, 0.0
         ref = ys_for_range if ys_for_range.size > 0 else ys
-        vmin = float(ref.min())
-        vmax = float(ref.max())
+        finite_ref = ref[np.isfinite(ref)]
+        if finite_ref.size == 0:
+            return ys.astype(np.float32), 0.0, 0.0
+        vmin = float(finite_ref.min())
+        vmax = float(finite_ref.max())
         if vmax - vmin < 1e-9:
             return np.full(ys.shape, 0.5, dtype=np.float32), vmin, vmax
         ys_draw = ((ys.astype(np.float32) - vmin) / (vmax - vmin)).astype(np.float32)
@@ -661,6 +678,7 @@ class GroupedChartWidget(QWidget):
             if not target:
                 continue
             all_y = np.concatenate(target)
+            all_y = all_y[np.isfinite(all_y)]
             if all_y.size == 0:
                 continue
             lo = float(all_y.min())
@@ -922,6 +940,36 @@ class GroupedChartWidget(QWidget):
     def _plot_axis_color(self) -> str:
         return S.palette(self._theme)["text"]
 
+    def _curve_pen(self, channel: ChannelDefEntry, fallback_index: int):
+        for channels, style in (
+            (PLATFORM_TARGET_CHANNELS, Qt.PenStyle.DashLine),
+            (MS6222_RELATIVE_CHANNELS, Qt.PenStyle.DotLine),
+        ):
+            for axis, channel_id in channels.items():
+                if channel.channel_id == channel_id:
+                    return pg.mkPen(
+                        color=_ATTITUDE_COLORS[axis],
+                        width=1.8,
+                        style=style,
+                    )
+        if self._profile is not None and self._current_hw is not None:
+            for axis, role in (
+                ("roll", CHANNEL_ROLE_ROLL),
+                ("pitch", CHANNEL_ROLE_PITCH),
+                ("yaw", CHANNEL_ROLE_YAW),
+            ):
+                attitude = self._profile.find_channel_by_role(self._current_hw, role)
+                if attitude is not None and attitude.channel_id == channel.channel_id:
+                    return pg.mkPen(
+                        color=_ATTITUDE_COLORS[axis],
+                        width=2.0,
+                        style=Qt.PenStyle.SolidLine,
+                    )
+        return pg.mkPen(
+            color=_COMBINED_PALETTE[fallback_index % len(_COMBINED_PALETTE)],
+            width=1.5,
+        )
+
     def _apply_button_theme(self) -> None:
         p = S.palette(self._theme)
         px = S.font_px(11, self._scale)
@@ -962,12 +1010,11 @@ class GroupedChartWidget(QWidget):
         plot.enableAutoRange(x=False, y=False)
 
         for i, ch in enumerate(channels):
-            color = _COMBINED_PALETTE[i % len(_COMBINED_PALETTE)]
             label = f"{ch.name} ({ch.unit})" if ch.unit else ch.name
             # antialias=False：曲线关抗锯齿（坐标轴/文字仍走全局 AA）。归一化后
             # 噪声信号铺满全高变密集锯齿，AA 描这种长路径极慢 —— 这是归一化卡顿主因。
             curve = plot.plot(
-                [], [], pen=pg.mkPen(color=color, width=1.5), name=label,
+                [], [], pen=self._curve_pen(ch, i), name=label,
                 antialias=False,
             )
             self._curves[ch.channel_id] = (0, curve, ch)
@@ -1045,10 +1092,9 @@ class GroupedChartWidget(QWidget):
 
             for i, ch in enumerate(group_channels):
                 # 组内按索引从高区分度调色板取色（每组独立子图，组间撞色无妨）
-                color = _DISTINCT_PALETTE[i % len(_DISTINCT_PALETTE)]
                 # antialias=False：见 _rebuild_combined 注释（归一化卡顿主因）
                 curve = plot.plot(
-                    [], [], pen=pg.mkPen(color=color, width=1.5), name=ch.name,
+                    [], [], pen=self._curve_pen(ch, i), name=ch.name,
                     antialias=False,
                 )
                 self._curves[ch.channel_id] = (group_id, curve, ch)

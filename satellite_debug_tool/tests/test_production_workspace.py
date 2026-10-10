@@ -49,18 +49,14 @@ def _write_recipe(
     return path
 
 
-def test_workspace_explicitly_marks_engineering_preview(qapp, settings) -> None:
+def test_workspace_describes_formal_preflight_contract(qapp, settings) -> None:
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
 
     workspace = ProductionWorkspace(settings)
 
     notice = workspace._preview_notice.text()
-    assert "M19-A" in notice
-    assert "engineering preview" in notice or "工程预览" in notice
-    assert (
-        "not approved for formal production release" in notice
-        or "尚未批准用于正式试产放行" in notice
-    )
+    assert "station profile" in notice or "工位档案" in notice
+    assert "preflight" in notice or "预检" in notice
     workspace.close()
 
 

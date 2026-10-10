@@ -1,5 +1,8 @@
 # M29 AFD01A / AFD01B2 上位机开发记录
 
+> 历史说明：本文中的 Ed25519/签名包描述记录当时实现，客户固件包已由 M33 AES-256-GCM 认证解密模型替代。
+
+
 日期：2026-09-28。状态：上位机软件实现完成；真机、RF、OTA 安装和 Windows 平台验收待执行。
 
 对应计划：`doc/M29_AFD01A_B2_upper_pc_plan.md`；验收：`doc/M29_AFD01A_B2_upper_pc_acceptance.md`。

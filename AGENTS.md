@@ -50,7 +50,7 @@ python3 scripts/update_translations.py check
 - `MainWindow` 负责顶层 `activate_view()` / `deactivate_view()`；各工作区只负责当前子页面。隐藏页面停止曲线、3D、表格和夹具绘图，连接、录制、OTA、批次与采集状态继续运行。
 - OTA、参数写入和 Product 控制通过 `DeviceSessionCore` 的单一设备事务租约互斥；控制器在完成、失败、断线或连接代际变化时释放各自 owner。
 - Product Service `result=0` 只表示设备已接受请求；只有更新且匹配的遥测回读才表示状态已应用，物理 RF 证据继续独立。
-- 客户 OTA 使用不可变的已验签 artifact token，绑定包字节、签名 manifest 和当前设备会话；工程 raw BIN 与客户签名包不共用授权，传输期间不允许替换 artifact。
+- 客户 OTA 使用不可变的已认证解密 artifact token，绑定解密后的包字节、加密 manifest 和当前设备会话；工程 raw BIN 与客户加密包不共用授权，传输期间不允许替换 artifact。
 - `OTA_END=VERIFIED` 只确认字节转移和校验已被设备接受；完成结果还必须证明同 endpoint 返回、本次会话捕获的每项不可变身份都重新匹配，且传输前捕获的每个固件来源都重新回报、相互一致并匹配目标版本。同版本包只能显示“应用未独立确认”。
 - 工程 Tab 内部仍是 `LiveView / PlaybackView / LogView / DeviceView` 四张卡（`QTabWidget`，tabBar 隐藏，顶栏"药丸"接管）。
 
@@ -72,7 +72,7 @@ Engineering Live       DeviceSessionCore stores → first-access presentation �
 Playback     .sdb v2/v3 → streaming DataImporter → PlaybackSeriesProvider(SQLite) → window DataStore
 Log          .log   → WindTermLogParser → 虚拟 ProfileStore (hw_type="windterm_log") + DataStore (无界, max=128)
 Device       DeviceSessionCore + Parameter/Ota controllers → 参数表 / COMMAND_RESPONSE / OTA 状态机
-Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore → BatchCoordinator / FixtureSessionCoordinator → ResultStore + SDB
+Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore → BatchCoordinator / FixtureSessionCoordinator → MotionPlatformController + ResultStore + SDB
 ```
 
 ### 包结构（已演进出新模块，AGENTS 要跟得上）
@@ -89,25 +89,30 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/data/` — `ChannelBuffer`、`DataStore`、`TelemetrySeriesStore`、`StateStore`、`EventLog` 与 GNSS/Orbit Store
 - `core/profile/` — `ProfileStore` + `ProfileCache`，设备 profile 驱动 UI；`semantics.py` 通道语义；`ins_yaw_display.py` 内部 INS 航向处理
 - `core/production/` — **M19/M21** 试产与夹具领域；`BatchCoordinator` / `FixtureSessionCoordinator` 统一状态迁移、资源租约和证据收尾，页面只发意图并呈现类型化状态
+- `core/production/configuration.py` — **M32** 生产配置 v2；产品、电源、摇摆台、MS-6222 与工位引用统一解析，正式批次冻结完整夹具 payload、revision、标定和 SHA-256；旧 `production.ms6222_port` 仅作为一次迁移输入
+- `core/production/run_coordinator.py` — **M19-A.13** 首轮正式自动工况的唯一 attempt 状态机；只依据前置证据、硬件启动回执和逐设备分析结果推进，不用超时推断动作成功
+- `core/production/fixture_runtime.py` — **M19-A.13** 进程级摇摆台/MS-6222 所有权根；Customer 弹窗与 Production 共用唯一租约、夹具档案和坐标标定 Store
+- `core/production/fixture_telemetry.py` — **M19-A.15** 进程级夹具姿态事实总线；平台已发送目标、MS-6222 标定后相对 FRD 与真实航向保持独立来源，活动 SDB v3 recorder 各自订阅并保存
 - `core/production/ms6222_debug.py` — **M19-A.5/M19-A9** MS-6222 独立串口租约与工程证据会话；独立 MS 页面只采集参考，摇摆台自动资格测试显式获取摇摆台与 MS 两项所有权并生成联合诊断包
-- `core/production/platform_service.py` — **M19-A.8** Windows 灵境平台服务的资源校验、用户目录部署、单实例启动和 UDP 9800 监听状态 owner；macOS 保持远程 Windows 服务模式，UDP 监听不表示驱动已接受或平台已运动
-- `core/production/fixture_profile.py` — **M19-A.7** 摇摆台型号模板、v2 工作站档案、运行包线和控制租约；当前灵境六自由度平台的 A6/A6T 服务端点为 `192.168.15.101:9800`，原始 XML 的 `DriverEx=192.168.15.201` 只表示底层驱动地址；型号参数自动展开，现场只确认轴符号并由引导标定生成真实 calibration ID
+- `core/motion_platform/` — **M19-A.11** 可复用运动平台直接控制组件；独占本机 `192.168.15.101:8410` 反馈端点并向控制器 `192.168.15.201:7408` 发送二进制帧，统一拥有严格逆运动学、连接代际、反馈闭环完成、回原点、轨迹调度和证据模型
+- `core/production/fixture_profile.py` — **M19-A.11** 摇摆台型号模板、v4 工作站档案、运行包线和控制租约；型号预置直接控制端点与运动学参数，旧 `192.168.15.101:9800` 厂家服务端点不解释为控制器地址，现场只确认轴符号并由引导标定生成真实 calibration ID
 - `core/log_parser/` — WindTerm 日志解析
-- `core/security/` — 客户 OTA 固件包 Ed25519 验签（`firmware_package.py`）
+- `core/security/` — 客户 OTA 固件包 AES-256-GCM 认证解密（`firmware_package.py`）
 - `core/link_trace.py` — 帧 trace 日志
 - `core/config.py` — `Settings` 类，JSON 存 `~/.satellite_debug_tool/settings.json`
 - `ui/` — PySide6 呈现层；`view_lifecycle.py` 定义页面生命周期，`lazy_view_host.py` 提供首次访问构建，`semantic_style.py` 只在语义属性变化时刷新样式
 - `ui/assets/` — Leaflet 离线地图 bundle + STL 模型
 - `i18n/` — `TranslationManager` + TS/QM 翻译资源（`translations/satellite_debug_tool_zh_CN.{ts,qm}`）
 - `io/` — `DataRecorder`、流式 `DataImporter` 与唯一 `sdb_schema.py`；大型 SDB 在原文件旁生成可重建的稀疏 `.sdbi` 索引
-- `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）、`build_signed_firmware_package.py`（客户 OTA 固件打包工具）
-- `updater/` — 自动升级模块：`ReleaseChecker / Downloader / Applier`，单文件 `updater` 二进制在 PyInstaller 后嵌入 `.app/Contents/MacOS/updater`
+- `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）、`build_encrypted_firmware_package.py`（客户 OTA 加密固件打包工具）
+- `updater/` — 自动升级模块：`ReleaseChecker / Downloader / Applier`；`UpdateDialog` 只冻结安装请求，`MainWindow.closeEvent()` 完成受控收尾后才启动单文件 updater；updater 递归验证唯一载荷根并持久化阶段状态
 - `platform/macos/{en,zh_CN}.lproj/InfoPlist.strings` — macOS `CFBundleLocalizations` 用的本地化 InfoPlist 字符串
 
 ### 关键约定
 
 - 所有 import 用 `satellite_debug_tool.` 前缀（绝对导入；这是为什么必须 `python3 -m ...`）
 - UI 在 `ui/`，业务在 `core/`，持久化在 `io/`，**试产业务在 `core/production/`，客户产品服务领域在 `core/product/`**
+- 运动平台协议、运动学、UDP socket、状态机和轨迹调度只存在于 `core/motion_platform/`；试产页面、批次编排和后续场景仿真只调用其公开领域接口。MS-6222 保持独立参考源，由上层联合测试显式组合。
 - worker 线程（`BaseWorker` 子类）**严禁**直接操作 widget；必须 emit Qt 信号，主线程消费
 - 页面构造只建立呈现对象；协议解析、连接代际、参数/OTA 状态机、试产状态迁移和证据收尾属于 `core/`。
 - 高频页面必须实现幂等 `activate_view()` / `deactivate_view()`；隐藏时停止呈现定时器，恢复时先从 Store 即时刷新一次。
@@ -121,10 +126,14 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - 主题三档 `dark / dark_hc / light`，由 `S.palette()` 出语义色键（兼容键 + Mission Console 新语义键），顶栏图标按钮循环切换
 - 离线地图约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮
 - **客户多设备页面按 endpoint 固定绑定**——每个 endpoint bundle 复用 Directory 的唯一 Runtime/Core/Store；禁止把已有 widget/controller 动态 rebind 到另一 endpoint。工程“共享客户 UDP”复用当前 bundle，工程串口保持独立。
-- **AFD01 新型号身份**——后续出货的 AFD01A 沿用原 AFD01 的产品使用方式与 3D 几何，但 `afd01` / `afd01a` / `afd01b2` / `afd01c` 各自独立注册，按 Debug hw_type、Product Identity 与 service protocol 精确准入；recipe 和签名 OTA 包不互作别名。A/B2 仅接受 protocol 8，B2 未提供独立 STL 时使用占位模型。
+- **AFD01 新型号身份**——后续出货的 AFD01A 沿用原 AFD01 的产品使用方式与 3D 几何，但 `afd01` / `afd01a` / `afd01b2` / `afd01c` 各自独立注册，按 Debug hw_type、Product Identity 与 service protocol 精确准入；recipe 和加密 OTA 包不互作别名。A/B2 仅接受 protocol 8，B2 未提供独立 STL 时使用占位模型。
 - **电源与网络测试按客户设备固定绑定**——`customer.devices[]` 使用稳定 `device_id` 保存各自电源和 iperf profile；编辑 endpoint 不改变归属。外接电源弹窗配置 IP/设定值并执行闭环控制，端口固定 2268；SDB 的 `external_power_sample/v1` 只写入对应设备并携带 `device_id`/endpoint。
+- **摇摆台对外统一设备 FRD**——夹具界面、轨迹、自动资格测试和报告使用 Roll+ 右翼下沉、Pitch+ 机头上抬、Yaw+ 向右/俯视顺时针；灵境 A6 型号在运动组件边界固定转换为供应商控制符号 `(-1,+1,-1)`，型号档案只读。平台静止与 MS-6222 标定后姿态精度是两个独立结论。
+- **正式工位夹具绑定**——电源 TCP、摇摆台控制/反馈 UDP 和 MS-6222 COM 均来自所选工位依赖档案；型号预置拥有几何、运行包线和 FRD 符号，现场档案拥有实际端点。正式批次启动要求摇摆台反馈与 MS-6222 有效帧均进入 `READY`，`CONFIGURED` 不表示已连接。
+- **夹具姿态按设备录制并相关回放**——活动 SDB v3 以 `fixture_attitude_sample/v1` metadata 保存共享夹具事实；回放只在同一设备启动代际的有效主机接收时间/设备 uptime 锚点内插值。设备姿态、平台目标和 MS 相对 FRD 在同一姿态区域按颜色与线型区分；无效或缺口用 NaN 断开，未对齐样本不进入曲线。
 - **客户网络测试是设备级状态**——每个 endpoint bundle 拥有固定 `IperfTestController/Store`，切换页面不重绑、不停止后台测试；不同设备只在本地 IPv4和服务端端口不冲突时并行，应用退出前逐个完成进程和证据收尾。
 - 全局设置弹窗按 Customer / Engineering / Production scope 呈现；客户和工程 scope 不显示试产配置与试产报告，Production scope 保留这些业务设置。
+- Customer 侧栏与 Engineering 顶栏的“摇摆台…”入口复用同一个弹窗实例和进程级 `FixtureRuntime`；提供日常相对姿态、回中、组合连续摇摆、受控停止、MS 绝对航向和有界姿态修正，目标/MS 实测/误差共用一张姿态图。回原点、档案编辑和资格标定仍由 Production 工程页面负责。
 - 第一方可翻译复合控件显式实现 `retranslate_ui()`；语言切换使用稳定源键，禁止扫描对象树或根据当前可见文本反查业务状态。
 
 ## 持久化路径（`~/.satellite_debug_tool/`）
@@ -136,7 +145,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 | `production_configuration.json` | 产品测试模板、电源档案和工作站配置的单一原子目录；批次只保存所选稳定 ID |
 | `profiles/{hw_type}.json` | ProfileCache 缓存的设备 profile |
 | `tiles/{region}/{z}/{x}/{y}.png` | M8 OSM 离线 tile（按区域分组） |
-| `updates/<tag>/updater.log` | 自动升级日志；升级失败时排查用 |
+| `updates/<tag>/updater.log`、`update-status.json` | 自动升级持久日志与原子事务状态；临时解压目录独立清理 |
 | `production_batches/<batch_id>/` | M19-A 批次原始数据库、SDB、配方和夹具证据 |
 | 设置的报告根目录/`日期/型号/SN/批次/` | 单设备 V1/V2 DOCX、`evidence.zip` 与 SHA-256 `manifest.json` |
 | `fixture_profiles/` | 带 revision 与 SHA-256 的工作站夹具档案 |
@@ -150,6 +159,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **macOS 本地打包**：`./scripts/build_macos.sh`（自动 venv + 装依赖 + 跑 `update_translations.py check` + PyInstaller 主程序+updater + 嵌入 `.app/Contents/MacOS/updater` + `codesign --force --deep --sign -` ad-hoc 签名 + `xattr -cr` 清 quarantine + `ditto -c -k` 出 zip）
 - **Windows 一键打包**：`scripts\build_windows.bat`（PyInstaller + `verify_model_assets.py` 校验 3D 模型 + updater 嵌入 + `Compress-Archive` 出 zip）
+- **Windows 自动更新包合同**：GitHub Release `.7z` 的归档根直接包含 `SatelliteDebugTool.exe`、`updater.exe` 与 `_internal/`，兼容旧 updater 安装修复版；上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷
 - **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，7z 分卷上传 GitHub Release；推 master/main 触发 `ci-only-build` 上传 artifact 不发版）
 - **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 兼容性问题，强制本地脚本。updater 二进制仍嵌入但 mac 平台不发版，触发频率为零
 - **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.4.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
@@ -176,6 +186,8 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/acceptance_log.md` — F-/A- 系列验收跟踪
 - `doc/i18n_terms.md` — 中英术语表
 - `doc/user_manual.md` / `doc/user_manual_en.md` — M16 工程工作区历史操作手册；当前三工作区事实以本文件为准
+- `doc/production_automation_operator_guide.md` — 当前试产工程预览的配置、夹具检查、批次、证据和报告操作指南，明确尚未接通的正式自动工况边界
+- `doc/M32_formal_production_fixture_closure_*.md` — 电源、摇摆台、MS-6222 完整工作站配置、M31 出货整备和正式自动工况收口计划、验收与开发记录
 - `doc/RELEASING.md` — 发版 SOP（含 tag 重发、hotfix、rc 预发）
-- `doc/AFD01_signed_firmware_package.md` — 客户 OTA 固件包签名格式
+- `doc/AFD01_encrypted_firmware_package.md` — 客户 OTA 加密固件包格式
 - `BUILDING.md` — 打包可执行文件完整指南

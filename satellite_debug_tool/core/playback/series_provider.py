@@ -91,7 +91,7 @@ class PlaybackSeriesProvider:
             CREATE TABLE samples (
                 channel_id INTEGER NOT NULL,
                 timestamp_ms REAL NOT NULL,
-                value REAL NOT NULL
+                value REAL
             );
             CREATE TABLE peaks (
                 level_ms INTEGER NOT NULL,
@@ -108,7 +108,7 @@ class PlaybackSeriesProvider:
             );
             """
         )
-        self._sample_rows: list[tuple[int, float, float]] = []
+        self._sample_rows: list[tuple[int, float, Optional[float]]] = []
         self._peak_rows: list[tuple] = []
         self._buckets: dict[tuple[int, int], _PeakBucket] = {}
         self._report_count = 0
@@ -150,9 +150,13 @@ class PlaybackSeriesProvider:
         for sample in report.samples:
             channel_id = int(sample.channel_id)
             value = float(sample.value)
-            self._sample_rows.append((channel_id, timestamp, value))
+            self._sample_rows.append(
+                (channel_id, timestamp, value if math.isfinite(value) else None)
+            )
             self._sample_count += 1
             self._channel_counts[channel_id] = self._channel_counts.get(channel_id, 0) + 1
+            if not math.isfinite(value):
+                continue
             for level_ms in _BUCKET_LEVELS_MS:
                 bucket_id = math.floor(timestamp / level_ms)
                 key = (level_ms, channel_id)
@@ -243,12 +247,31 @@ class PlaybackSeriesProvider:
                 """,
                 (level_ms, first_bucket, last_bucket),
             )
+            gap_points: dict[int, list[tuple[float, float]]] = {}
+            for channel_id, timestamp in connection.execute(
+                """
+                SELECT channel_id, timestamp_ms
+                FROM samples
+                WHERE timestamp_ms >= ? AND timestamp_ms <= ? AND value IS NULL
+                ORDER BY channel_id, timestamp_ms
+                """,
+                (start, end),
+            ):
+                gap_points.setdefault(int(channel_id), []).append(
+                    (float(timestamp), float("nan"))
+                )
             current_channel: Optional[int] = None
             channel_points: list[tuple[float, float]] = []
             for row in rows:
                 channel_id = int(row[0])
                 if current_channel is not None and channel_id != current_channel:
-                    self._append_channel_points(store, current_channel, channel_points, start, end)
+                    self._append_channel_points(
+                        store,
+                        current_channel,
+                        [*channel_points, *gap_points.pop(current_channel, [])],
+                        start,
+                        end,
+                    )
                     channel_points = []
                 current_channel = channel_id
                 channel_points.extend(
@@ -260,7 +283,15 @@ class PlaybackSeriesProvider:
                     )
                 )
             if current_channel is not None:
-                self._append_channel_points(store, current_channel, channel_points, start, end)
+                self._append_channel_points(
+                    store,
+                    current_channel,
+                    [*channel_points, *gap_points.pop(current_channel, [])],
+                    start,
+                    end,
+                )
+            for channel_id, points in gap_points.items():
+                self._append_channel_points(store, channel_id, points, start, end)
         return store
 
     @staticmethod
@@ -272,12 +303,20 @@ class PlaybackSeriesProvider:
         return _BUCKET_LEVELS_MS[-1]
 
     @staticmethod
-    def _append_rows(store: DataStore, rows: Iterable[tuple[int, float, float]]) -> None:
+    def _append_rows(
+        store: DataStore,
+        rows: Iterable[tuple[int, float, Optional[float]]],
+    ) -> None:
         for channel_id, timestamp, value in rows:
             store.update(
                 DataReport(
                     float(timestamp),
-                    [ChannelSample(int(channel_id), float(value))],
+                    [
+                        ChannelSample(
+                            int(channel_id),
+                            float("nan") if value is None else float(value),
+                        )
+                    ],
                 )
             )
 

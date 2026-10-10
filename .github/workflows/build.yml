@@ -98,29 +98,28 @@ jobs:
         run: |
           $tag = "${{ needs.prepare-release.outputs.tag }}"
           $name = "satellite_debug_tool-win-${tag}"
-          New-Item -ItemType Directory -Path "release/${name}" -Force | Out-Null
-          Copy-Item -Recurse "dist/SatelliteDebugTool/*" "release/${name}/"
-          if (Test-Path "doc/WINDOWS_QUICK_START.md") {
-            Copy-Item "doc/WINDOWS_QUICK_START.md" "release/${name}/README-Windows.md"
-          }
-          if (Test-Path "doc/user_manual.md") {
-            Copy-Item "doc/user_manual.md" "release/${name}/user_manual.md"
-          }
-          if (Test-Path "doc/user_manual_en.md") {
-            Copy-Item "doc/user_manual_en.md" "release/${name}/user_manual_en.md"
-          }
           echo "RELEASE_NAME=${name}" >> $env:GITHUB_ENV
 
       - name: Create 7z archive
         shell: pwsh
         run: |
           $name = $env:RELEASE_NAME
+          $archive = Join-Path "${{ github.workspace }}" "release/${name}.7z"
+          Push-Location "dist/SatelliteDebugTool"
           & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 -mf=off -mmt=on `
-            "release/${name}.7z" "release/${name}/" | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            throw "7-Zip failed with exit code $LASTEXITCODE"
+            $archive "*" | Out-Null
+          $archiveExitCode = $LASTEXITCODE
+          Pop-Location
+          if ($archiveExitCode -ne 0) {
+            throw "7-Zip failed with exit code $archiveExitCode"
           }
-          Get-Item "release/${name}.7z"
+          Get-Item $archive
+
+      - name: Validate updater payload layout
+        shell: pwsh
+        run: |
+          $name = $env:RELEASE_NAME
+          python scripts/verify_update_archive.py "release/${name}.7z"
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

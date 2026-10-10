@@ -24,6 +24,12 @@ from satellite_debug_tool.updater.applier import (
     Applier,
     ApplyError,
     ApplyResult,
+    PayloadContract,
+)
+from satellite_debug_tool.updater.handoff import (
+    UpdateLaunchRequest,
+    launch_updater,
+    prepare_update_launch_request,
 )
 
 __all__ = [
@@ -39,4 +45,8 @@ __all__ = [
     "Applier",
     "ApplyError",
     "ApplyResult",
+    "PayloadContract",
+    "UpdateLaunchRequest",
+    "launch_updater",
+    "prepare_update_launch_request",
 ]

@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from satellite_debug_tool.core.production import (
     PowerSupplyProfile,
+    ReferenceSensorProfile,
+    FixtureCalibration,
+    FixtureCalibrationStore,
+    FixtureProfileStore,
     ProductTestTemplate,
     ProductionConfigurationError,
     ProductionConfigurationStore,
     ProductionRecipe,
     StationProfile,
+    fixture_model_preset,
 )
 
 
@@ -79,8 +86,46 @@ def _station(*, branch_count: int = 4, branch_current_a: float = 10.0) -> Statio
 
 
 def _store(tmp_path: Path, *, power=None, station=None) -> ProductionConfigurationStore:
-    store = ProductionConfigurationStore(tmp_path / "production_configuration.json")
-    store.save_catalog([_product()], [power or _power()], [station or _station()])
+    profile_store = FixtureProfileStore(tmp_path / "fixture_profiles")
+    calibration_store = FixtureCalibrationStore(tmp_path / "fixture_calibrations")
+    profile = replace(
+        fixture_model_preset("lingjing-a6-200mm").create_profile("motion-main"),
+        calibration_id="MS6222-CAL-TEST-0001",
+    )
+    profile_store.save(profile)
+    calibration = FixtureCalibration(
+        calibration_id=profile.calibration_id,
+        profile_id=profile.profile_id,
+        profile_sha256=profile.sha256,
+        created_utc=datetime.now(timezone.utc).isoformat(),
+        sensor_axis_for_logical=("roll", "pitch", "yaw"),
+        logical_signs=(1, 1, 1),
+        zero_offsets_deg=(0.0, 0.0, 0.0),
+        response_matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        cross_coupling_ratio=(0.0, 0.0, 0.0),
+        static_noise_std_deg=(0.01, 0.01, 0.01),
+        sample_coverage_ratio=1.0,
+        confirmed=True,
+    )
+    calibration_store.save(calibration)
+    reference = ReferenceSensorProfile(
+        profile_id="ms6222-main",
+        revision=1,
+        display_name="MS-6222 主参考",
+        driver_id="ms6222_serial_v1",
+        serial_port="COM7",
+        baud_rate=460800,
+        installation_id="ms6222-main-installation",
+        calibration_id=profile.calibration_id,
+    )
+    store = ProductionConfigurationStore(
+        tmp_path / "production_configuration.json",
+        fixture_profile_store=profile_store,
+        calibration_store=calibration_store,
+    )
+    store.save_catalog(
+        [_product()], [power or _power()], [station or _station()], [reference]
+    )
     return store
 
 
@@ -124,7 +169,9 @@ def test_bundle_round_trip_and_revision_conflict_are_atomic(tmp_path: Path) -> N
     source = _store(tmp_path / "source")
     bundle = source.export_bundle(tmp_path / "line-1.production.json")
     destination = ProductionConfigurationStore(
-        tmp_path / "destination" / "production_configuration.json"
+        tmp_path / "destination" / "production_configuration.json",
+        fixture_profile_store=FixtureProfileStore(tmp_path / "destination" / "fixture_profiles"),
+        calibration_store=FixtureCalibrationStore(tmp_path / "destination" / "fixture_calibrations"),
     )
 
     destination.import_bundle(bundle)
@@ -152,7 +199,11 @@ def test_bundle_rejects_tampered_hash_before_writing(tmp_path: Path) -> None:
     payload = json.loads(bundle.read_text(encoding="utf-8"))
     payload["power_profiles"][0]["host"] = "192.168.1.200"
     bundle.write_text(json.dumps(payload), encoding="utf-8")
-    destination = ProductionConfigurationStore(tmp_path / "target.json")
+    destination = ProductionConfigurationStore(
+        tmp_path / "target.json",
+        fixture_profile_store=FixtureProfileStore(tmp_path / "target_fixture_profiles"),
+        calibration_store=FixtureCalibrationStore(tmp_path / "target_fixture_calibrations"),
+    )
 
     with pytest.raises(ProductionConfigurationError, match="SHA-256"):
         destination.import_bundle(bundle)

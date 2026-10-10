@@ -1,5 +1,8 @@
 # M22 AFD01C 上位机适配开发记录
 
+> 历史说明：本文中的 Ed25519/签名包描述记录当时实现，客户固件包已由 M33 AES-256-GCM 认证解密模型替代。
+
+
 对应计划：`doc/M22_AFD01C_upper_pc_adaptation_plan.md`
 
 验收标准：`doc/M22_AFD01C_upper_pc_adaptation_acceptance.md`

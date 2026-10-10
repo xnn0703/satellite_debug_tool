@@ -90,6 +90,7 @@ class _FinalizeThread(QThread):
 class Ms6222DebugWorkspace(QWidget):
     status_message = Signal(str, int)
     active_changed = Signal(bool)
+    runtime_state_changed = Signal(str, str, str)
     VALID_DATA_TIMEOUT_S = 5.0
 
     def __init__(
@@ -99,6 +100,7 @@ class Ms6222DebugWorkspace(QWidget):
         *,
         session_root: Optional[Path] = None,
         worker_factory: Callable[..., Ms6222SerialWorker] = Ms6222SerialWorker,
+        profile_port: str = "",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -106,6 +108,7 @@ class Ms6222DebugWorkspace(QWidget):
         self._lease = lease
         self._session_root = session_root
         self._worker_factory = worker_factory
+        self._profile_port = str(profile_port).strip()
         self._lease_handle: Optional[Ms6222LeaseHandle] = None
         self._worker: Optional[Ms6222SerialWorker] = None
         self._connected = False
@@ -237,6 +240,7 @@ class Ms6222DebugWorkspace(QWidget):
         self._plot = pg.PlotWidget()
         self._plot.showGrid(x=True, y=True, alpha=0.15)
         self._plot.setLabel("left", tr("Angle"), units="deg")
+        self._plot.getAxis("left").enableAutoSIPrefix(False)
         self._plot.setLabel("bottom", tr("Elapsed time"), units="s")
         self._plot.addLegend()
         self._curves = {
@@ -299,9 +303,7 @@ class Ms6222DebugWorkspace(QWidget):
         return group, labels
 
     def _refresh_ports(self) -> None:
-        selected = self._port.currentText().strip() or str(
-            self._settings.get("production.ms6222_port", "") or ""
-        ).strip()
+        selected = self._port.currentText().strip() or self._profile_port
         ports = sorted({item.device for item in list_ports.comports()})
         self._port.clear()
         self._port.addItems(ports)
@@ -311,6 +313,17 @@ class Ms6222DebugWorkspace(QWidget):
                 self._port.addItem(selected)
                 index = self._port.count() - 1
             self._port.setCurrentIndex(index)
+
+    def select_profile_port(self, port: str) -> None:
+        value = str(port).strip()
+        if not value or self._worker is not None:
+            return
+        index = self._port.findText(value)
+        if index < 0:
+            self._port.addItem(value, value)
+            index = self._port.count() - 1
+        self._port.setCurrentIndex(index)
+        self._profile_port = value
 
     def _toggle_connection(self) -> None:
         if self._worker is not None:
@@ -335,8 +348,6 @@ class Ms6222DebugWorkspace(QWidget):
         worker.finished.connect(self._on_worker_finished)
         self._lease_handle = handle
         self._worker = worker
-        self._settings.set("production.ms6222_port", port)
-        self._settings.persist_preferences()
         self._valid_data_confirmed = False
         self._connection_state.setText(tr("Opening serial port..."))
         self._data_state.setText(tr("Valid data not confirmed"))
@@ -368,6 +379,11 @@ class Ms6222DebugWorkspace(QWidget):
             else tr("Serial port closed")
         )
         self._append_event(self._connection_state.text(), "connection")
+        self.runtime_state_changed.emit(
+            "reference",
+            "connected" if connected else "configured",
+            port if connected else "",
+        )
         self._update_actions()
 
     def _on_worker_finished(self) -> None:
@@ -387,6 +403,7 @@ class Ms6222DebugWorkspace(QWidget):
     def _on_error(self, details: str) -> None:
         message = tr("MS-6222 serial error: {details}", details=details)
         self._show_error(message)
+        self.runtime_state_changed.emit("reference", "fault", str(details))
         if self.session_active:
             self._finish_capture(abort_reason=message)
 
@@ -399,6 +416,9 @@ class Ms6222DebugWorkspace(QWidget):
                 self._finish_capture(abort_reason=str(exc))
         if not envelope.valid:
             return
+        self.runtime_state_changed.emit(
+            "reference", "ready", "valid MS-6222 frames"
+        )
         self._valid_data_confirmed = True
         self._last_frame_wall_ns = envelope.host_wall_time_ns
         self._last_valid_monotonic_ns = envelope.host_monotonic_ns

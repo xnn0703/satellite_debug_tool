@@ -276,13 +276,19 @@ def _validate_motion_platform(platform: Any, errors: list[str]) -> None:
     if not isinstance(platform, dict):
         errors.append("fixtures.motion_platform must be an object")
         return
-    if platform.get("command_family") != "A6T":
-        errors.append("fixtures.motion_platform.command_family must be 'A6T'")
-    if platform.get("driver") != "lingjing_udp_v0_3":
+    if platform.get("command_family") != "binary_position_feedback":
         errors.append(
-            "fixtures.motion_platform.driver must be 'lingjing_udp_v0_3'"
+            "fixtures.motion_platform.command_family must be 'binary_position_feedback'"
         )
-    for pose_name, expected_z in (("center_pose", 100), ("reset_pose", 0)):
+    if platform.get("driver") != "lingjing_udp_v1":
+        errors.append(
+            "fixtures.motion_platform.driver must be 'lingjing_udp_v1'"
+        )
+    if platform.get("home_command") != "controller_home":
+        errors.append(
+            "fixtures.motion_platform.home_command must be 'controller_home'"
+        )
+    for pose_name, expected_z in (("center_pose", 100),):
         pose = platform.get(pose_name)
         if not isinstance(pose, dict):
             errors.append(f"fixtures.motion_platform.{pose_name} must be an object")

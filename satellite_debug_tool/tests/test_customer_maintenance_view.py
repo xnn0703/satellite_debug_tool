@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -10,9 +9,6 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.protocol import (
     CmdType,
@@ -27,7 +23,10 @@ from satellite_debug_tool.core.protocol import (
     build_device_reboot,
 )
 from satellite_debug_tool.core.session import DeviceSessionCore
-from satellite_debug_tool.core.security import TrustedFirmwareKey, build_signed_manifest_message
+from satellite_debug_tool.core.security import (
+    FirmwareEncryptionKey,
+    create_firmware_package_bytes,
+)
 from satellite_debug_tool.i18n import tr
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 
@@ -132,51 +131,47 @@ def app():
 
 
 @pytest.fixture
-def signing_material():
-    private = Ed25519PrivateKey.generate()
-    public = private.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
+def encryption_material():
+    key = FirmwareEncryptionKey(
+        "test-package-key",
+        bytes(range(32)),
+        "Test package key",
     )
-    return private, {"test-release": TrustedFirmwareKey("test-release", public, "Test release")}
+    return key, {key.key_id: key}
 
 
 def _package(
     path: Path,
-    private: Ed25519PrivateKey,
+    encryption_key: FirmwareEncryptionKey,
     *,
     hardware: str = "afd01",
     product: str = "AFD01",
 ) -> bytes:
     firmware = b"AFD01-CUSTOMER-IMAGE" * 64
-    manifest = {
-        "schema_version": 1,
-        "product": product,
-        "hardware_types": [hardware],
-        "version": "0.0.131",
-        "version_policy": "upgrade_only",
-        "firmware": "afd01.bin",
-        "firmware_size": len(firmware),
-        "firmware_sha256": hashlib.sha256(firmware).hexdigest(),
-        "key_id": "test-release",
-    }
-    signature = private.sign(build_signed_manifest_message(manifest))
+    manifest, encrypted = create_firmware_package_bytes(
+        firmware,
+        firmware_name="afd01.bin",
+        product=product,
+        hardware_types=(hardware,),
+        version="0.0.131",
+        version_policy="upgrade_only",
+        encryption_key=encryption_key,
+    )
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest))
-        archive.writestr("afd01.bin", firmware)
-        archive.writestr("signature.ed25519", signature)
+        archive.writestr("firmware.aesgcm", encrypted)
     return firmware
 
 
 def test_verified_package_is_forwarded_and_install_requires_confirmation(
-    app, tmp_path: Path, signing_material, monkeypatch
+    app, tmp_path: Path, encryption_material, monkeypatch
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     path = tmp_path / "release.sfpkg"
-    firmware = _package(path, private)
+    firmware = _package(path, encryption_key)
     live = _LiveDouble()
     device = _DeviceDouble()
-    view = CustomerMaintenanceView(live, device, _SettingsDouble(), trusted_keys=keys)
+    view = CustomerMaintenanceView(live, device, _SettingsDouble(), encryption_keys=keys)
 
     assert view.load_package(path)
     assert device.loaded == (firmware, "afd01.bin")
@@ -190,14 +185,14 @@ def test_verified_package_is_forwarded_and_install_requires_confirmation(
 
 
 def test_replacing_ota_artifact_invalidates_verified_package(
-    app, tmp_path: Path, signing_material
+    app, tmp_path: Path, encryption_material
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     path = tmp_path / "release.sfpkg"
-    _package(path, private)
+    _package(path, encryption_key)
     live = _LiveDouble()
     device = _DeviceDouble()
-    view = CustomerMaintenanceView(live, device, _SettingsDouble(), trusted_keys=keys)
+    view = CustomerMaintenanceView(live, device, _SettingsDouble(), encryption_keys=keys)
 
     assert view.load_package(path)
     device.artifact = object()
@@ -209,16 +204,16 @@ def test_replacing_ota_artifact_invalidates_verified_package(
 
 
 def test_wrong_hardware_and_raw_binary_are_not_forwarded(
-    app, tmp_path: Path, signing_material
+    app, tmp_path: Path, encryption_material
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     wrong = tmp_path / "wrong.sfpkg"
-    _package(wrong, private, hardware="esa01")
+    _package(wrong, encryption_key, hardware="esa01")
     raw = tmp_path / "afd01.bin"
     raw.write_bytes(b"not a package")
     live = _LiveDouble()
     device = _DeviceDouble()
-    view = CustomerMaintenanceView(live, device, _SettingsDouble(), trusted_keys=keys)
+    view = CustomerMaintenanceView(live, device, _SettingsDouble(), encryption_keys=keys)
 
     assert not view.load_package(wrong)
     assert device.loaded is None
@@ -226,19 +221,19 @@ def test_wrong_hardware_and_raw_binary_are_not_forwarded(
     assert device.loaded is None
 
 
-def test_afd01c_accepts_only_matching_signed_product(
-    app, tmp_path: Path, signing_material
+def test_afd01c_accepts_only_matching_encrypted_product(
+    app, tmp_path: Path, encryption_material
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     afd01c_path = tmp_path / "afd01c.sfpkg"
     _package(
         afd01c_path,
-        private,
+        encryption_key,
         hardware="afd01c",
         product="AFD01C",
     )
     afd01_path = tmp_path / "afd01.sfpkg"
-    _package(afd01_path, private, hardware="afd01", product="AFD01")
+    _package(afd01_path, encryption_key, hardware="afd01", product="AFD01")
     live = _LiveDouble(
         hardware_type="afd01c",
         product_identity="AFD01C",
@@ -249,7 +244,7 @@ def test_afd01c_accepts_only_matching_signed_product(
         live,
         device,
         _SettingsDouble(),
-        trusted_keys=keys,
+        encryption_keys=keys,
     )
 
     assert view.load_package(afd01c_path)
@@ -263,29 +258,29 @@ def test_afd01c_accepts_only_matching_signed_product(
         afd01_live,
         afd01_device,
         _SettingsDouble(),
-        trusted_keys=keys,
+        encryption_keys=keys,
     )
     assert not afd01_view.load_package(afd01c_path)
     assert afd01_device.loaded is None
 
 
 @pytest.mark.parametrize("product", ("AFD01A", "AFD01B2"))
-def test_new_afd01_variant_ota_accepts_only_its_signed_product(
-    app, tmp_path: Path, signing_material, product: str
+def test_new_afd01_variant_ota_accepts_only_its_encrypted_product(
+    app, tmp_path: Path, encryption_material, product: str
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     products = ("AFD01", "AFD01A", "AFD01B2", "AFD01C")
     packages = {}
     for name in products:
         path = tmp_path / f"{name.lower()}.sfpkg"
-        _package(path, private, hardware=name.lower(), product=name)
+        _package(path, encryption_key, hardware=name.lower(), product=name)
         packages[name] = path
 
     live = _LiveDouble(
         hardware_type=product.lower(), product_identity=product, service_protocol=8
     )
     device = _DeviceDouble()
-    view = CustomerMaintenanceView(live, device, _SettingsDouble(), trusted_keys=keys)
+    view = CustomerMaintenanceView(live, device, _SettingsDouble(), encryption_keys=keys)
     for name, path in packages.items():
         device.loaded = None
         assert view.load_package(path) is (name == product)
@@ -293,11 +288,11 @@ def test_new_afd01_variant_ota_accepts_only_its_signed_product(
 
 
 def test_ota_requires_matching_debug_and_product_identity(
-    app, tmp_path: Path, signing_material
+    app, tmp_path: Path, encryption_material
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     path = tmp_path / "afd01c.sfpkg"
-    _package(path, private, hardware="afd01c", product="AFD01C")
+    _package(path, encryption_key, hardware="afd01c", product="AFD01C")
     live = _LiveDouble(
         hardware_type="afd01c",
         product_identity="AFD01",
@@ -308,7 +303,7 @@ def test_ota_requires_matching_debug_and_product_identity(
         live,
         device,
         _SettingsDouble(),
-        trusted_keys=keys,
+        encryption_keys=keys,
     )
 
     assert not view.load_package(path)
@@ -316,14 +311,14 @@ def test_ota_requires_matching_debug_and_product_identity(
 
 
 def test_disconnect_clears_previously_verified_package(
-    app, tmp_path: Path, signing_material
+    app, tmp_path: Path, encryption_material
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     path = tmp_path / "release.sfpkg"
-    _package(path, private)
+    _package(path, encryption_key)
     live = _LiveDouble()
     device = _DeviceDouble()
-    view = CustomerMaintenanceView(live, device, _SettingsDouble(), trusted_keys=keys)
+    view = CustomerMaintenanceView(live, device, _SettingsDouble(), encryption_keys=keys)
     assert view.load_package(path)
 
     live.connected = False
@@ -334,18 +329,18 @@ def test_disconnect_clears_previously_verified_package(
 
 
 def test_identity_change_clears_previously_verified_package(
-    app, tmp_path: Path, signing_material
+    app, tmp_path: Path, encryption_material
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     path = tmp_path / "release.sfpkg"
-    _package(path, private)
+    _package(path, encryption_key)
     live = _LiveDouble()
     device = _DeviceDouble()
     view = CustomerMaintenanceView(
         live,
         device,
         _SettingsDouble(),
-        trusted_keys=keys,
+        encryption_keys=keys,
     )
     view.activate_view()
     assert view.load_package(path)
@@ -370,19 +365,19 @@ def test_identity_change_clears_previously_verified_package(
 def test_ota_confirmation_is_rejected_when_identity_changes_in_dialog(
     app,
     tmp_path: Path,
-    signing_material,
+    encryption_material,
     monkeypatch,
 ) -> None:
-    private, keys = signing_material
+    encryption_key, keys = encryption_material
     path = tmp_path / "release.sfpkg"
-    _package(path, private)
+    _package(path, encryption_key)
     live = _LiveDouble()
     device = _DeviceDouble()
     view = CustomerMaintenanceView(
         live,
         device,
         _SettingsDouble(),
-        trusted_keys=keys,
+        encryption_keys=keys,
     )
     assert view.load_package(path)
 
@@ -486,7 +481,7 @@ def test_mount_save_waits_for_product_serial_or_uid(
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
 
@@ -518,7 +513,7 @@ def test_mount_save_is_atomic_reboots_and_waits_for_final_readback(
         live,
         device,
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
     assert view._mount_authoritative == (0.0, 0.0, 0.0)
@@ -636,7 +631,7 @@ def test_mount_preview_and_inputs_ignore_internal_raw_imu_rotation(app) -> None:
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
 
@@ -663,7 +658,7 @@ def test_mount_readback_keeps_missing_valid_bits_unavailable(app) -> None:
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
 
@@ -706,7 +701,7 @@ def test_hidden_mount_preview_defers_render_until_reactivated(app) -> None:
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     assert not view._mount_preview.updatesEnabled()
     view.activate_view()
@@ -729,7 +724,7 @@ def test_hidden_maintenance_defers_store_render_until_reactivated(app) -> None:
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
     assert view._identity_labels["main_fw"].text() == "0.0.130"
@@ -755,7 +750,7 @@ def test_mount_unavailable_text_distinguishes_offline_waiting_and_unsupported(
         offline_live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     assert offline_view._mount_readback.text() == tr("Offline")
 
@@ -764,7 +759,7 @@ def test_mount_unavailable_text_distinguishes_offline_waiting_and_unsupported(
         waiting_live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     assert waiting_view._mount_readback.text() == tr("Waiting for product service")
 
@@ -773,7 +768,7 @@ def test_mount_unavailable_text_distinguishes_offline_waiting_and_unsupported(
         protocol_live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     unsupported = tr("Installation attitude is not supported by this firmware")
     assert protocol_view._mount_readback.text() == unsupported
@@ -788,7 +783,7 @@ def test_mount_unavailable_text_distinguishes_offline_waiting_and_unsupported(
         capability_live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     assert capability_view._mount_readback.text() == unsupported
 
@@ -800,7 +795,7 @@ def test_mount_capability_absence_keeps_editor_read_only(app) -> None:
         live,
         device,
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
 
     view._mount_yaw.setValue(10.0)
@@ -816,7 +811,7 @@ def test_mount_disconnect_discards_old_authority_but_preserves_same_device_draft
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
     view._mount_yaw.setValue(7.0)
@@ -860,7 +855,7 @@ def test_clean_disconnect_does_not_create_mount_draft_for_next_device(app) -> No
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
     assert not view._mount_dirty
@@ -903,7 +898,7 @@ def test_mount_draft_is_discarded_when_same_endpoint_identity_changes(app) -> No
         live,
         _DeviceDouble(),
         _SettingsDouble(),
-        trusted_keys={},
+        encryption_keys={},
     )
     view.activate_view()
     view._mount_yaw.setValue(7.0)

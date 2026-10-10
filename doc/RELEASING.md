@@ -161,6 +161,14 @@ A: 通常是依赖没在 `satellite_debug_tool.spec` `hiddenimports` 里。
 **Q: `.7z` 下载后无法解压？**
 A: 检查 spec 里 `-mf=off` 没有被去掉（关闭 BCJ2 滤器，保 py7zr / The Unarchiver 兼容）。
 
+**Q: 自动更新包应使用什么目录结构？**
+A: Windows Release 的 `.7z` 必须直接以 `dist/SatelliteDebugTool/` 的内容作为归档根目录，
+即根部同时包含 `SatelliteDebugTool.exe`、`updater.exe` 和 `_internal/`。这保证仍使用旧 updater
+的已安装版本也能安装修复版。CI 上传前必须运行 `scripts/verify_update_archive.py`；新版 updater
+也会递归识别历史版本的单层或多层 wrapper，但新的发布包不得再增加 wrapper。
+
 **Q: 升级失败后老版本启动后报错？**
-A: 升级器把旧版改成 `SatelliteDebugTool.app.bak.<时间戳>`。手动改回 `SatelliteDebugTool.app` 即可恢复。
-失败原因看 `~/.satellite_debug_tool/updates/<tag>/updater.log`（如有）。
+A: Windows 升级器把旧目录改成 `SatelliteDebugTool.bak.<时间戳>`，替换失败会自动尝试回滚；
+若需要人工恢复，先退出相关进程，再把备份目录改回原安装目录名。
+固定诊断文件为 `~/.satellite_debug_tool/updates/<tag>/updater.log` 和同目录的
+`update-status.json`。状态中的 `stage` 是失败阶段，`detail` 是直接原因。

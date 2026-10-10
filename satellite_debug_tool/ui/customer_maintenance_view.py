@@ -1,4 +1,4 @@
-"""Customer maintenance view with mount configuration and signed-package OTA."""
+"""Customer maintenance view with mount configuration and encrypted-package OTA."""
 
 from __future__ import annotations
 
@@ -48,11 +48,11 @@ from satellite_debug_tool.core.session import (
     SessionOperationGateway,
 )
 from satellite_debug_tool.core.security import (
+    FirmwareEncryptionKey,
     FirmwarePackage,
     FirmwarePackageError,
     FirmwarePackageErrorCode,
-    TrustedFirmwareKey,
-    load_bundled_trusted_keys,
+    load_bundled_encryption_keys,
     verify_firmware_package,
 )
 from satellite_debug_tool.i18n import register_translatable, tr, trc, tr_source
@@ -73,7 +73,7 @@ class CustomerMaintenanceView(QWidget):
         settings,
         parent: Optional[QWidget] = None,
         *,
-        trusted_keys: Optional[Mapping[str, TrustedFirmwareKey]] = None,
+        encryption_keys: Optional[Mapping[str, FirmwareEncryptionKey]] = None,
         operation_gateway_factory: Optional[
             Callable[[], SessionOperationGateway]
         ] = None,
@@ -113,14 +113,14 @@ class CustomerMaintenanceView(QWidget):
         self._package_scope: Optional[DeviceSessionScope] = None
         self._package_artifact: Optional[OtaArtifactToken] = None
         self._package_error: Optional[FirmwarePackageError] = None
-        self._trust_error = ""
+        self._key_store_error = ""
         try:
-            self._trusted_keys = dict(
-                load_bundled_trusted_keys() if trusted_keys is None else trusted_keys
+            self._encryption_keys = dict(
+                load_bundled_encryption_keys() if encryption_keys is None else encryption_keys
             )
         except FirmwarePackageError as exc:
-            self._trusted_keys = {}
-            self._trust_error = exc.detail
+            self._encryption_keys = {}
+            self._key_store_error = exc.detail
         self._ota_status_source = "Idle"
         self._ota_status_values: dict = {}
         self._local_status_source = ""
@@ -282,11 +282,11 @@ class CustomerMaintenanceView(QWidget):
         ota_layout = QVBoxLayout(ota)
         ota_layout.setContentsMargins(14, 10, 14, 13)
         ota_layout.setSpacing(9)
-        self._ota_title = QLabel(tr("Signed firmware update"))
+        self._ota_title = QLabel(tr("Encrypted firmware update"))
         self._ota_title.setObjectName("customerControlTitle")
         ota_layout.addWidget(self._ota_title)
         package_row = QHBoxLayout()
-        self._package_label = QLabel(tr("No signed package selected"))
+        self._package_label = QLabel(tr("No encrypted package selected"))
         self._package_label.setWordWrap(True)
         package_row.addWidget(self._package_label, 1)
         self._select_btn = QPushButton(tr("Select package..."))
@@ -733,9 +733,9 @@ class CustomerMaintenanceView(QWidget):
         last_dir = self._settings.get("paths.firmware_dir", "") or ""
         path, _ = QFileDialog.getOpenFileName(
             self,
-            tr("Select signed firmware package"),
+            tr("Select encrypted firmware package"),
             last_dir,
-            tr("Signed firmware package (*.sfpkg)"),
+            tr("Encrypted firmware package (*.sfpkg)"),
         )
         if path:
             self.load_package(Path(path))
@@ -748,8 +748,8 @@ class CustomerMaintenanceView(QWidget):
         scope, expected_product = ota_identity
         hardware = scope.hardware_type
         current_version = scope.product_firmware
-        if not self._trusted_keys:
-            self._set_local_status("No trusted firmware signing key is installed")
+        if not self._encryption_keys:
+            self._set_local_status("Firmware package decryption key is unavailable")
             return False
         try:
             package = verify_firmware_package(
@@ -757,7 +757,7 @@ class CustomerMaintenanceView(QWidget):
                 expected_product=expected_product,
                 expected_hardware=hardware,
                 current_version=str(current_version),
-                trusted_keys=self._trusted_keys,
+                encryption_keys=self._encryption_keys,
             )
         except FirmwarePackageError as exc:
             self._clear_package_selection()
@@ -777,17 +777,17 @@ class CustomerMaintenanceView(QWidget):
         self._package_error = None
         self._package_label.setText(path.name)
         self._render_package_detail()
-        self._set_local_status("Package verified and ready")
+        self._set_local_status("Package verified, decrypted, and ready")
         self._refresh_actions()
         return True
 
     @staticmethod
     def _package_error_text(error: FirmwarePackageError) -> str:
         code = error.code
-        if code == FirmwarePackageErrorCode.UNSIGNED:
-            return tr("The package is unsigned or its signature is malformed")
-        if code in {FirmwarePackageErrorCode.UNKNOWN_KEY, FirmwarePackageErrorCode.SIGNATURE_INVALID}:
-            return tr("The package signature is not trusted")
+        if code == FirmwarePackageErrorCode.UNKNOWN_KEY:
+            return tr("The package uses an unknown encryption key")
+        if code == FirmwarePackageErrorCode.AUTHENTICATION_FAILED:
+            return tr("The encrypted firmware package was modified or cannot be authenticated")
         if code in {FirmwarePackageErrorCode.HASH_MISMATCH, FirmwarePackageErrorCode.SIZE_MISMATCH}:
             return tr("The firmware payload is corrupt")
         if code == FirmwarePackageErrorCode.PRODUCT_MISMATCH:
@@ -796,8 +796,8 @@ class CustomerMaintenanceView(QWidget):
             return tr("The package does not support this hardware")
         if code in {FirmwarePackageErrorCode.VERSION_INVALID, FirmwarePackageErrorCode.VERSION_NOT_ALLOWED}:
             return tr("The package version is not allowed for this device")
-        if code in {FirmwarePackageErrorCode.CRYPTO_UNAVAILABLE, FirmwarePackageErrorCode.TRUST_STORE_INVALID}:
-            return tr("Firmware signature verification is unavailable")
+        if code in {FirmwarePackageErrorCode.CRYPTO_UNAVAILABLE, FirmwarePackageErrorCode.KEY_STORE_INVALID}:
+            return tr("Firmware package decryption is unavailable")
         return tr("The firmware package format is invalid")
 
     def _start_ota(self) -> None:
@@ -812,7 +812,7 @@ class CustomerMaintenanceView(QWidget):
             self,
             tr("Install firmware update"),
             tr(
-                "Install signed firmware {target} over {current}? The device will reboot during the update.",
+                "Install encrypted firmware {target} over {current}? The device will reboot during the update.",
                 target=package.version,
                 current=current,
             ),
@@ -859,10 +859,9 @@ class CustomerMaintenanceView(QWidget):
             package = self._package
             self._package_detail.setText(
                 tr(
-                    "Verified {product} {version} · signer {signer} · SHA-256 {digest}",
+                    "Decrypted {product} {version} · AES-GCM · SHA-256 {digest}",
                     product=package.product,
                     version=package.version,
-                    signer=package.key_label,
                     digest=package.firmware_sha256[:12],
                 )
             )
@@ -882,7 +881,7 @@ class CustomerMaintenanceView(QWidget):
         if self._package_artifact is not None and artifact != self._package_artifact:
             self._clear_package_selection()
             self._set_local_status(
-                "Firmware selection changed; verify the signed package again"
+                "Firmware selection changed; select the encrypted package again"
             )
         self._refresh_actions()
 
@@ -893,7 +892,7 @@ class CustomerMaintenanceView(QWidget):
         self._package_artifact = None
         self._package_error = None
         if hasattr(self, "_package_label"):
-            self._package_label.setText(tr("No signed package selected"))
+            self._package_label.setText(tr("No encrypted package selected"))
             self._package_detail.setText("—")
 
     def _refresh_actions(self) -> None:
@@ -911,25 +910,25 @@ class CustomerMaintenanceView(QWidget):
             and self._device_online()
             and self._device.customer_ota_available()
         )
-        trusted = bool(self._trusted_keys) and not self._trust_error
-        self._select_btn.setEnabled(available and trusted)
+        key_store_ready = bool(self._encryption_keys) and not self._key_store_error
+        self._select_btn.setEnabled(available and key_store_ready)
         self._upload_btn.setEnabled(
             available
             and self._package is not None
             and self._package_artifact is not None
             and self._device.customer_ota_available(self._package_artifact)
         )
-        if not trusted:
+        if not key_store_ready:
             self._package_detail.setText(
-                tr("No trusted firmware signing key is installed")
-                if not self._trust_error
-                else tr("Firmware signature verification is unavailable")
+                tr("Firmware package decryption key is unavailable")
+                if not self._key_store_error
+                else tr("Firmware package decryption is unavailable")
             )
 
     def _ota_identity_scope(
         self,
     ) -> Optional[tuple[DeviceSessionScope, str]]:
-        """Return the exact current-session OTA identity and signed product name."""
+        """Return the exact current-session OTA identity and encrypted product name."""
 
         if not self._device_online():
             return None
@@ -1014,7 +1013,7 @@ class CustomerMaintenanceView(QWidget):
         self._component_table.setHorizontalHeaderLabels(
             [tr("Component"), tr("Status"), tr("Temperature"), tr("Voltage"), tr("Version")]
         )
-        self._ota_title.setText(tr("Signed firmware update"))
+        self._ota_title.setText(tr("Encrypted firmware update"))
         self._mount_title.setText(tr("Device installation attitude"))
         self._mount_contract.setText(
             tr("FRD carrier: +X forward / +Y right / +Z down · ZYX · degrees")
@@ -1032,7 +1031,7 @@ class CustomerMaintenanceView(QWidget):
         for key, label in self._identity_title_labels.items():
             label.setText(self._identity_title(key))
         if self._package_path is None:
-            self._package_label.setText(tr("No signed package selected"))
+            self._package_label.setText(tr("No encrypted package selected"))
         self._render_package_detail()
         if self._ota_status_source:
             self._ota_status.setText(
