@@ -188,6 +188,7 @@ class ProductionWorkspace(QWidget):
         production_power_adapter_factory: Callable[
             [PowerSupplyConfig], GwInstekPswAdapter
         ] = GwInstekPswAdapter,
+        open_tcp_shell: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
@@ -201,6 +202,7 @@ class ProductionWorkspace(QWidget):
         )
         self._resolved_configuration: Optional[ResolvedProductionConfiguration] = None
         self._production_power_adapter_factory = production_power_adapter_factory
+        self._open_tcp_shell = open_tcp_shell
         self._production_power_worker: Optional[ProductionPowerWorker] = None
         self._pending_power_participants: tuple[DeviceSession, ...] = ()
         self._power_record_count = 0
@@ -306,6 +308,11 @@ class ProductionWorkspace(QWidget):
         navigation.addWidget(self._fixture_page_button)
         navigation.addWidget(self._ms6222_page_button)
         navigation.addWidget(self._power_page_button)
+        self._tcp_shell_button = QPushButton(tr("TCP shell..."))
+        self._tcp_shell_button.setObjectName("productionTcpShellButton")
+        self._tcp_shell_button.setVisible(self._open_tcp_shell is not None)
+        self._tcp_shell_button.clicked.connect(self._on_open_tcp_shell)
+        navigation.addWidget(self._tcp_shell_button)
         navigation.addStretch(1)
         outer.addLayout(navigation)
 
@@ -588,6 +595,11 @@ class ProductionWorkspace(QWidget):
 
     def _ensure_power_debug(self) -> PowerSupplyDebugWorkspace:
         return self._power_host.ensure_view()
+
+    def _on_open_tcp_shell(self) -> None:
+        opener = self._open_tcp_shell
+        if opener is not None:
+            opener()
 
     def _switch_subpage(self, index: int) -> None:
         requested = int(index)
@@ -2296,6 +2308,7 @@ class ProductionWorkspace(QWidget):
         self._fixture_page_button.setText(tr("Motion platform test"))
         self._ms6222_page_button.setText(tr("MS-6222 test"))
         self._power_page_button.setText(tr("Power supply diagnostics"))
+        self._tcp_shell_button.setText(tr("TCP shell..."))
         self._title.setText(tr("Production batch test"))
         self._preview_notice.setText(
             tr(

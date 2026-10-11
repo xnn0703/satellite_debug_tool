@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
             iperf_controller=None,
             iperf_store=None,
             fixture_runtime=self._fixture_runtime,
+            tcp_shell_session_directory=self._endpoint_directory,
         )
         self._customer.add_requested.connect(self._on_add_customer_device)
         self._customer.edit_requested.connect(self._on_edit_customer_device)
@@ -299,6 +300,7 @@ class MainWindow(QMainWindow):
             broker=self._udp_broker,
             session_directory=self._endpoint_directory,
             fixture_runtime=self._fixture_runtime,
+            open_tcp_shell=self._customer.open_tcp_shell_dialog,
         )
         return self._production
 
@@ -394,6 +396,13 @@ class MainWindow(QMainWindow):
         )
         self._engineering_fixture_button.hide()
         row.addWidget(self._engineering_fixture_button)
+        self._engineering_tcp_shell_button = QPushButton(tr("TCP shell..."))
+        self._engineering_tcp_shell_button.setProperty("variant", "ghost")
+        self._engineering_tcp_shell_button.clicked.connect(
+            self._open_engineering_tcp_shell_dialog
+        )
+        self._engineering_tcp_shell_button.hide()
+        row.addWidget(self._engineering_tcp_shell_button)
         row.addStretch(1)
 
         # 右：主题切换 + 检查更新 + 设置（图标按钮）
@@ -457,6 +466,7 @@ class MainWindow(QMainWindow):
         self._tab_pillbar.setVisible(engineering_active)
         self._engineering_mode_combo.setVisible(engineering_active)
         self._engineering_fixture_button.setVisible(engineering_active)
+        self._engineering_tcp_shell_button.setVisible(engineering_active)
         for tab_index, button in enumerate(self._engineering_tab_pills):
             button.setVisible(engineering_active)
             button.setChecked(engineering_active and tab_index == current_tab)
@@ -472,6 +482,9 @@ class MainWindow(QMainWindow):
 
     def _open_engineering_fixture_dialog(self) -> None:
         self._customer.open_fixture_dialog()
+
+    def _open_engineering_tcp_shell_dialog(self) -> None:
+        self._customer.open_tcp_shell_dialog()
 
     def _engineering_mode_block_reason(self, target_mode: str) -> str:
         if target_mode == ENGINEERING_SHARED_UDP:
@@ -790,6 +803,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr("SoftHertz Phased-Array Terminal Tool"))
         self._brand_text.setText(tr("SoftHertz"))
         self._engineering_fixture_button.setText(tr("Motion platform..."))
+        self._engineering_tcp_shell_button.setText(tr("TCP shell..."))
         sb = self.statusBar()
         if sb is not None:
             sb.clearMessage()

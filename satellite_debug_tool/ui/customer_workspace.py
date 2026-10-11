@@ -21,6 +21,7 @@ from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.core.production import FixtureRuntime
 from satellite_debug_tool.ui import icons, styles as S
 from satellite_debug_tool.ui.customer_fixture_dialog import CustomerFixtureDialog
+from satellite_debug_tool.ui.customer_tcp_shell_dialog import CustomerTcpShellDialog
 from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_playback_view import CustomerPlaybackView
@@ -122,6 +123,7 @@ class CustomerWorkspace(QWidget):
         iperf_controller=None,
         iperf_store=None,
         fixture_runtime: Optional[FixtureRuntime] = None,
+        tcp_shell_session_directory=None,
     ) -> None:
         super().__init__(parent)
         if (device_directory is None) != (page_bundle_factory is None):
@@ -139,6 +141,8 @@ class CustomerWorkspace(QWidget):
         self._iperf_store = iperf_store
         self._fixture_runtime = fixture_runtime
         self._fixture_dialog: Optional[CustomerFixtureDialog] = None
+        self._tcp_shell_session_directory = tcp_shell_session_directory
+        self._tcp_shell_dialog: Optional[CustomerTcpShellDialog] = None
         self._multi_device_enabled = device_directory is not None
         self._theme = "dark"
         self._scale = "small"
@@ -327,6 +331,7 @@ class CustomerWorkspace(QWidget):
             self._stack.addWidget(page)
         side.addStretch(1)
         self._add_fixture_button(side)
+        self._add_tcp_shell_button(side)
 
         root.addWidget(self._sidebar)
         root.addWidget(self._stack, 1)
@@ -458,6 +463,7 @@ class CustomerWorkspace(QWidget):
             self._stack.addWidget(page)
         side.addStretch(1)
         self._add_fixture_button(side)
+        self._add_tcp_shell_button(side)
 
         root.addWidget(self._sidebar)
         root.addWidget(self._stack, 1)
@@ -491,6 +497,31 @@ class CustomerWorkspace(QWidget):
 
     def _clear_fixture_dialog(self, _result: int) -> None:
         self._fixture_dialog = None
+
+    def _add_tcp_shell_button(self, layout: QVBoxLayout) -> None:
+        self._tcp_shell_button = QPushButton(tr("TCP shell..."))
+        self._tcp_shell_button.setObjectName("customerTcpShellButton")
+        self._tcp_shell_button.clicked.connect(self.open_tcp_shell_dialog)
+        layout.addWidget(self._tcp_shell_button)
+
+    def open_tcp_shell_dialog(self) -> CustomerTcpShellDialog:
+        dialog = self._tcp_shell_dialog
+        if dialog is None:
+            dialog = CustomerTcpShellDialog(
+                self._settings,
+                device_directory=self._device_directory,
+                session_directory=self._tcp_shell_session_directory,
+                parent=self,
+            )
+            dialog.finished.connect(self._clear_tcp_shell_dialog)
+            self._tcp_shell_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
+
+    def _clear_tcp_shell_dialog(self, _result: int) -> None:
+        self._tcp_shell_dialog = None
 
     def _connect_directory_signal(self, name: str, slot) -> None:
         signal = getattr(self._device_directory, name, None)
@@ -664,6 +695,13 @@ class CustomerWorkspace(QWidget):
             dialog.workspace.shutdown()
             dialog.close()
             self._fixture_dialog = None
+        tcp_dialog = self._tcp_shell_dialog
+        if tcp_dialog is not None:
+            if not tcp_dialog.workspace.confirm_shutdown():
+                return False
+            tcp_dialog.workspace.shutdown()
+            tcp_dialog.close()
+            self._tcp_shell_dialog = None
         if not self._multi_device_enabled:
             self.deactivate_view()
             for host in (
@@ -739,6 +777,7 @@ class CustomerWorkspace(QWidget):
     def retranslate_ui(self) -> None:
         self._section_label.setText(tr("Product operation"))
         self._fixture_button.setText(tr("Motion platform..."))
+        self._tcp_shell_button.setText(tr("TCP shell..."))
         for button, (_page_id, label, _icon_name) in zip(
             self._nav_buttons, self._PAGE_DEFS
         ):

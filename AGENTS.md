@@ -100,6 +100,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/production/fixture_profile.py` — **M19-A.11** 摇摆台型号模板、v4 工作站档案、运行包线和控制租约；型号预置直接控制端点与运动学参数，旧 `192.168.15.101:9800` 厂家服务端点不解释为控制器地址，现场只确认轴符号并由引导标定生成真实 calibration ID
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 AES-256-GCM 认证解密（`firmware_package.py`）
+- `core/tcp_shell/` — **M37** AFD01 Raw TCP Shell + 严格 YMODEM Batch Sender：`ymodem_sender.py` 纯状态机（C 握手、STX/1024 块、CRC16-CCITT、EOT 两阶段、空文件名批结束）、`worker.py` 单 socket 读写 owner（QThread）、`controller.py` YMODEM 准入租约与最小版本回读、`recorder.py` 会话证据
 - `core/link_trace.py` — 帧 trace 日志
 - `core/config.py` — `Settings` 类，JSON 存 `~/.satellite_debug_tool/settings.json`
 - `ui/` — PySide6 呈现层；`view_lifecycle.py` 定义页面生命周期，`lazy_view_host.py` 提供首次访问构建，`semantic_style.py` 只在语义属性变化时刷新样式
@@ -135,8 +136,10 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **夹具姿态按设备录制并相关回放**——活动 SDB v3 以 `fixture_attitude_sample/v1` metadata 保存共享夹具事实；回放只在同一设备启动代际的有效主机接收时间/设备 uptime 锚点内插值。设备姿态、平台目标和 MS 相对 FRD 在同一姿态区域按颜色与线型区分；无效或缺口用 NaN 断开，未对齐样本不进入曲线。
 - **客户网络测试是设备级状态**——每个 endpoint bundle 拥有固定 `IperfTestController/Store`，切换页面不重绑、不停止后台测试；不同设备只在本地 IPv4和服务端端口不冲突时并行，应用退出前逐个完成进程和证据收尾。
 - 全局设置弹窗按 Customer / Engineering / Production scope 呈现；客户和工程 scope 不显示试产配置与试产报告，Production scope 保留这些业务设置。
+- Customer 侧栏、Engineering 顶栏与 Production 导航的“TCP Shell…”入口复用同一个弹窗实例（`CustomerWorkspace.open_tcp_shell_dialog` 懒创建缓存）；弹窗内置 AFD01 Raw TCP Shell 终端（默认端口 1235）与 YMODEM Sender，跨工作区切换存活，关闭即断开会话并收尾证据。
 - Customer 侧栏与 Engineering 顶栏的“摇摆台…”入口复用同一个弹窗实例和进程级 `FixtureRuntime`；提供日常相对姿态、回中、组合连续摇摆、受控停止、MS 绝对航向和有界姿态修正，目标/MS 实测/误差共用一张姿态图。回原点、档案编辑和资格标定仍由 Production 工程页面负责。
 - 第一方可翻译复合控件显式实现 `retranslate_ui()`；语言切换使用稳定源键，禁止扫描对象树或根据当前可见文本反查业务状态。
+- **TCP Shell/YMODEM 是工程工具路径**——Shell 观察与输入不持设备事务租约；YMODEM 开始前对有管理会话的 endpoint 以 `tcp-shell-ymodem` purpose 抢占操作网关（客户/工程走 attachment 网关，批次外设备要求 gate 空闲），手填未管理目标允许直传并在证据记录 `managed_session: false`。YMODEM 文件名原样保留：`<target>_app_X.Y.Z_release|beta.bin` → 设备 DOWNLOAD 区、`app_factory.bin` → FACTORY 区、其他 → LittleFS、跨产品被设备拒绝。YMODEM 完成只证明字节已被设备接收校验；升级生效由重启后握手回读独立呈现，不自动判 PASS。
 
 ## 持久化路径（`~/.satellite_debug_tool/`）
 
@@ -156,6 +159,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 | `ms6222_sessions/<session_id>/` | MS-6222 独立调试的配置、原始帧、解析 CSV、统计、事件、summary 与 manifest |
 | `power_supply_sessions/<session_id>/` | PSW 独立工程调试的配置、身份、SCPI 记录、事件与 manifest |
 | `iperf_sessions/<device_id>/<session_id>/` | 设备级 iperf3 配置、UL/DL 原始 JSONL、网络/功耗 CSV、事件与 summary |
+| `tcp_shell_sessions/<session_id>/` | M37 TCP Shell 会话证据：config、TX/RX transcript、YMODEM 记录、事件、summary 与 manifest |
 
 ## 构建与发版
 
@@ -184,6 +188,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M34_AFD01D_upper_pc_adaptation_*.md` — AFD01D 独立身份、OTA、试产和 3D 模型适配计划、验收与开发记录
 - `doc/M35_firmware_package_version_policy_*.md` — 客户固件包默认允许升级、同版本重装和降级的跨仓发布合同
 - `doc/M36_debug_ota_response_contract_*.md` — 旧固件有界 OTA 响应合同（`OK` / `dup OK` / `OK, rebooting`）与 `0.0.131_beta` 起严格合同的迁移边界
+- `doc/M37_tcp_shell_ymodem_*.md` — 三工作区 TCP Shell + YMODEM 弹窗计划、验收与开发记录；真机引导升级路径
 - `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
 - `doc/M7_*.md` ~ `doc/M36_*.md` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配、M23 部件温度窗口、M24 Tracking 仿真、M25 客户多设备共享会话、M25R 会话恢复简化、M26 外接电源监测、M27 iperf3 功耗测试、M28 客户设备独立电源与 iperf3、M29 AFD01A/B2 产品接入、M30 Windows 自动更新可靠性、M31 生产出货整备、M33 上位机解密固件包）
