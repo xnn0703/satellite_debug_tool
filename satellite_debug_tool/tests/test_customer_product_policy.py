@@ -28,6 +28,8 @@ from satellite_debug_tool.core.product import customer_ota_product_policy
         ("afd01b", 8, False),
         ("afd01c", 8, True),
         ("afd01c", 7, False),
+        ("afd01d", 8, True),
+        ("afd01d", 7, False),
         ("esa01", 6, True),
         ("unknown-terminal", 6, False),
     ),
@@ -98,7 +100,12 @@ def test_esa01_requires_v6_product_service(qapplication_session) -> None:
 
 @pytest.mark.parametrize(
     ("hardware_type", "product_identity"),
-    (("afd01a", "AFD01"), ("afd01b2", "AFD01C"), ("afd01c", "AFD01")),
+    (
+        ("afd01a", "AFD01"),
+        ("afd01b2", "AFD01C"),
+        ("afd01c", "AFD01"),
+        ("afd01d", "AFD01C"),
+    ),
 )
 def test_debug_and_product_identity_must_match(
     qapplication_session, hardware_type: str, product_identity: str
@@ -125,7 +132,13 @@ def test_debug_and_product_identity_must_match(
 
 @pytest.mark.parametrize(
     ("hardware_type", "product_identity"),
-    (("afd01", "AFD01"), ("afd01a", "AFD01A"), ("afd01b2", "AFD01B2"), ("afd01c", "AFD01C")),
+    (
+        ("afd01", "AFD01"),
+        ("afd01a", "AFD01A"),
+        ("afd01b2", "AFD01B2"),
+        ("afd01c", "AFD01C"),
+        ("afd01d", "AFD01D"),
+    ),
 )
 def test_mount_configuration_requires_v8_and_device_capability(
     qapplication_session,
@@ -165,7 +178,13 @@ def test_mount_configuration_requires_v8_and_device_capability(
 
 @pytest.mark.parametrize(
     ("product_identity", "hardware_type"),
-    (("AFD01", "afd01"), ("AFD01A", "afd01a"), ("AFD01B2", "afd01b2"), ("afd01c", "afd01c")),
+    (
+        ("AFD01", "afd01"),
+        ("AFD01A", "afd01a"),
+        ("AFD01B2", "afd01b2"),
+        ("afd01c", "afd01c"),
+        ("AFD01D", "afd01d"),
+    ),
 )
 def test_customer_ota_policy_resolves_only_registered_exact_product(
     product_identity: str, hardware_type: str

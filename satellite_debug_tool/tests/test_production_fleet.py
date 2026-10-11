@@ -561,7 +561,7 @@ def test_unsupported_hardware_never_becomes_identified() -> None:
     controller.stop()
 
 
-@pytest.mark.parametrize("model", ("AFD01A", "AFD01B2", "AFD01C"))
+@pytest.mark.parametrize("model", ("AFD01A", "AFD01B2", "AFD01C", "AFD01D"))
 def test_new_afd01_variants_protocol_v8_become_identified(model: str) -> None:
     controller = _controller()
     controller._on_datagram(
@@ -582,7 +582,7 @@ def test_new_afd01_variants_protocol_v8_become_identified(model: str) -> None:
     controller.stop()
 
 
-@pytest.mark.parametrize("model", ("AFD01A", "AFD01B2", "AFD01C"))
+@pytest.mark.parametrize("model", ("AFD01A", "AFD01B2", "AFD01C", "AFD01D"))
 def test_supported_new_afd01_variant_without_serial_waits_for_identity_configuration(model: str) -> None:
     controller = _controller()
     controller._on_datagram(
@@ -601,7 +601,15 @@ def test_supported_new_afd01_variant_without_serial_waits_for_identity_configura
 
 @pytest.mark.parametrize(
     "serial_number",
-    ("-", "unknown", "AFD01-dev", "AFD01A-dev", "AFD01B2-dev", "未配置"),
+    (
+        "-",
+        "unknown",
+        "AFD01-dev",
+        "AFD01A-dev",
+        "AFD01B2-dev",
+        "AFD01D-dev",
+        "未配置",
+    ),
 )
 def test_placeholder_serial_never_becomes_a_production_identity(
     serial_number: str,
@@ -621,14 +629,15 @@ def test_placeholder_serial_never_becomes_a_production_identity(
     controller.stop()
 
 
-def test_afd01c_requires_product_service_v8() -> None:
+@pytest.mark.parametrize("model", ("AFD01C", "AFD01D"))
+def test_newest_afd01_variants_require_product_service_v8(model: str) -> None:
     controller = _controller()
     controller._on_datagram(
         _datagram(
             ("192.168.1.12", 4004),
             _identity(
-                "AFD01C-OLD",
-                model="AFD01C",
+                f"{model}-OLD",
+                model=model,
                 service_protocol=7,
             ),
         )
@@ -638,12 +647,15 @@ def test_afd01c_requires_product_service_v8() -> None:
     controller.stop()
 
 
-def test_afd01c_without_serial_does_not_hide_unsupported_protocol() -> None:
+@pytest.mark.parametrize("model", ("AFD01C", "AFD01D"))
+def test_newest_afd01_variants_without_serial_do_not_hide_unsupported_protocol(
+    model: str,
+) -> None:
     controller = _controller()
     controller._on_datagram(
         _datagram(
             ("192.168.1.12", 4004),
-            _identity("", model="AFD01C", service_protocol=7),
+            _identity("", model=model, service_protocol=7),
         )
     )
 

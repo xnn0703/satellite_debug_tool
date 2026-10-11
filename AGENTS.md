@@ -17,7 +17,7 @@
 python3 -m satellite_debug_tool.main
 python3 -m satellite_debug_tool.main --production   # 解锁批量试产工作区（启动即进）
 
-# 测试（无 editable install 时需要 PYTHONPATH；89 个测试文件，conftest 已设 offscreen + 静默更新）
+# 测试（无 editable install 时需要 PYTHONPATH；100 个测试文件，conftest 已设 offscreen + 静默更新）
 PYTHONPATH=. pytest satellite_debug_tool/tests
 pytest satellite_debug_tool/tests/test_frame_v2.py -v      # 单文件
 pytest satellite_debug_tool/tests -k "crc"                 # 按 pattern
@@ -41,7 +41,7 @@ python3 scripts/update_translations.py check
 
 | 索引 | 工作区 | 入口 | 备注 |
 |------|--------|------|------|
-| 0 | **Customer Workspace**（默认） | 直接进 | 面向已注册产品（AFD01 / AFD01A / AFD01B2 / AFD01C / ESA01）：左侧最多 4 台显式 UDP 设备，Overview / RF control / Network test / Playback / Maintenance。每个 endpoint 使用固定会话页面 bundle；Network test 是全局页面。 |
+| 0 | **Customer Workspace**（默认） | 直接进 | 面向已注册产品（AFD01 / AFD01A / AFD01B2 / AFD01C / AFD01D / ESA01）：左侧最多 4 台显式 UDP 设备，Overview / RF control / Network test / Playback / Maintenance。每个 endpoint 使用固定会话页面 bundle；Network test 是全局页面。 |
 | 1 | **Engineering Tabs**（Live / Playback / Log / Device） | `Ctrl+Shift+E` 首次确认后本会话解锁 | 内部诊断、协议解码、设备参数读写、OTA。 |
 | 2 | **Production Workspace**（批量试产） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | 批次测试 / 摇摆台测试 / MS-6222 测试 / 电源测试四页面；已有单设备 DOCX、证据 ZIP 和 V2 审核，完整自动测试编排仍在后续里程碑。 |
 
@@ -51,6 +51,8 @@ python3 scripts/update_translations.py check
 - OTA、参数写入和 Product 控制通过 `DeviceSessionCore` 的单一设备事务租约互斥；控制器在完成、失败、断线或连接代际变化时释放各自 owner。
 - Product Service `result=0` 只表示设备已接受请求；只有更新且匹配的遥测回读才表示状态已应用，物理 RF 证据继续独立。
 - 客户 OTA 使用不可变的已认证解密 artifact token，绑定解密后的包字节、加密 manifest 和当前设备会话；工程 raw BIN 与客户加密包不共用授权，传输期间不允许替换 artifact。
+- AFD01 系列低于 `0.0.131_beta` 的已认证解密客户包使用有界旧 OTA 响应合同（`OK` / `dup OK` / `OK, rebooting`）；`0.0.131_beta` 及以后、工程 raw BIN、未知型号或未知版本只接受带阶段和序号的正式响应。
+- 新生成的客户 `.sfpkg` 默认使用 `allow_downgrade`，允许升级、同版本重装和降级；上位机仍严格执行经过 AES-GCM 认证的 manifest 策略，旧包不会被旁路。
 - `OTA_END=VERIFIED` 只确认字节转移和校验已被设备接受；完成结果还必须证明同 endpoint 返回、本次会话捕获的每项不可变身份都重新匹配，且传输前捕获的每个固件来源都重新回报、相互一致并匹配目标版本。同版本包只能显示“应用未独立确认”。
 - 工程 Tab 内部仍是 `LiveView / PlaybackView / LogView / DeviceView` 四张卡（`QTabWidget`，tabBar 隐藏，顶栏"药丸"接管）。
 
@@ -120,13 +122,13 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **每个离线 Tab 使用独立 `DataStore` / `ProfileStore`**；共享 UDP 的 Customer 与 Engineering 通过当前 endpoint bundle 消费同一个 Runtime Store，工程串口和 Playback/Log 分别独立，切换不污染
 - 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x11`、`0x20..0x2C`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
 - 通用长帧扩容不改变专用上传分片合同：`OTA_DATA` 每片 1..1021 B（UI 通常发送 512 B），Orbit `UPLOAD_CHUNK` 每片 1..1012 B
-- 测试在 `satellite_debug_tool/tests/`（89 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
+- 测试在 `satellite_debug_tool/tests/`（100 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
 - `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_UPDATE_CHECK=0` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
 - 字号已固化 `small`（`base_px=13`，`main.py` 调 `S.apply_global_font(app, scale="small", base_px=13)`）；`styles.FONT_SCALES` / `FontScale` API 仅保留兼容 `test_styles.py`，UI 不再暴露
 - 主题三档 `dark / dark_hc / light`，由 `S.palette()` 出语义色键（兼容键 + Mission Console 新语义键），顶栏图标按钮循环切换
 - 离线地图约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮
 - **客户多设备页面按 endpoint 固定绑定**——每个 endpoint bundle 复用 Directory 的唯一 Runtime/Core/Store；禁止把已有 widget/controller 动态 rebind 到另一 endpoint。工程“共享客户 UDP”复用当前 bundle，工程串口保持独立。
-- **AFD01 新型号身份**——后续出货的 AFD01A 沿用原 AFD01 的产品使用方式与 3D 几何，但 `afd01` / `afd01a` / `afd01b2` / `afd01c` 各自独立注册，按 Debug hw_type、Product Identity 与 service protocol 精确准入；recipe 和加密 OTA 包不互作别名。A/B2 仅接受 protocol 8，B2 未提供独立 STL 时使用占位模型。
+- **AFD01 新型号身份**——AFD01A 沿用原 AFD01 的产品使用方式与 3D 几何；`afd01` / `afd01a` / `afd01b2` / `afd01c` / `afd01d` 各自独立注册，按 Debug hw_type、Product Identity 与 service protocol 精确准入，recipe 和加密 OTA 包不互作别名。A/B2/C/D 仅接受 protocol 8；B2 未提供独立 STL 时使用占位模型，C/D 共用外观几何但分别打包为 `afd01c.stl` / `afd01d.stl`，CAD 轴按 `+Z=机头、+X=左翼、+Y=天顶` 映射到 FLU。
 - **电源与网络测试按客户设备固定绑定**——`customer.devices[]` 使用稳定 `device_id` 保存各自电源和 iperf profile；编辑 endpoint 不改变归属。外接电源弹窗配置 IP/设定值并执行闭环控制，端口固定 2268；SDB 的 `external_power_sample/v1` 只写入对应设备并携带 `device_id`/endpoint。
 - **摇摆台对外统一设备 FRD**——夹具界面、轨迹、自动资格测试和报告使用 Roll+ 右翼下沉、Pitch+ 机头上抬、Yaw+ 向右/俯视顺时针；灵境 A6 型号在运动组件边界固定转换为供应商控制符号 `(-1,+1,-1)`，型号档案只读。平台静止与 MS-6222 标定后姿态精度是两个独立结论。
 - **正式工位夹具绑定**——电源 TCP、摇摆台控制/反馈 UDP 和 MS-6222 COM 均来自所选工位依赖档案；型号预置拥有几何、运行包线和 FRD 符号，现场档案拥有实际端点。正式批次启动要求摇摆台反馈与 MS-6222 有效帧均进入 `READY`，`CONFIGURED` 不表示已连接。
@@ -162,7 +164,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **Windows 自动更新包合同**：GitHub Release `.7z` 的归档根直接包含 `SatelliteDebugTool.exe`、`updater.exe` 与 `_internal/`，兼容旧 updater 安装修复版；上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷
 - **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，7z 分卷上传 GitHub Release；推 master/main 触发 `ci-only-build` 上传 artifact 不发版）
 - **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 兼容性问题，强制本地脚本。updater 二进制仍嵌入但 mac 平台不发版，触发频率为零
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.4.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.5.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；mac 本地手动 `./scripts/build_macos.sh`
 - **`release.config.json`** 配 GitHub owner/repo/api；updater 用 `release_config.py` 读取
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
@@ -179,13 +181,17 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/DEBUG设备协议接口规范_v2.md` — **协议权威规范**
 - `doc/M22_AFD01C_upper_pc_adaptation_*.md` — 当前 AFD01C 上位机适配范围、证据与未完成真机边界
 - `doc/M29_AFD01A_B2_upper_pc_*.md` — AFD01A/B2 接入计划、验收及真机边界
+- `doc/M34_AFD01D_upper_pc_adaptation_*.md` — AFD01D 独立身份、OTA、试产和 3D 模型适配计划、验收与开发记录
+- `doc/M35_firmware_package_version_policy_*.md` — 客户固件包默认允许升级、同版本重装和降级的跨仓发布合同
+- `doc/M36_debug_ota_response_contract_*.md` — 旧固件有界 OTA 响应合同（`OK` / `dup OK` / `OK, rebooting`）与 `0.0.131_beta` 起严格合同的迁移边界
 - `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
-- `doc/M7_*.md` ~ `doc/M29_*.md` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配、M23 部件温度窗口、M24 Tracking 仿真、M25 客户多设备共享会话、M25R 会话恢复简化、M26 外接电源监测、M27 iperf3 功耗测试、M28 客户设备独立电源与 iperf3、M29 AFD01A/B2 产品接入）
+- `doc/M7_*.md` ~ `doc/M36_*.md` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配、M23 部件温度窗口、M24 Tracking 仿真、M25 客户多设备共享会话、M25R 会话恢复简化、M26 外接电源监测、M27 iperf3 功耗测试、M28 客户设备独立电源与 iperf3、M29 AFD01A/B2 产品接入、M30 Windows 自动更新可靠性、M31 生产出货整备、M33 上位机解密固件包）
 - `doc/development_log.md` — M1–M6 实施日志
 - `doc/acceptance_log.md` — F-/A- 系列验收跟踪
 - `doc/i18n_terms.md` — 中英术语表
 - `doc/user_manual.md` / `doc/user_manual_en.md` — M16 工程工作区历史操作手册；当前三工作区事实以本文件为准
+- `doc/customer_workspace_guide.md`（含 `_en` 版） — 当前客户工作区多设备操作指南：endpoint 目录、连接阶段语义与设备级测试边界
 - `doc/production_automation_operator_guide.md` — 当前试产工程预览的配置、夹具检查、批次、证据和报告操作指南，明确尚未接通的正式自动工况边界
 - `doc/M32_formal_production_fixture_closure_*.md` — 电源、摇摆台、MS-6222 完整工作站配置、M31 出货整备和正式自动工况收口计划、验收与开发记录
 - `doc/RELEASING.md` — 发版 SOP（含 tag 重发、hotfix、rc 预发）

@@ -18,6 +18,7 @@ from satellite_debug_tool.core.security import (
     build_encrypted_manifest_aad,
     create_firmware_package_bytes,
     device_firmware_versions_equal,
+    firmware_version_is_older,
     firmware_versions_equal,
     load_bundled_encryption_keys,
     verify_firmware_package,
@@ -224,6 +225,14 @@ def test_firmware_version_equivalence_ignores_only_build_identity() -> None:
     assert not device_firmware_versions_equal("1.0.0", "2.0.0")
 
 
+def test_firmware_version_cutoff_accepts_device_wire_identity() -> None:
+    assert firmware_version_is_older(
+        "V0.0.130 beta e9b8b64396a3.d",
+        "0.0.131_beta",
+    )
+    assert not firmware_version_is_older("V0.0.131 beta", "0.0.131_beta")
+
+
 def test_schema_v1_signed_package_is_rejected(tmp_path: Path, encryption_material) -> None:
     _key, keys = encryption_material
     path = tmp_path / "legacy.sfpkg"
@@ -342,7 +351,7 @@ def test_authenticated_plaintext_size_and_hash_mismatch_are_rejected(
     assert raised.value.code is FirmwarePackageErrorCode.FORMAT
 
 
-@pytest.mark.parametrize("product", ("AFD01A", "AFD01B2", "AFD01C"))
+@pytest.mark.parametrize("product", ("AFD01A", "AFD01B2", "AFD01C", "AFD01D"))
 def test_release_builder_uses_registered_variant_identity(tmp_path: Path, product: str) -> None:
     firmware = tmp_path / f"{product.lower()}_application.bin"
     firmware.write_bytes(product.encode() * 64)
@@ -365,10 +374,11 @@ def test_release_builder_uses_registered_variant_identity(tmp_path: Path, produc
         output,
         expected_product=product,
         expected_hardware=product.lower(),
-        current_version="V0.0.130 beta e9b8b64396a3.d",
+        current_version="V9.9.9",
     )
     assert package.product == product
     assert package.hardware_types == (product.lower(),)
+    assert package.version_policy == "allow_downgrade"
     assert package.firmware == firmware.read_bytes()
 
 

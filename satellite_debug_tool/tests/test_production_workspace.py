@@ -215,7 +215,7 @@ def test_identified_session_is_registered_and_recording_armed(
     workspace.close()
 
 
-@pytest.mark.parametrize("product", ("afd01a", "afd01b2", "afd01c"))
+@pytest.mark.parametrize("product", ("afd01a", "afd01b2", "afd01c", "afd01d"))
 def test_afd01_variant_recipe_registers_matching_device(
     qapp,
     settings,

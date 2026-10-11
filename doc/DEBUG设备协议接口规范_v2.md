@@ -7,8 +7,8 @@
 | 协议版本 | v2.0 |
 | 上一版本 | v1.0（`DEBUG设备协议接口规范.md`） |
 | 发布日期 | 2026-04-16 |
-| 最近修订 | 2026-09-28（AFD01A / AFD01B2 产品注册合同；帧格式未变） |
-| 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / afd01a / afd01b2 / afd01c / esa01 / ufd45，后续新型号无需改协议） |
+| 最近修订 | 2026-10-10（AFD01D 产品注册合同；帧格式未变） |
+| 兼容设备 | 任意实现本规范的 `device_type=0x0D` 设备（当前有 afd01 / afd01a / afd01b2 / afd01c / afd01d / esa01 / ufd45，后续新型号无需改协议） |
 | 适用上位机 | 实现 DEBUG protocol v2 及相应产品扩展的 `satellite_debug_tool` |
 
 ---
@@ -31,7 +31,7 @@
 
 > **协议与具体设备完全解耦**。通道、状态字、事件的 ID、名称、单位、分组、枚举值——
 > **全部**由下位机通过 DEFINE 帧自描述。协议规范只定义**编码格式**，不规定"哪个 ID 必须是什么含义"。
-> 这样 afd01 / afd01a / afd01b2 / afd01c / esa01 / ufd45 / 未来新型号各自发各自的表，上位机可按自描述 Debug profile 呈现。
+> 这样 afd01 / afd01a / afd01b2 / afd01c / afd01d / esa01 / ufd45 / 未来新型号各自发各自的表，上位机可按自描述 Debug profile 呈现。
 > 客户 Product Service、OTA 和试产准入仍必须使用显式注册的产品身份、协议版本和能力合同，不能从 Debug profile 名称推断。
 
 **兼容性**：v2 **完全取代 v1**，上下位机同步切换（本项目决定放弃 v1 兼容层以简化代码路径）。设备启动即发 `META_INFO`，上位机校验 `protocol_ver == 0x02`，否则断连并提示升级固件。
@@ -60,7 +60,7 @@
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
 
-`*` 命令空间分段分配：通用 Debug/GNSS/Tracking 为 `0x01..0x11`，Product Service（AFD01 / AFD01A / AFD01B2 / AFD01C / ESA01）为
+`*` 命令空间分段分配：通用 Debug/GNSS/Tracking 为 `0x01..0x11`，Product Service（AFD01 / AFD01A / AFD01B2 / AFD01C / AFD01D / ESA01）为
 `0x20..0x2C`，XESA01 Orbit 为 `0x30..0x31`；中间保留值不因图中范围而成为有效命令。
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
@@ -187,6 +187,11 @@ Device OTA 的 `COMMAND_RESPONSE` 上下文分别为 `OTA_BEGIN=...`、`OTA_DATA
 `OTA_END=...`。上位机只消费当前阶段且序号匹配的响应；迟到的参数、Debug 或其他
 OTA 阶段响应不能结束当前事务。`OTA_END=VERIFIED` 只证明传输镜像已在设备端通过
 完整性校验；上位机仍必须将回机身份与目标固件版本分别确认。
+
+AFD01 系列 `0.0.130_beta` 及更早版本曾返回 `OK`、`dup OK`、`OK, rebooting`。客户侧
+上位机只在已认证解密的客户包、已注册 AFD01 系列身份且当前固件明确早于 `0.0.131_beta` 时，
+按当前 stop-and-wait 阶段解释这些精确文本。`0.0.131_beta` 是上下文响应合同的首个
+正式版本；该版本及以后、原始工程 BIN、未知型号或未知版本均只使用正式合同。
 
 ### 5.4 `META_INFO` (0x04) — 元信息
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 import time
 from typing import Any, Optional
 import zlib
@@ -15,6 +16,7 @@ from satellite_debug_tool.core.profile import CapabilitySupport
 from satellite_debug_tool.core.security import (
     FirmwarePackage,
     device_firmware_versions_equal,
+    firmware_version_is_older,
     firmware_versions_equal,
 )
 from satellite_debug_tool.core.protocol import (
@@ -49,6 +51,9 @@ OTA_BEGIN_TIMEOUT_MS = 15000
 OTA_END_TIMEOUT_MS = 10000
 OTA_REBOOT_TIMEOUT_S = 120.0
 OTA_REBOOT_PROBE_MS = 3000
+OTA_CONTEXTUAL_RESPONSE_MINIMUM_VERSION = "0.0.131_beta"
+_LEGACY_OTA_PRODUCTS = frozenset({"afd01", "afd01a", "afd01b2", "afd01c", "afd01d"})
+_LOGGER = logging.getLogger(__name__)
 
 
 class OtaCapabilityState(str, Enum):
@@ -73,6 +78,13 @@ class OtaArtifactSource(str, Enum):
 
     ENGINEERING_RAW = "engineering_raw"
     VERIFIED_PACKAGE = "verified_package"
+
+
+class OtaResponseContract(str, Enum):
+    """Device acknowledgement contract frozen when an OTA transaction starts."""
+
+    CONTEXTUAL = "contextual"
+    LEGACY_BOOTSTRAP = "legacy_bootstrap"
 
 
 @dataclass(frozen=True)
@@ -183,6 +195,7 @@ class OtaController(QObject):
         self._known_debug_enabled = False
         self._paused_debug = False
         self._restore_debug = False
+        self._response_contract = OtaResponseContract.CONTEXTUAL
         self._firmware_before = ""
         self._firmware_current = (
             session.meta_info.fw_ver if session.meta_info is not None else ""
@@ -249,6 +262,10 @@ class OtaController(QObject):
     @property
     def total_chunks(self) -> int:
         return self._total_chunks
+
+    @property
+    def response_contract(self) -> OtaResponseContract:
+        return self._response_contract
 
     def configure_engineering_file(
         self,
@@ -637,6 +654,31 @@ class OtaController(QObject):
         except ValueError:
             return False
 
+    def _current_firmware_for_artifact(self, artifact: _OtaArtifact) -> str:
+        return (
+            artifact.scope.product_firmware
+            or artifact.scope.debug_firmware
+            or self._firmware_current
+        ).strip()
+
+    def _select_response_contract(self, artifact: _OtaArtifact) -> OtaResponseContract:
+        if artifact.source is not OtaArtifactSource.VERIFIED_PACKAGE:
+            return OtaResponseContract.CONTEXTUAL
+        if artifact.product.strip().casefold() not in _LEGACY_OTA_PRODUCTS:
+            return OtaResponseContract.CONTEXTUAL
+        current_version = self._current_firmware_for_artifact(artifact)
+        if not current_version:
+            return OtaResponseContract.CONTEXTUAL
+        try:
+            if firmware_version_is_older(
+                current_version,
+                OTA_CONTEXTUAL_RESPONSE_MINIMUM_VERSION,
+            ):
+                return OtaResponseContract.LEGACY_BOOTSTRAP
+        except ValueError:
+            return OtaResponseContract.CONTEXTUAL
+        return OtaResponseContract.CONTEXTUAL
+
     def start(
         self,
         *,
@@ -675,6 +717,7 @@ class OtaController(QObject):
         self._active = True
         self._mutation_sent = False
         self._active_artifact = artifact
+        self._response_contract = self._select_response_contract(artifact)
         self._sequence = 0
         self._retry = 0
         self._total_chunks = (
@@ -683,6 +726,14 @@ class OtaController(QObject):
         self._start_time = time.monotonic()
         self._paused_debug = bool(pause_debug)
         self._restore_debug = self._paused_debug and self._known_debug_enabled
+        _LOGGER.info(
+            "OTA transaction started: contract=%s hardware=%s current=%s target=%s bytes=%d",
+            self._response_contract.value,
+            artifact.scope.hardware_type or "?",
+            self._current_firmware_for_artifact(artifact) or "?",
+            artifact.target_version or "?",
+            len(artifact.data),
+        )
         if not self._update_operation_context("prepare"):
             self._finish(OtaStatus.BEGIN_SEND_FAILED)
             return False
@@ -814,6 +865,7 @@ class OtaController(QObject):
             self._finish(OtaStatus.BEGIN_SEND_FAILED)
             return
         self._mutation_sent = True
+        _LOGGER.info("OTA command sent: stage=begin")
         self._response_timer.start(OTA_BEGIN_TIMEOUT_MS)
 
     def _send_current_chunk(self) -> None:
@@ -853,6 +905,10 @@ class OtaController(QObject):
             )
             return
         self._mutation_sent = True
+        _LOGGER.info(
+            "OTA command sent: stage=data sequence=%d",
+            self._sequence,
+        )
         self._response_timer.start(OTA_CHUNK_TIMEOUT_MS)
 
     def _send_end(self) -> None:
@@ -877,11 +933,18 @@ class OtaController(QObject):
             )
             return
         self._mutation_sent = True
+        _LOGGER.info("OTA command sent: stage=end")
         self._response_timer.start(OTA_END_TIMEOUT_MS)
 
     def _apply_response(self, response: CommandResponse) -> None:
         if not self._active:
             return
+        _LOGGER.info(
+            "OTA response received: stage=%s code=%d message=%r",
+            self._state.value,
+            int(response.code),
+            response.msg or "",
+        )
         if self._state is OtaState.BEGIN:
             self._apply_begin_response(response)
         elif self._state is OtaState.DATA:
@@ -891,6 +954,21 @@ class OtaController(QObject):
 
     def _apply_begin_response(self, response: CommandResponse) -> None:
         message = (response.msg or "").strip()
+        if self._response_contract is OtaResponseContract.LEGACY_BOOTSTRAP:
+            if int(response.code) == int(RespCode.SUCCESS) and message == "OK":
+                self._response_timer.stop()
+                self._retry = 0
+                QTimer.singleShot(0, self._send_current_chunk)
+                return
+            if int(response.code) != int(RespCode.SUCCESS) and message in {
+                "OTA in progress",
+                "no LFS",
+                "len",
+                "name",
+                "open fail",
+            }:
+                self._finish(OtaStatus.BEGIN_REJECTED, detail=message)
+            return
         if not message.startswith("OTA_BEGIN"):
             return
         if int(response.code) == int(RespCode.SUCCESS):
@@ -908,6 +986,26 @@ class OtaController(QObject):
     def _apply_data_response(self, response: CommandResponse) -> None:
         expected = f"OTA_DATA={self._sequence}"
         message = (response.msg or "").strip()
+        if self._response_contract is OtaResponseContract.LEGACY_BOOTSTRAP:
+            if int(response.code) == int(RespCode.SUCCESS) and message in {"OK", "dup OK"}:
+                self._response_timer.stop()
+                self._sequence += 1
+                self._retry = 0
+                self._emit_progress()
+                QTimer.singleShot(0, self._send_current_chunk)
+                return
+            if int(response.code) != int(RespCode.SUCCESS) and message in {
+                "not receiving",
+                "len",
+                "seq",
+                "write fail",
+            }:
+                self.status_changed.emit(
+                    OtaStatus.CHUNK_REJECTED,
+                    {"sequence": self._sequence, "detail": message},
+                )
+                self._begin_terminal_abort("Device rejected an OTA data chunk")
+            return
         if message != expected:
             return
         if int(response.code) == int(RespCode.SUCCESS):
@@ -930,6 +1028,18 @@ class OtaController(QObject):
 
     def _apply_end_response(self, response: CommandResponse) -> None:
         message = (response.msg or "").strip()
+        if self._response_contract is OtaResponseContract.LEGACY_BOOTSTRAP:
+            if int(response.code) == int(RespCode.SUCCESS) and message == "OK, rebooting":
+                self._enter_wait_reboot()
+                return
+            if int(response.code) != int(RespCode.SUCCESS) and message in {
+                "not receiving",
+                "len",
+                "CRC mismatch",
+            }:
+                self.status_changed.emit(OtaStatus.END_REJECTED, {"detail": message})
+                self._begin_terminal_abort("Device rejected OTA verification")
+            return
         if not message.startswith("OTA_END"):
             return
         if int(response.code) == int(RespCode.SUCCESS):
@@ -1135,6 +1245,12 @@ class OtaController(QObject):
         """Publish an unconfirmed OTA result and release local ownership."""
 
         del restore_debug
+        _LOGGER.warning(
+            "OTA transaction ended without confirmed result: status=%s reason=%s values=%r",
+            status.value,
+            reason,
+            values,
+        )
         self._response_timer.stop()
         self._reboot_timer.stop()
         self._session.set_handshake_retries_paused(False)
@@ -1155,6 +1271,11 @@ class OtaController(QObject):
         restore_debug: bool = True,
         **values: Any,
     ) -> None:
+        _LOGGER.info(
+            "OTA transaction ended: status=%s values=%r",
+            status.value,
+            values,
+        )
         should_restore = restore_debug and self._restore_debug and self._connected
         self._active = False
         self._mutation_sent = False
@@ -1192,10 +1313,12 @@ __all__ = [
     "OTA_CHUNK_TIMEOUT_MS",
     "OTA_END_TIMEOUT_MS",
     "OTA_MAX_IMAGE_BYTES",
+    "OTA_CONTEXTUAL_RESPONSE_MINIMUM_VERSION",
     "OtaArtifactSource",
     "OtaArtifactToken",
     "OtaCapabilityState",
     "OtaController",
+    "OtaResponseContract",
     "OtaState",
     "OtaStatus",
 ]

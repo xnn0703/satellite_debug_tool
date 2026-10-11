@@ -126,10 +126,11 @@ def test_recipe_products_are_resolved_from_the_registered_policy() -> None:
     assert production_recipe_product_policy("AFD01A") is not None
     assert production_recipe_product_policy("AFD01B2") is not None
     assert production_recipe_product_policy("AFD01C") is not None
+    assert production_recipe_product_policy("AFD01D") is not None
     assert production_recipe_product_policy("ESA01") is None
 
 
-@pytest.mark.parametrize("product", ("afd01a", "afd01b2"))
+@pytest.mark.parametrize("product", ("afd01a", "afd01b2", "afd01d"))
 def test_new_afd01_variants_have_independent_recipe_products(product: str) -> None:
     payload = valid_recipe()
     payload["product"] = product.upper()

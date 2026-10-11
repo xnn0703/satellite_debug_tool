@@ -53,7 +53,7 @@ Runtime/Core/Store；工程串口使用独立 Core。设备选择和工作区切
 工程工作区显示 `Live / Playback / Log / Device / Tracking Simulator`，并显式选择“工程串口”或
 “共享客户 UDP”；共享模式跟随客户当前选中的已连接 endpoint，不独立创建 UDP 连接。
 客户页面不混入工程导航，解锁状态不持久化。`Ctrl+Shift+P` 以相同方式打开试产工作区。
-客户目录支持已注册的 AFD01、AFD01C 和 ESA01；具体 RF、OTA 能力仍按产品合同分别开放。
+客户目录支持已注册的 AFD01、AFD01A、AFD01B2、AFD01C、AFD01D 和 ESA01；具体 RF、OTA 能力仍按产品合同分别开放。
 
 默认启动只构建设备目录壳与当前设备的客户总览；空目录不创建伪设备 Core。每个 endpoint 的
 其他客户页面、工程呈现和试产页面首次访问时构建并复用；

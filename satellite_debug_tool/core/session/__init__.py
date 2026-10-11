@@ -12,11 +12,13 @@ from .command_sender import (
 )
 from .controllers import DebugController, DebugRequestResult, parse_debug_ack_target
 from .ota_controller import (
+    OTA_CONTEXTUAL_RESPONSE_MINIMUM_VERSION,
     OTA_MAX_IMAGE_BYTES,
     OtaArtifactSource,
     OtaArtifactToken,
     OtaCapabilityState,
     OtaController,
+    OtaResponseContract,
     OtaState,
     OtaStatus,
 )
@@ -83,10 +85,12 @@ __all__ = [
     "IdentityAuthorizationScope",
     "LegacySessionOperationGateway",
     "OtaCapabilityState",
+    "OTA_CONTEXTUAL_RESPONSE_MINIMUM_VERSION",
     "OTA_MAX_IMAGE_BYTES",
     "OtaArtifactSource",
     "OtaArtifactToken",
     "OtaController",
+    "OtaResponseContract",
     "OtaState",
     "OtaStatus",
     "ParameterCapabilityState",

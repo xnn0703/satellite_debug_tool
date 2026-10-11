@@ -254,6 +254,12 @@ def device_firmware_versions_equal(first: str, second: str) -> bool:
     return _version_key(first) == _version_key(second)
 
 
+def firmware_version_is_older(current_version: str, minimum_version: str) -> bool:
+    """Return whether a device-reported version predates a package-style cutoff."""
+
+    return _version_key(current_version) < _package_version_key(minimum_version)
+
+
 def _required_string(manifest: dict, name: str) -> str:
     value = manifest.get(name)
     if not isinstance(value, str) or not value.strip():

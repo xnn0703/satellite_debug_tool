@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that a frozen application contains both built-in device models."""
+"""Verify that a frozen application contains every registered built-in model."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import sys
 
 EXPECTED_MODELS = {
     "afd01.stl": "f58706d3b6fa1ac67f67fea50b8c9c4aa10b50716c8aedab8ef529290f0d5b37",
+    "afd01c.stl": "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d",
+    "afd01d.stl": "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d",
     "esa01.stl": "f58706d3b6fa1ac67f67fea50b8c9c4aa10b50716c8aedab8ef529290f0d5b37",
 }
 EXPECTED_SUFFIX = ("satellite_debug_tool", "ui", "assets", "models")

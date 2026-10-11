@@ -6,9 +6,11 @@ import hashlib
 from pathlib import Path
 
 import numpy as np
+import pytest
 from pyqtgraph.opengl import MeshData
 
 from satellite_debug_tool.ui.device_model_resources import (
+    device_model_axes,
     device_model_candidates,
     load_first_device_model,
     normalize_model_key,
@@ -31,6 +33,22 @@ def test_builtin_models_are_present_and_identical():
     assert esa01.stat().st_size == 8_066_184
     assert _sha256(afd01) == EXPECTED_SHA256
     assert _sha256(esa01) == EXPECTED_SHA256
+
+
+def test_afd01d_builtin_model_is_valid_and_has_independent_hash():
+    afd01d = MODELS_DIR / "afd01d.stl"
+    assert afd01d.stat().st_size == 5_268_984
+    assert _sha256(afd01d) == (
+        "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d"
+    )
+
+    from satellite_debug_tool.ui.stl_loader import load_stl
+
+    vertices, faces = load_stl(afd01d)
+    assert vertices.shape == (316_134, 3)
+    assert faces.shape == (105_378, 3)
+    assert np.isfinite(vertices).all()
+    assert np.all(np.ptp(vertices, axis=0) > 0.0)
 
 
 def test_model_candidates_prefer_user_override(tmp_path):
@@ -83,7 +101,7 @@ def test_invalid_model_key_is_rejected(tmp_path):
     assert device_model_candidates("../afd01", home=tmp_path) == ()
 
 
-def test_afd01c_does_not_alias_the_afd01_model(tmp_path):
+def test_afd01c_uses_its_independent_builtin_model(tmp_path):
     candidates = device_model_candidates(
         "AFD01C",
         home=tmp_path,
@@ -93,12 +111,17 @@ def test_afd01c_does_not_alias_the_afd01_model(tmp_path):
         tmp_path / ".satellite_debug_tool" / "models" / "afd01c.stl",
         MODELS_DIR / "afd01c.stl",
     )
-    assert load_first_device_model(
+    loaded = load_first_device_model(
         "AFD01C",
-        lambda path: path.read_bytes(),
+        lambda path: path.name,
         home=tmp_path,
         builtin_dir=MODELS_DIR,
-    ) is None
+    )
+    assert loaded == (MODELS_DIR / "afd01c.stl", "afd01c.stl")
+    assert _sha256(MODELS_DIR / "afd01c.stl") == (
+        "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d"
+    )
+    assert device_model_axes("AFD01C") == device_model_axes("AFD01D")
 
 
 def test_afd01a_prefers_own_override_then_original_builtin(tmp_path):
@@ -144,6 +167,56 @@ def test_afd01b2_keeps_independent_model_key(tmp_path):
     assert load_first_device_model(
         "AFD01B2", lambda path: path.read_bytes(), home=tmp_path, builtin_dir=MODELS_DIR
     ) is None
+
+
+def test_afd01d_uses_only_its_independent_model_and_axes(tmp_path):
+    candidates = device_model_candidates(
+        "AFD01D", home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert candidates == (
+        tmp_path / ".satellite_debug_tool" / "models" / "afd01d.stl",
+        MODELS_DIR / "afd01d.stl",
+    )
+    loaded = load_first_device_model(
+        "AFD01D", lambda path: path.name, home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert loaded == (MODELS_DIR / "afd01d.stl", "afd01d.stl")
+
+    axes = device_model_axes("AFD01D")
+    assert (axes.up_axis, axes.nose_axis, axes.nose_sign, axes.left_sign) == (
+        1,
+        2,
+        1.0,
+        1.0,
+    )
+
+
+def test_attitude_widget_applies_afd01d_product_axes(qapplication_session) -> None:
+    from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
+
+    widget = AttitudeWidget()
+    assert widget.try_load_device_model("AFD01D")
+    assert widget._loaded_model_hw == "afd01d"
+    assert widget._device_verts is not None
+    assert np.ptp(widget._device_verts, axis=0) == pytest.approx(
+        (2.782136, 3.6, 0.761942), abs=1e-5
+    )
+    widget.close()
+
+
+def test_attitude_widget_applies_shared_enclosure_axes_to_afd01c(
+    qapplication_session,
+) -> None:
+    from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
+
+    widget = AttitudeWidget()
+    assert widget.try_load_device_model("AFD01C")
+    assert widget._loaded_model_hw == "afd01c"
+    assert widget._device_verts is not None
+    assert np.ptp(widget._device_verts, axis=0) == pytest.approx(
+        (2.782136, 3.6, 0.761942), abs=1e-5
+    )
+    widget.close()
 
 
 def test_model_change_clears_stale_mesh_when_target_has_no_model(

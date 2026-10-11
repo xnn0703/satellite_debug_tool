@@ -66,6 +66,14 @@ _CUSTOMER_PRODUCT_POLICIES = {
         customer_ota_product="AFD01C",
         production_recipe_product="afd01c",
     ),
+    # AFD01D has its own firmware, OTA, recipe, and model identity at protocol v8.
+    "afd01d": CustomerProductPolicy(
+        "afd01d",
+        "AFD01D",
+        frozenset({8}),
+        customer_ota_product="AFD01D",
+        production_recipe_product="afd01d",
+    ),
     # ESA01 is introduced with the complete v6 Product Service contract.
     "esa01": CustomerProductPolicy("esa01", "ESA01", frozenset({6})),
 }

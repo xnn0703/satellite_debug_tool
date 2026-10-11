@@ -152,6 +152,7 @@ def test_product_template_picker_lists_registered_production_products(
         "afd01a": "AFD01A",
         "afd01b2": "AFD01B2",
         "afd01c": "AFD01C",
+        "afd01d": "AFD01D",
     }
     dialog.close()
 

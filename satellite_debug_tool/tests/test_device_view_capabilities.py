@@ -383,6 +383,8 @@ def test_async_ota_matches_sequence_and_reports_same_version_as_unconfirmed(qapp
         CommandResponse(int(RespCode.INTERNAL_ERROR), "PARA_SET=failed")
     )
     assert view._ota_controller.state is OtaState.BEGIN
+    view._on_command_response(CommandResponse(int(RespCode.SUCCESS), "OK"))
+    assert view._ota_controller.state is OtaState.BEGIN
 
     view._on_command_response(CommandResponse(int(RespCode.SUCCESS), "OTA_BEGIN=READY"))
     qapp.processEvents()
@@ -394,6 +396,7 @@ def test_async_ota_matches_sequence_and_reports_same_version_as_unconfirmed(qapp
     assert view._ota_controller.state is OtaState.DATA
 
     sent_count = len(worker.sent)
+    view._on_command_response(CommandResponse(int(RespCode.SUCCESS), "OK"))
     view._on_command_response(CommandResponse(int(RespCode.SUCCESS), "OTA_DATA=99"))
     view._on_command_response(
         CommandResponse(int(RespCode.INTERNAL_ERROR), "OTA_DATA=99")

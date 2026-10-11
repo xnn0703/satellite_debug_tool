@@ -44,6 +44,7 @@ firmware.aesgcm
 - 固件仓库正式发布入口删除 `sign`、私钥路径和 key ID 参数，改为 `package`：调用上位机加密工具，从同一次
   App artifact 生成客户包；factory HEX/BIN 仍保持 Boot+App 原始生产镜像。
 - `factory-manifest.json` 记录客户包 SHA-256、加密 key ID、算法、目标版本和版本策略，不记录明文固件副本。
+- M35 起新包默认使用 `allow_downgrade`，允许升级、同版本重装和降级；manifest 仍可显式选择其他策略。
 
 ## 5. 上位机加载与 OTA
 

@@ -56,6 +56,7 @@ from satellite_debug_tool.core.session import (
     MountConfigurationController,
     MountConfigurationStatus,
     OtaController,
+    OtaResponseContract,
     OtaState,
     OtaStatus,
     OTA_MAX_IMAGE_BYTES,
@@ -651,6 +652,84 @@ def test_verified_ota_confirmation_cannot_survive_raw_image_replacement(
     assert replacement != confirmed
     assert not ota.start(pause_debug=False, required_artifact=confirmed)
     assert statuses[-1] is OtaStatus.ARTIFACT_MISMATCH
+
+
+def test_verified_legacy_ota_bootstrap_uses_exact_old_responses(
+    qapplication_session,
+) -> None:
+    _core, ota, statuses = _ota_product_session(firmware="V0.0.130 beta abcdef1.d")
+    token = ota.configure_verified_package(_verified_package("0.0.131_beta"))
+    assert token is not None
+    assert ota.start(pause_debug=False, required_artifact=token)
+    assert ota.response_contract is OtaResponseContract.LEGACY_BOOTSTRAP
+
+    ota.feed_record(CommandResponse(RespCode.SUCCESS, "OTA_BEGIN=READY"))
+    assert ota.state is OtaState.BEGIN
+    ota.feed_record(CommandResponse(RespCode.SUCCESS, "OK"))
+    qapplication_session.processEvents()
+    assert ota.state is OtaState.DATA
+    ota.feed_record(CommandResponse(RespCode.SUCCESS, "OK"))
+    qapplication_session.processEvents()
+    assert ota.state is OtaState.END
+    ota.feed_record(CommandResponse(RespCode.SUCCESS, "OK, rebooting"))
+    assert ota.state is OtaState.WAIT_REBOOT
+    assert statuses[-1] is OtaStatus.REBOOTING
+
+
+def test_contextual_ota_cutoff_rejects_legacy_success_text(
+    qapplication_session,
+) -> None:
+    _core, ota, _statuses = _ota_product_session(firmware="V0.0.131 beta")
+    token = ota.configure_verified_package(
+        _verified_package("0.0.131_beta", policy="allow_same")
+    )
+    assert token is not None
+    assert ota.start(pause_debug=False, required_artifact=token)
+    assert ota.response_contract is OtaResponseContract.CONTEXTUAL
+
+    ota.feed_record(CommandResponse(RespCode.SUCCESS, "OK"))
+    assert ota.state is OtaState.BEGIN
+    ota.feed_record(CommandResponse(RespCode.SUCCESS, "OTA_BEGIN=READY"))
+    qapplication_session.processEvents()
+    assert ota.state is OtaState.DATA
+
+
+@pytest.mark.parametrize(
+    ("stage", "code", "message", "expected_status"),
+    (
+        ("begin", RespCode.BUSY, "OTA in progress", OtaStatus.BEGIN_REJECTED),
+        ("data", RespCode.INTERNAL_ERROR, "write fail", OtaStatus.CHUNK_REJECTED),
+        ("end", RespCode.PARAM_ERROR, "CRC mismatch", OtaStatus.END_REJECTED),
+    ),
+)
+def test_verified_legacy_ota_reports_known_rejections_without_waiting_for_timeout(
+    qapplication_session,
+    stage: str,
+    code: RespCode,
+    message: str,
+    expected_status: OtaStatus,
+) -> None:
+    core, ota, statuses = _ota_product_session(firmware="0.0.130_beta")
+    token = ota.configure_verified_package(_verified_package("0.0.131_beta"))
+    assert token is not None
+    assert ota.start(pause_debug=False, required_artifact=token)
+    if stage in {"data", "end"}:
+        ota.feed_record(CommandResponse(RespCode.SUCCESS, "OK"))
+        qapplication_session.processEvents()
+    if stage == "end":
+        ota.feed_record(CommandResponse(RespCode.SUCCESS, "OK"))
+        qapplication_session.processEvents()
+
+    ota.feed_record(CommandResponse(code, message))
+
+    assert expected_status in statuses
+    if stage == "begin":
+        assert ota.state is OtaState.IDLE
+        assert not core.device_transaction_active
+    else:
+        assert ota.state is OtaState.TERMINATING
+        ota._on_response_timeout()
+        assert not core.device_transaction_active
 
 
 def test_customer_ota_requires_non_placeholder_immutable_identity(

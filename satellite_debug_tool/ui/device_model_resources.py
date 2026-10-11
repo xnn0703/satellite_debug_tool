@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Callable, Optional, TypeVar
@@ -13,10 +14,35 @@ _BUILTIN_MODELS_DIR = Path(__file__).resolve().parent / "assets" / "models"
 T = TypeVar("T")
 
 
+@dataclass(frozen=True)
+class DeviceModelAxes:
+    """Map one product-owned STL coordinate system into widget FLU axes."""
+
+    up_axis: int
+    nose_axis: int
+    nose_sign: float
+    left_sign: float
+
+
+_DEFAULT_MODEL_AXES = DeviceModelAxes(2, 1, 1.0, -1.0)
+_MODEL_AXES = {
+    # AFD01C/D share this enclosure CAD: X=left, Y=thickness/up, +Z=nose.
+    "afd01c": DeviceModelAxes(1, 2, 1.0, 1.0),
+    "afd01d": DeviceModelAxes(1, 2, 1.0, 1.0),
+}
+
+
 def normalize_model_key(hw_type: str) -> str:
     """Return a safe lowercase model key, or an empty string when invalid."""
     key = str(hw_type or "").strip().lower()
     return key if _MODEL_KEY_RE.fullmatch(key) else ""
+
+
+def device_model_axes(hw_type: str) -> DeviceModelAxes:
+    """Return the explicit model axes or the established legacy model axes."""
+
+    key = normalize_model_key(hw_type)
+    return _MODEL_AXES.get(key, _DEFAULT_MODEL_AXES)
 
 
 def device_model_candidates(

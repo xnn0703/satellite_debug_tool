@@ -8,7 +8,7 @@
 
 - 三工作区：默认客户工作台、会话内解锁的工程工作区、批量试产与夹具调试工作区
 - 单一设备会话：同一 endpoint 只由一个 `DeviceSessionCore` 持有连接、协议解析和权威 Store；试产 Fleet 通过 `SessionRegistry` 复用会话
-- 已注册客户产品：AFD01、AFD01C、ESA01；按精确产品身份、协议版本和能力声明开放 Product Service，未知组合明确拒绝
+- 已注册客户产品：AFD01、AFD01A、AFD01B2、AFD01C、AFD01D、ESA01；按精确产品身份、协议版本和能力声明开放 Product Service，未知组合明确拒绝
 - 实时调试：串口/UDP 连接、DEBUG v2 握手、profile 驱动 Dashboard / Chart / State / Event / 3D
 - 数据录制与回放：流式 `.sdb v2/v3` 导入，磁盘型 `PlaybackSeriesProvider` 按时间窗口和像素预算读取大文件
 - WindTerm 日志解析：`.log` 转虚拟 profile + 曲线

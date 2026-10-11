@@ -264,12 +264,12 @@ def test_afd01c_accepts_only_matching_encrypted_product(
     assert afd01_device.loaded is None
 
 
-@pytest.mark.parametrize("product", ("AFD01A", "AFD01B2"))
+@pytest.mark.parametrize("product", ("AFD01A", "AFD01B2", "AFD01D"))
 def test_new_afd01_variant_ota_accepts_only_its_encrypted_product(
     app, tmp_path: Path, encryption_material, product: str
 ) -> None:
     encryption_key, keys = encryption_material
-    products = ("AFD01", "AFD01A", "AFD01B2", "AFD01C")
+    products = ("AFD01", "AFD01A", "AFD01B2", "AFD01C", "AFD01D")
     packages = {}
     for name in products:
         path = tmp_path / f"{name.lower()}.sfpkg"

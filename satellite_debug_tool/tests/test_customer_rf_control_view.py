@@ -136,7 +136,7 @@ def test_manual_controls_wait_for_manual_readback(app) -> None:
     assert view._rx_polar.model().item(3).isEnabled()
 
 
-@pytest.mark.parametrize("hardware_type", ("afd01a", "afd01b2"))
+@pytest.mark.parametrize("hardware_type", ("afd01a", "afd01b2", "afd01d"))
 def test_new_afd01_variant_rf_controls_follow_registered_service(
     app, hardware_type: str
 ) -> None:
@@ -215,6 +215,8 @@ def test_mode_request_requires_matching_response_and_readback(app) -> None:
         ("afd01", 6, True),
         ("afd01c", 8, True),
         ("afd01c", 7, False),
+        ("afd01d", 8, True),
+        ("afd01d", 7, False),
         ("esa01", 6, True),
         ("unknown-terminal", 6, False),
     ),

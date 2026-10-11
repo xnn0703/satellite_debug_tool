@@ -32,7 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version-policy",
         choices=("upgrade_only", "allow_same", "allow_downgrade"),
-        default="upgrade_only",
+        default="allow_downgrade",
     )
     return parser
 

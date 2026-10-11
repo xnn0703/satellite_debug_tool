@@ -166,13 +166,6 @@ class AttitudeWidget(QWidget):
         self._scan_trail: deque = deque(maxlen=SCAN_TRAIL_LEN)
         # 机体→世界旋转矩阵（由 update_attitude 维护）
         self._body_rot = np.eye(3, dtype=np.float64)
-        # 设备 STL 模型朝向（STL 轴 → widget FLU：X=机头/Y=左翼/Z=天顶）。
-        # AFD01/ESA01：Z(厚度52)=天顶，实际机头是原始 +Y；原始 +X 映射到
-        # widget -Y，等价于从旧 +X 机头俯视逆时针转 90 度且不镜像模型。
-        self._model_up_axis = 2
-        self._model_nose_axis = 1
-        self._model_nose_sign = 1.0
-        self._model_left_sign = -1.0
         self._loaded_model_hw = None
         # 设备 STL 原始 verts/faces（加载后保留，切主题时重新烘焙明暗）
         self._device_verts = None
@@ -486,6 +479,7 @@ class AttitudeWidget(QWidget):
         用户可在 ~/.satellite_debug_tool/models/<hw_type>.stl 覆盖内置模型。
         """
         from satellite_debug_tool.ui.device_model_resources import (
+            device_model_axes,
             load_first_device_model,
             normalize_model_key,
         )
@@ -501,12 +495,13 @@ class AttitudeWidget(QWidget):
 
         def _load_mesh(model_path):
             verts, faces = load_stl(model_path)
+            axes = device_model_axes(model_key)
             verts = normalize_mesh(
                 verts, target_size=3.6,
-                up_axis=self._model_up_axis,
-                nose_axis=self._model_nose_axis,
-                nose_sign=self._model_nose_sign,
-                left_sign=self._model_left_sign,
+                up_axis=axes.up_axis,
+                nose_axis=axes.nose_axis,
+                nose_sign=axes.nose_sign,
+                left_sign=axes.left_sign,
             )
             return MeshData(vertexes=verts, faces=faces)
 
