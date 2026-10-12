@@ -66,6 +66,9 @@ class TerminalEdit(QTextEdit):
 
     bytes_entered = Signal(bytes)
 
+    # 类级默认值：构造期间的 Qt 事件就可能进入 event() 覆写。
+    _input_enabled = False
+
     _CTRL_KEYS = {
         Qt.Key.Key_D: b"\x04",
         Qt.Key.Key_E: b"\x05",
@@ -97,6 +100,20 @@ class TerminalEdit(QTextEdit):
 
     def set_input_enabled(self, enabled: bool) -> None:
         self._input_enabled = bool(enabled)
+
+    def event(self, event):  # noqa: N802
+        # Qt 在 event() 层把 Tab/Backtab 截走做焦点切换，keyPressEvent 收不到；
+        # 终端输入启用时在更早一层拦截并作为键值发送。
+        from PySide6.QtCore import QEvent
+
+        if (
+            self._input_enabled
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)
+        ):
+            self.bytes_entered.emit(b"\t" if event.key() == Qt.Key.Key_Tab else b"\x1b[Z")
+            return True
+        return super().event(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if self._input_enabled:
@@ -150,7 +167,7 @@ class TcpShellWorkspace(QWidget):
             session_directory=session_directory,
         )
         self._decoder = _TerminalDecoder()
-        self._after_cr = False
+        self._pending_cr = False
         self._overwrite_mode = False
         self._hex_view = False
         self._selected_file: Optional[Path] = None
@@ -414,24 +431,31 @@ class TcpShellWorkspace(QWidget):
                 pending.clear()
                 self._overwrite_mode = False
 
+        def resolve_pending_cr() -> None:
+            # "\r\n" 是一次换行；单独 "\r" 回到行首进入覆盖模式。
+            if self._pending_cr:
+                self._pending_cr = False
+                cursor.movePosition(cursor.MoveOperation.StartOfLine)
+                self._overwrite_mode = True
+
         for char in text:
-            if char == "\n" and self._after_cr:
-                self._after_cr = False
+            if char == "\r":
+                flush()
+                self._pending_cr = True
                 continue
-            self._after_cr = False
+            if char == "\n":
+                flush()
+                if self._pending_cr:
+                    self._pending_cr = False
+                cursor.insertText("\n")
+                continue
+            resolve_pending_cr()
             if char == "\b":
                 flush()
                 cursor.deletePreviousChar()
-            elif char == "\r":
-                flush()
-                cursor.movePosition(cursor.MoveOperation.StartOfLine)
-                self._after_cr = True
-                self._overwrite_mode = True
-            elif char == "\n":
-                flush()
-                cursor.insertText("\n")
             else:
                 pending.append(char)
+        resolve_pending_cr()
         flush()
         self._terminal.setTextCursor(cursor)
         scrollbar = self._terminal.verticalScrollBar()

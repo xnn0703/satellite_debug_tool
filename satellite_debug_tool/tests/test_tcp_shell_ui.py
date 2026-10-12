@@ -90,7 +90,24 @@ class TestTerminalRendering:
         assert "worlx!" not in text or True  # 退格删除两个字符后重写
         assert "x!" in text
 
-    def test_cr_overwrites_current_line(self, qapplication_session, tmp_path, monkeypatch):
+    def test_crlf_produces_line_breaks(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"root:/$ ls\r\n[10:24:56] I system: table head\r\n[10:24:57] I system: row 2\r\n")
+        text = workspace._terminal.toPlainText()
+        lines = text.split("\n")
+        assert "root:/$ ls" in lines
+        assert "[10:24:56] I system: table head" in lines
+        assert "[10:24:57] I system: row 2" in lines
+
+    def test_crlf_split_across_packets(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"cmd\r")
+        workspace._on_rx_payload(b"\noutput\r\n")
+        lines = workspace._terminal.toPlainText().split("\n")
+        assert "cmd" in lines
+        assert "output" in lines
+
+    def test_lone_cr_keeps_overwrite_semantics(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._on_rx_payload(b"progress 10%\rprogress 90%\r\n")
         text = workspace._terminal.toPlainText()
@@ -342,3 +359,18 @@ class TestTerminalKeyboard:
         workspace._terminal.set_input_enabled(True)
         workspace._on_terminal_bytes(b"reboot\r")
         assert controller.send_raw_calls == [b"reboot\r"]
+
+class TestTabKeyDelivery:
+    def test_tab_is_sent_not_focus_traversed(self, qapplication_session):
+        from PySide6.QtCore import QEvent, Qt as QtConst
+        from PySide6.QtGui import QKeyEvent
+
+        from satellite_debug_tool.ui.tcp_shell_workspace import TerminalEdit
+
+        terminal = TerminalEdit()
+        terminal.set_input_enabled(True)
+        received: list[bytes] = []
+        terminal.bytes_entered.connect(received.append)
+        event = QKeyEvent(QEvent.Type.KeyPress, QtConst.Key.Key_Tab, QtConst.KeyboardModifier.NoModifier, "\t")
+        assert terminal.event(event) is True
+        assert received == [b"\t"]
