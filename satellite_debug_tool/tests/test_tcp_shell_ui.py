@@ -374,3 +374,60 @@ class TestTabKeyDelivery:
         event = QKeyEvent(QEvent.Type.KeyPress, QtConst.Key.Key_Tab, QtConst.KeyboardModifier.NoModifier, "\t")
         assert terminal.event(event) is True
         assert received == [b"\t"]
+
+class TestSgrColourRendering:
+    def test_decoder_splits_sgr_tokens_and_buffers_partial_escape(self):
+        from satellite_debug_tool.ui.tcp_shell_workspace import _TerminalDecoder
+
+        decoder = _TerminalDecoder()
+        tokens = decoder.feed(b"\x1b[32mOK\x1b[0m")
+        assert tokens == [("sgr", "32"), ("text", "OK"), ("sgr", "0")]
+        # ESC 序列被 TCP 拆开时，尾巴缓冲到下一包
+        tokens = decoder.feed(b"warn \x1b[3")
+        assert tokens == [("text", "warn ")]
+        tokens = decoder.feed(b"1mred")
+        assert tokens == [("sgr", "31"), ("text", "red")]
+
+    def test_colour_is_applied_to_document(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        from PySide6.QtGui import QColor
+
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"plain \x1b[32mgreen\x1b[0m tail")
+        cursor = workspace._terminal.textCursor()
+        cursor.setPosition(6, cursor.MoveMode.MoveAnchor)  # "green" 起始位置
+        cursor.setPosition(11, cursor.MoveMode.KeepAnchor)
+        char_format = cursor.charFormat()
+        assert char_format.foreground().color() == QColor("#98c379")
+
+    def test_bold_and_reset(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"\x1b[1mB\x1b[0mn")
+        cursor = workspace._terminal.textCursor()
+        cursor.setPosition(0, cursor.MoveMode.MoveAnchor)
+        cursor.setPosition(1, cursor.MoveMode.KeepAnchor)
+        bold_format = cursor.charFormat()
+        assert bold_format.fontWeight() > 400
+        cursor.setPosition(1, cursor.MoveMode.MoveAnchor)
+        cursor.setPosition(2, cursor.MoveMode.KeepAnchor)
+        normal_format = cursor.charFormat()
+        assert normal_format.fontWeight() <= 400
+
+    def test_monospace_font_is_used(self, qapplication_session):
+        from PySide6.QtGui import QFont
+
+        from satellite_debug_tool.ui.tcp_shell_workspace import TerminalEdit
+
+        terminal = TerminalEdit()
+        assert terminal.font().styleHint() == QFont.StyleHint.Monospace
+        assert terminal.font().pixelSize() == 13
+
+    def test_tab_expands_to_four_columns(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"a\tb\r\n")
+        assert "a    b" in workspace._terminal.toPlainText()

@@ -64,3 +64,40 @@
   `keyPressEvent` 收不到；改为在 `event()` 层拦截并发送 `\t` / `\x1b[Z`。构造期间的
   Qt 事件可能先于实例属性赋值进入覆写，`_input_enabled` 提升为类级默认值。
 - 新增回归：`\r\n` 换行、跨包拆分、单独 `\r` 覆盖、Tab 键值发送；全量 `1527 passed`。
+
+## 2026-10-12：真机首轮验证与两项修复
+
+### 真机证据（2026-10-12 11:06–11:07 会话）
+
+- TCP Shell `1235` 会话、命令回显、日志观察与 Serial 行为一致。
+- YMODEM 传输 `afd01c_app_0.0.132_beta.bin`：784392 B / 4826 ms / 158 KiB/s，1K 块 767、
+  128B 块 0、rejected=0；设备 `ymodem_port_thread` 报告 completed。
+- 设备日志证明候选写入 raw download 区（`Found new fw in raw download`，非 LittleFS），
+  同时验证了固件仓库 `debug_ota_raw_fw_20261010` 的单一候选区修复。
+- 重启后 Boot 完整安装链：`app_old.bin` 备份 → DOWNLOAD 安装 → `ota status` 回读
+  app version 0.0.132 → jump app。
+
+### 修复一：终端对齐与颜色（对照 Serial 截图）
+
+- 症状：表格列错位、日志无颜色。根因：终端未用等宽字体（Letter Shell 靠空格对齐），
+  且 ANSI 序列被整体剥离。
+- 修复：`TerminalEdit` 显式等宽字体（systemFont(FixedFont) + Monospace styleHint + fixedPitch，
+  13px）；decoder 从"剥离 ANSI"升级为 token 化——SGR 序列解析为颜色指令（16 色前景 +
+  粗体，one-dark 系配色，38/48 扩展色跳过保持当前色），非 SGR 控制序列仍丢弃，跨包拆开的
+  ESC 序列缓冲重组；`\t` 在等宽字体下按 4 列展开。
+
+### 修复二：YMODEM 进度恒 0%
+
+- 症状：传输完成但进度条保持 0%（真机 784 KB 全程 0%）。
+- 根因：`TcpShellWorker.__init__` 里 `self._sender = sender or YmodemSender()` 在生产
+  sender=None 时预建了**无回调**默认实例，`_run_ymodem` 的 `self._sender or
+  YmodemSender(on_progress=...)` 永远取不到带回调实例——进度信号与逐块证据回调被吞。
+- 修复：构造保留 `self._sender = sender`，回调实例仅在 `_run_ymodem` 现场构造；端到端
+  测试改走生产路径并断言 `ymodem_progress` 事件真实到达（此前注入 fast sender 掩盖了
+  该路径）。
+
+### 验证
+
+- 新增 6 项回归（SGR token 化、跨包 ESC 缓冲、文档颜色、粗体重置、等宽字体、Tab 展开）
+  与端到端进度断言；全量 `1532 passed`。
+- 渲染对照：表格竖线对齐成列、日志级别 I/E 分色、每行独立、等宽生效。

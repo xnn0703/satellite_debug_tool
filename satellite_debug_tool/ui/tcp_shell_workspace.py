@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QTextCharFormat
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -38,23 +39,70 @@ from satellite_debug_tool.core.tcp_shell.controller import (
 from satellite_debug_tool.core.tcp_shell.worker import TcpShellWorkerState
 from satellite_debug_tool.i18n import register_translatable, tr
 
-_ANSI_PATTERN = re.compile(
-    rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+_ANSI_TOKEN = re.compile(
+    rb"\x1b(?:\[([0-9;?]*)([A-Za-z])|\][^\x07\x1b]*(?:\x07|\x1b\\))"
 )
 _DEFAULT_TCP_PORT = 1235
 
+# Letter Shell 常用 SGR 前景色（one-dark 系，dark 主题下可读；亮色 90-97 加亮）。
+_SGR_FOREGROUND = {
+    30: "#5c6370",
+    31: "#e06c75",
+    32: "#98c379",
+    33: "#e5c07b",
+    34: "#61afef",
+    35: "#c678dd",
+    36: "#56b6c2",
+    37: "#d7dae0",
+    90: "#7f848e",
+    91: "#ff7b86",
+    92: "#b5e890",
+    93: "#ffd479",
+    94: "#84c1ff",
+    95: "#e2a2ff",
+    96: "#8ce0e8",
+    97: "#ffffff",
+}
+
 
 class _TerminalDecoder:
-    """Incremental shell text rendering: UTF-8, backspace, CR overwrite, no ANSI."""
+    """Decode UTF-8 incrementally and split ANSI SGR sequences from text.
+
+    Returns a token list: ``("text", str)`` chunks and ``("sgr", params)`` for
+    colour changes. Non-SGR control sequences (cursor moves, OSC) are dropped.
+    A partial escape sequence split across TCP packets is buffered.
+    """
 
     def __init__(self) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._pending_ansi = b""
 
-    def feed(self, data: bytes) -> str:
-        return self._decoder.decode(_ANSI_PATTERN.sub(b"", data))
+    def feed(self, data: bytes) -> list[tuple[str, str]]:
+        data = self._pending_ansi + data
+        self._pending_ansi = b""
+        tokens: list[tuple[str, str]] = []
+        position = 0
+        for match in _ANSI_TOKEN.finditer(data):
+            if match.start() > position:
+                tokens.append(
+                    ("text", self._decoder.decode(data[position : match.start()]))
+                )
+            if match.group(2) == b"m":
+                tokens.append(("sgr", (match.group(1) or b"0").decode("ascii")))
+            position = match.end()
+        tail = data[position:]
+        keep = 0
+        escape = tail.rfind(b"\x1b")
+        if escape != -1 and _ANSI_TOKEN.match(tail, escape) is None:
+            keep = len(tail) - escape
+        if keep < len(tail):
+            tokens.append(("text", self._decoder.decode(tail[: len(tail) - keep])))
+        self._pending_ansi = tail[len(tail) - keep :] if keep else b""
+        return tokens
 
     def reset(self) -> None:
         self._decoder.reset()
+        self._pending_ansi = b""
 
 
 class TerminalEdit(QTextEdit):
@@ -96,6 +144,13 @@ class TerminalEdit(QTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setUndoRedoEnabled(False)
+        # Letter Shell 用空格对齐表格与日志列，必须等宽字体；显式声明
+        # styleHint/fixedPitch，无系统固定字体别名时 Qt 仍会解析到等宽族。
+        fixed = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        fixed.setPixelSize(13)
+        fixed.setStyleHint(QFont.StyleHint.Monospace)
+        fixed.setFixedPitch(True)
+        self.setFont(fixed)
         self._input_enabled = False
 
     def set_input_enabled(self, enabled: bool) -> None:
@@ -169,6 +224,8 @@ class TcpShellWorkspace(QWidget):
         self._decoder = _TerminalDecoder()
         self._pending_cr = False
         self._overwrite_mode = False
+        self._sgr_foreground: str | None = None
+        self._sgr_bold = False
         self._hex_view = False
         self._selected_file: Optional[Path] = None
         self._build_ui()
@@ -413,7 +470,6 @@ class TcpShellWorkspace(QWidget):
         if self._hex_view:
             self._append_terminal(data.hex(" ") + "\n")
             return
-        text = self._decoder.feed(data)
         cursor = self._terminal.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         pending: list[str] = []
@@ -427,7 +483,7 @@ class TcpShellWorkspace(QWidget):
                         cursor.MoveMode.KeepAnchor,
                         len(chunk),
                     )
-                cursor.insertText(chunk)
+                cursor.insertText(chunk, self._current_char_format())
                 pending.clear()
                 self._overwrite_mode = False
 
@@ -438,28 +494,77 @@ class TcpShellWorkspace(QWidget):
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
                 self._overwrite_mode = True
 
-        for char in text:
-            if char == "\r":
+        def render_text(text: str) -> None:
+            for char in text:
+                if char == "\r":
+                    flush()
+                    self._pending_cr = True
+                    continue
+                if char == "\n":
+                    flush()
+                    if self._pending_cr:
+                        self._pending_cr = False
+                    cursor.insertText("\n")
+                    continue
+                resolve_pending_cr()
+                if char == "\b":
+                    flush()
+                    cursor.deletePreviousChar()
+                elif char == "\t":
+                    # 等宽字体下按固定 4 列展开，保持设备空格对齐。
+                    pending.append("    ")
+                else:
+                    pending.append(char)
+
+        for kind, value in self._decoder.feed(data):
+            if kind == "sgr":
                 flush()
-                self._pending_cr = True
-                continue
-            if char == "\n":
-                flush()
-                if self._pending_cr:
-                    self._pending_cr = False
-                cursor.insertText("\n")
-                continue
-            resolve_pending_cr()
-            if char == "\b":
-                flush()
-                cursor.deletePreviousChar()
+                self._apply_sgr(value)
             else:
-                pending.append(char)
+                render_text(value)
         resolve_pending_cr()
         flush()
         self._terminal.setTextCursor(cursor)
         scrollbar = self._terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def _current_char_format(self) -> QTextCharFormat:
+        if self._sgr_foreground is None and not self._sgr_bold:
+            return QTextCharFormat()
+        char_format = QTextCharFormat()
+        if self._sgr_foreground is not None:
+            char_format.setForeground(QColor(self._sgr_foreground))
+        if self._sgr_bold:
+            char_format.setFontWeight(QFont.Weight.Bold)
+        return char_format
+
+    def _apply_sgr(self, params: str) -> None:
+        codes: list[int] = []
+        for part in params.split(";"):
+            codes.append(int(part) if part.isdigit() else 0)
+        if not codes:
+            codes = [0]
+        index = 0
+        while index < len(codes):
+            code = codes[index]
+            if code == 0:
+                self._sgr_foreground = None
+                self._sgr_bold = False
+            elif code == 1:
+                self._sgr_bold = True
+            elif code == 22:
+                self._sgr_bold = False
+            elif code == 39:
+                self._sgr_foreground = None
+            elif code in _SGR_FOREGROUND:
+                self._sgr_foreground = _SGR_FOREGROUND[code]
+            elif code in (38, 48):
+                # 256/RGB 扩展色：跳过其后参数（38;5;n / 38;2;r;g;b），保持当前色。
+                if index + 1 < len(codes) and codes[index + 1] == 5:
+                    index += 2
+                elif index + 1 < len(codes) and codes[index + 1] == 2:
+                    index += 4
+            index += 1
 
     def _append_terminal(self, text: str) -> None:
         cursor = self._terminal.textCursor()

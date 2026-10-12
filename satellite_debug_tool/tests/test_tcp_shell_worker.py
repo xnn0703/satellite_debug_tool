@@ -285,11 +285,12 @@ class TestYmodemEndToEnd:
     def test_full_transfer_with_fragmented_controls(
         self, qapplication_session, tmp_path
     ):
+        # 不注入 sender：走生产路径，验证进度与逐块证据回调真实触发。
         device = FakeAfd01Device(fragment_controls=True)
         device.start()
         try:
             harness = WorkerHarness(qapplication_session, tmp_path, device)
-            worker = harness.start_worker(sender=_fast_sender())
+            worker = harness.start_worker()
             worker.submit_connect("127.0.0.1", device.port)
             assert harness.wait_state(TcpShellWorkerState.CONNECTED)
             payload = bytes((index * 13 + 5) & 0xFF for index in range(2500))
@@ -306,6 +307,11 @@ class TestYmodemEndToEnd:
             assert finished["outcome"] == "completed"
             assert finished["bytes_confirmed"] == 2500
             assert finished["filename"] == spec.filename
+            # 生产 sender 的进度与逐块证据回调必须真实触发（进度恒 0 的回归）。
+            progress_events = [v for n, v in harness.events if n == "ymodem_progress"]
+            assert progress_events, "ymodem_progress never emitted"
+            assert progress_events[-1]["bytes_confirmed"] == 2500
+            assert progress_events[-1]["total_bytes"] == 2500
             assert device.payload_bytes().startswith(payload)
             assert device.payload_bytes()[:2500] == payload
             worker.submit_disconnect("operator")

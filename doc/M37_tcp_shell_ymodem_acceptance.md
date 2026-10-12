@@ -42,8 +42,8 @@
 
 ## F. 真机验收（现场）
 
-- [ ] 真实 AFD01 Shell 会话：连接 `1235`、命令回显、日志观察与 Serial/CoolTerm 行为一致。
-- [ ] 真机 YMODEM 传输 `afd01c_app_0.0.131_beta.bin` 成功，设备日志显示候选写入 DOWNLOAD 而非 LittleFS。
-- [ ] 传输后设备重启、Boot 安装、目标版本回读与弹窗显示一致。
+- [x] 真实 AFD01 Shell 会话：连接 `1235`、命令回显、日志观察与 Serial/CoolTerm 行为一致（2026-10-12 真机确认，含终端渲染三项修复后复核）。
+- [x] 真机 YMODEM 传输 `afd01c_app_0.0.132_beta.bin` 成功（784392 B、158 KiB/s、1K 块 767、rejected=0）；设备日志 `Found new fw in raw download` 证明候选写入 DOWNLOAD 而非 LittleFS（2026-10-12）。
+- [x] 传输后设备重启、Boot 安装链完整（app_old 备份 → DOWNLOAD 安装 → jump app），`ota status` 回读 app version 0.0.132 与传输文件名一致（2026-10-12）。
 - [ ] 跨产品文件名（如对 AFD01C 发 `afd01a_app_*.bin`）被设备拒绝且上位机证据如实记录。
 - [ ] YMODEM 期间对同一 endpoint 发起客户 OTA 被互斥拒绝；结束后可正常发起。

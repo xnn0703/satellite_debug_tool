@@ -108,7 +108,9 @@ class TcpShellWorker(QThread):
         self._operator = operator
         self._recorder = recorder
         self._connect_timeout_s = float(connect_timeout_s)
-        self._sender = sender or YmodemSender()
+        # None 时在 _run_ymodem 里构造带进度/证据回调的 sender；
+        # 此处不能预建默认实例，否则会吞掉传输期回调（进度恒为 0 的根因）。
+        self._sender = sender
         self._commands: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
         self._ymodem_cancel = threading.Event()
