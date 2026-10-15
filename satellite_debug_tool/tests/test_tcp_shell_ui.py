@@ -461,3 +461,48 @@ class TestBootProgressBar:
         lines = workspace._terminal.toPlainText().split("\n")
         assert "first" in lines
         assert "second" in lines
+
+class TestEraseLineContract:
+    """设备 App 侧真实字节合同（transcript 20261015T070125Z 实证）：
+    每帧 "root:/$ " + ESC[2K + \r\r + 进度文本；日志行 "root:/$ " + ESC[2K + \r + 颜色 + 内容 + \r\n。
+    丢弃 EL 会使提示符尾部逐帧累积（"每次进度多一个 /$ root:"）。"""
+
+    def test_decoder_emits_el_tokens(self):
+        from satellite_debug_tool.ui.tcp_shell_workspace import _TerminalDecoder
+
+        decoder = _TerminalDecoder()
+        tokens = decoder.feed(b"root:/$ \x1b[2K\r\r[== 50%")
+        assert ("el", "2") in tokens
+        assert ("text", "root:/$ ") in tokens
+        assert ("text", "\r\r[== 50%") in tokens
+
+    def test_app_progress_frames_leave_no_prompt_residue(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        # 两帧真实进度序列（含提示符前缀与 EL2 清行）
+        workspace._on_rx_payload(b"root:/$ \x1b[2K\r\r[==                        ]  50%")
+        workspace._on_rx_payload(b"root:/$ \x1b[2K\r\r[=========================  ]  51%")
+        text = workspace._terminal.toPlainText()
+        assert "root:/$" not in text
+        assert "[=========================  ]  51%" in text
+        assert "50%" not in text
+
+    def test_log_line_prefix_prompt_is_erased(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(
+            b"root:/$ \x1b[2K\r\x1b[32m[2006-01-01 08:25:01] I raw_fw:\x1b[39m "
+            b"raw_fw: download region prepared (pre-erased)\r\n"
+        )
+        text = workspace._terminal.toPlainText()
+        assert "root:/$" not in text
+        assert "download region prepared (pre-erased)" in text
+
+    def test_el0_erases_to_end_of_line(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"abcdef\r\x1b[0Kxy")
+        text = workspace._terminal.toPlainText()
+        assert "abcdef" not in text
+        assert "xy" in text

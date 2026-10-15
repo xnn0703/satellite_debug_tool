@@ -66,11 +66,12 @@ _SGR_FOREGROUND = {
 
 
 class _TerminalDecoder:
-    """Decode UTF-8 incrementally and split ANSI SGR sequences from text.
+    """Decode UTF-8 incrementally and split ANSI sequences from text.
 
-    Returns a token list: ``("text", str)`` chunks and ``("sgr", params)`` for
-    colour changes. Non-SGR control sequences (cursor moves, OSC) are dropped.
-    A partial escape sequence split across TCP packets is buffered.
+    Returns a token list: ``("text", str)`` chunks, ``("sgr", params)`` for
+    colour changes and ``("el", mode)`` for Erase-in-Line. Other control
+    sequences (cursor moves, OSC) are dropped. A partial escape sequence
+    split across TCP packets is buffered.
     """
 
     def __init__(self) -> None:
@@ -87,8 +88,11 @@ class _TerminalDecoder:
                 tokens.append(
                     ("text", self._decoder.decode(data[position : match.start()]))
                 )
-            if match.group(2) == b"m":
+            final = match.group(2)
+            if final == b"m":
                 tokens.append(("sgr", (match.group(1) or b"0").decode("ascii")))
+            elif final == b"K":
+                tokens.append(("el", (match.group(1) or b"0").decode("ascii")))
             position = match.end()
         tail = data[position:]
         keep = 0
@@ -494,6 +498,21 @@ class TcpShellWorkspace(QWidget):
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
                 self._overwrite_mode = True
 
+        def erase_line(mode: str) -> None:
+            # 设备日志/进度合同：先打提示符，再 ESC[2K 清整行、\r 回行首重绘。
+            # 丢弃 EL 会残留提示符尾部并逐帧累积（"每次进度多一个 /$ root:"）。
+            flush()
+            resolve_pending_cr()
+            if mode == "1":
+                cursor.movePosition(cursor.MoveOperation.StartOfLine, cursor.MoveMode.KeepAnchor)
+            elif mode == "2":
+                cursor.movePosition(cursor.MoveOperation.StartOfLine)
+                cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
+            else:
+                cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
+            if cursor.hasSelection():
+                cursor.removeSelectedText()
+
         def render_text(text: str) -> None:
             for char in text:
                 if char == "\r":
@@ -520,6 +539,8 @@ class TcpShellWorkspace(QWidget):
             if kind == "sgr":
                 flush()
                 self._apply_sgr(value)
+            elif kind == "el":
+                erase_line(value)
             else:
                 render_text(value)
         # 包尾的 "\r" 不提前决断：TCP 包边界不得改变语义——下一字符是 "\n"
