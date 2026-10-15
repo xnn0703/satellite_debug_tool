@@ -109,6 +109,41 @@ class _TerminalDecoder:
         self._pending_ansi = b""
 
 
+def _log_text(tokens) -> str:
+    """Normalise decoded shell text for the .log file: CR becomes LF, drop BS."""
+
+    chunks: list[str] = []
+    for kind, value in tokens:
+        if kind != "text":
+            continue
+        chunks.append(value.replace("\r", "\n"))
+    text = "".join(chunks)
+    while "\b" in text:
+        text = text.replace("\b", "")
+    return text
+
+
+class ShellLogWriter:
+    """Append device shell text to <IP>_<YYYYMMDD_HHMMSS>.log in one directory."""
+
+    def __init__(self, directory: Path, host: str) -> None:
+        safe_host = "".join(
+            char if char.isalnum() or char in ".-_" else "_" for char in host
+        )
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.path = directory / f"{safe_host}_{stamp}.log"
+        directory.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a", encoding="utf-8")
+
+    def write(self, text: str) -> None:
+        self._file.write(text)
+        self._file.flush()
+
+    def close(self) -> None:
+        self._file.flush()
+        self._file.close()
+
+
 class TerminalEdit(QTextEdit):
     """Dumb terminal: keystrokes become device bytes; the device echoes back.
 
@@ -230,6 +265,7 @@ class TcpShellWorkspace(QWidget):
         self._overwrite_mode = False
         self._sgr_foreground: str | None = None
         self._sgr_bold = False
+        self._log_writer: ShellLogWriter | None = None
         self._hex_view = False
         self._selected_file: Optional[Path] = None
         self._build_ui()
@@ -274,9 +310,14 @@ class TcpShellWorkspace(QWidget):
         self._terminal.bytes_entered.connect(self._on_terminal_bytes)
         self._hex_check = QCheckBox(tr("Show raw hex"))
         self._hex_check.toggled.connect(self._on_hex_toggled)
+        self._log_check = QCheckBox(tr("Auto-save session log"))
+        self._log_check.toggled.connect(self._on_log_toggled)
+        self._log_path_label = QLabel("")
+        self._log_path_label.setWordWrap(False)
         header_row = QHBoxLayout()
         header_row.addWidget(self._hex_check)
-        header_row.addStretch(1)
+        header_row.addWidget(self._log_check)
+        header_row.addWidget(self._log_path_label, 1)
         terminal_layout.addLayout(header_row)
         terminal_layout.addWidget(self._terminal, 1)
         splitter.addWidget(terminal_box)
@@ -365,6 +406,9 @@ class TcpShellWorkspace(QWidget):
         return answer is QMessageBox.StandardButton.Yes
 
     def shutdown(self) -> None:
+        writer, self._log_writer = self._log_writer, None
+        if writer is not None:
+            writer.close()
         self._controller.shutdown()
 
     def retranslate_ui(self) -> None:
@@ -374,6 +418,7 @@ class TcpShellWorkspace(QWidget):
         self._start_button.setText(tr("Start transfer"))
         self._cancel_button.setText(tr("Cancel transfer"))
         self._hex_check.setText(tr("Show raw hex"))
+        self._log_check.setText(tr("Auto-save session log"))
         self._file_edit.setPlaceholderText(tr("Select a firmware .bin file"))
         self._file_info_label.setText(
             self._file_info_label.text()
@@ -471,6 +516,9 @@ class TcpShellWorkspace(QWidget):
         self._controller.send_raw(data)
 
     def _on_rx_payload(self, data: bytes) -> None:
+        tokens = self._decoder.feed(data)
+        if self._log_writer is not None:
+            self._log_writer.write(_log_text(tokens))
         if self._hex_view:
             self._append_terminal(data.hex(" ") + "\n")
             return
@@ -598,6 +646,41 @@ class TcpShellWorkspace(QWidget):
 
     def _on_hex_toggled(self, checked: bool) -> None:
         self._hex_view = bool(checked)
+
+    def _on_log_toggled(self, checked: bool) -> None:
+        if checked:
+            directory = self._resolve_log_directory()
+            if directory is None:
+                self._log_check.setChecked(False)
+                return
+            host = self._current_host() or "shell"
+            self._log_writer = ShellLogWriter(directory, host)
+            self._log_path_label.setText(str(self._log_writer.path))
+            self._append_event(
+                tr("Session log: {path}").format(path=self._log_writer.path)
+            )
+        else:
+            writer, self._log_writer = self._log_writer, None
+            if writer is not None:
+                writer.close()
+                self._append_event(
+                    tr("Session log saved: {path}").format(path=writer.path)
+                )
+            self._log_path_label.setText("")
+
+    def _resolve_log_directory(self):
+        # 已配置过的目录直接使用（不存在时由 writer 重建）；仅首次使用弹选择框。
+        configured = str(self._settings.get("tcp_shell.log_dir", "") or "")
+        if configured:
+            return Path(configured)
+        directory = QFileDialog.getExistingDirectory(
+            self, tr("Choose the shell log directory"), str(Path.home())
+        )
+        if not directory:
+            return None
+        self._settings.set("tcp_shell.log_dir", directory)
+        self._settings.persist_preferences()
+        return Path(directory)
 
     # -- YMODEM -----------------------------------------------------------------------------
 

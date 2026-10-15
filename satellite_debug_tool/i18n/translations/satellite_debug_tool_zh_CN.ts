@@ -717,7 +717,7 @@ Configuration file: ~/.satellite_debug_tool/settings.json</source>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="747"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="561"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="796"/>
         <source>Connecting...</source>
         <translation>正在连接...</translation>
     </message>
@@ -1359,8 +1359,8 @@ Its channels will return to the unassigned list.</source>
         <location filename="../../ui/production_workspace.py" line="2328"/>
         <location filename="../../ui/settings_dialog.py" line="273"/>
         <location filename="../../ui/settings_dialog.py" line="359"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="212"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="295"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="331"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="417"/>
         <source>Browse...</source>
         <translation>浏览...</translation>
     </message>
@@ -1497,7 +1497,7 @@ Its channels will return to the unassigned list.</source>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="1296"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="562"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="797"/>
         <source>Connected</source>
         <translation>已连接</translation>
     </message>
@@ -3712,7 +3712,7 @@ This cannot be undone, and some parameters require a restart.</source>
     </message>
     <message>
         <location filename="../../ui/device_view.py" line="856"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="454"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="689"/>
         <source>Select firmware file</source>
         <translation>选择固件文件</translation>
     </message>
@@ -4244,8 +4244,8 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <location filename="../../ui/power_supply_debug_workspace.py" line="216"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="827"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="886"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="178"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="294"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="292"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="416"/>
         <source>Disconnect</source>
         <translation>断开连接</translation>
     </message>
@@ -4344,8 +4344,8 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <location filename="../../ui/live_view.py" line="798"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="165"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="592"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="176"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="293"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="290"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="415"/>
         <source>Connect</source>
         <translation>连接</translation>
     </message>
@@ -4476,9 +4476,9 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <location filename="../../ui/live_view.py" line="2969"/>
         <location filename="../../ui/live_view.py" line="2983"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="854"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="180"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="560"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="565"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="294"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="795"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="800"/>
         <source>Disconnected</source>
         <translation>已断开</translation>
     </message>
@@ -7520,168 +7520,189 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>TCP Shell</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="168"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="282"/>
         <source>TCP shell target</source>
         <translation>TCP Shell 目标</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="182"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="296"/>
         <source>Port</source>
         <translation>端口</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="191"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="305"/>
         <source>Shell terminal</source>
         <translation>Shell 终端</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="197"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="298"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="311"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="420"/>
         <source>Show raw hex</source>
         <translation>显示原始十六进制</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="206"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="313"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="421"/>
+        <source>Auto-save session log</source>
+        <translation>自动保存会话日志</translation>
+    </message>
+    <message>
+        <location filename="../../ui/tcp_shell_workspace.py" line="325"/>
         <source>YMODEM firmware transfer</source>
         <translation>YMODEM 固件传输</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="211"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="299"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="330"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="422"/>
         <source>Select a firmware .bin file</source>
         <translation>选择固件 .bin 文件</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="214"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="296"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="333"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="418"/>
         <source>Start transfer</source>
         <translation>开始传输</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="216"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="297"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="335"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="419"/>
         <source>Cancel transfer</source>
         <translation>取消传输</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="222"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="303"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="341"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="426"/>
         <source>No firmware file selected</source>
         <translation>未选择固件文件</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="235"/>
-        <location filename="../../ui/tcp_shell_workspace.py" line="305"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="354"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="428"/>
         <source>Session events</source>
         <translation>会话事件</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="272"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="391"/>
         <source>A YMODEM transfer is running. Closing sends CAN CAN to cancel the transfer and saves the session as incomplete. Close anyway?</source>
         <translation>YMODEM 传输正在进行。关闭将发送 CAN CAN 取消传输，并把会话保存为不完整。仍要关闭吗？</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="277"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="396"/>
         <source>The TCP shell is connected. Closing disconnects the session. Close anyway?</source>
         <translation>TCP Shell 当前已连接。关闭将断开会话。仍要关闭吗？</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="282"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="401"/>
         <source>Close TCP shell</source>
         <translation>关闭 TCP Shell</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="357"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="480"/>
         <source>Enter a device IPv4 address first.</source>
         <translation>请先填写设备 IPv4 地址。</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="360"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="483"/>
         <source>Connecting to {host}:{port}...</source>
         <translation>正在连接 {host}:{port}...</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="373"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="496"/>
         <source>Connected to {host}:{port}</source>
         <translation>已连接 {host}:{port}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="377"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="500"/>
         <source>Connect failed: {reason}</source>
         <translation>连接失败：{reason}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="381"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="504"/>
         <source>Disconnected: {reason}</source>
         <translation>已断开：{reason}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="388"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="511"/>
         <source>Evidence session: {id}</source>
         <translation>证据会话：{id}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="463"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="660"/>
+        <source>Session log: {path}</source>
+        <translation>日志文件：{path}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/tcp_shell_workspace.py" line="667"/>
+        <source>Session log saved: {path}</source>
+        <translation>日志已保存：{path}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/tcp_shell_workspace.py" line="677"/>
+        <source>Choose the shell log directory</source>
+        <translation>选择 Shell 日志保存目录</translation>
+    </message>
+    <message>
+        <location filename="../../ui/tcp_shell_workspace.py" line="698"/>
         <source>File: {name} | {size} bytes | SHA-256 {digest}</source>
         <translation>文件：{name} | {size} 字节 | SHA-256 {digest}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="467"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="702"/>
         <source>Device route: {route}</source>
         <translation>设备端路由：{route}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="469"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="704"/>
         <source>Target version: {version}</source>
         <translation>目标版本：{version}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="471"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="706"/>
         <source>Filename does not encode a version</source>
         <translation>文件名未编码版本号</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="485"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="720"/>
         <source>YMODEM rejected: {detail}</source>
         <translation>YMODEM 被拒绝：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="489"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="724"/>
         <source>YMODEM admission: {mode}</source>
         <translation>YMODEM 准入：{mode}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="506"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="741"/>
         <source>{confirmed}/{total} bytes | retransmits: {retransmits}</source>
         <translation>{confirmed}/{total} 字节 | 重传：{retransmits}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="517"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="752"/>
         <source>Transfer completed; waiting for the device to reboot. Version readback appears after the session returns.</source>
         <translation>传输完成；等待设备重启。会话恢复后将显示版本回读。</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="523"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="758"/>
         <source>Transfer {outcome}: {error}</source>
         <translation>传输{outcome}：{error}</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="528"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="763"/>
         <source>YMODEM {outcome}: {blocks} blocks, {bytes} bytes</source>
         <translation>YMODEM {outcome}：{blocks} 块，{bytes} 字节</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="540"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="775"/>
         <source>Readback version {version} matches the target.</source>
         <translation>回读版本 {version} 与目标一致。</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="545"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="780"/>
         <source>Readback version {current}; target {target}. Apply confirmation is a separate fact.</source>
         <translation>回读版本 {current}；目标 {target}。应用生效是独立结论。</translation>
     </message>
     <message>
-        <location filename="../../ui/tcp_shell_workspace.py" line="563"/>
+        <location filename="../../ui/tcp_shell_workspace.py" line="798"/>
         <source>YMODEM transfer</source>
         <translation>YMODEM 传输</translation>
     </message>

@@ -506,3 +506,76 @@ class TestEraseLineContract:
         text = workspace._terminal.toPlainText()
         assert "abcdef" not in text
         assert "xy" in text
+
+class TestSessionLog:
+    def _enable_logging(self, workspace, log_dir):
+        workspace._settings.set("tcp_shell.log_dir", str(log_dir))
+        workspace._log_check.setChecked(True)
+
+    def test_log_file_records_session_text(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._device_combo.setEditText("192.168.1.12")
+        log_dir = tmp_path / "shell-logs"
+        self._enable_logging(workspace, log_dir)
+
+        workspace._on_rx_payload(
+            b"root:/$ \x1b[32m[TS] I mod:\x1b[39m message\r\nnext line\r\n"
+        )
+        logs = list(log_dir.glob("192.168.1.12_*.log"))
+        assert len(logs) == 1
+        content = logs[0].read_text(encoding="utf-8")
+        assert "[TS] I mod: message" in content
+        assert "next line" in content
+        assert "\r" not in content
+        assert "\x1b" not in content
+
+    def test_toggle_off_stops_writing_and_keeps_file(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        log_dir = tmp_path / "shell-logs"
+        self._enable_logging(workspace, log_dir)
+        workspace._on_rx_payload(b"first\r\n")
+        log_file = next(log_dir.glob("*.log"))
+        workspace._log_check.setChecked(False)
+        workspace._on_rx_payload(b"second\r\n")
+        content = log_file.read_text(encoding="utf-8")
+        assert "first" in content
+        assert "second" not in content
+        assert log_file.exists()
+
+    def test_hex_view_does_not_affect_logging(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        log_dir = tmp_path / "shell-logs"
+        self._enable_logging(workspace, log_dir)
+        workspace._hex_check.setChecked(True)
+        workspace._on_rx_payload(b"payload\r\n")
+        content = next(log_dir.glob("*.log")).read_text(encoding="utf-8")
+        assert "payload" in content
+
+    def test_shutdown_closes_writer(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        log_dir = tmp_path / "shell-logs"
+        self._enable_logging(workspace, log_dir)
+        workspace._on_rx_payload(b"tail\r\n")
+        workspace.shutdown()
+        assert workspace._log_writer is None
+        assert "tail" in next(log_dir.glob("*.log")).read_text(encoding="utf-8")
+
+    def test_cancelled_directory_choice_disables_checkbox(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "satellite_debug_tool.ui.tcp_shell_workspace.QFileDialog.getExistingDirectory",
+            lambda *a, **k: "",
+        )
+        workspace._log_check.setChecked(True)
+        assert workspace._log_check.isChecked() is False
+        assert workspace._log_writer is None
