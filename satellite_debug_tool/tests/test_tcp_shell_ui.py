@@ -431,3 +431,33 @@ class TestSgrColourRendering:
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._on_rx_payload(b"a\tb\r\n")
         assert "a    b" in workspace._terminal.toPlainText()
+
+class TestBootProgressBar:
+    """固件 ota_print_progress_bar 合同：每帧 "\r" + 整行重打，仅 100% 帧补 "\n"。"""
+
+    def test_progress_bar_frames_overwrite_one_line(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"\r[=====                                             ]  10%")
+        workspace._on_rx_payload(b"\r[==========================                        ]  50%")
+        workspace._on_rx_payload(b"\r[==================================================] 100%\n")
+        text = workspace._terminal.toPlainText()
+        assert "10%" not in text
+        assert "50%" not in text
+        assert "[==================================================] 100%" in text
+
+    def test_packet_boundary_keeps_cr_undecided(self, qapplication_session, tmp_path, monkeypatch):
+        """包尾 "\r" 不提前进入覆盖模式；下一包是文本才覆盖，是 "\n" 则换行。"""
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"abc\r")
+        workspace._on_rx_payload(b"xy")
+        text = workspace._terminal.toPlainText()
+        assert "abc" not in text
+        assert "xyc" in text
+
+    def test_packet_boundary_cr_then_lf_still_breaks_line(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"first\r")
+        workspace._on_rx_payload(b"\nsecond\r\n")
+        lines = workspace._terminal.toPlainText().split("\n")
+        assert "first" in lines
+        assert "second" in lines

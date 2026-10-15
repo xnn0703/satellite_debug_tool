@@ -522,7 +522,9 @@ class TcpShellWorkspace(QWidget):
                 self._apply_sgr(value)
             else:
                 render_text(value)
-        resolve_pending_cr()
+        # 包尾的 "\r" 不提前决断：TCP 包边界不得改变语义——下一字符是 "\n"
+        # 则换行，是其他字符才进入行首覆盖（boot 进度条与 shell 提示符并发
+        # 交错时，提前决断会把覆盖意图泄漏到无关文本上产生半替换碎片）。
         flush()
         self._terminal.setTextCursor(cursor)
         scrollbar = self._terminal.verticalScrollBar()
