@@ -179,7 +179,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **macOS 本地打包**：`./scripts/build_macos.sh user|ops|both`（默认 ops）（自动 venv + 装依赖 + 跑 `update_translations.py check` + PyInstaller 主程序+updater + 嵌入 `.app/Contents/MacOS/updater` + `codesign --force --deep --sign -` ad-hoc 签名 + `xattr -cr` 清 quarantine + `ditto -c -k` 出 zip）
 - **Windows 一键打包**：`scripts\build_windows.bat user|ops|both`（默认 ops）；两平台均由 `scripts/build_editions.py` 调用 spec、验证模型与构建身份、嵌入 updater 并生成独立 zip。用户 Windows 安装目录为 `SatelliteTerminalToolUser`，EXE 保留 `SatelliteDebugTool.exe`。
 - **Windows 自动更新包合同**：GitHub Release `.7z` 的归档根直接包含 `SatelliteDebugTool.exe`、`updater.exe` 与 `_internal/`，兼容旧 updater 安装修复版；上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷
-- **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，user/ops 矩阵完成冻结启动/总览/Shell/退出烟测，再生成并验证单文件 7z，两份构建成功后由唯一 publish job 上传；推 master/main 触发双版本 `ci-only-build` 上传 artifact 不发版）
+- **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，user/ops 矩阵完成冻结离屏启动/总览/Shell/退出烟测，再生成并验证单文件 7z，两份构建成功后由唯一 publish job 创建草稿，核对资产后发布；推 master/main 触发双版本 `ci-only-build` 上传 artifact 不发版）
 - **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 兼容性问题，强制本地脚本。updater 二进制仍嵌入但 mac 平台不发版，触发频率为零
 - **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.8.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；mac 本地手动 `./scripts/build_macos.sh both`

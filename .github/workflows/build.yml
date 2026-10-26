@@ -99,6 +99,8 @@ jobs:
 
       - name: Smoke-test the frozen edition
         timeout-minutes: 3
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: python scripts/check_frozen_application.py --edition ${{ matrix.edition }} --version "${{ needs.prepare-release.outputs.tag }}"
 
       - name: Upload frozen smoke evidence
@@ -158,12 +160,12 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: release
-      - name: Publish both validated editions
+      - name: Prepare validated release draft
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
           name: Release ${{ needs.prepare-release.outputs.tag }}
-          draft: false
+          draft: true
           prerelease: false
           make_latest: true
           fail_on_unmatched_files: true
@@ -207,6 +209,8 @@ jobs:
         run: scripts\build_windows.bat ${{ matrix.edition }}
       - name: Smoke-test the frozen edition
         timeout-minutes: 3
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: python scripts/check_frozen_application.py --edition ${{ matrix.edition }}
       - name: Upload CI smoke evidence
         if: always()

@@ -39,6 +39,8 @@ def main() -> None:
     if code != 0:
         raise SystemExit(f"Frozen {args.edition} smoke failed with exit code {code}")
     proof = json.loads(result.read_text(encoding="utf-8"))
+    if env.get("QT_QPA_PLATFORM") and proof.get("qpa_platform") != env["QT_QPA_PLATFORM"]:
+        raise SystemExit("Frozen smoke used a different Qt platform")
     if (proof.get("edition"), proof.get("version"), proof.get("overview_panels"), proof.get("shell_dialog")) != (args.edition, version, "PASS", "PASS"):
         raise SystemExit("Frozen smoke evidence differs from the release contract")
 

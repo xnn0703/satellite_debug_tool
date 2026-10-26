@@ -14,7 +14,7 @@
               ↓
    build-windows (user/ops → 两个 7z → 验证 artifact)
               ↓
-   publish-windows (两版成功后共同发布)
+   publish-windows (两版成功后创建草稿，核对资产后发布)
               ↓
    完成 ✅  https://github.com/xnn0703/satellite_debug_tool/releases
                               ↓
@@ -89,7 +89,7 @@ git push github v1.1.0    # 触发 GitHub Release
 
 - [ ] GitHub Release 同时包含用户版 `satellite_terminal_tool-user-windows-v<version>.7z` 与运维版 `satellite_debug_tool-win-v<version>.7z`
 - [ ] 两包构建身份均匹配 tag，用户包包含完整 Shell，旧全量更新器只匹配 ops 资产
-- [ ] Windows user/ops 冻结启动烟测及其 smoke artifact 均通过，版本/总览/Shell/退出一致
+- [ ] Windows user/ops 冻结离屏启动烟测及其 smoke artifact 均通过，版本/总览/Shell/退出一致
 - [ ] 下载并解压 `.7z` 后目录结构完整
 - [ ] 老版本启动后 24h 内或手动点 🔄 检查更新 → 弹"发现新版"对话框
 - [ ] 两版分别完成同版更新 → 下载 → 重启 → 回读 edition 与版本；交叉包在替换前被拒绝
@@ -185,3 +185,7 @@ A: Windows 升级器把旧目录改成 `SatelliteDebugTool.bak.<时间戳>`，�
 - 旧更新器平台正则只命中保留旧命名的 ops 包。用户版采用 `-user-windows-` 独立名称。新更新器验证 edition/platform/version，历史 ops 目标 `<=1.7.0` 才允许缺少身份 marker。
 - 两版下载后都需真实 Windows 冻结程序启动与退出、旧版安装升级以及交叉包拒绝验收。源码测试与 macOS 本地构建不替代该平台门禁。
 - 用户版更新状态路径为 `~/.satellite_debug_tool/user/updates/<tag>/`；ops 沿用上文路径。macOS 仍手动分发，不进入当前 Windows updater 安装链路。
+
+## 草稿发布门禁
+
+Windows 两版校验通过后先建立 Release 草稿。核对本地全量/两版 macOS 结果、Windows 离屏启动、资产身份与下载载荷后，通过 `gh release edit v<version> --draft=false --latest` 完成发布。CI 离屏检查验证装配、资源和受控退出；目标机 OpenGL 渲染、旧 Windows 安装原地升级及物理设备动作继续独立验收。

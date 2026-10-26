@@ -89,7 +89,7 @@ def run_application(edition, window_factory, *, started=None):
         loaded = [name for name in sys.modules if any(name.startswith("satellite_debug_tool." + key) for key in forbidden)]
         if edition is Edition.USER and loaded:
             raise RuntimeError("user edition loaded operations modules: " + repr(loaded))
-        result = {**initial, "edition": edition.value, "version": __version__, "pages": window._customer._page_ids,
+        result = {**initial, "edition": edition.value, "version": __version__, "qpa_platform": app.platformName(), "pages": window._customer._page_ids,
                   "startup_seconds": round(time.perf_counter() - started, 3),
                   "rss_bytes": psutil.Process().memory_info().rss,
                   "thread_count": psutil.Process().num_threads(), "operations_modules": loaded, "shell_dialog": "PASS", "overview_panels": "PASS"}
@@ -101,6 +101,8 @@ def run_application(edition, window_factory, *, started=None):
         if not window.close():
             raise RuntimeError("frozen smoke shutdown was refused")
         app.processEvents()
+        import logging
+        logging.shutdown()
         temporary.cleanup()
         sys.exit(0)
     sys.exit(app.exec())

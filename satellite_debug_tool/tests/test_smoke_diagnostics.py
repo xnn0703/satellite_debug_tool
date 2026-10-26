@@ -25,3 +25,25 @@ def test_ordinary_start_keeps_the_original_exception_hook(tmp_path):
     result = subprocess.run([sys.executable, "-c", script, str(hook), f"--smoke-output={output}"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert not output.exists()
+
+
+def test_smoke_closes_logging_before_temporary_directory_cleanup(tmp_path):
+    output = tmp_path / "smoke-user.json"
+    script = r'''
+import logging,runpy,tempfile
+from pathlib import Path
+Original = tempfile.TemporaryDirectory
+class WindowsDirectory(Original):
+    def cleanup(self):
+        for handler in logging.getLogger().handlers:
+            if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename).is_relative_to(self.name):
+                assert handler.stream is None or handler.stream.closed, 'Windows keeps the application log locked'
+        super().cleanup()
+tempfile.TemporaryDirectory = WindowsDirectory
+runpy.run_module('satellite_debug_tool.main_user', run_name='__main__')
+'''
+    result = subprocess.run([sys.executable, "-c", script, "--smoke-test", f"--smoke-output={output}"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    proof = json.loads(output.read_text())
+    assert proof["edition"] == "user"
+    assert proof["overview_panels"] == "PASS"
