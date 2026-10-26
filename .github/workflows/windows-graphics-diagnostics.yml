@@ -14,13 +14,20 @@ jobs:
         shell: pwsh
         run: |
           @'
-          import sys,runpy
+          import os,sys,json,subprocess
+          from pathlib import Path
           from importlib.metadata import version
           print({name:version(name) for name in ('PySide6','pyqtgraph','PyOpenGL')},flush=True)
-          sys.argv=['source','--smoke-test','--smoke-output=release/source-smoke.json']
-          from satellite_debug_tool.smoke_diagnostics import install
-          install()
-          runpy.run_module('satellite_debug_tool.main_user',run_name='__main__')
+          Path('release').mkdir(exist_ok=True)
+          outcomes={}
+          for name,extra in (('default',{}),('desktop',{'QT_OPENGL':'desktop'}),('offscreen',{'QT_QPA_PLATFORM':'offscreen'})):
+              output=f'release/source-smoke-{name}.json'
+              code="from satellite_debug_tool.smoke_diagnostics import install; install(); import runpy; runpy.run_module('satellite_debug_tool.main_user',run_name='__main__')"
+              with open(f'release/source-smoke-{name}.log','w') as log:
+                  result=subprocess.run([sys.executable,'-c',code,'--smoke-test',f'--smoke-output={output}'],env=dict(os.environ,**extra),stdout=log,stderr=log,timeout=60)
+              outcomes[name]=result.returncode
+          print(json.dumps(outcomes),flush=True)
+          Path('release/source-smoke-outcomes.json').write_text(json.dumps(outcomes))
           '@ | python
       - uses: actions/upload-artifact@v4
         if: always()

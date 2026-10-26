@@ -46,10 +46,13 @@ def install() -> None:
                         "format_version": context.format().version(),
                         "profile": context.format().profile().name,
                         "is_opengl_es": context.isOpenGLES(),
-                        "version": GL.glGetString(GL.GL_VERSION).decode(errors="replace"),
-                        "renderer": GL.glGetString(GL.GL_RENDERER).decode(errors="replace"),
-                        "vendor": GL.glGetString(GL.GL_VENDOR).decode(errors="replace"),
                     }
+                    import psutil
+                    proof["graphics"]["libraries"] = [item.path for item in psutil.Process().memory_maps()
+                        if any(name in item.path.lower() for name in ("opengl", "egl", "gles"))]
+                    for name, token in (("version", GL.GL_VERSION), ("renderer", GL.GL_RENDERER), ("vendor", GL.GL_VENDOR)):
+                        value = GL.glGetString(token)
+                        proof["graphics"][name] = value.decode(errors="replace") if value else None
             except Exception as probe_error:
                 proof["graphics_probe_error"] = str(probe_error)
             destination.write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8")
