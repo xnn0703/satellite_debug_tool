@@ -33,10 +33,26 @@ def install() -> None:
     def report_exception(error_type, error, tb) -> None:
         destination = output_path()
         if destination is not None:
-            destination.write_text(json.dumps({
+            proof = {
                 "status": "failed", "error": str(error),
                 "traceback": "".join(traceback.format_exception(error_type, error, tb)),
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            }
+            try:
+                from PySide6.QtGui import QOpenGLContext
+                context = QOpenGLContext.currentContext()
+                if context is not None:
+                    from OpenGL import GL
+                    proof["graphics"] = {
+                        "format_version": context.format().version(),
+                        "profile": context.format().profile().name,
+                        "is_opengl_es": context.isOpenGLES(),
+                        "version": GL.glGetString(GL.GL_VERSION).decode(errors="replace"),
+                        "renderer": GL.glGetString(GL.GL_RENDERER).decode(errors="replace"),
+                        "vendor": GL.glGetString(GL.GL_VENDOR).decode(errors="replace"),
+                    }
+            except Exception as probe_error:
+                proof["graphics_probe_error"] = str(probe_error)
+            destination.write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8")
         os._exit(1)
 
     sys.excepthook = report_exception

@@ -1,0 +1,30 @@
+name: Windows graphics diagnostics
+on: workflow_dispatch
+jobs:
+  source-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r satellite_debug_tool/requirements.txt
+      - name: Compare source application
+        shell: pwsh
+        run: |
+          @'
+          import sys,runpy
+          from importlib.metadata import version
+          print({name:version(name) for name in ('PySide6','pyqtgraph','PyOpenGL')},flush=True)
+          sys.argv=['source','--smoke-test','--smoke-output=release/source-smoke.json']
+          from satellite_debug_tool.smoke_diagnostics import install
+          install()
+          runpy.run_module('satellite_debug_tool.main_user',run_name='__main__')
+          '@ | python
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-graphics-diagnostics
+          path: release/source-smoke.*
+          retention-days: 7
