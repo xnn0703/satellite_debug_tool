@@ -44,28 +44,6 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Resolved tag: ${TAG}"
 
-      - name: Remove stale v1.1.0 Gitee release metadata
-        if: steps.resolve.outputs.tag == 'v1.1.0'
-        continue-on-error: true
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
-          RESP=$(curl -sS --connect-timeout 5 --max-time 15 \
-            "https://gitee.com/api/v5/repos/soft-hertz/satellite_debug_tool_release/releases/tags/v1.1.0" || true)
-          REL_ID=$(echo "$RESP" | python3 -c "import sys,json
-          try:
-            d=json.load(sys.stdin); print(d.get('id') or '')
-          except Exception:
-            print('')")
-          if [[ -n "${REL_ID}" ]]; then
-            curl --fail-with-body --show-error --silent --connect-timeout 5 --max-time 15 \
-              -X DELETE \
-              "https://gitee.com/api/v5/repos/soft-hertz/satellite_debug_tool_release/releases/${REL_ID}?access_token=${GITEE_TOKEN}"
-            echo "Removed stale Gitee release metadata id=${REL_ID}"
-          else
-            echo "No stale Gitee v1.1.0 release metadata found"
-          fi
-
   # ============================================================
   # 2a. build-windows
   # ============================================================

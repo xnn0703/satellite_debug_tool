@@ -1,6 +1,7 @@
 # 发版 SOP
 
 > 适用：satellite_debug_tool v1.0+
+> 发布目标：GitHub（2026-10-26 用户确认）。源码、标签与 Release 均使用 `github` 远端。
 > 关联：[../BUILDING.md](../BUILDING.md) / [M11_plan.md](M11_plan.md)
 
 ## 一图流
@@ -67,12 +68,10 @@ mac .app `Info.plist` 的 CFBundleVersion 会由 spec 自动读这个值，**无
 ```bash
 git add satellite_debug_tool/__init__.py
 git commit -m "chore: bump version to 1.1.0"
-git push origin master
 git push github master
 
 # tag 名必须 = v + __version__
 git tag v1.1.0
-git push origin v1.1.0    # 同步 Gitee 源码 tag
 git push github v1.1.0    # 触发 GitHub Release
 ```
 
@@ -81,9 +80,9 @@ git push github v1.1.0    # 触发 GitHub Release
 打开 https://github.com/xnn0703/satellite_debug_tool/actions 看进度：
 - prepare-release（30s）
 - build-windows（user/ops 两项构建及身份检查）
-- publish-windows（两版成功后共同发布）
+- publish-windows（两版成功后共同生成草稿，验收后发布）
 
-中间任一失败 → 修问题 → 再走一遍（先删本地 + 远端 tag，改完再 push）
+中间任一失败 → 依据失败证据修复。仅尚未公开的发行标签按下节重建；已发布版本使用新的修复版本号。
 
 ### 5. 验收
 
@@ -96,19 +95,17 @@ git push github v1.1.0    # 触发 GitHub Release
 
 ## tag 删除 / 重发流程
 
-CI 失败需要重发：
+CI 失败且版本尚未公开时重发（已发布标签保持不可变）：
 
 ```bash
 # 删本地 tag
 git tag -d v1.1.0
 
 # 删远程 tag
-git push origin :refs/tags/v1.1.0
 git push github :refs/tags/v1.1.0
 
 # 修问题后重新 tag + push
 git tag v1.1.0
-git push origin v1.1.0
 git push github v1.1.0
 ```
 
@@ -137,7 +134,6 @@ vim satellite_debug_tool/__init__.py  # → "1.0.1"
 
 # 3. commit + tag + push
 git commit -am "fix: 紧急修复 XXX"
-git push origin codex/hotfix-1.0.1
 git push github codex/hotfix-1.0.1
 git tag v1.0.1
 git push github v1.0.1
@@ -147,7 +143,7 @@ git push github v1.0.1
 # 5. master merge hotfix
 git checkout master
 git merge --no-ff codex/hotfix-1.0.1
-git push origin master
+git push github master
 ```
 
 ## 常见问题
@@ -183,7 +179,7 @@ A: Windows 升级器把旧目录改成 `SatelliteDebugTool.bak.<时间戳>`，�
 - 两版共用唯一源码版本号；本地验证包不等于已发布版本。首次正式双版发布应使用新的版本 tag，保留历史 v1.7.0 资产。
 - 旧全量版属于 ops，继续读取原设置目录；用户版读取 `~/.satellite_debug_tool/user/`，首次使用空设备目录。Windows 安装目录和 macOS app identity 按 BUILDING.md 区分。
 - 旧更新器平台正则只命中保留旧命名的 ops 包。用户版采用 `-user-windows-` 独立名称。新更新器验证 edition/platform/version，历史 ops 目标 `<=1.7.0` 才允许缺少身份 marker。
-- 两版下载后都需真实 Windows 冻结程序启动与退出、旧版安装升级以及交叉包拒绝验收。源码测试与 macOS 本地构建不替代该平台门禁。
+- Windows CI 使用冻结程序离屏启动验证装配、资源与受控退出；目标 Windows 显卡的 3D 渲染、旧版安装升级以及真实设备操作保留独立现场验收。交叉包拒绝由身份合同回归覆盖。
 - 用户版更新状态路径为 `~/.satellite_debug_tool/user/updates/<tag>/`；ops 沿用上文路径。macOS 仍手动分发，不进入当前 Windows updater 安装链路。
 
 ## 草稿发布门禁

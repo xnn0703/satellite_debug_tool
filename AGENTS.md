@@ -172,6 +172,8 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 ## 构建与发版
 
+- **发布目标（2026-10-26 用户确认）**：源码、发行标签及 Release 使用 GitHub；使用 `github` 远端执行发布。
+
 - **开发验证方式（2026-10-23 用户确认）**：每轮修复默认验证源码并提供运行命令；用户完成功能验证、明确要求打包后，再执行本地打包或主动触发发行构建。
 
 - **M39 应用图标**：`ui/assets/icons/app_icon_master.png` 是已确认图稿，`scripts/generate_application_icons.py` 从母版生成 Windows 多尺寸 ICO、macOS ICNS 和实际尺寸预览。主程序/updater 的 Windows spec、macOS BUNDLE、QApplication 与顶栏共用该资源；运行时入口为 `ui/application_icon.py`。
