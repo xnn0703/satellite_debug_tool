@@ -1,4 +1,4 @@
-"""TCP shell controller: YMODEM admission lease and session ownership (M37).
+"""Shell session controller: YMODEM admission lease and session ownership (M37).
 
 Admission rules (confirmed with the user):
 
@@ -9,7 +9,7 @@ Admission rules (confirmed with the user):
   exist in the shared session directory (e.g. production devices outside a
   batch) are admitted while the runtime operation gate is idle and rejected
   while any operation or batch freeze holds it.
-- Hand-typed targets without a runtime transfer directly; the evidence
+- Hand-typed TCP targets and serial targets transfer directly; the evidence
   records ``managed_session: false``.
 """
 
@@ -30,7 +30,6 @@ from .worker import TcpShellWorker, TcpShellWorkerState
 from .ymodem_sender import YmodemFileSpec
 
 YMODEM_PURPOSE = "tcp-shell-ymodem"
-_DEFAULT_TCP_PORT = 1235
 
 _VERSION_PATTERN = re.compile(r"_(\d+\.\d+\.\d+(?:_(?:release|beta))?)\.bin$")
 _APP_BIN_PATTERN = re.compile(
@@ -75,7 +74,7 @@ def ymodem_route_hint(filename: str) -> str:
 class TcpShellController(QObject):
     """Own the single TCP shell session and its YMODEM admission lease."""
 
-    connected = Signal(str, int)
+    connected = Signal(str)
     connect_failed = Signal(str)
     disconnected = Signal(str)
     state_changed = Signal(str)
@@ -90,11 +89,13 @@ class TcpShellController(QObject):
         *,
         device_directory=None,
         session_directory=None,
+        session_root: Optional[Path] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._device_directory = device_directory
         self._session_directory = session_directory
+        self._session_root = session_root
         self._lease_owner = object()
         self._gateway = None
         self._worker: Optional[TcpShellWorker] = None
@@ -115,22 +116,27 @@ class TcpShellController(QObject):
 
     def connect_device(
         self,
-        host: str,
-        port: int = _DEFAULT_TCP_PORT,
+        target: dict,
         *,
         endpoint=None,
         operator: str = "",
     ) -> bool:
+        """Connect one shell target: ``{"transport": "tcp"|"serial", ...}``.
+
+        ``endpoint`` binds the session to a managed device runtime (UDP device
+        directory hit, TCP target only); serial targets and hand-typed TCP
+        addresses stay unmanaged.
+        """
         self.disconnect_device("reconnect")
         worker = TcpShellWorker(
-            host=host,
-            port=port,
+            target=target,
             managed_session=endpoint is not None,
             operator=operator,
+            session_root=self._session_root,
         )
         self._bind_worker(worker)
         self._endpoint = endpoint
-        worker.submit_connect(host, port)
+        worker.submit_connect()
         return True
 
     def disconnect_device(self, reason: str = "operator") -> None:

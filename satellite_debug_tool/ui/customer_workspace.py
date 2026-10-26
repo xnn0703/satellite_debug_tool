@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from satellite_debug_tool.edition import Edition, edition_of
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -18,15 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
-from satellite_debug_tool.core.production import FixtureRuntime
 from satellite_debug_tool.ui import icons, styles as S
-from satellite_debug_tool.ui.customer_fixture_dialog import CustomerFixtureDialog
-from satellite_debug_tool.ui.customer_tcp_shell_dialog import CustomerTcpShellDialog
 from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_playback_view import CustomerPlaybackView
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
-from satellite_debug_tool.ui.customer_iperf_view import CustomerIperfView
 from satellite_debug_tool.ui.customer_device_list import (
     CustomerDeviceList,
     CustomerDeviceSnapshot,
@@ -132,6 +129,9 @@ class CustomerWorkspace(QWidget):
             )
         self._live = live_view
         self._settings = settings
+        self._operations = edition_of(settings) is Edition.OPS
+        if not self._operations:
+            self._PAGE_DEFS = tuple((key, tr_source("Firmware update") if key == "maintenance" else label, icon) for key, label, icon in self._PAGE_DEFS if key != "iperf")
         self._device_provider = device_view if callable(device_view) else lambda: device_view
         self._device_directory = device_directory
         self._page_bundle_factory = page_bundle_factory
@@ -179,7 +179,7 @@ class CustomerWorkspace(QWidget):
     @property
     def iperf_test(self) -> QWidget:
         if self._multi_device_enabled:
-            return self._iperf_pages.ensure_active_view()
+            return self._iperf_pages.ensure_active_view() if self._iperf_pages is not None else None
         return self._iperf_host.ensure_view()
 
     @property
@@ -208,6 +208,9 @@ class CustomerWorkspace(QWidget):
         return self._playback
 
     def _create_iperf(self) -> QWidget:
+        if not self._operations:
+            raise RuntimeError("this tool requires the operations edition")
+        from satellite_debug_tool.ui.customer_iperf_view import CustomerIperfView
         if self._iperf_controller is None or self._iperf_store is None:
             self._iperf = _PendingCustomerPage("Network test is unavailable")
         else:
@@ -315,8 +318,10 @@ class CustomerWorkspace(QWidget):
                 self._maintenance_host,
             )
         )
+        if not self._operations:
+            self._page_views = [view for i, view in enumerate(self._page_views) if i != 2]
         for index, ((page_id, label, icon_name), page) in enumerate(
-            zip(self._PAGE_DEFS, pages)
+            zip(self._PAGE_DEFS, tuple(pages[i] for i in (0, 1, 2, 3, 4) if self._operations or i != 2))
         ):
             button = QPushButton(tr(label))
             button.setObjectName("customerNavButton")
@@ -373,7 +378,7 @@ class CustomerWorkspace(QWidget):
             "overview", self._bundle_registry
         )
         self._rf_pages = CustomerEndpointPageStack("rf", self._bundle_registry)
-        self._iperf_pages = CustomerEndpointPageStack("iperf", self._bundle_registry)
+        self._iperf_pages = CustomerEndpointPageStack("iperf", self._bundle_registry) if self._operations else None
         self._maintenance_pages = CustomerEndpointPageStack(
             "maintenance", self._bundle_registry
         )
@@ -383,6 +388,8 @@ class CustomerWorkspace(QWidget):
             self._iperf_pages,
             self._maintenance_pages,
         ):
+            if page_stack is None:
+                continue
             page_stack.status_message.connect(self._forward_endpoint_status)
             page_stack.view_created.connect(self._on_endpoint_view_created)
             page_stack.add_requested.connect(self.add_requested)
@@ -412,14 +419,16 @@ class CustomerWorkspace(QWidget):
         )
         rf_scroll.setWidget(self._rf_pages)
 
-        iperf_scroll = QScrollArea()
-        iperf_scroll.setObjectName("customerIperfScroll")
-        iperf_scroll.setWidgetResizable(True)
-        iperf_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        iperf_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        iperf_scroll.setWidget(self._iperf_pages)
+        iperf_scroll = None
+        if self._operations:
+            iperf_scroll = QScrollArea()
+            iperf_scroll.setObjectName("customerIperfScroll")
+            iperf_scroll.setWidgetResizable(True)
+            iperf_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            iperf_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+            iperf_scroll.setWidget(self._iperf_pages)
 
         maintenance_scroll = QScrollArea()
         maintenance_scroll.setObjectName("customerMaintenanceScroll")
@@ -447,8 +456,10 @@ class CustomerWorkspace(QWidget):
                 self._maintenance_pages,
             )
         )
+        if not self._operations:
+            self._page_views = [view for i, view in enumerate(self._page_views) if i != 2]
         for index, ((page_id, label, icon_name), page) in enumerate(
-            zip(self._PAGE_DEFS, pages)
+            zip(self._PAGE_DEFS, tuple(pages[i] for i in (0, 1, 2, 3, 4) if self._operations or i != 2))
         ):
             button = QPushButton(tr(label))
             button.setObjectName("customerNavButton")
@@ -477,6 +488,9 @@ class CustomerWorkspace(QWidget):
         self.set_page(0)
 
     def _add_fixture_button(self, layout: QVBoxLayout) -> None:
+        if not self._operations:
+            self._fixture_button = None
+            return
         self._fixture_button = QPushButton(tr("Motion platform..."))
         self._fixture_button.setObjectName("customerFixtureButton")
         self._fixture_button.setEnabled(self._fixture_runtime is not None)
@@ -484,6 +498,9 @@ class CustomerWorkspace(QWidget):
         layout.addWidget(self._fixture_button)
 
     def open_fixture_dialog(self) -> None:
+        if not self._operations:
+            raise RuntimeError("this tool requires the operations edition")
+        from satellite_debug_tool.ui.customer_fixture_dialog import CustomerFixtureDialog
         if self._fixture_runtime is None:
             return
         dialog = self._fixture_dialog
@@ -491,6 +508,7 @@ class CustomerWorkspace(QWidget):
             dialog = CustomerFixtureDialog(self._settings, self._fixture_runtime, self)
             dialog.finished.connect(self._clear_fixture_dialog)
             self._fixture_dialog = dialog
+        dialog.workspace.set_theme(self._theme, self._scale)
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
@@ -499,12 +517,13 @@ class CustomerWorkspace(QWidget):
         self._fixture_dialog = None
 
     def _add_tcp_shell_button(self, layout: QVBoxLayout) -> None:
-        self._tcp_shell_button = QPushButton(tr("TCP shell..."))
+        self._tcp_shell_button = QPushButton(tr("Shell..."))
         self._tcp_shell_button.setObjectName("customerTcpShellButton")
         self._tcp_shell_button.clicked.connect(self.open_tcp_shell_dialog)
         layout.addWidget(self._tcp_shell_button)
 
     def open_tcp_shell_dialog(self) -> CustomerTcpShellDialog:
+        from satellite_debug_tool.ui.customer_tcp_shell_dialog import CustomerTcpShellDialog
         dialog = self._tcp_shell_dialog
         if dialog is None:
             dialog = CustomerTcpShellDialog(
@@ -515,6 +534,7 @@ class CustomerWorkspace(QWidget):
             )
             dialog.finished.connect(self._clear_tcp_shell_dialog)
             self._tcp_shell_dialog = dialog
+        dialog.workspace.set_theme(self._theme, self._scale)
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
@@ -557,6 +577,8 @@ class CustomerWorkspace(QWidget):
             self._iperf_pages,
             self._maintenance_pages,
         ):
+            if page_stack is None:
+                continue
             page_stack.set_endpoints(endpoints)
         for endpoint in old_endpoints:
             if endpoint not in endpoints:
@@ -586,10 +608,12 @@ class CustomerWorkspace(QWidget):
             self._iperf_pages,
             self._maintenance_pages,
         ):
+            if page_stack is None:
+                continue
             page_stack.set_active_endpoint(endpoint)
         self._overview = self._overview_pages.active_view
         self._rf_control = self._rf_pages.active_view
-        self._iperf = self._iperf_pages.active_view
+        self._iperf = self._iperf_pages.active_view if self._iperf_pages is not None else None
         self._maintenance = self._maintenance_pages.active_view
 
     def _request_endpoint_selection(self, endpoint: object) -> None:
@@ -727,7 +751,8 @@ class CustomerWorkspace(QWidget):
             self._iperf_pages,
             self._maintenance_pages,
         ):
-            page_stack.shutdown()
+            if page_stack is not None:
+                page_stack.shutdown()
         self._playback_host.shutdown()
         self._shutdown_done = True
         return True
@@ -745,8 +770,9 @@ class CustomerWorkspace(QWidget):
             f"#customerNavButton {{ background: transparent; border: 0; border-radius: 5px; "
             f"color: {pal['text_2']}; text-align: left; padding: 8px 9px; }}"
             f"#customerNavButton:hover {{ background: {pal['card_2']}; color: {pal['text']}; }}"
-            f"#customerNavButton:checked {{ background: {pal['accent_dim']}; "
-            f"color: {pal['accent_ink']}; font-weight: 600; }}"
+            f"#customerNavButton:checked {{ background: {pal['selected_bg']}; "
+            f"color: {pal['selected_text']}; font-weight: 600; border-left: 2px solid {pal['selected_border']}; }}"
+            f"#customerNavButton:focus {{ border: 1px solid {pal['focus']}; }}"
             f"#customerPendingState {{ color: {pal['text_muted']}; }}"
             f"#customerOverviewScroll {{ background: {pal['bg']}; }}"
             f"#customerMaintenanceScroll {{ background: {pal['bg']}; }}"
@@ -755,7 +781,8 @@ class CustomerWorkspace(QWidget):
             self._device_list.set_theme(theme, scale)
             self._overview_pages.set_theme(theme, scale)
             self._rf_pages.set_theme(theme, scale)
-            self._iperf_pages.set_theme(theme, scale)
+            if self._iperf_pages is not None:
+                self._iperf_pages.set_theme(theme, scale)
             self._playback_host.set_theme(theme, scale)
             self._maintenance_pages.set_theme(theme, scale)
         else:
@@ -764,20 +791,25 @@ class CustomerWorkspace(QWidget):
             self._iperf_host.set_theme(theme, scale)
             self._playback_host.set_theme(theme, scale)
             self._maintenance_host.set_theme(theme, scale)
+        if self._fixture_dialog is not None:
+            self._fixture_dialog.workspace.set_theme(theme, scale)
+        if self._tcp_shell_dialog is not None:
+            self._tcp_shell_dialog.workspace.set_theme(theme, scale)
         self._refresh_nav_icons()
 
     def _refresh_nav_icons(self) -> None:
         pal = S.palette(self._theme)
         for button in self._nav_buttons:
-            color = pal["accent_ink"] if button.isChecked() else pal["text_2"]
+            color = pal["selected_text"] if button.isChecked() else pal["text_2"]
             button.setIcon(
                 icons.icon(str(button.property("iconName")), color=color, size=14)
             )
 
     def retranslate_ui(self) -> None:
         self._section_label.setText(tr("Product operation"))
-        self._fixture_button.setText(tr("Motion platform..."))
-        self._tcp_shell_button.setText(tr("TCP shell..."))
+        if self._operations:
+            self._fixture_button.setText(tr("Motion platform..."))
+        self._tcp_shell_button.setText(tr("Shell..."))
         for button, (_page_id, label, _icon_name) in zip(
             self._nav_buttons, self._PAGE_DEFS
         ):
@@ -786,7 +818,8 @@ class CustomerWorkspace(QWidget):
             self._device_list.retranslate_ui()
             self._overview_pages.retranslate_ui()
             self._rf_pages.retranslate_ui()
-            self._iperf_pages.retranslate_ui()
+            if self._iperf_pages is not None:
+                self._iperf_pages.retranslate_ui()
             self._playback_host.retranslate_ui()
             self._maintenance_pages.retranslate_ui()
         else:

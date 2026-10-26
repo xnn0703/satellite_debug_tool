@@ -30,6 +30,7 @@ NAK = b"\x15"
 CAN = b"\x18"
 C = b"\x43"
 EOT = b"\x04"
+SOH = 0x01
 STX = 0x02
 
 
@@ -47,10 +48,14 @@ def _wait_until(qapplication_session, predicate, timeout_s: float = 5.0) -> bool
 class FakeAfd01Device(threading.Thread):
     """Mirror the firmware TCP shell + YMODEM receiver on a local socket."""
 
-    def __init__(self, *, fragment_controls: bool = False, stall_after_block: int = -1):
+    def __init__(self, *, fragment_controls: bool = False, stall_after_block: int = -1,
+                 header_ack_delay_s: float = 0.0):
         super().__init__(daemon=True)
         self.fragment_controls = fragment_controls
         self.stall_after_block = stall_after_block
+        # 头包 ACK 前的同步耗时（RT-Thread yota 在 on_begin 里擦分区，XESA01 实测
+        # 552 KiB ≈ 7 s，上界为 1 MiB download 分区）。
+        self.header_ack_delay_s = header_ack_delay_s
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind(("127.0.0.1", 0))
@@ -118,6 +123,8 @@ class FakeAfd01Device(threading.Thread):
         if header is None or header[1] != 0 or header[3] == 0:
             conn.sendall(CAN)
             return
+        if self.header_ack_delay_s:
+            time.sleep(self.header_ack_delay_s)
         self._send_control(conn, ACK)
         self._send_control(conn, C)
         block_index = 0
@@ -130,10 +137,11 @@ class FakeAfd01Device(threading.Thread):
             if first == CAN:
                 self.cancel_received = True
                 return
-            if first[0] != STX:
+            if first[0] not in (SOH, STX):
                 conn.sendall(CAN)
                 return
-            rest = self._recv_exact(conn, 1028)
+            body = 128 if first[0] == SOH else 1024
+            rest = self._recv_exact(conn, 2 + body + 2)
             frame = first + rest
             sequence = frame[1]
             if sequence == 0 and frame[3] == 0:
@@ -172,9 +180,10 @@ class FakeAfd01Device(threading.Thread):
 
     def _recv_frame(self, conn: socket.socket):
         first = self._recv_exact(conn, 1)
-        if first[0] != STX:
+        if first[0] not in (SOH, STX):
             return None
-        rest = self._recv_exact(conn, 1028)
+        body = 128 if first[0] == SOH else 1024
+        rest = self._recv_exact(conn, 2 + body + 2)
         return first + rest
 
     def payload_bytes(self) -> bytes:
@@ -196,13 +205,12 @@ class WorkerHarness:
         self.worker: TcpShellWorker | None = None
 
     def start_worker(self, **kwargs) -> TcpShellWorker:
+        target = {"transport": "tcp", "host": "127.0.0.1", "port": self.device.port}
         worker = TcpShellWorker(
-            host="127.0.0.1",
-            port=self.device.port,
+            target=target,
             managed_session=False,
             recorder=TcpShellSessionRecorder(
-                host="127.0.0.1",
-                port=self.device.port,
+                target=target,
                 managed_session=False,
                 root=self.session_dir_hint / "sessions",
             ),
@@ -255,12 +263,34 @@ def device_server():
 
 
 class TestShellSession:
+    def test_controller_records_shell_in_selected_edition_root(
+        self, qapplication_session, tmp_path, device_server
+    ):
+        from satellite_debug_tool.core.tcp_shell.controller import TcpShellController
+
+        session_root = tmp_path / "user" / "tcp_shell_sessions"
+        controller = TcpShellController(session_root=session_root)
+        try:
+            assert controller.connect_device(
+                {"transport": "tcp", "host": "127.0.0.1", "port": device_server.port}
+            )
+            assert _wait_until(qapplication_session, lambda: controller.state is TcpShellWorkerState.CONNECTED)
+            assert controller.send_text("help")
+            assert _wait_until(qapplication_session, lambda: b"help\r" in device_server.received_text)
+        finally:
+            controller.shutdown()
+        assert controller.worker is None
+        sessions = list(session_root.iterdir())
+        assert len(sessions) == 1
+        assert (sessions[0] / "summary.json").is_file()
+        assert (sessions[0] / "manifest.json").is_file()
+
     def test_connect_send_raw_and_disconnect(
         self, qapplication_session, tmp_path, device_server
     ):
         harness = WorkerHarness(qapplication_session, tmp_path, device_server)
         worker = harness.start_worker()
-        worker.submit_connect("127.0.0.1", device_server.port)
+        worker.submit_connect()
         assert harness.wait_state(TcpShellWorkerState.CONNECTED)
         worker.submit_send_raw(b"help\r")
         assert _wait_until(
@@ -276,7 +306,7 @@ class TestShellSession:
         server.close()  # 端口已关闭，连接必然失败
         harness = WorkerHarness(qapplication_session, tmp_path, server)
         worker = harness.start_worker()
-        worker.submit_connect("127.0.0.1", server.port)
+        worker.submit_connect()
         assert harness.wait_event("connect_failed") is not None
         worker.stop_and_join()
 
@@ -291,7 +321,7 @@ class TestYmodemEndToEnd:
         try:
             harness = WorkerHarness(qapplication_session, tmp_path, device)
             worker = harness.start_worker()
-            worker.submit_connect("127.0.0.1", device.port)
+            worker.submit_connect()
             assert harness.wait_state(TcpShellWorkerState.CONNECTED)
             payload = bytes((index * 13 + 5) & 0xFF for index in range(2500))
             spec = YmodemFileSpec("afd01c_app_0.0.131_beta.bin", payload)
@@ -319,13 +349,40 @@ class TestYmodemEndToEnd:
         finally:
             device.close()
 
+    def test_full_transfer_with_delayed_header_ack(self, qapplication_session, tmp_path):
+        # RT-Thread yota 合同：头包 ACK 前同步擦除下载分区（XESA01 552 KiB 实测
+        # +6.87 s）。旧实现按块窗口（ack_timeout）等待在 +5 s 超时放弃。
+        device = FakeAfd01Device(header_ack_delay_s=1.5)
+        device.start()
+        try:
+            harness = WorkerHarness(qapplication_session, tmp_path, device)
+            sender = YmodemSender(c_timeout_s=6.0, ack_timeout_s=0.5, final_ack_timeout_s=4.0)
+            worker = harness.start_worker(sender=sender)
+            worker.submit_connect()
+            assert harness.wait_state(TcpShellWorkerState.CONNECTED)
+            spec = YmodemFileSpec("f.bin", bytes(1024))
+            worker.submit_start_ymodem(spec)
+            finished = None
+
+            def _finished():
+                nonlocal finished
+                finished = harness.wait_event("ymodem_finished", timeout_s=0.2)
+                return finished is not None
+
+            assert _wait_until(qapplication_session, _finished, timeout_s=10.0), device.error
+            assert finished["outcome"] == "completed"
+            assert finished["bytes_confirmed"] == 1024
+            harness.finish()
+        finally:
+            device.close()
+
     def test_cancel_sends_can_can(self, qapplication_session, tmp_path):
         device = FakeAfd01Device(stall_after_block=1)
         device.start()
         try:
             harness = WorkerHarness(qapplication_session, tmp_path, device)
             worker = harness.start_worker(sender=_fast_sender())
-            worker.submit_connect("127.0.0.1", device.port)
+            worker.submit_connect()
             assert harness.wait_state(TcpShellWorkerState.CONNECTED)
             spec = YmodemFileSpec("f.bin", bytes(3000))
             worker.submit_start_ymodem(spec)
@@ -353,7 +410,7 @@ class TestRecorderEvidence:
     ):
         harness = WorkerHarness(qapplication_session, tmp_path, device_server)
         worker = harness.start_worker()
-        worker.submit_connect("127.0.0.1", device_server.port)
+        worker.submit_connect()
         assert harness.wait_state(TcpShellWorkerState.CONNECTED)
         worker.submit_send_raw(b"version\r")
         assert _wait_until(

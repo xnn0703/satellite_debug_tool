@@ -49,18 +49,6 @@ from satellite_debug_tool.ui.chart_group_titles import (
 )
 
 
-# Mission Console 信号色板（16 色高区分度，相邻通道色相拉开）。
-# 来自 styles.SIGNAL_PALETTE —— 三主题下同一通道保持一致；适配深蓝仪表台背景。
-_DISTINCT_PALETTE = list(S.SIGNAL_PALETTE)
-
-# 与 EventLog level 对应的事件竖线颜色（Mission Console 语义色）
-_EVENT_LEVEL_COLORS = {
-    0: "#586976",   # DEBUG  → text_3 灰
-    1: "#38BDF8",   # INFO   → info 蓝
-    2: "#FBBF24",   # WARN   → warn 黄
-    3: "#FB7185",   # ERROR  → err 红
-}
-
 # stacked 模式下每个子图固定目标高度（像素）。
 # - 小于可视区：容器自适应不触发滚动
 # - 大于可视区：容器总高度累加触发 QScrollArea 滚动
@@ -70,13 +58,6 @@ _STACKED_SUBPLOT_HEIGHT = 220
 # 避免每帧 setXRange 触发 sigRangeChanged → 刻度/网格重绘导致肉眼闪烁。
 _X_SCROLL_STEP_SEC = 1.0
 
-# combined 模式复用同一套高区分度调色板（统一视觉，避免两套色规则）
-_COMBINED_PALETTE = _DISTINCT_PALETTE
-_ATTITUDE_COLORS = {
-    "roll": "#5B8FF9",
-    "pitch": "#00B8A9",
-    "yaw": "#F6BD16",
-}
 
 
 def _group_title(group_id: int) -> str:
@@ -381,6 +362,13 @@ class GroupedChartWidget(QWidget):
                 curve.setVisible(bool(visible))
                 return
 
+    def channel_colors(self) -> dict[str, str]:
+        """向通道呈现提供实际曲线颜色，包括姿态角色、分组顺序与当前主题。"""
+        return {
+            channel_key(channel_id): pg.mkPen(curve.opts["pen"]).color().name()
+            for channel_id, (_group_id, curve, _entry) in self._curves.items()
+        }
+
     # ---- M10 F1：归一化 ----
 
     def _on_normalize_toggled(self, on: bool) -> None:
@@ -545,7 +533,7 @@ class GroupedChartWidget(QWidget):
         plot = self._plots.get(plot_key)
         if plot is not None:
             # 橙色 = 非自动；提醒用户"该子图 Y 是你自己调的"
-            plot.getAxis("left").setTextPen("#FFA500")
+            plot.getAxis("left").setTextPen(S.palette(self._theme)["warn"])
 
     def _on_y_auto_clicked(self) -> None:
         """复位所有子图 Y 到 display 范围（已归一化的子图复位到 [0,1]）。"""
@@ -816,11 +804,11 @@ class GroupedChartWidget(QWidget):
 
         is_user_mark = (event_id == 0xFFFF)
         if is_user_mark:
-            color = "#FFB347"   # 醒目琥珀
+            color = S.palette(self._theme)["warn"]
             pen = pg.mkPen(color=color, width=2, style=Qt.SolidLine)
             label = f"⚑ {name}" if name else tr("⚑ USER MARK")
         else:
-            color = _EVENT_LEVEL_COLORS.get(level, "#CCCCCC")
+            color = S.event_color(level, self._theme)
             pen = pg.mkPen(color=color, width=1, style=Qt.DashLine)
             label = name
 
@@ -948,7 +936,7 @@ class GroupedChartWidget(QWidget):
             for axis, channel_id in channels.items():
                 if channel.channel_id == channel_id:
                     return pg.mkPen(
-                        color=_ATTITUDE_COLORS[axis],
+                        color=S.chart_color(S.ATTITUDE_COLORS[axis], self._theme),
                         width=1.8,
                         style=style,
                     )
@@ -961,12 +949,12 @@ class GroupedChartWidget(QWidget):
                 attitude = self._profile.find_channel_by_role(self._current_hw, role)
                 if attitude is not None and attitude.channel_id == channel.channel_id:
                     return pg.mkPen(
-                        color=_ATTITUDE_COLORS[axis],
+                        color=S.chart_color(S.ATTITUDE_COLORS[axis], self._theme),
                         width=2.0,
                         style=Qt.PenStyle.SolidLine,
                     )
         return pg.mkPen(
-            color=_COMBINED_PALETTE[fallback_index % len(_COMBINED_PALETTE)],
+            color=S.signal_palette(self._theme)[fallback_index % len(S.SIGNAL_PALETTE)],
             width=1.5,
         )
 
@@ -978,8 +966,8 @@ class GroupedChartWidget(QWidget):
             f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 2px 10px; "
             f"font-size: {px}px; }}"
             f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
-            f"QPushButton:checked {{ background-color: {p['primary']}; color: white; "
-            f"border-color: {p['primary']}; font-weight: 600; }}"
+            f"QPushButton:checked {{ background-color: {p['selected_bg']}; color: {p['selected_text']}; "
+            f"border-color: {p['selected_border']}; font-weight: 600; }}"
         )
         self._btn_combined.setStyleSheet(btn_style)
         self._btn_stacked.setStyleSheet(btn_style)

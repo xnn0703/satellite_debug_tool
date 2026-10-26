@@ -1,4 +1,4 @@
-"""Mission Console 全局 QSS 生成器。
+"""应用语义角色全局 QSS 生成器。
 
 按 palette 角色生成一份覆盖标准 Qt chrome 控件的全局样式表（按钮 / 输入 / 下拉 /
 复选框 / Tab / 滚动条 / 菜单 / 工具提示 / 表格 / 对话框）。在 MainWindow 主题切换时
@@ -31,10 +31,11 @@ def build(theme: str = "dark", scale: str = "small") -> str:
     fz_sm = S.font_px(12, scale)
     fz_xs = S.font_px(11, scale)
     mono = S.monospace_family()
+    sans = S.sans_family()
 
     accent = p["accent"]
-    accent_soft = _rgba(accent, 0.12)
-    accent_ink = p["accent_ink"]
+    selected_bg = p["selected_bg"]
+    selected_text = p["selected_text"]
     err = p["err"]
     err_soft = _rgba(err, 0.14)
 
@@ -45,6 +46,7 @@ QWidget {{
     color: {p['text']};
     font-size: {fz}px;
 }}
+QLabel {{ background: transparent; }}
 QToolTip {{
     background-color: {p['card_2']};
     color: {p['text']};
@@ -53,6 +55,9 @@ QToolTip {{
     padding: 4px 8px;
 }}
 
+QAbstractButton:focus, QAbstractItemView:focus {{
+    border: 1px solid {p['focus']};
+}}
 /* ===== 按钮（默认 = 次按钮） ===== */
 QPushButton {{
     background-color: {p['card_2']};
@@ -75,21 +80,25 @@ QPushButton:disabled {{
     border-color: {p['border']};
 }}
 QPushButton:checked {{
-    background-color: {accent_soft};
-    border-color: {accent};
-    color: {p['accent_2']};
+    background-color: {selected_bg};
+    border-color: {p['selected_border']};
+    color: {selected_text};
 }}
 
 /* 主按钮 variant=primary（Connect 等） */
 QPushButton[variant="primary"] {{
-    background-color: {accent};
-    color: {accent_ink};
-    border: 1px solid {accent};
+    background-color: {p['primary_bg']};
+    color: {p['primary_text']};
+    border: 1px solid {p['primary_bg']};
     font-weight: 600;
 }}
 QPushButton[variant="primary"]:hover {{
-    background-color: {p['accent_2']};
-    border-color: {p['accent_2']};
+    background-color: {p['primary_hover']};
+    border-color: {p['primary_hover']};
+}}
+QPushButton[variant="primary"]:pressed {{
+    background-color: {p['primary_pressed']};
+    border-color: {p['primary_pressed']};
 }}
 QPushButton[variant="primary"]:disabled {{
     background-color: {p['panel']};
@@ -104,7 +113,7 @@ QPushButton[variant="danger"] {{
     border: 1px solid {_rgba(err, 0.4)};
 }}
 QPushButton[variant="danger"]:hover {{
-    background-color: {_rgba(err, 0.22)};
+    background-color: {_rgba(err, 0.18)};
 }}
 
 /* 幽灵 variant=ghost */
@@ -118,6 +127,10 @@ QPushButton[variant="ghost"]:hover {{
     color: {p['text']};
 }}
 
+QPushButton:focus, QPushButton[variant="primary"]:focus,
+QPushButton[variant="danger"]:focus, QPushButton[variant="ghost"]:focus {{
+    border: 1px solid {p['focus']};
+}}
 /* ===== 输入框 / 下拉 / 数字框 ===== */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     background-color: {p['input_bg']};
@@ -125,13 +138,20 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     border: 1px solid {p['border_2']};
     border-radius: 5px;
     padding: 3px 8px;
-    selection-background-color: {accent};
-    selection-color: {accent_ink};
+    selection-background-color: {selected_bg};
+    selection-color: {selected_text};
+    placeholder-text-color: {p['text_muted']};
+    font-size: {fz_sm}px;
+}}
+QLineEdit, QSpinBox, QDoubleSpinBox {{
     font-family: "{mono}";
+}}
+QComboBox, QComboBox QAbstractItemView {{
+    font-family: "{sans}";
     font-size: {fz_sm}px;
 }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
-    border: 1px solid {accent};
+    border: 1px solid {p['focus']};
 }}
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {{
     color: {p['text_3']};
@@ -153,8 +173,8 @@ QComboBox QAbstractItemView {{
     color: {p['text']};
     border: 1px solid {p['border_2']};
     border-radius: 5px;
-    selection-background-color: {accent_soft};
-    selection-color: {p['accent_2']};
+    selection-background-color: {selected_bg};
+    selection-color: {selected_text};
     outline: 0;
     padding: 2px;
 }}
@@ -220,7 +240,7 @@ QTabBar::tab:hover {{
 }}
 QTabBar::tab:selected {{
     background: {p['bg']};
-    color: {p['accent_2']};
+    color: {selected_text};
     border-color: {p['border_2']};
     border-bottom: 2px solid {accent};
 }}
@@ -290,13 +310,13 @@ QTableWidget, QTableView {{
     gridline-color: {p['border']};
     border: 1px solid {p['border']};
     border-radius: 5px;
-    selection-background-color: {accent_soft};
-    selection-color: {p['accent_2']};
+    selection-background-color: {selected_bg};
+    selection-color: {selected_text};
     outline: 0;
 }}
 QHeaderView::section {{
     background-color: {p['panel_2']};
-    color: {p['text_3']};
+    color: {p['text_2']};
     border: 0;
     border-right: 1px solid {p['border']};
     border-bottom: 1px solid {p['border']};
@@ -318,8 +338,8 @@ QMenu::item {{
     border-radius: 4px;
 }}
 QMenu::item:selected {{
-    background-color: {accent_soft};
-    color: {p['accent_2']};
+    background-color: {selected_bg};
+    color: {selected_text};
 }}
 QMenu::separator {{
     height: 1px;
@@ -342,13 +362,13 @@ QProgressBar {{
     border: 1px solid {p['border']};
     border-radius: 5px;
     text-align: center;
-    color: {p['text_2']};
+    color: {p['progress_text']};
     font-family: "{mono}";
     font-size: {fz_xs}px;
     height: 16px;
 }}
 QProgressBar::chunk {{
-    background-color: {accent};
+    background-color: {p['progress_bg']};
     border-radius: 4px;
 }}
 
@@ -358,11 +378,11 @@ QTextEdit, QPlainTextEdit, QListWidget, QListView {{
     color: {p['text']};
     border: 1px solid {p['border']};
     border-radius: 5px;
-    selection-background-color: {accent_soft};
-    selection-color: {p['accent_2']};
+    selection-background-color: {selected_bg};
+    selection-color: {selected_text};
 }}
-QListWidget::item:selected, QListView::item:selected {{
-    background-color: {accent_soft};
-    color: {p['accent_2']};
+QAbstractItemView::item:selected, QListWidget::item:selected, QListView::item:selected {{
+    background-color: {selected_bg};
+    color: {selected_text};
 }}
 """

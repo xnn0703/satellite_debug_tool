@@ -163,6 +163,29 @@ def test_english_numerus_fallback_and_chinese_catalog(i18n_context):
     assert trn("%n event(s)", 2) == "2 个事件"
 
 
+def test_neutral_product_name_survives_runtime_language_switch(i18n_context, qapp):
+    """客户交付回归：窗口和顶栏在中英文切换后保持中性产品名称。"""
+    from satellite_debug_tool import __app_name_cn__, __app_name_en__
+    from satellite_debug_tool.i18n import LANGUAGE_EN_US, LANGUAGE_ZH_CN
+    from satellite_debug_tool.ui.main_window import MainWindow
+
+    settings, manager = i18n_context
+    window = MainWindow(settings=settings)
+    try:
+        for locale, title, short_name in (
+            (LANGUAGE_EN_US, __app_name_en__, "Terminal Tool"),
+            (LANGUAGE_ZH_CN, __app_name_cn__, "终端工具"),
+            (LANGUAGE_EN_US, __app_name_en__, "Terminal Tool"),
+        ):
+            manager.set_preference(locale)
+            qapp.processEvents()
+            assert window.windowTitle() == title
+            assert window._brand_text.text() == short_name
+    finally:
+        window.close()
+        qapp.processEvents()
+
+
 def test_runtime_switch_preserves_main_window_state(i18n_context, qapp):
     from satellite_debug_tool.core.protocol import ChannelSample, DataReport
     from satellite_debug_tool.i18n import LANGUAGE_EN_US, LANGUAGE_ZH_CN

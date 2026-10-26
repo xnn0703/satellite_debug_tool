@@ -54,23 +54,8 @@ from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.flow_layout import FlowLayout
 
 
-SYSTEM_COLORS = {
-    0: "#3B82F6",  # GPS
-    1: "#EF4444",  # GLONASS
-    2: "#F59E0B",  # SBAS
-    3: "#A855F7",  # Galileo
-    4: "#22C55E",  # BDS
-    5: "#06B6D4",  # QZSS
-    6: "#EC4899",  # NavIC
-    7: "#94A3B8",
-}
-BAND_COLORS = {
-    "L1": "#F59E0B", "L2": "#22C55E", "L5": "#2563EB",
-    "G1": "#F59E0B", "G2": "#22C55E",
-    "E1": "#F59E0B", "E5a": "#2563EB", "E5b": "#22C55E",
-    "E6": "#A855F7", "E5 AltBOC": "#06B6D4",
-    "B1": "#F59E0B", "B2": "#22C55E", "B3": "#2563EB",
-}
+SYSTEM_COLORS = S.GNSS_SYSTEM_COLORS
+BAND_COLORS = S.GNSS_BAND_COLORS
 _BAND_ORDER = {
     "L1": 0, "G1": 0, "E1": 0, "B1": 0,
     "L2": 1, "G2": 1, "E5a": 1, "B2": 1,
@@ -79,7 +64,7 @@ _BAND_ORDER = {
 }
 CN0_COLOR_MIN_DBHZ = 20
 CN0_COLOR_MAX_DBHZ = 51
-CN0_UNKNOWN_COLOR = "#94A3B8"
+CN0_UNKNOWN_COLOR = S.GNSS_SYSTEM_COLORS[7]
 CN0_LEGEND_VALUES = (CN0_COLOR_MAX_DBHZ, 40, 30, CN0_COLOR_MIN_DBHZ)
 # Backward-compatible data export. Rendering uses _cn0_legend_ticks() so labels
 # can follow the active application language.
@@ -239,6 +224,7 @@ class SkyPlotWidget(QWidget):
         self._systems: Set[int] = set(SYSTEM_NAMES)
         self._cn0_coloring = False
         self._stale = False
+        self._theme = "dark"
         self._dark = True
         self._scale = "small"
         self._legend_font_px = 10
@@ -272,8 +258,9 @@ class SkyPlotWidget(QWidget):
         self._refresh_empty_text()
         self.update()
 
-    def set_theme(self, dark: bool, scale: str) -> None:
-        self._dark = dark
+    def set_theme(self, dark: str | bool, scale: str) -> None:
+        self._theme = S._normalize_theme(dark)
+        self._dark = self._theme != "light"
         self._scale = scale
         self._legend_font_px = max(9, S.font_px(10, scale))
         self.update()
@@ -333,8 +320,8 @@ class SkyPlotWidget(QWidget):
 
     def _paint_cn0_legend(self, painter: QPainter) -> None:
         legend_font, card, gradient_rect = self.cn0_legend_layout()
-        palette = S.palette("dark" if self._dark else "light")
-        card_bg = QColor("#0B1220" if self._dark else "#FFFFFF")
+        palette = S.palette(self._theme)
+        card_bg = QColor(palette["panel"])
         card_bg.setAlpha(218)
         fg = QColor(palette["text"])
         border = QColor(palette["border_2"])
@@ -398,9 +385,10 @@ class SkyPlotWidget(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        bg = QColor("#0F172A" if self._dark else "#F8FAFC")
-        fg = QColor("#CBD5E1" if self._dark else "#334155")
-        grid = QColor("#475569" if self._dark else "#CBD5E1")
+        palette = S.palette(self._theme)
+        bg = QColor(palette["panel"])
+        fg = QColor(palette["text"])
+        grid = QColor(palette["border_2"])
         if self._stale:
             painter.setOpacity(0.38)
         painter.fillRect(self.rect(), bg)
@@ -459,11 +447,11 @@ class SkyPlotWidget(QWidget):
             if self._cn0_coloring:
                 color = _cn0_color(cn0) if cn0 is not None else QColor(CN0_UNKNOWN_COLOR)
             else:
-                color = QColor(SYSTEM_COLORS.get(system, CN0_UNKNOWN_COLOR))
+                color = QColor(S.chart_color(SYSTEM_COLORS.get(system, CN0_UNKNOWN_COLOR), self._theme))
             painter.setPen(QPen(bg, 1.0))
             painter.setBrush(color)
             painter.drawEllipse(point, 10.0, 10.0)
-            painter.setPen(QColor("#FFFFFF"))
+            painter.setPen(QColor(palette["accent_ink"]))
             painter.drawText(QRectF(point.x() - 13, point.y() - 8, 26, 16), Qt.AlignCenter, str(sv_id))
             cn0_label = tr("Color C/N₀") if self._cn0_coloring else "C/N₀"
             cn0_detail = f"{cn0_label}={cn0 if cn0 is not None else '—'} dB-Hz"
@@ -516,6 +504,7 @@ class CnrBarWidget(QWidget):
         self._bars: List[FrequencyBar] = []
         self._hit_rects: List[Tuple[QRectF, FrequencyBar]] = []
         self._stale = False
+        self._theme = "dark"
         self._dark = True
         self._signal_record_count = 0
         self._locked_signal_count = 0
@@ -553,15 +542,20 @@ class CnrBarWidget(QWidget):
         self.update()
 
     def set_dark_theme(self, dark: bool) -> None:
-        self._dark = dark
+        self.set_theme(dark)
+
+    def set_theme(self, theme: str | bool) -> None:
+        self._theme = S._normalize_theme(theme)
+        self._dark = self._theme != "light"
         self.update()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        bg = QColor("#0F172A" if self._dark else "#F8FAFC")
-        fg = QColor("#CBD5E1" if self._dark else "#334155")
-        grid = QColor("#334155" if self._dark else "#E2E8F0")
+        palette = S.palette(self._theme)
+        bg = QColor(palette["panel"])
+        fg = QColor(palette["text"])
+        grid = QColor(palette["border_2"])
         painter.fillRect(self.rect(), bg)
         if self._stale:
             painter.setOpacity(0.38)
@@ -591,7 +585,7 @@ class CnrBarWidget(QWidget):
             for index, bar in enumerate(bars):
                 height = chart.height() * min(60, bar.cn0_dbhz) / 60.0
                 rect = QRectF(start_x + index * bar_width + 1.0, chart.bottom() - height, max(3.0, bar_width - 2.0), height)
-                painter.fillRect(rect, QColor(BAND_COLORS.get(bar.band, SYSTEM_COLORS.get(system, "#94A3B8"))))
+                painter.fillRect(rect, QColor(S.chart_color(BAND_COLORS.get(bar.band, SYSTEM_COLORS.get(system, CN0_UNKNOWN_COLOR)), self._theme)))
                 self._hit_rects.append((rect, bar))
             painter.setPen(fg)
             painter.drawText(
@@ -941,7 +935,7 @@ class GnssWidget(QWidget):
         self._fit_info_font()
         bands = sorted({bar.band for bar in bars}, key=lambda band: (_BAND_ORDER.get(band, 99), band))
         legend_items = [
-            f'<span style="color:{BAND_COLORS.get(band, "#94A3B8")}">■</span> {band}'
+            f'<span style="color:{S.chart_color(BAND_COLORS.get(band, CN0_UNKNOWN_COLOR), self._theme)}">■</span> {band}'
             for band in bands
         ]
         set_translatable_text(
@@ -1008,8 +1002,8 @@ class GnssWidget(QWidget):
         self._theme = theme
         self._scale = scale
         dark = theme != "light"
-        self._sky.set_theme(dark, scale)
-        self._bars.set_dark_theme(dark)
+        self._sky.set_theme(theme, scale)
+        self._bars.set_theme(theme)
         palette = S.palette(theme)
         self.setStyleSheet(f"GnssWidget {{ background: {palette['bg']}; color: {palette['text']}; }}")
         self._info_font_candidates = tuple(dict.fromkeys(

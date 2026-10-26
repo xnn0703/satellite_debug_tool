@@ -35,19 +35,6 @@ from satellite_debug_tool.i18n import mark_raw_text, register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.flow_layout import FlowLayout
 
-# Mission Console 语义色标（与 StatePanel 同源）
-_ENUM_LEVEL_COLORS = {
-    0: "#34D399",   # ok 绿
-    1: "#FBBF24",   # warn 黄
-    2: "#FB7185",   # err 红
-    3: "#586976",   # idle 灰
-}
-_BOOL_ON = "#34D399"
-_BOOL_OFF = "#586976"
-_LINK_OK = "#34D399"
-_LINK_BAD = "#FB7185"
-_LINK_IDLE = "#586976"
-
 
 def _dot(color: str, size: int = 8) -> str:
     """状态圆点：Mission Console 点阵风（8px + 同色辉光）。"""
@@ -67,7 +54,8 @@ class _Chip(QFrame):
         row.setContentsMargins(6, 2, 8, 2)
         row.setSpacing(6)
         self._dot_label = QLabel()
-        self._dot_label.setStyleSheet(_dot(_LINK_IDLE))
+        self._dot_role = "text_muted"
+        self._dot_label.setStyleSheet(_dot(S.palette("dark")[self._dot_role]))
         self._text = QLabel(label)
         mark_raw_text(self._text)
         row.addWidget(self._dot_label)
@@ -82,14 +70,17 @@ class _Chip(QFrame):
         self._scale = scale
         p = S.palette(self._theme)
         self.setStyleSheet(
-            f"QFrame {{ background-color: {p['card_2']}; border: 1px solid {p['border']}; "
-            f"border-radius: 11px; padding: 2px 7px; }}"
+            f"_Chip {{ background-color: {p['card_2']}; border: 1px solid {p['border']}; "
+            f"border-radius: 5px; padding: 2px 7px; }}"
             f"QLabel {{ border: none; color: {p['text_2']}; "
             f"font-size: {S.font_px(11, scale)}px; background: transparent; }}"
         )
 
-    def set_dot(self, color: str) -> None:
-        self._dot_label.setStyleSheet(_dot(color))
+        self.set_dot(self._dot_role)
+
+    def set_dot(self, role: str) -> None:
+        self._dot_role = role
+        self._dot_label.setStyleSheet(_dot(S.palette(self._theme)[role]))
 
     def set_text(self, text: str) -> None:
         self._text.setText(text)
@@ -138,7 +129,7 @@ class StatusStripWidget(QFrame):
             tr("Local .sdb recording status: flashing red means recording; gray means idle")
         )
         self._beat_chip = _Chip("BEAT")
-        self._beat_chip.set_dot(_LINK_IDLE)
+        self._beat_chip.set_dot("text_muted")
         self._beat_chip.setToolTip(
             tr("Flashes green for each HEARTBEAT frame received")
         )
@@ -154,7 +145,7 @@ class StatusStripWidget(QFrame):
         self._beat_timer = QTimer(self)
         self._beat_timer.setSingleShot(True)
         self._beat_timer.setInterval(200)
-        self._beat_timer.timeout.connect(lambda: self._beat_chip.set_dot(_LINK_IDLE))
+        self._beat_timer.timeout.connect(lambda: self._beat_chip.set_dot("text_muted"))
 
         profile_store.profile_changed.connect(self._on_profile_changed)
         state_store.state_changed.connect(self._on_state_changed)
@@ -221,19 +212,19 @@ class StatusStripWidget(QFrame):
 
     def set_link_state(self, *, connected: bool) -> None:
         if connected:
-            self._link_chip.set_dot(_LINK_OK)
+            self._link_chip.set_dot("ok")
             self._link_chip.set_text("LINK OK")
         else:
-            self._link_chip.set_dot(_LINK_BAD)
+            self._link_chip.set_dot("err")
             self._link_chip.set_text("LINK --")
 
     def set_recording(self, active: bool) -> None:
-        self._recording_chip.set_dot("#F14C4C" if active else _LINK_IDLE)
+        self._recording_chip.set_dot("recording" if active else "text_muted")
         self._recording_chip.set_text("REC ●" if active else "REC")
 
     def pulse_heartbeat(self) -> None:
         """由 MainWindow 在收到 HEARTBEAT 帧时调用，闪一下 BEAT 灯。"""
-        self._beat_chip.set_dot(_LINK_OK)
+        self._beat_chip.set_dot("ok")
         self._beat_timer.start()
 
     # ---- 响应 ----
@@ -299,7 +290,7 @@ class StatusStripWidget(QFrame):
             if current is not None:
                 self._apply_state(chip, entry, current)
             elif entry.state_type == int(StateType.ENUM):
-                chip.set_dot(_BOOL_OFF)
+                chip.set_dot("text_muted")
                 chip.set_text(f"{entry.name}: UNKNOWN")
         self.updateGeometry()
 
@@ -307,14 +298,14 @@ class StatusStripWidget(QFrame):
         if entry.state_type == int(StateType.BOOL):
             inverse = bool(entry.flags & STATE_FLAG_INVERSE)
             on = (value != 0) ^ inverse
-            chip.set_dot(_BOOL_ON if on else _BOOL_OFF)
+            chip.set_dot("ok" if on else "text_muted")
             chip.set_text(entry.name)
             return
         # ENUM
         match = next((e for e in entry.enums if e.value == value), None)
         if match is None:
-            chip.set_dot(_BOOL_OFF)
+            chip.set_dot("text_muted")
             chip.set_text(f"{entry.name}=?")
             return
-        chip.set_dot(_ENUM_LEVEL_COLORS.get(match.level, _BOOL_OFF))
+        chip.set_dot(S.enum_role(match.level))
         chip.set_text(f"{entry.name}: {match.name}")

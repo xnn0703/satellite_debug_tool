@@ -4,7 +4,7 @@
 + StateStore + EventLog。导入文件时不会污染 Live Tab 的实时数据，反之亦然。
 
 UI 结构：
-    顶部一行：[Open .sdb] [文件名 label] [总时长 label] [TimeRangeControl]
+    顶部两行：文件信息；时间范围 + 地图/GNSS。
     主区：    [GroupedChartWidget] | [Dashboard + EventTimeline] (Horizontal Splitter)
 """
 
@@ -111,7 +111,7 @@ class PlaybackView(QWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(3)
 
-        # ---------- 顶部一行：Open + 文件名 + 总时长 + TimeRange ----------
+        # ---------- 文件行：Open + 文件名 + 总时长 ----------
         topbar = QWidget()
         top_layout = QHBoxLayout(topbar)
         top_layout.setContentsMargins(4, 2, 4, 2)
@@ -146,9 +146,17 @@ class PlaybackView(QWidget):
         self._fixture_label.setMinimumWidth(190)
         top_layout.addWidget(self._fixture_label)
 
+        root.addWidget(topbar)
+
+        # 时间范围独立成行，文件信息与工具控件分别按内容布局。
+        range_bar = QWidget()
+        range_layout = QHBoxLayout(range_bar)
+        range_layout.setContentsMargins(4, 2, 4, 2)
+        range_layout.setSpacing(6)
+
         self._range_ctl = TimeRangeControl()
         self._range_ctl.range_changed.connect(self._on_range_changed)
-        top_layout.addWidget(self._range_ctl)
+        range_layout.addWidget(self._range_ctl)
 
         # M8: "地图"按钮 — 检测到 GPS channel 时启用
         self._map_btn = QPushButton(tr("Map"))
@@ -158,7 +166,7 @@ class PlaybackView(QWidget):
             tr("Open or close the map window; gps_lat and gps_lon channels are required")
         )
         self._map_btn.clicked.connect(self._toggle_map)
-        top_layout.addWidget(self._map_btn)
+        range_layout.addWidget(self._map_btn)
 
         self._gnss_btn = QPushButton("GNSS")
         self._gnss_btn.setFixedSize(64, 28)
@@ -167,9 +175,9 @@ class PlaybackView(QWidget):
             tr("Open GNSS sky-plot and signal-level C/N₀ snapshot playback")
         )
         self._gnss_btn.clicked.connect(self._toggle_gnss)
-        top_layout.addWidget(self._gnss_btn)
+        range_layout.addWidget(self._gnss_btn)
 
-        root.addWidget(topbar)
+        root.addWidget(range_bar)
 
         # ---------- 主区：chart | (dashboard + event_timeline) ----------
         splitter = QSplitter(Qt.Horizontal)
@@ -227,10 +235,8 @@ class PlaybackView(QWidget):
         self._total_label.setStyleSheet(
             f"color: {p['text']}; background: transparent;"
         )
-        self._open_btn.setStyleSheet(
-            f"background-color: {p['primary']}; color: white; "
-            f"border: none; padding: 4px 8px; border-radius: 2px;"
-        )
+        self._open_btn.setProperty("variant", "primary")
+        self._open_btn.setStyleSheet("")
 
     # ============================ 业务 ============================
 

@@ -15,6 +15,7 @@ import sys
 block_cipher = None
 APP_NAME = "updater"
 ROOT = Path(SPECPATH)
+ICON_DIR = ROOT / "satellite_debug_tool" / "ui" / "assets" / "icons"
 ENTRY = str(ROOT / "satellite_debug_tool" / "updater" / "main.py")
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -64,5 +65,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=str(ICON_DIR / "app_icon.ico") if sys.platform == "win32" else None,
 )

@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
+    QStyledItemDelegate,
     QWidget,
 )
 
@@ -75,10 +77,13 @@ class TimeRangeControl(QWidget):
         layout.addWidget(self._lbl_prefix)
 
         self._preset_combo = QComboBox()
+        # QSS 列表由标准委托测量和绘制，统一跨平台的文本布局。
+        self._preset_combo.setItemDelegate(QStyledItemDelegate(self._preset_combo))
+        self._preset_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self._preset_combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         for preset_id, _ in _PRESETS:
             self._preset_combo.addItem(_preset_label(preset_id), preset_id)
         self._preset_combo.setCurrentIndex(0)   # 默认"全部"
-        self._preset_combo.setFixedWidth(110)
         self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         layout.addWidget(self._preset_combo)
 
@@ -219,22 +224,9 @@ class TimeRangeControl(QWidget):
     def _apply_theme(self) -> None:
         p = S.palette(self._theme)
         text = p["text"]
-        input_bg = p["input_bg"]
-        primary = p["primary"]
         for lbl in (self._lbl_prefix, self._lbl_start, self._lbl_end):
             lbl.setStyleSheet(f"color: {text}; background: transparent;")
-        combo_css = (
-            f"background-color: {input_bg}; color: {text}; "
-            f"border: 1px solid {p['input_border']}; padding: 2px 6px; border-radius: 2px;"
-        )
-        self._preset_combo.setStyleSheet(combo_css)
-        spin_css = (
-            f"background-color: {input_bg}; color: {text}; "
-            f"border: 1px solid {p['input_border']}; padding: 2px 4px; border-radius: 2px;"
-        )
-        self._spin_start.setStyleSheet(spin_css)
-        self._spin_end.setStyleSheet(spin_css)
-        self._btn_apply.setStyleSheet(
-            f"background-color: {primary}; color: white; border: none; "
-            f"padding: 2px 8px; border-radius: 2px;"
-        )
+        for widget in (self._preset_combo, self._spin_start, self._spin_end):
+            widget.setStyleSheet("")
+        self._btn_apply.setProperty("variant", "primary")
+        self._btn_apply.setStyleSheet("")

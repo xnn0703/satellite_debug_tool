@@ -74,6 +74,7 @@ class CustomerMaintenanceView(QWidget):
         parent: Optional[QWidget] = None,
         *,
         encryption_keys: Optional[Mapping[str, FirmwareEncryptionKey]] = None,
+        firmware_only: bool = False,
         operation_gateway_factory: Optional[
             Callable[[], SessionOperationGateway]
         ] = None,
@@ -83,6 +84,7 @@ class CustomerMaintenanceView(QWidget):
             operation_gateway_factory
         ):
             raise TypeError("operation_gateway_factory must be callable")
+        self._firmware_only = bool(firmware_only)
         self._live = live_view
         self._device = device_view
         self._settings = settings
@@ -94,11 +96,13 @@ class CustomerMaintenanceView(QWidget):
         )
         if operation_gateway_factory is not None and operation_gateway is None:
             raise ValueError("operation_gateway_factory must return a gateway")
-        self._mount_controller = MountConfigurationController(
-            live_view.session_core(),
-            parent=self,
-            operation_gateway=operation_gateway,
-        )
+        self._mount_controller = None
+        if not self._firmware_only:
+            self._mount_controller = MountConfigurationController(
+                live_view.session_core(),
+                parent=self,
+                operation_gateway=operation_gateway,
+            )
         self._theme = "dark"
         self._mount_authoritative: Optional[tuple[float, float, float]] = None
         self._mount_dirty = False
@@ -126,10 +130,11 @@ class CustomerMaintenanceView(QWidget):
         self._local_status_source = ""
         self._build_ui()
         self._store.updated.connect(self._on_store_updated)
-        self._mount_controller.pending_changed.connect(
-            self._on_mount_pending_changed
-        )
-        self._mount_controller.status_changed.connect(self._on_mount_status)
+        if self._mount_controller is not None:
+            self._mount_controller.pending_changed.connect(
+                self._on_mount_pending_changed
+            )
+            self._mount_controller.status_changed.connect(self._on_mount_status)
         live_view.session_core().device_transaction_changed.connect(
             lambda _active: self._refresh_mount()
         )
@@ -151,10 +156,10 @@ class CustomerMaintenanceView(QWidget):
 
         header = QVBoxLayout()
         header.setSpacing(2)
-        self._title = QLabel(tr("Maintenance"))
+        self._title = QLabel(tr("Firmware update") if self._firmware_only else tr("Maintenance"))
         self._title.setObjectName("customerPageTitle")
         self._subtitle = QLabel(
-            tr("Device inventory, installation attitude, and authenticated firmware updates.")
+            tr("Authenticated firmware updates for the selected device.") if self._firmware_only else tr("Device inventory, installation attitude, and authenticated firmware updates.")
         )
         self._subtitle.setObjectName("customerPageSubtitle")
         header.addWidget(self._title)
@@ -219,63 +224,64 @@ class CustomerMaintenanceView(QWidget):
         components_layout.addWidget(self._component_table)
         root.addWidget(components)
 
-        mount = QFrame()
-        mount.setObjectName("customerMaintenanceSection")
-        mount_layout = QHBoxLayout(mount)
-        mount_layout.setContentsMargins(14, 10, 14, 13)
-        mount_layout.setSpacing(16)
-        mount_controls = QVBoxLayout()
-        mount_controls.setSpacing(8)
-        self._mount_title = QLabel(tr("Device installation attitude"))
-        self._mount_title.setObjectName("customerControlTitle")
-        mount_controls.addWidget(self._mount_title)
-        self._mount_contract = QLabel(
-            tr("FRD carrier: +X forward / +Y right / +Z down · ZYX · degrees")
-        )
-        self._mount_contract.setObjectName("customerPackageDetail")
-        self._mount_contract.setWordWrap(True)
-        mount_controls.addWidget(self._mount_contract)
-        mount_grid = QGridLayout()
-        mount_grid.setHorizontalSpacing(10)
-        mount_grid.setVerticalSpacing(7)
-        self._mount_yaw_label = QLabel(tr("Yaw (+ right)"))
-        self._mount_pitch_label = QLabel(tr("Pitch (+ nose up)"))
-        self._mount_roll_label = QLabel(tr("Roll (+ left side up)"))
-        self._mount_yaw = self._mount_input(-180.0, 180.0)
-        self._mount_pitch = self._mount_input(-90.0, 90.0)
-        self._mount_roll = self._mount_input(-180.0, 180.0)
-        for row, (label, field) in enumerate(
-            (
-                (self._mount_yaw_label, self._mount_yaw),
-                (self._mount_pitch_label, self._mount_pitch),
-                (self._mount_roll_label, self._mount_roll),
+        if not self._firmware_only:
+            mount = QFrame()
+            mount.setObjectName("customerMaintenanceSection")
+            mount_layout = QHBoxLayout(mount)
+            mount_layout.setContentsMargins(14, 10, 14, 13)
+            mount_layout.setSpacing(16)
+            mount_controls = QVBoxLayout()
+            mount_controls.setSpacing(8)
+            self._mount_title = QLabel(tr("Device installation attitude"))
+            self._mount_title.setObjectName("customerControlTitle")
+            mount_controls.addWidget(self._mount_title)
+            self._mount_contract = QLabel(
+                tr("FRD carrier: +X forward / +Y right / +Z down · ZYX · degrees")
             )
-        ):
-            mount_grid.addWidget(label, row, 0)
-            mount_grid.addWidget(field, row, 1)
-        mount_grid.setColumnStretch(1, 1)
-        mount_controls.addLayout(mount_grid)
-        self._mount_readback = QLabel(tr("Waiting for device mount readback"))
-        self._mount_readback.setObjectName("customerPackageDetail")
-        self._mount_readback.setWordWrap(True)
-        mount_controls.addWidget(self._mount_readback)
-        self._mount_transaction_state = QLabel(tr("No pending mount change"))
-        self._mount_transaction_state.setObjectName("customerMountTransactionState")
-        self._mount_transaction_state.setWordWrap(True)
-        mount_controls.addWidget(self._mount_transaction_state)
-        self._save_mount_btn = QPushButton(tr("Save and restart"))
-        self._save_mount_btn.setMinimumHeight(34)
-        self._save_mount_btn.clicked.connect(self._request_mount)
-        mount_controls.addWidget(self._save_mount_btn)
-        mount_controls.addStretch(1)
-        mount_layout.addLayout(mount_controls, 2)
+            self._mount_contract.setObjectName("customerPackageDetail")
+            self._mount_contract.setWordWrap(True)
+            mount_controls.addWidget(self._mount_contract)
+            mount_grid = QGridLayout()
+            mount_grid.setHorizontalSpacing(10)
+            mount_grid.setVerticalSpacing(7)
+            self._mount_yaw_label = QLabel(tr("Yaw (+ right)"))
+            self._mount_pitch_label = QLabel(tr("Pitch (+ nose up)"))
+            self._mount_roll_label = QLabel(tr("Roll (+ left side up)"))
+            self._mount_yaw = self._mount_input(-180.0, 180.0)
+            self._mount_pitch = self._mount_input(-90.0, 90.0)
+            self._mount_roll = self._mount_input(-180.0, 180.0)
+            for row, (label, field) in enumerate(
+                (
+                    (self._mount_yaw_label, self._mount_yaw),
+                    (self._mount_pitch_label, self._mount_pitch),
+                    (self._mount_roll_label, self._mount_roll),
+                )
+            ):
+                mount_grid.addWidget(label, row, 0)
+                mount_grid.addWidget(field, row, 1)
+            mount_grid.setColumnStretch(1, 1)
+            mount_controls.addLayout(mount_grid)
+            self._mount_readback = QLabel(tr("Waiting for device mount readback"))
+            self._mount_readback.setObjectName("customerPackageDetail")
+            self._mount_readback.setWordWrap(True)
+            mount_controls.addWidget(self._mount_readback)
+            self._mount_transaction_state = QLabel(tr("No pending mount change"))
+            self._mount_transaction_state.setObjectName("customerMountTransactionState")
+            self._mount_transaction_state.setWordWrap(True)
+            mount_controls.addWidget(self._mount_transaction_state)
+            self._save_mount_btn = QPushButton(tr("Save and restart"))
+            self._save_mount_btn.setMinimumHeight(34)
+            self._save_mount_btn.clicked.connect(self._request_mount)
+            mount_controls.addWidget(self._save_mount_btn)
+            mount_controls.addStretch(1)
+            mount_layout.addLayout(mount_controls, 2)
 
-        self._mount_preview = AttitudeWidget()
-        self._mount_preview.setMinimumSize(420, 280)
-        self._mount_preview.set_yaw_reference("legacy")
-        self._mount_preview.setUpdatesEnabled(False)
-        mount_layout.addWidget(self._mount_preview, 3)
-        root.addWidget(mount)
+            self._mount_preview = AttitudeWidget()
+            self._mount_preview.setMinimumSize(420, 280)
+            self._mount_preview.set_yaw_reference("legacy")
+            self._mount_preview.setUpdatesEnabled(False)
+            mount_layout.addWidget(self._mount_preview, 3)
+            root.addWidget(mount)
 
         ota = QFrame()
         ota.setObjectName("customerMaintenanceSection")
@@ -379,6 +385,8 @@ class CustomerMaintenanceView(QWidget):
             self.refresh()
 
     def _refresh_mount(self) -> None:
+        if self._firmware_only:
+            return
         service_state = self._live.customer_service_state()
         device_online = self._device_online()
         status = self._store.mount_status_record if device_online else None
@@ -631,6 +639,8 @@ class CustomerMaintenanceView(QWidget):
         )
 
     def _request_mount(self) -> None:
+        if self._firmware_only:
+            return
         if not self._mount_dirty or self._mount_controller.pending is not None:
             return
         yaw, pitch, roll = self._mount_target()
@@ -843,7 +853,7 @@ class CustomerMaintenanceView(QWidget):
         self._ota_status_source = source
         self._ota_status_values = dict(values) if isinstance(values, dict) else {}
         self._local_status_source = ""
-        self._ota_status.setText(trc("DeviceView", source, **self._ota_status_values))
+        self._ota_status.setText(tr(source, **self._ota_status_values))
         self._progress.setValue(int(progress))
         self._abort_btn.setEnabled(bool(active))
         self._refresh_actions()
@@ -977,7 +987,8 @@ class CustomerMaintenanceView(QWidget):
         if self._view_active:
             return
         self._view_active = True
-        self._mount_preview.setUpdatesEnabled(True)
+        if not self._firmware_only:
+            self._mount_preview.setUpdatesEnabled(True)
         self._mount_preview_angles = None
         self.refresh()
 
@@ -987,7 +998,8 @@ class CustomerMaintenanceView(QWidget):
         if not self._view_active:
             return
         self._view_active = False
-        self._mount_preview.setUpdatesEnabled(False)
+        if not self._firmware_only:
+            self._mount_preview.setUpdatesEnabled(False)
 
     def set_theme(self, theme: str, _scale: str = "small") -> None:
         self._theme = theme
@@ -1002,29 +1014,31 @@ class CustomerMaintenanceView(QWidget):
             f"#customerMountTransactionState[result='ok'] {{ color: {pal['ok']}; }}"
             f"#customerMountTransactionState[result='error'] {{ color: {pal['err']}; }}"
         )
-        self._mount_preview.set_theme(theme, _scale)
+        if not self._firmware_only:
+            self._mount_preview.set_theme(theme, _scale)
 
     def retranslate_ui(self) -> None:
-        self._title.setText(tr("Maintenance"))
+        self._title.setText(tr("Firmware update") if self._firmware_only else tr("Maintenance"))
         self._subtitle.setText(
-            tr("Device inventory, installation attitude, and authenticated firmware updates.")
+            tr("Authenticated firmware updates for the selected device.") if self._firmware_only else tr("Device inventory, installation attitude, and authenticated firmware updates.")
         )
         self._component_title.setText(tr("Device components"))
         self._component_table.setHorizontalHeaderLabels(
             [tr("Component"), tr("Status"), tr("Temperature"), tr("Voltage"), tr("Version")]
         )
         self._ota_title.setText(tr("Encrypted firmware update"))
-        self._mount_title.setText(tr("Device installation attitude"))
-        self._mount_contract.setText(
-            tr("FRD carrier: +X forward / +Y right / +Z down · ZYX · degrees")
-        )
-        self._mount_yaw_label.setText(tr("Yaw (+ right)"))
-        self._mount_pitch_label.setText(tr("Pitch (+ nose up)"))
-        self._mount_roll_label.setText(tr("Roll (+ left side up)"))
-        self._save_mount_btn.setText(tr("Save and restart"))
-        self._mount_transaction_state.setText(
-            tr(self._mount_status_source, **self._mount_status_values)
-        )
+        if not self._firmware_only:
+            self._mount_title.setText(tr("Device installation attitude"))
+            self._mount_contract.setText(
+                tr("FRD carrier: +X forward / +Y right / +Z down · ZYX · degrees")
+            )
+            self._mount_yaw_label.setText(tr("Yaw (+ right)"))
+            self._mount_pitch_label.setText(tr("Pitch (+ nose up)"))
+            self._mount_roll_label.setText(tr("Roll (+ left side up)"))
+            self._save_mount_btn.setText(tr("Save and restart"))
+            self._mount_transaction_state.setText(
+                tr(self._mount_status_source, **self._mount_status_values)
+            )
         self._select_btn.setText(tr("Select package..."))
         self._upload_btn.setText(tr("Install update"))
         self._abort_btn.setText(tr("Abort"))
@@ -1035,7 +1049,7 @@ class CustomerMaintenanceView(QWidget):
         self._render_package_detail()
         if self._ota_status_source:
             self._ota_status.setText(
-                trc("DeviceView", self._ota_status_source, **self._ota_status_values)
+                tr(self._ota_status_source, **self._ota_status_values)
             )
         elif self._local_status_source:
             self._ota_status.setText(tr(self._local_status_source))

@@ -70,6 +70,9 @@ jobs:
   # 2a. build-windows
   # ============================================================
   build-windows:
+    strategy:
+      matrix:
+        edition: [user, ops]
     runs-on: windows-latest
     needs: prepare-release
     # 推 master/main 时 prepare-release 跳过，所以 needs 为 null → 这里也跳过
@@ -91,13 +94,39 @@ jobs:
 
       - name: Build (main + updater)
         shell: cmd
-        run: scripts\build_windows.bat
+        run: scripts\build_windows.bat ${{ matrix.edition }}
+
+      - name: Smoke-test the frozen edition
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $edition = "${{ matrix.edition }}"
+          $folder = if ($edition -eq "user") { "SatelliteTerminalToolUser" } else { "SatelliteDebugTool" }
+          $exe = Join-Path $PWD "dist/$edition/$folder/SatelliteDebugTool.exe"
+          $result = Join-Path $PWD "release/smoke-$edition.json"
+          $env:SATELLITE_UPDATE_CHECK = "0"
+          $process = Start-Process -FilePath $exe -ArgumentList @("--smoke-test", "--smoke-output=$result") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Frozen $edition smoke failed: $($process.ExitCode)" }
+          $proof = Get-Content $result -Raw | ConvertFrom-Json
+          $expected = "${{ needs.prepare-release.outputs.tag }}" -replace '^v', ''
+          if ($proof.edition -ne $edition -or $proof.version -ne $expected -or $proof.overview_panels -ne "PASS" -or $proof.shell_dialog -ne "PASS") {
+            throw "Frozen edition smoke evidence differs from the release contract"
+          }
+          Get-Content $result
+
+      - name: Upload frozen smoke evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.edition }}
+          path: release/smoke-*.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Layout release dir
         shell: pwsh
         run: |
           $tag = "${{ needs.prepare-release.outputs.tag }}"
-          $name = "satellite_debug_tool-win-${tag}"
+          $name = if ("${{ matrix.edition }}" -eq "user") { "satellite_terminal_tool-user-windows-${tag}" } else { "satellite_debug_tool-win-${tag}" }
           echo "RELEASE_NAME=${name}" >> $env:GITHUB_ENV
 
       - name: Create 7z archive
@@ -105,7 +134,8 @@ jobs:
         run: |
           $name = $env:RELEASE_NAME
           $archive = Join-Path "${{ github.workspace }}" "release/${name}.7z"
-          Push-Location "dist/SatelliteDebugTool"
+          $folder = if ("${{ matrix.edition }}" -eq "user") { "SatelliteTerminalToolUser" } else { "SatelliteDebugTool" }
+          Push-Location "dist/${{ matrix.edition }}/${folder}"
           & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 -mf=off -mmt=on `
             $archive "*" | Out-Null
           $archiveExitCode = $LASTEXITCODE
@@ -119,10 +149,28 @@ jobs:
         shell: pwsh
         run: |
           $name = $env:RELEASE_NAME
-          python scripts/verify_update_archive.py "release/${name}.7z"
+          python scripts/verify_update_archive.py "release/${name}.7z" --edition "${{ matrix.edition }}" --version "${{ needs.prepare-release.outputs.tag }}"
 
-      - name: Upload to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+      - name: Upload validated edition archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.edition }}
+          path: release/*.7z
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-windows:
+    runs-on: ubuntu-latest
+    needs: [prepare-release, build-windows]
+    if: always() && needs.prepare-release.result == 'success' && needs.build-windows.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+      - name: Publish both validated editions
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
@@ -131,30 +179,26 @@ jobs:
           prerelease: false
           make_latest: true
           fail_on_unmatched_files: true
-          body: |
-            ## Windows
-
-            Download the single `.7z` archive, extract it with 7-Zip, and run `SatelliteDebugTool.exe`.
-
-            下载单个 `.7z` 压缩包，使用 7-Zip 解压后运行 `SatelliteDebugTool.exe`。
-
-            ## macOS
-
-            macOS packages are built locally and distributed separately.
-          files: release/satellite_debug_tool-win-${{ needs.prepare-release.outputs.tag }}.7z
+          body_path: doc/${{ needs.prepare-release.outputs.tag }}_release_notes.md
+          files: |
+            release/satellite_terminal_tool-user-windows-${{ needs.prepare-release.outputs.tag }}.7z
+            release/satellite_debug_tool-win-${{ needs.prepare-release.outputs.tag }}.7z
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # build-macos 已移除：mac 在线打包遇到 PyInstaller .app symlink 复杂性
   # （Python.framework / Qt frameworks 1500+ symlinks + 7z 不稳定），改本地脚本：
-  #     ./scripts/build_macos.sh
-  # 本地脚本会自动 venv + 装依赖 + ditto 打包，产物 release/SatelliteDebugTool-macOS-<arch>.zip
+  #     ./scripts/build_macos.sh both
+  # 本地脚本会自动 venv + 装依赖 + ditto 打包，产物 release/SatelliteDebugTool-<user|ops>-macOS-<arch>.zip
   # mac 用户拿到 zip 解压双击即可；mac 平台不走自动升级链路（updater 仍嵌入但触发频率为零）。
 
   # ============================================================
   # 3. ci-only-build  (master/main 推送 → 仅本地构建验证 + 上传 GH artifact)
   # ============================================================
   ci-only-build:
+    strategy:
+      matrix:
+        edition: [user, ops]
     name: CI build (no release, win only)
     if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
@@ -171,11 +215,11 @@ jobs:
           pip install -r satellite_debug_tool/requirements.txt
       - name: Build
         shell: cmd
-        run: scripts\build_windows.bat
+        run: scripts\build_windows.bat ${{ matrix.edition }}
       - name: Upload CI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SatelliteDebugTool-Windows-ci
+          name: SatelliteDebugTool-${{ matrix.edition }}-Windows-ci
           path: release/*.zip
           retention-days: 7
           if-no-files-found: warn

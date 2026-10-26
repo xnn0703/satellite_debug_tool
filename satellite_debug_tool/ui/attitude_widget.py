@@ -63,7 +63,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QVector3D
+from PySide6.QtGui import QColor, QVector3D
 from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLMeshItem, MeshData
 
 from satellite_debug_tool.i18n import register_translatable, tr
@@ -813,12 +813,7 @@ class AttitudeWidget(QWidget):
         self._is_dark = self._theme != "light"
         self._scale = scale
         # 3D 视图背景
-        if self._theme == "dark_hc":
-            self._gl_view.setBackgroundColor(0x00, 0x00, 0x00)
-        elif self._theme == "light":
-            self._gl_view.setBackgroundColor(0xFF, 0xFF, 0xFF)
-        else:
-            self._gl_view.setBackgroundColor(0x1E, 0x1E, 0x1E)
+        self._gl_view.setBackgroundColor(QColor(S.palette(self._theme)["panel"]))
         self._apply_scene_colors()
         self._apply_label_styles()
 
@@ -833,21 +828,13 @@ class AttitudeWidget(QWidget):
 
         浅色背景下原来的亮绿波束、淡蓝轨迹、深灰栅格几乎看不见，这里给浅色主题
         换成深而饱和的颜色，保证在白底上对比足够。"""
-        light = self._theme == "light"
-        if light:
-            grid_color = (0.80, 0.80, 0.84, 0.45)   # 浅灰，淡淡的参考网格不抢眼
-            beam_color = (0.00, 0.42, 0.00, 1.0)    # 纯饱和深绿，白底上细线也醒目
-            trail_color = (0.05, 0.20, 0.75, 0.95)  # 饱和深蓝
-            ax_x = (0.80, 0.00, 0.00, 1.0)          # 北：红
-            ax_y = (0.00, 0.45, 0.00, 1.0)          # 西：深绿
-            ax_z = (0.05, 0.10, 0.85, 1.0)          # 上：蓝
-        else:
-            grid_color = (0x3C / 255, 0x3C / 255, 0x3C / 255, 0.8)
-            beam_color = (0.30, 0.95, 0.50, 1.0)
-            trail_color = (0.50, 0.80, 1.0, 0.70)
-            ax_x = (1.0, 0.0, 0.0, 1.0)
-            ax_y = (0.0, 1.0, 0.0, 1.0)
-            ax_z = (0.30, 0.45, 1.0, 1.0)
+        p = S.palette(self._theme)
+        grid_color = QColor(p["border"]).getRgbF()
+        beam_color = QColor(p["ok"]).getRgbF()
+        trail_color = QColor(p["info"]).getRgbF()
+        ax_x = QColor(p["err"]).getRgbF()
+        ax_y = QColor(p["ok"]).getRgbF()
+        ax_z = QColor(p["info"]).getRgbF()
         if getattr(self, "_grid", None) is not None:
             self._grid.setColor(grid_color)
         self._ant_line.setData(color=beam_color)

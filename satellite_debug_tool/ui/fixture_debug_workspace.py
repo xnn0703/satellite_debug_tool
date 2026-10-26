@@ -368,11 +368,7 @@ class FixtureAttitudePlot(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._widget)
-        axis_colors = {
-            "roll": "#5f7cff",
-            "pitch": "#00b3a4",
-            "yaw": "#ffb020",
-        }
+        axis_colors = S.ATTITUDE_COLORS
         series_styles = {
             "target": (Qt.PenStyle.SolidLine, 1.7),
             "measured": (Qt.PenStyle.DashLine, 1.5),
@@ -472,6 +468,13 @@ class FixtureAttitudePlot(QWidget):
     def set_theme(self, theme: str) -> None:
         palette = S.palette(theme)
         self._widget.setBackground(palette["panel"])
+        for axis, curves in self._curves.items():
+            for curve in curves.values():
+                pen = pg.mkPen(curve.opts["pen"])
+                pen.setColor(pg.mkColor(S.chart_color(S.ATTITUDE_COLORS[axis], theme)))
+                curve.setPen(pen)
+        for _sample, label, _axis, _source in self._legend_entries:
+            label.setText(label.text, color=palette["text_2"])
         for plot in self._plots.values():
             for axis_name in ("left", "bottom"):
                 axis = plot.getAxis(axis_name)
@@ -1039,9 +1042,9 @@ class FixtureDebugWorkspace(QWidget):
         self._preview.setMenuEnabled(False)
         self._preview.showGrid(x=True, y=True, alpha=0.15)
         self._preview_curves = {
-            "roll": self._preview.plot([], [], pen=pg.mkPen("#5f7cff")),
-            "pitch": self._preview.plot([], [], pen=pg.mkPen("#00b3a4")),
-            "yaw": self._preview.plot([], [], pen=pg.mkPen("#ffb020")),
+            "roll": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["roll"])),
+            "pitch": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["pitch"])),
+            "yaw": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["yaw"])),
         }
         layout.addWidget(self._preview, 8, 0, 1, 4)
         self._preview_button = QPushButton(tr("Preview and validate"))
@@ -2627,6 +2630,8 @@ class FixtureDebugWorkspace(QWidget):
         )
         self._attitude_plot.set_theme(theme)
         self._preview.setBackground(palette["panel"])
+        for axis_name, curve in self._preview_curves.items():
+            curve.setPen(pg.mkPen(S.chart_color(S.ATTITUDE_COLORS[axis_name], theme)))
         for axis_name in ("left", "bottom"):
             axis = self._preview.getAxis(axis_name)
             axis.setPen(pg.mkPen(palette["border_2"]))

@@ -20,14 +20,12 @@ class TcpShellSessionRecorder:
     def __init__(
         self,
         *,
-        host: str,
-        port: int,
+        target: Mapping,
         managed_session: bool,
         operator: str = "",
         root: Optional[Path] = None,
     ) -> None:
-        self.host = str(host)
-        self.port = int(port)
+        self.target = dict(target)
         self.managed_session = bool(managed_session)
         self.operator = str(operator)
         self.root = root or (Path.home() / ".satellite_debug_tool" / "tcp_shell_sessions")
@@ -49,8 +47,7 @@ class TcpShellSessionRecorder:
                 "session_id": self.session_id,
                 "operator": self.operator,
                 "created_utc": _utc_now(),
-                "host": self.host,
-                "port": self.port,
+                "target": dict(self.target),
                 "managed_session": self.managed_session,
             },
         )
@@ -119,8 +116,7 @@ class TcpShellSessionRecorder:
             "final_state": str(final_state),
             "incomplete_reason": str(incomplete_reason),
             "managed_session": self.managed_session,
-            "host": self.host,
-            "port": self.port,
+            "target": dict(self.target),
             "finished_utc": _utc_now(),
         }
         if ymodem:

@@ -126,8 +126,15 @@ class Settings:
         },
     }
 
-    def __init__(self):
+    def __init__(self, *, edition=None, config_directory=None):
+        from satellite_debug_tool.edition import Edition, build_edition
+
+        self._edition = build_edition() if edition is None else Edition(edition)
         self._config_dir = Path.home() / ".satellite_debug_tool"
+        if config_directory is not None:
+            self._config_dir = Path(config_directory)
+        if self._edition is Edition.USER:
+            self._config_dir = self._config_dir / "user"
         self._config_file = self._config_dir / "settings.json"
         self._backup_file = self._config_dir / "settings.json.bak"
         self._config: dict = {}
@@ -137,6 +144,10 @@ class Settings:
         self._load_diagnostics: list[str] = []
         self._preference_persistence_notice_emitted = False
         self._load()
+
+    @property
+    def edition(self):
+        return self._edition
 
     def _load(self):
         """Load, validate and migrate the raw JSON before applying defaults."""

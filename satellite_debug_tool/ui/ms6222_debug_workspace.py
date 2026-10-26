@@ -244,9 +244,9 @@ class Ms6222DebugWorkspace(QWidget):
         self._plot.setLabel("bottom", tr("Elapsed time"), units="s")
         self._plot.addLegend()
         self._curves = {
-            "roll": self._plot.plot([], [], pen=pg.mkPen("#5f7cff"), name="Roll"),
-            "pitch": self._plot.plot([], [], pen=pg.mkPen("#00b3a4"), name="Pitch"),
-            "yaw": self._plot.plot([], [], pen=pg.mkPen("#ffb020"), name="Yaw"),
+            "roll": self._plot.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["roll"]), name="Roll"),
+            "pitch": self._plot.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["pitch"]), name="Pitch"),
+            "yaw": self._plot.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["yaw"]), name="Yaw"),
         }
         plot_layout.addWidget(self._plot)
         body.addWidget(plot_group)
@@ -625,6 +625,8 @@ class Ms6222DebugWorkspace(QWidget):
         self._theme = theme
         palette = S.palette(theme)
         self._plot.setBackground(palette["panel"])
+        for axis_name, curve in self._curves.items():
+            curve.setPen(pg.mkPen(S.chart_color(S.ATTITUDE_COLORS[axis_name], theme)))
         for axis_name in ("left", "bottom"):
             axis = self._plot.getAxis(axis_name)
             axis.setPen(pg.mkPen(palette["border_2"]))

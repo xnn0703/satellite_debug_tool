@@ -31,12 +31,6 @@ from satellite_debug_tool.i18n import register_translatable, set_translatable_n_
 from satellite_debug_tool.ui import styles as S
 
 
-_LEVEL_COLORS = {
-    0: "#808080",   # DEBUG 灰
-    1: "#4EC9B0",   # INFO 绿
-    2: "#DCDCAA",   # WARN 黄
-    3: "#F14C4C",   # ERROR 红
-}
 _LEVEL_NAMES = {0: "DBG", 1: "INF", 2: "WRN", 3: "ERR"}
 
 
@@ -130,7 +124,7 @@ class EventTimelineWidget(QWidget):
         self._scale = scale
         p = S.palette(self._theme)
         # list-item 分隔线色：深色稍浅一档、浅色用极浅灰
-        item_border = "#404040" if self._theme == "dark_hc" else ("#333333" if self._is_dark else "#E8E8E8")
+        item_border = p["border"]
         px = S.font_px(12, scale)
         small_px = S.font_px(11, scale)
         self.setStyleSheet(
@@ -145,10 +139,15 @@ class EventTimelineWidget(QWidget):
             f"border: 1px solid {p['input_border']}; border-radius: 3px; padding: 2px 8px; "
             f"font-size: {px}px; }}"
             f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
+            f"QPushButton:focus, QLineEdit:focus, QComboBox:focus {{ border-color: {p['focus']}; }}"
         )
         self._count_label.setStyleSheet(
             f"color: {p['text_muted']}; padding: 2px 4px; font-size: {small_px}px;"
         )
+        # 保留过滤、选择与滚动位置，只重绘现有条目的颜色。
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            item.setForeground(QColor(S.event_color(item.data(Qt.UserRole + 1), self._theme)))
 
     # ----- 事件 -----
 
@@ -216,7 +215,8 @@ class EventTimelineWidget(QWidget):
 
     def _make_item(self, rec: EventRecord) -> QListWidgetItem:
         item = QListWidgetItem(self._format_row(rec))
-        item.setForeground(QColor(_LEVEL_COLORS.get(rec.level, "#CCCCCC")))
+        item.setForeground(QColor(S.event_color(rec.level, self._theme)))
+        item.setData(Qt.UserRole + 1, rec.level)
         item.setToolTip(self._tooltip_for(rec))
         # A1/A2: 把 ms 时间戳存到 item 里，双击/右键时拿出来 emit
         item.setData(Qt.UserRole, int(rec.timestamp_ms))

@@ -308,7 +308,7 @@ class ProductionWorkspace(QWidget):
         navigation.addWidget(self._fixture_page_button)
         navigation.addWidget(self._ms6222_page_button)
         navigation.addWidget(self._power_page_button)
-        self._tcp_shell_button = QPushButton(tr("TCP shell..."))
+        self._tcp_shell_button = QPushButton(tr("Shell..."))
         self._tcp_shell_button.setObjectName("productionTcpShellButton")
         self._tcp_shell_button.setVisible(self._open_tcp_shell is not None)
         self._tcp_shell_button.clicked.connect(self._on_open_tcp_shell)
@@ -2293,7 +2293,7 @@ class ProductionWorkspace(QWidget):
             f"#productionTitle {{ color: {palette['text']}; font-size: 16px; font-weight: 700; }}"
             f"#productionState {{ color: {palette['accent_2']}; font-weight: 600; "
             f"padding: 3px 9px; border: 1px solid {palette['border_2']}; border-radius: 5px; }}"
-            f"#productionPreviewNotice {{ color: {palette['warn']}; background: {palette['warn_soft']}; "
+            f"#productionPreviewNotice {{ color: {palette['warn']}; background: {S.qss_color(palette['warn_soft'])}; "
             f"padding: 6px 9px; border: 1px solid {palette['warn']}; border-radius: 5px; }}"
             f"#productionRecipeStatus, #productionFooterStatus {{ color: {palette['text_2']}; }}"
         )
@@ -2308,7 +2308,7 @@ class ProductionWorkspace(QWidget):
         self._fixture_page_button.setText(tr("Motion platform test"))
         self._ms6222_page_button.setText(tr("MS-6222 test"))
         self._power_page_button.setText(tr("Power supply diagnostics"))
-        self._tcp_shell_button.setText(tr("TCP shell..."))
+        self._tcp_shell_button.setText(tr("Shell..."))
         self._title.setText(tr("Production batch test"))
         self._preview_notice.setText(
             tr(

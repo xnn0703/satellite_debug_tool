@@ -47,7 +47,7 @@ def test_main_window_launches_updater_after_owned_shutdown(
     monkeypatch.setenv("HOME", str(tmp_path))
     launched = []
     monkeypatch.setattr(
-        "satellite_debug_tool.ui.main_window.launch_updater",
+        "satellite_debug_tool.ui.application_window_actions.launch_updater",
         launched.append,
     )
     window = MainWindow(settings=Settings())
@@ -66,7 +66,7 @@ def test_shutdown_rejection_clears_request_without_launching_updater(
     monkeypatch.setenv("HOME", str(tmp_path))
     launched = []
     monkeypatch.setattr(
-        "satellite_debug_tool.ui.main_window.launch_updater",
+        "satellite_debug_tool.ui.application_window_actions.launch_updater",
         launched.append,
     )
 
@@ -99,7 +99,7 @@ def test_transport_shutdown_failure_prevents_updater_launch(
     monkeypatch.setenv("HOME", str(tmp_path))
     launched = []
     monkeypatch.setattr(
-        "satellite_debug_tool.ui.main_window.launch_updater",
+        "satellite_debug_tool.ui.application_window_actions.launch_updater",
         launched.append,
     )
     window = MainWindow(settings=Settings())

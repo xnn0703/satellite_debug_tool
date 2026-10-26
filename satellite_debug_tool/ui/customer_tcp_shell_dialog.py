@@ -1,4 +1,4 @@
-"""Shared TCP shell dialog opened from all three workspaces (M37)."""
+"""Shared Shell dialog for user and operations editions (TCP/serial + YMODEM)."""
 
 from __future__ import annotations
 
@@ -19,9 +19,10 @@ class CustomerTcpShellDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("TCP shell"))
+        self.setWindowTitle(tr("Shell"))
         self.resize(1040, 720)
-        self.setMinimumSize(880, 560)
+        # 侧栏（连接/YMODEM/事件）有 300px 内容下限，终端区随窗口收缩。
+        self.setMinimumSize(960, 560)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.workspace = TcpShellWorkspace(

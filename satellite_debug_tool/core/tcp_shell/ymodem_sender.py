@@ -14,6 +14,22 @@ follows standard YMODEM batch semantics with these binding details:
   timeout, so the sender must wait for it after the final ACK.
 - The batch ends with a sequence-0 header whose payload starts with two NUL
   bytes (empty filename), answered by a single ACK.
+- Header and batch-end frames are sent as SOH/128 and data blocks as STX/1024.
+  The RT-Thread rym component (XESA01) validates the batch-end header as a
+  fixed 128-byte block regardless of the frame marker, so an STX batch-end
+  frame always fails its CRC check there; the AFD01 receiver accepts both
+  block sizes for every frame. A header longer than 128 bytes falls back to
+  STX, which both receivers also accept.
+- The sender does not cap the payload size: whether the destination can hold
+  the file is decided by the device, which aborts the transfer with a single
+  CAN. An empty payload is refused here because its header would be
+  indistinguishable from the batch-end header.
+- A receiver may run a slow storage operation before acknowledging: the
+  RT-Thread yota command erases the whole destination partition in on_begin
+  before the header ACK (~7 s for 552 KiB on XESA01, bounded by the 1 MiB
+  partition), and the AFD01 firmware commits to flash before the final-EOT
+  ACK. Both waits therefore use the storage-latency window
+  (``final_ack_timeout_s``), while per-block ACKs use the short window.
 """
 
 from __future__ import annotations
@@ -32,7 +48,7 @@ CAN = 0x18
 CRC_CHAR = 0x43
 
 BLOCK_SIZE = 1024
-MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+HEADER_BLOCK_SIZE = 128
 
 
 class YmodemError(RuntimeError):
@@ -66,8 +82,8 @@ class YmodemFileSpec:
     def __post_init__(self) -> None:
         if not self.filename or "/" in self.filename or "\\" in self.filename:
             raise YmodemError(f"invalid ymodem filename: {self.filename!r}")
-        if not 0 < len(self.data) <= MAX_PAYLOAD_BYTES:
-            raise YmodemError(f"payload size out of range: {len(self.data)}")
+        if not self.data:
+            raise YmodemError("ymodem payload is empty")
         digest = hashlib.sha256(self.data).hexdigest()
         if self.sha256 and self.sha256.lower() != digest:
             raise YmodemError("payload does not match the expected SHA-256")
@@ -175,13 +191,19 @@ class YmodemSender:
     ) -> None:
         header_payload = (
             spec.filename.encode("ascii") + b"\x00" + str(spec.size).encode("ascii") + b"\x00"
-        ).ljust(BLOCK_SIZE, b"\x00")
-        frame = _build_frame(0, header_payload)
+        )
+        if len(header_payload) <= HEADER_BLOCK_SIZE:
+            frame = _build_frame(0, header_payload.ljust(HEADER_BLOCK_SIZE, b"\x00"), SOH)
+        else:
+            frame = _build_frame(0, header_payload.ljust(BLOCK_SIZE, b"\x00"))
         retries = 0
         self._on_event("header_sent", {"filename": spec.filename, "size": spec.size})
         while True:
             transport.send(frame)
-            control = reader.next_control(self._ack_timeout_s)
+            # The receiver may erase the destination partition in on_begin
+            # before acknowledging the header (RT-Thread yota), so the header
+            # ACK waits on the storage-latency window, not the block window.
+            control = reader.next_control(self._final_ack_timeout_s)
             if control == ACK:
                 control = self._expect_c_after_header(reader, transport)
                 if control == CRC_CHAR:
@@ -272,7 +294,7 @@ class YmodemSender:
             if control is None:
                 raise YmodemError("timeout waiting for C before batch end")
             raise YmodemError(f"unexpected byte before batch end: 0x{control:02X}")
-        frame = _build_frame(0, bytes(BLOCK_SIZE))
+        frame = _build_frame(0, bytes(HEADER_BLOCK_SIZE), SOH)
         transport.send(frame)
         self._on_event("batch_end_sent", {})
         control = reader.next_control(self._final_ack_timeout_s)
@@ -323,11 +345,12 @@ class _ControlReader:
                 raise YmodemCancelled("cancelled by operator")
 
 
-def _build_frame(sequence: int, payload: bytes) -> bytes:
-    if len(payload) != BLOCK_SIZE:
+def _build_frame(sequence: int, payload: bytes, marker: int = STX) -> bytes:
+    block = HEADER_BLOCK_SIZE if marker == SOH else BLOCK_SIZE
+    if len(payload) != block:
         raise YmodemError("ymodem payload must be exactly one block")
     return (
-        bytes([STX, sequence & 0xFF, 0xFF - (sequence & 0xFF)])
+        bytes([marker, sequence & 0xFF, 0xFF - (sequence & 0xFF)])
         + payload
         + _crc16_ccitt(payload).to_bytes(2, "big")
     )
@@ -362,7 +385,7 @@ __all__ = [
     "CAN",
     "CRC_CHAR",
     "EOT",
-    "MAX_PAYLOAD_BYTES",
+    "HEADER_BLOCK_SIZE",
     "NAK",
     "SOH",
     "STX",

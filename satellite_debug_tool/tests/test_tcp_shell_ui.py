@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import time
 
 import pytest
@@ -28,6 +29,14 @@ def _wait_until(qapplication_session, predicate, timeout_s: float = 3.0) -> bool
         time.sleep(0.005)
     qapplication_session.processEvents()
     return bool(predicate())
+
+
+_LINE_STAMP = re.compile(r"^\[\d{2}:\d{2}:\d{2}\.\d{3}\] ")
+
+
+def _strip_stamp(line: str) -> str:
+    """剥掉行首接收时间戳，恢复设备原始行用于断言。"""
+    return _LINE_STAMP.sub("", line)
 
 
 class FakeWorker:
@@ -94,7 +103,7 @@ class TestTerminalRendering:
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._on_rx_payload(b"root:/$ ls\r\n[10:24:56] I system: table head\r\n[10:24:57] I system: row 2\r\n")
         text = workspace._terminal.toPlainText()
-        lines = text.split("\n")
+        lines = [_strip_stamp(line) for line in text.split("\n")]
         assert "root:/$ ls" in lines
         assert "[10:24:56] I system: table head" in lines
         assert "[10:24:57] I system: row 2" in lines
@@ -103,7 +112,7 @@ class TestTerminalRendering:
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._on_rx_payload(b"cmd\r")
         workspace._on_rx_payload(b"\noutput\r\n")
-        lines = workspace._terminal.toPlainText().split("\n")
+        lines = [_strip_stamp(line) for line in workspace._terminal.toPlainText().split("\n")]
         assert "cmd" in lines
         assert "output" in lines
 
@@ -119,6 +128,207 @@ class TestTerminalRendering:
         workspace._hex_check.setChecked(True)
         workspace._on_rx_payload(b"AB")
         assert "41 42" in workspace._terminal.toPlainText()
+
+
+class TestLineTimestampAndCaret:
+    """WindTerm 风格行首时间戳：每行一条，覆盖/清行/退格只作用于设备文本。"""
+
+    STAMP = re.compile(r"^\[\d{2}:\d{2}:\d{2}\.\d{3}\] ")
+
+    def _lines(self, workspace) -> list[str]:
+        return [line for line in workspace._terminal.toPlainText().split("\n") if line]
+
+    def test_each_line_starts_with_receive_timestamp(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"first line\r\nsecond line\r\n")
+        lines = self._lines(workspace)
+        assert len(lines) == 2
+        assert all(self.STAMP.match(line) for line in lines)
+        assert "first line" in lines[0]
+        assert "second line" in lines[1]
+
+    def test_cr_overwrite_keeps_single_timestamp(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
+
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"progress 10%\rprogress 90%\r\n")
+        lines = self._lines(workspace)
+        assert len(lines) == 1
+        assert self.STAMP.match(lines[0])
+        assert lines[0][_TIMESTAMP_LEN:] == "progress 90%"
+
+    def test_erase_line_keeps_timestamp(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"root:/$ \x1b[2K\r[TS] log line\r\n")
+        lines = self._lines(workspace)
+        assert len(lines) == 1
+        assert self.STAMP.match(lines[0])
+        assert "[TS] log line" in lines[0]
+        assert "root:/$" not in lines[0]
+
+    def test_backspace_stops_at_timestamp(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
+
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._on_rx_payload(b"ab\x08\x08\x08\x08\x08")
+        line = self._lines(workspace)[0]
+        assert line[_TIMESTAMP_LEN:] == ""
+        assert self.STAMP.match(line)
+
+    def test_hex_lines_carry_timestamp(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._hex_check.setChecked(True)
+        workspace._on_rx_payload(b"AB")
+        line = self._lines(workspace)[0]
+        assert self.STAMP.match(line)
+        assert "41 42" in line
+
+    def test_session_log_stays_pure_device_text(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._settings.set("tcp_shell.log_dir", str(tmp_path / "shell-logs"))
+        workspace._log_check.setChecked(True)
+        workspace._on_rx_payload(b"payload\r\n")
+        content = next((tmp_path / "shell-logs").glob("*.log")).read_text(encoding="utf-8")
+        # 日志文件保持纯设备文本：不写入本地时间戳（\r 归一换行是既有日志合同）。
+        assert "payload" in content
+        assert not _LINE_STAMP.match(content)
+
+    def test_terminal_shows_caret(self, qapplication_session, tmp_path, monkeypatch):
+        """Qt 只读 QTextEdit 不绘制 text caret——自绘闪烁光标的合同回归。"""
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QFocusEvent
+
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        terminal = workspace._terminal
+        assert terminal.cursorWidth() > 0
+        terminal.focusInEvent(QFocusEvent(QEvent.Type.FocusIn))
+        assert terminal._blink_timer.isActive()
+        terminal._toggle_caret()
+        assert terminal._caret_on
+        terminal.grab()  # paint 冒烟：含自绘光标分支
+        terminal.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+        assert not terminal._blink_timer.isActive()
+        assert not terminal._caret_on
+
+    def test_context_menu_offers_clear_screen(self, qapplication_session, tmp_path, monkeypatch):
+        from satellite_debug_tool.i18n import tr
+
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        menu = workspace._terminal._build_context_menu()
+        texts = [action.text() for action in menu.actions()]
+        assert tr("Clear screen") in texts
+        assert any(action.isSeparator() for action in menu.actions())
+
+    def test_clear_screen_resets_render_state_and_stamps_next_line(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        # 制造残留状态：半个 ANSI 序列、挂起 \r、SGR 颜色、已盖时间戳的行
+        workspace._on_rx_payload(b"\x1b[32mcolored\r")
+        assert workspace._line_stamped is True
+        workspace._on_clear_terminal()
+        assert workspace._terminal.toPlainText() == ""
+        assert workspace._line_stamped is False
+        assert workspace._sgr_foreground is None
+        assert workspace._pending_cr is False
+        # 清屏后新行照常带时间戳，且不残留旧颜色/覆盖语义
+        workspace._on_rx_payload(b"fresh line\r\n")
+        lines = [line for line in workspace._terminal.toPlainText().split("\n") if line]
+        assert len(lines) == 1
+        assert _LINE_STAMP.match(lines[0])
+        assert lines[0].endswith("fresh line")
+        from satellite_debug_tool.i18n import tr
+
+        assert tr("Terminal cleared") in workspace._events.toPlainText()
+
+
+class TestTransportSelection:
+    """连接区 TCP/串口两页：互斥、target 组装、settings 记忆与恢复。"""
+
+    def test_type_switch_swaps_config_pages(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        assert workspace._config_stack.currentIndex() == 0
+        workspace._type_combo.setCurrentIndex(1)
+        assert workspace._config_stack.currentIndex() == 1
+        assert workspace._is_serial() is True
+        workspace._type_combo.setCurrentIndex(0)
+        assert workspace._config_stack.currentIndex() == 0
+        assert workspace._is_serial() is False
+
+    def test_current_target_tcp_and_serial(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._device_combo.setEditText("192.168.1.6:1235")
+        workspace._port_spin.setValue(1235)
+        assert workspace._current_target() == {
+            "transport": "tcp",
+            "host": "192.168.1.6",
+            "port": 1235,
+        }
+        workspace._type_combo.setCurrentIndex(1)
+        workspace._serial_combo.setEditText("/dev/cu.usbserial")
+        workspace._baud_combo.setCurrentText("921600")
+        assert workspace._current_target() == {
+            "transport": "serial",
+            "port": "/dev/cu.usbserial",
+            "baudrate": 921600,
+        }
+        assert workspace._target_label(workspace._current_target()) == "/dev/cu.usbserial@921600"
+
+    def test_serial_choices_enumerated_and_kept(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        import satellite_debug_tool.core.tcp_shell.transport as transport_module
+
+        monkeypatch.setattr(
+            transport_module, "list_serial_ports", lambda: ["/dev/cu.A", "/dev/cu.B"]
+        )
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._serial_combo.setEditText("/dev/cu.typed")
+        workspace._type_combo.setCurrentIndex(1)
+        texts = [workspace._serial_combo.itemText(i) for i in range(workspace._serial_combo.count())]
+        assert texts == ["/dev/cu.A", "/dev/cu.B"]
+        assert workspace._serial_combo.currentText() == "/dev/cu.typed"  # 手填不丢
+
+    def test_settings_remember_and_restore_serial(
+        self, qapplication_session, tmp_path, monkeypatch
+    ):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._type_combo.setCurrentIndex(1)
+        workspace._serial_combo.setEditText("/dev/cu.usbserial")
+        workspace._baud_combo.setCurrentText("460800")
+        workspace._remember_target()
+
+        reopened = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        assert reopened._is_serial() is True
+        assert reopened._serial_combo.currentText() == "/dev/cu.usbserial"
+        assert reopened._baud_combo.currentText() == "460800"
+
+    def test_serial_endpoint_is_none(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._device_combo.setEditText("192.168.1.6")
+        assert workspace._current_endpoint() is not None or workspace._device_directory is None
+        workspace._type_combo.setCurrentIndex(1)
+        assert workspace._current_endpoint() is None  # 串口无管理 endpoint
+
+    def test_log_file_stem_follows_transport(self, qapplication_session, tmp_path, monkeypatch):
+        workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
+        workspace._device_combo.setEditText("192.168.1.6")
+        assert workspace._log_file_stem() == "192.168.1.6"
+        workspace._type_combo.setCurrentIndex(1)
+        workspace._serial_combo.setEditText("/dev/cu.usbserial")
+        assert workspace._log_file_stem() == "/dev/cu.usbserial"
 
 
 class TestYmodemControls:
@@ -278,6 +488,9 @@ class TestThreeEntrySingleDialog:
         workspace = ProductionWorkspace(settings, open_tcp_shell=opener)
         qapplication_session.processEvents()
         assert workspace._tcp_shell_button.isVisible() or not workspace.isVisible()
+        from satellite_debug_tool.i18n import tr
+
+        assert workspace._tcp_shell_button.text() == tr("Shell...")
         workspace._on_open_tcp_shell()
         assert opened == [True]
         workspace.shutdown()
@@ -393,26 +606,32 @@ class TestSgrColourRendering:
     ):
         from PySide6.QtGui import QColor
 
+        from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
+
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._on_rx_payload(b"plain \x1b[32mgreen\x1b[0m tail")
         cursor = workspace._terminal.textCursor()
-        cursor.setPosition(6, cursor.MoveMode.MoveAnchor)  # "green" 起始位置
-        cursor.setPosition(11, cursor.MoveMode.KeepAnchor)
+        stamp = _TIMESTAMP_LEN  # 行首时间戳占位，设备文本整体右移
+        cursor.setPosition(stamp + 6, cursor.MoveMode.MoveAnchor)  # "green" 起始位置
+        cursor.setPosition(stamp + 11, cursor.MoveMode.KeepAnchor)
         char_format = cursor.charFormat()
         assert char_format.foreground().color() == QColor("#98c379")
 
     def test_bold_and_reset(
         self, qapplication_session, tmp_path, monkeypatch
     ):
+        from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
+
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._on_rx_payload(b"\x1b[1mB\x1b[0mn")
         cursor = workspace._terminal.textCursor()
-        cursor.setPosition(0, cursor.MoveMode.MoveAnchor)
-        cursor.setPosition(1, cursor.MoveMode.KeepAnchor)
+        stamp = _TIMESTAMP_LEN
+        cursor.setPosition(stamp + 0, cursor.MoveMode.MoveAnchor)
+        cursor.setPosition(stamp + 1, cursor.MoveMode.KeepAnchor)
         bold_format = cursor.charFormat()
         assert bold_format.fontWeight() > 400
-        cursor.setPosition(1, cursor.MoveMode.MoveAnchor)
-        cursor.setPosition(2, cursor.MoveMode.KeepAnchor)
+        cursor.setPosition(stamp + 1, cursor.MoveMode.MoveAnchor)
+        cursor.setPosition(stamp + 2, cursor.MoveMode.KeepAnchor)
         normal_format = cursor.charFormat()
         assert normal_format.fontWeight() <= 400
 
@@ -458,7 +677,7 @@ class TestBootProgressBar:
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._on_rx_payload(b"first\r")
         workspace._on_rx_payload(b"\nsecond\r\n")
-        lines = workspace._terminal.toPlainText().split("\n")
+        lines = [_strip_stamp(line) for line in workspace._terminal.toPlainText().split("\n")]
         assert "first" in lines
         assert "second" in lines
 

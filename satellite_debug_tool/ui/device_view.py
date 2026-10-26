@@ -1,6 +1,8 @@
 """Device page bound to typed parameter and OTA session controllers."""
 
 from __future__ import annotations
+from satellite_debug_tool.ui.ota_status_text import ota_status_source
+from satellite_debug_tool.core.session.customer_ota_access import CustomerOtaAccess
 
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -162,6 +164,7 @@ class DeviceView(QWidget):
             parent=self,
             operation_gateway=ota_gateway,
         )
+        self._customer_ota_access = CustomerOtaAccess(self._session_core, self._ota_controller, self._connection_available)
         self._theme = "dark"
         self._scale = "small"
         self._settings = settings   # 可选；用于读取 paths.firmware_dir 作为打开默认目录
@@ -333,44 +336,17 @@ class DeviceView(QWidget):
             self._ota_controller.active,
         )
 
-    def customer_ota_available(
-        self,
-        artifact: OtaArtifactToken | None = None,
-    ) -> bool:
-        """Whether the shared engineering OTA transport can accept a verified image."""
-        available = bool(
-            self._connection_available()
-            and self._ota_controller.supported
-            and not self._ota_controller.active
-            and not self._session_core.device_transaction_active
-        )
-        return bool(
-            available
-            and (
-                artifact is None
-                or self._ota_controller.verified_artifact_matches(artifact)
-            )
-        )
+    def customer_ota_available(self, artifact=None) -> bool:
+        return self._customer_ota_access.available(artifact)
 
-    def load_customer_ota_package(
-        self,
-        package: FirmwarePackage,
-    ) -> OtaArtifactToken | None:
-        """Bind a verified package and its provenance to the shared OTA owner."""
+    def load_customer_ota_package(self, package):
+        return self._customer_ota_access.load(package)
 
-        if not self.customer_ota_available():
-            return None
-        return self._ota_controller.configure_verified_package(package)
-
-    def start_customer_ota(self, artifact: OtaArtifactToken) -> bool:
-        if not self.customer_ota_available(artifact):
-            return False
-        self._ota_pause_debug_cb.setChecked(True)
-        self._ota_controller.start(
-            pause_debug=True,
-            required_artifact=artifact,
-        )
-        return self._ota_controller.active
+    def start_customer_ota(self, artifact) -> bool:
+        started = self._customer_ota_access.start(artifact)
+        if started:
+            self._ota_pause_debug_cb.setChecked(True)
+        return started
 
     def abort_customer_ota(self) -> None:
         self._on_ota_abort()
@@ -587,62 +563,7 @@ class DeviceView(QWidget):
         status: OtaStatus,
         values: dict[str, Any],
     ) -> None:
-        if status is OtaStatus.TRANSFERRING:
-            source = (
-                tr_source(
-                    "Transferring... {sequence}/{total} ({percent}%)  "
-                    "{speed:.1f} KB/s  {remaining}s remaining"
-                )
-                if "speed" in values
-                else tr_source("Transferring... {sequence}/{total} ({percent}%)")
-            )
-        else:
-            source = {
-                OtaStatus.IDLE: tr_source("Idle"),
-                OtaStatus.WAITING_PROFILE: tr_source("Waiting for device Profile and capabilities..."),
-                OtaStatus.WAITING_CAPABILITY: tr_source("Waiting for device capability declaration..."),
-                OtaStatus.UNSUPPORTED: tr_source("OTA is unavailable in this firmware"),
-                OtaStatus.TRANSACTION_ACTIVE: tr_source("Device is busy"),
-                OtaStatus.NO_FILE: tr_source("No file selected"),
-                OtaStatus.ARTIFACT_TOO_LARGE: tr_source(
-                    "Firmware image exceeds the OTA protocol limit"
-                ),
-                OtaStatus.STOPPING_LIVE_DATA: tr_source("Stopping live data..."),
-                OtaStatus.STOP_LIVE_DATA_FAILED: tr_source("Failed to stop live data: {detail}"),
-                OtaStatus.SENDING_BEGIN: tr_source("Sending OTA_BEGIN..."),
-                OtaStatus.BEGIN_SEND_FAILED: tr_source("Failed to send OTA_BEGIN"),
-                OtaStatus.BEGIN_REJECTED: tr_source("OTA_BEGIN rejected: {detail}"),
-                OtaStatus.BEGIN_TIMEOUT: tr_source("ota_begin timed out"),
-                OtaStatus.CHUNK_SEND_FAILED: tr_source("Failed to send chunk {sequence}"),
-                OtaStatus.CHUNK_RETRY: tr_source("Chunk {sequence} was not confirmed; retry {retry}/{maximum}"),
-                OtaStatus.CHUNK_REJECTED: tr_source("Chunk {sequence} rejected: {detail}"),
-                OtaStatus.CHUNK_TIMEOUT: tr_source("Chunk {sequence} timed out repeatedly"),
-                OtaStatus.VERIFYING: tr_source("Verifying..."),
-                OtaStatus.END_SEND_FAILED: tr_source("Failed to send OTA_END"),
-                OtaStatus.END_REJECTED: tr_source("OTA_END verification failed: {detail}"),
-                OtaStatus.END_TIMEOUT: tr_source("ota_end timed out"),
-                OtaStatus.REBOOTING: tr_source("Device is rebooting ({elapsed}s elapsed; bootloader flashing usually takes about 45s)..."),
-                OtaStatus.REBOOT_TIMEOUT: tr_source("Device did not return within 120 s; check the connection"),
-                OtaStatus.ARTIFACT_MISMATCH: tr_source("The selected firmware no longer matches the confirmed package"),
-                OtaStatus.IDENTITY_UNAVAILABLE: tr_source("A device serial number or unique identifier is required for customer OTA"),
-                OtaStatus.IDENTITY_FACTS_CONFLICT: tr_source("Debug and Product Service report different device serial numbers"),
-                OtaStatus.FIRMWARE_FACTS_CONFLICT: tr_source("Debug and Product Service report different firmware versions"),
-                OtaStatus.TARGET_VERSION_CONFIRMED: tr_source("✓ Target firmware {version} confirmed on the same device ({before} → {after})"),
-                OtaStatus.TARGET_VERSION_NOT_CONFIRMED: tr_source("Target firmware {target} was not confirmed; device reported {actual}"),
-                OtaStatus.RETURN_IDENTITY_CHANGED: tr_source("A different device identity responded after the transfer"),
-                OtaStatus.RETURN_IDENTITY_UNCONFIRMED: tr_source("The returning device identity could not be confirmed"),
-                OtaStatus.RETURN_FIRMWARE_UNCONFIRMED: tr_source(
-                    "Firmware was not reported again by every captured source"
-                ),
-                OtaStatus.FIRMWARE_CHANGED: tr_source("Device firmware changed ({before} → {after})"),
-                OtaStatus.APPLICATION_UNCONFIRMED: tr_source("Firmware {version} was reported, but applying this package was not independently confirmed"),
-                OtaStatus.CONNECTION_LOST: tr_source("Connection lost; OTA aborted"),
-                OtaStatus.SESSION_CHANGED: tr_source("Device session changed; select the firmware again"),
-                OtaStatus.ABORTED: tr_source("Aborted by user"),
-                OtaStatus.ABORT_PENDING: tr_source(
-                    "OTA final device state is unknown; recovery is required"
-                ),
-            }[status]
+        source = ota_status_source(status, values)
         self._set_ota_status(source, **values)
         final_statuses = {
             OtaStatus.STOP_LIVE_DATA_FAILED,
@@ -930,19 +851,20 @@ class DeviceView(QWidget):
             f"padding: 4px 10px; font-size: {px}px; }}"
             f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
             f"QPushButton:disabled {{ color: {p['text_faint']}; }}"
+            f"QPushButton:focus, QLineEdit:focus {{ border: 1px solid {p['focus']}; }}"
             f"QTableWidget {{ background-color: {p['card']}; color: {p['text']}; "
             f"border: 1px solid {p['border']}; font-size: {px}px; "
             f"gridline-color: {p['border']}; }}"
             f"QHeaderView::section {{ background-color: {p['panel']}; color: {p['text_muted']}; "
             f"border: 1px solid {p['border']}; padding: 4px; font-size: {px}px; }}"
             f"QProgressBar {{ border: 1px solid {p['border']}; border-radius: 2px; "
-            f"background-color: {p['input_bg']}; text-align: center; color: {p['text']}; "
+            f"background-color: {p['input_bg']}; text-align: center; color: {p['progress_text']}; "
             f"font-size: {px}px; }}"
-            f"QProgressBar::chunk {{ background-color: {p['primary']}; }}"
+            f"QProgressBar::chunk {{ background-color: {p['progress_bg']}; }}"
             f"QCheckBox {{ color: {p['text']}; font-size: {px}px; }}"
         )
         self._overlay.setStyleSheet(
-            f"background-color: rgba(30,30,30,200); color: {p['text_faint']}; font-size: 16px;"
+            f"background-color: {S.qss_color(p['card'] + 'F2')}; color: {p['text']}; font-size: 16px;"
         )
 
     def resizeEvent(self, event):

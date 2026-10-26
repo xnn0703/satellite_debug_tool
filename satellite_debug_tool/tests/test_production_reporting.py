@@ -350,7 +350,7 @@ def test_pass_generates_v1_self_contained_zip_and_valid_manifest(tmp_path: Path)
             store,
             batch_output_dir=output,
             report_root=tmp_path / "reports",
-            branding=ReportBranding(company_name="软赫", tester_role="测试员"),
+            branding=ReportBranding(company_name="客户公司", tester_role="测试员"),
         )
         artifact = service.archive_device("BATCH-01", serial)
 

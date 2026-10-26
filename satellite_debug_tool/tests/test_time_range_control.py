@@ -25,6 +25,85 @@ class TestInitialState:
         assert w.current_range() == (0.0, 0.0)
 
 
+@pytest.mark.parametrize("theme", ("dark", "dark_hc", "light"))
+@pytest.mark.parametrize("locale", ("zh_CN", "en_US"))
+@pytest.mark.parametrize("host_kind", ("standalone", "playback", "log"))
+def test_preset_text_fits_control_and_popup(qapp, tmp_path, monkeypatch, theme, locale, host_kind):
+    """回归：中英文最长选项完整显示，框体和弹出列表按同一字体布局。"""
+    from pathlib import Path
+    from PySide6.QtGui import QFontInfo
+    from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.i18n import initialize_translation_manager
+    from satellite_debug_tool.ui import styles as S
+    from satellite_debug_tool.ui.qss import build
+    from satellite_debug_tool.ui.time_range_control import TimeRangeControl
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("SATELLITE_DEBUG_LOCALE", raising=False)
+    manager = initialize_translation_manager(qapp, Settings())
+    previous_style, previous_font = qapp.styleSheet(), qapp.font()
+    widget = None
+    try:
+        S.apply_global_font(qapp, scale="small", base_px=13)
+        qapp.setStyleSheet(build(theme))
+        manager.set_preference(locale)
+        if host_kind == "standalone":
+            widget = TimeRangeControl()
+            control = widget
+            widget.resize(700, 60)
+        else:
+            from satellite_debug_tool.ui.log_view import LogView
+            from satellite_debug_tool.ui.playback_view import PlaybackView
+            view_type = PlaybackView if host_kind == "playback" else LogView
+            widget = view_type(settings=Settings())
+            control = widget._range_ctl
+            widget.resize(1024, 600)
+        widget.set_theme(theme)
+        control.set_total(3600)
+        widget.show()
+        qapp.processEvents()
+        combo = control._preset_combo
+        combo.setCurrentIndex(4)
+        current = control.current_range()
+        emitted = []
+        control.range_changed.connect(lambda *values: emitted.append(values))
+        # 同一实例往返切换语言，验证宽度失效与重算，同时保持选择和时间事实。
+        for language in (locale, "en_US" if locale == "zh_CN" else "zh_CN", locale):
+            manager.set_preference(language)
+            qapp.processEvents()
+            option = QStyleOptionComboBox()
+            combo.initStyleOption(option)
+            content = combo.style().subControlRect(
+                QStyle.ComplexControl.CC_ComboBox, option,
+                QStyle.SubControl.SC_ComboBoxEditField, combo,
+            )
+            required = max(combo.fontMetrics().horizontalAdvance(combo.itemText(i))
+                           for i in range(combo.count()))
+            assert content.width() >= required
+            combo.showPopup()
+            qapp.processEvents()
+            view = combo.view()
+            assert QFontInfo(combo.font()).family() == QFontInfo(view.font()).family()
+            assert combo.font().pixelSize() == view.font().pixelSize()
+            assert view.sizeHintForColumn(0) <= view.viewport().width()
+            for index in range(combo.count()):
+                row = view.visualRect(combo.model().index(index, 0))
+                assert row.right() <= view.viewport().rect().right()
+            combo.hidePopup()
+            assert combo.currentData() == "last_30_minutes"
+            assert control.current_range() == current
+        assert emitted == []
+    finally:
+        if widget is not None:
+            control._preset_combo.hidePopup()
+            widget.close()
+        manager.set_preference("zh_CN")
+        qapp.setStyleSheet(previous_style)
+        qapp.setFont(previous_font)
+        qapp.processEvents()
+
+
 class TestPresets:
     def test_set_total_updates_full_range(self, qapp):
         """预设 = '全部' 时，set_total(7200) 后 current_range 应等于 (0, 7200)。"""

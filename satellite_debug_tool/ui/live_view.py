@@ -106,14 +106,8 @@ from satellite_debug_tool.i18n import (
 )
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
-from satellite_debug_tool.ui.channel_panel import ChannelPanel
 from satellite_debug_tool.ui.chart_widget import COLORS
-from satellite_debug_tool.ui.control_panel_widget import ControlPanelWidget
-from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
-from satellite_debug_tool.ui.event_timeline_widget import EventTimelineWidget
 from satellite_debug_tool.ui.grouped_chart_widget import GroupedChartWidget
-from satellite_debug_tool.ui.state_panel_widget import StatePanelWidget
-from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
 
 
 DEVICE_ACTIVITY_TIMEOUT_S = 3.0
@@ -326,6 +320,9 @@ class LiveView(QWidget):
 
     def ensure_presentation(self) -> None:
         """Build the engineering-only widget tree once and bind current state."""
+        from satellite_debug_tool.edition import Edition, edition_of
+        if edition_of(self._settings) is Edition.USER:
+            raise RuntimeError("engineering presentation requires the operations edition")
         if self._presentation_ready:
             return
         started = time.perf_counter()
@@ -892,10 +889,12 @@ class LiveView(QWidget):
         self._toolbar.addWidget(self._statline)
 
         # ---------- StatusStrip（全宽） ----------
+        from satellite_debug_tool.ui.status_strip_widget import StatusStripWidget
         self._status_strip = StatusStripWidget(self._profile_store, self._state_store)
         root.addWidget(self._status_strip)
 
         # Dashboard（KPI 卡行）—— 移到中心列顶部（设计 kpi-row）
+        from satellite_debug_tool.ui.dashboard_widget import DashboardWidget
         self._dashboard = DashboardWidget(self._profile_store, self._state_store)
         self._dashboard.mode_requested.connect(self._on_dashboard_mode_requested)
 
@@ -905,6 +904,7 @@ class LiveView(QWidget):
         self._top_splitter = top_splitter   # 保存引用供持久化
 
         # 左侧：通道选择面板
+        from satellite_debug_tool.ui.channel_panel import ChannelPanel
         self._channel_panel = ChannelPanel()
         self._channel_panel.setMinimumWidth(160)
         # D6 P0 修复：勾选 = 控制曲线显隐（所见即所得）
@@ -940,11 +940,13 @@ class LiveView(QWidget):
         self._attitude.set_dark_theme(True)
         right_panel.addWidget(self._attitude)
 
+        from satellite_debug_tool.ui.state_panel_widget import StatePanelWidget
         self._state_panel = StatePanelWidget(
             self._profile_store, self._state_store, data_store=self._data_store
         )
         self._state_panel.setMinimumHeight(56)
         right_panel.addWidget(self._state_panel)
+        from satellite_debug_tool.ui.event_timeline_widget import EventTimelineWidget
         self._event_timeline = EventTimelineWidget(self._event_log)
         self._event_timeline.setMinimumHeight(115)
         self._event_timeline.jump_requested.connect(self._chart.jump_to_timestamp)
@@ -963,6 +965,7 @@ class LiveView(QWidget):
         top_splitter.splitterMoved.connect(self._on_top_splitter_moved)
         splitter.addWidget(top_splitter)
 
+        from satellite_debug_tool.ui.control_panel_widget import ControlPanelWidget
         self._control_panel = ControlPanelWidget()
         self._control_panel.setMaximumHeight(80)   # M7：防 splitter 拖动吞掉曲线区
         self._control_panel.set_profile_store(self._profile_store)
@@ -1004,7 +1007,7 @@ class LiveView(QWidget):
         pal = S.palette(theme)
         try:
             from satellite_debug_tool.ui import icons as _ic
-            ink = pal["accent_ink"]
+            ink = pal["primary_text"]
             t2 = pal["text_2"]
             err = pal["err"]
             self._connect_btn.setIcon(_ic.icon("plug", color=ink, size=14))
@@ -2124,7 +2127,10 @@ class LiveView(QWidget):
         for name in existing_names - channel_set:
             self._channel_panel.remove_channel(name)
         # 最新值刷新到 panel
+        colors = self._chart.channel_colors()
         for name in self._channel_panel.channel_names():
+            if name in colors:
+                self._channel_panel.set_channel_color(name, colors[name])
             ch = self._data_store.get_channel(name)
             latest = ch.get_latest() if ch else None
             if latest:
@@ -2915,6 +2921,8 @@ class LiveView(QWidget):
 
         # Channel panel：交给 ChannelPanel 自己刷主题
         self._channel_panel.apply_theme(theme, scale)
+        for name, color in self._chart.channel_colors().items():
+            self._channel_panel.set_channel_color(name, color)
 
     def _style_conn_card(self, pal: dict, scale: str) -> None:
         """设备状态卡 + statline 的主题样式 + 当前连接态着色。"""
@@ -2923,7 +2931,7 @@ class LiveView(QWidget):
         mono = S.monospace_family()
         connected = bool(self._is_connected)
         tint = pal["ok"] if connected else pal["err"]
-        tint_soft = pal["ok_soft"] if connected else pal["err_soft"]
+        tint_soft = S.qss_color(pal["ok_soft"] if connected else pal["err_soft"])
         self._conn_card.setStyleSheet(
             f"#connCard {{ background-color: {pal['card']}; border: 1px solid {pal['border_2']}; "
             f"border-radius: 7px; }}"

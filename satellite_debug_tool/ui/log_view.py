@@ -169,7 +169,7 @@ class LogView(QWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(3)
 
-        # 顶部一行：Open + 文件名 + 行/列统计 + range
+        # 文件行：Open + 文件名 + 行/列统计。
         top = QWidget()
         top_layout = QHBoxLayout(top)
         top_layout.setContentsMargins(4, 2, 4, 2)
@@ -204,9 +204,17 @@ class LogView(QWidget):
         self._stats_label.setFixedWidth(180)
         top_layout.addWidget(self._stats_label)
 
+        root.addWidget(top)
+
+        # 时间范围独立成行，保持中英文选项的完整内容宽度。
+        range_bar = QWidget()
+        range_layout = QHBoxLayout(range_bar)
+        range_layout.setContentsMargins(4, 2, 4, 2)
+        range_layout.setSpacing(6)
+
         self._range_ctl = TimeRangeControl()
         self._range_ctl.range_changed.connect(self._on_range_changed)
-        top_layout.addWidget(self._range_ctl)
+        range_layout.addWidget(self._range_ctl)
 
         # M8: 地图按钮
         self._map_btn = QPushButton(tr("Map"))
@@ -216,11 +224,11 @@ class LogView(QWidget):
             tr("Open or close the map window; the log must contain gps_lat and gps_lon")
         )
         self._map_btn.clicked.connect(self._toggle_map)
-        top_layout.addWidget(self._map_btn)
+        range_layout.addWidget(self._map_btn)
 
-        root.addWidget(top)
+        root.addWidget(range_bar)
 
-        # 第二行：X 轴占位说明（小字）
+        # X 轴占位说明（小字）。
         hint = QLabel(
             tr(
                 "X-axis time: row number × 100 ms (placeholder until the device logs ms timestamps)"
@@ -266,10 +274,8 @@ class LogView(QWidget):
         self._stats_label.setStyleSheet(
             f"color: {p['text']}; background: transparent;"
         )
-        self._open_btn.setStyleSheet(
-            f"background-color: {p['primary']}; color: white; "
-            f"border: none; padding: 4px 8px; border-radius: 2px;"
-        )
+        self._open_btn.setProperty("variant", "primary")
+        self._open_btn.setStyleSheet("")
         self._hint_label.setStyleSheet(
             f"color: {p['text_faint']}; font-size: 10px; padding: 0 4px;"
         )

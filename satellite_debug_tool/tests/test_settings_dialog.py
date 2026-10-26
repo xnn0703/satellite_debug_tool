@@ -106,7 +106,7 @@ class TestSettingsDialog:
         )
 
         original_branding = {
-            "company_name": "SoftHertz",
+            "company_name": "Customer Company",
             "logo_path": "/logo.png",
             "header": "H",
             "footer": "F",

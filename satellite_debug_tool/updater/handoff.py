@@ -11,6 +11,7 @@ from typing import Sequence
 from uuid import uuid4
 
 from satellite_debug_tool.updater.status import write_update_status
+from satellite_debug_tool.edition import Edition
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class UpdateLaunchRequest:
     work_dir: Path
     log_path: Path
     status_path: Path
+    edition: Edition = Edition.OPS
 
     def command(self) -> list[str]:
         return [
@@ -40,6 +42,8 @@ class UpdateLaunchRequest:
             str(self.status_path),
             "--target-version",
             self.target_version,
+            "--edition",
+            self.edition.value,
             "--volumes",
             *(str(path) for path in self.volumes),
         ]
@@ -53,6 +57,7 @@ def prepare_update_launch_request(
     volumes: Sequence[Path],
     transaction_dir: Path,
     main_pid: int | None = None,
+    edition: Edition = Edition.OPS,
 ) -> UpdateLaunchRequest:
     normalized_volumes = tuple(Path(path).resolve() for path in volumes)
     if not normalized_volumes:
@@ -80,6 +85,7 @@ def prepare_update_launch_request(
         work_dir=work_dir,
         log_path=root / "updater.log",
         status_path=root / "update-status.json",
+        edition=Edition(edition),
     )
     write_update_status(
         request.status_path,

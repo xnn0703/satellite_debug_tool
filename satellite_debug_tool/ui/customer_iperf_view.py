@@ -428,7 +428,7 @@ class CustomerIperfView(QWidget):
 
     def _refresh_plots(self) -> None:
         self._throughput_plot.clear()
-        for direction, color in (("ul", "#00a895"), ("dl", "#f0a202")):
+        for direction, color in (("ul", S.chart_color(S.ATTITUDE_COLORS["pitch"], self._theme)), ("dl", S.chart_color(S.ATTITUDE_COLORS["yaw"], self._theme))):
             values = [item for item in self._store.measurements() if item.direction == direction]
             if values:
                 self._throughput_plot.plot(
@@ -444,7 +444,7 @@ class CustomerIperfView(QWidget):
             self._power_plot.plot(
                 [item.host_timestamp_ns / 1e9 - origin for item in power],
                 [item.power_w for item in power],
-                pen=pg.mkPen("#e15d44", width=2),
+                pen=pg.mkPen(S.palette(self._theme)["err"], width=2),
             )
 
     def _refresh_events(self) -> None:
@@ -484,11 +484,15 @@ class CustomerIperfView(QWidget):
             plot.setBackground(pal["card"])
             plot.getAxis("left").setPen(pal["border"])
             plot.getAxis("bottom").setPen(pal["border"])
+            for name in ("left", "bottom"):
+                plot.getAxis(name).setTextPen(pal["text_2"])
         self.setStyleSheet(
             f"CustomerIperfView {{ background: {pal['bg']}; color: {pal['text']}; }}"
             f"QGroupBox {{ border: 1px solid {pal['border']}; border-radius: 6px; "
             f"margin-top: 8px; padding-top: 8px; color: {pal['text']}; }}"
         )
+
+        self._refresh_plots()
 
     def retranslate_ui(self) -> None:
         self._config_group.setTitle(tr("Network test configuration"))

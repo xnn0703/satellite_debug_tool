@@ -213,13 +213,13 @@ class ProductionSnrPanel(QFrame):
             f"#productionSnrPanel {{ background: {palette['card']}; "
             f"border: 1px solid {palette['border']}; border-radius: 4px; }}"
             f"#productionSnrIdentity {{ color: {palette['text']}; font-weight: 700; }}"
-            f"#productionSnrValue {{ color: {self._color}; font-size: 17px; font-weight: 700; "
+            f"#productionSnrValue {{ color: {palette['value_number']}; font-size: 17px; font-weight: 700; "
             f"font-family: '{S.monospace_family()}'; }}"
             f"#productionSnrStatus, #productionSnrTest {{ color: {palette['text_2']}; "
             f"font-size: 10px; }}"
         )
         self._plot.setBackground(palette["panel"])
-        self._curve.setPen(pg.mkPen(self._color, width=1.7))
+        self._curve.setPen(pg.mkPen(S.chart_color(self._color, theme), width=1.7))
         for axis_name in ("left", "bottom"):
             axis = self._plot.getAxis(axis_name)
             axis.setPen(pg.mkPen(palette["border_2"]))

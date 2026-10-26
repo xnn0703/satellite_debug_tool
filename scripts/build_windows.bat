@@ -1,7 +1,8 @@
 @echo off
 REM One-click build for Windows. Auto-installs pyinstaller if missing.
 REM Prereq: Python 3.9+ installed; current dir is project root (with .venv or system python).
-REM Output:  release\SatelliteDebugTool-Windows-x86_64.zip
+REM Usage: build_windows.bat user^|ops^|both (default ops)
+REM Output: release\SatelliteDebugTool-EDITION-Windows-ARCH.zip
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0.."
@@ -34,54 +35,11 @@ if errorlevel 1 (
 
 REM ---- validate translation catalogs and compiled QM ----
 echo [build_windows] Validating TS/QM translation resources...
-"%PY%" scripts\update_translations.py check || goto :err
-
-REM ---- clean ----
-if exist build rmdir /s /q build
-if exist dist  rmdir /s /q dist
-
-echo [build_windows] Building main app...
-"%PY%" -m PyInstaller --noconfirm satellite_debug_tool.spec || goto :err
-
-echo [build_windows] Verifying built-in 3D models...
-"%PY%" scripts\verify_model_assets.py "dist\SatelliteDebugTool" || goto :err
-
-echo [build_windows] Building updater (M11)...
-"%PY%" -m PyInstaller --noconfirm updater.spec || goto :err
-
-
-REM ---- M11: embed onefile updater into main install dir ----
-if exist "dist\updater.exe" if exist "dist\SatelliteDebugTool" (
-    echo [build_windows] Embedding updater into main install dir...
-    copy /Y "dist\updater.exe" "dist\SatelliteDebugTool\updater.exe" >nul
-)
-
-REM ---- bilingual operator documentation ----
-if exist "dist\SatelliteDebugTool" (
-    if exist "doc\WINDOWS_QUICK_START.md" copy /Y "doc\WINDOWS_QUICK_START.md" "dist\SatelliteDebugTool\README-Windows.md" >nul
-    if exist "doc\user_manual.md" copy /Y "doc\user_manual.md" "dist\SatelliteDebugTool\user_manual.md" >nul
-    if exist "doc\user_manual_en.md" copy /Y "doc\user_manual_en.md" "dist\SatelliteDebugTool\user_manual_en.md" >nul
-    if exist "doc\production_automation_operator_guide.md" copy /Y "doc\production_automation_operator_guide.md" "dist\SatelliteDebugTool\production_automation_operator_guide.md" >nul
-)
-
-REM ---- archive ----
-set "APP_ZIP=%RELEASE_DIR%\SatelliteDebugTool-Windows-x86_64.zip"
-if exist "%APP_ZIP%" del "%APP_ZIP%"
-
-pushd dist
-powershell -NoProfile -Command "Compress-Archive -Path 'SatelliteDebugTool' -DestinationPath '%APP_ZIP%' -Force" || goto :errpop
-popd
-
-echo.
-echo ==== Done. Artifacts in %RELEASE_DIR% ====
-dir /b "%RELEASE_DIR%"
-echo.
-echo Note: first run may trigger Windows SmartScreen (unsigned),
-echo       click "More info" -^> "Run anyway".
+set "EDITION=%~1"
+if "%EDITION%"=="" set "EDITION=ops"
+"%PY%" scripts\build_editions.py "%EDITION%" || goto :err
 goto :eof
 
-:errpop
-popd
 :err
 echo [build_windows] BUILD FAILED.
 exit /b 1

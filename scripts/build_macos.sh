@@ -4,9 +4,9 @@
 # 自动：venv 创建 + 依赖安装 + PyInstaller 打包 + updater 嵌入
 # 自动清 quarantine，打完即可双击运行
 #
-# 用法：  ./scripts/build_macos.sh
-# 产物：  dist/SatelliteDebugTool.app                       ← 双击运行
-#         release/SatelliteDebugTool-macOS-<arch>.zip       ← 分发用
+# 用法：  ./scripts/build_macos.sh user|ops|both（默认 ops）
+# 产物：  dist/user/SatelliteTerminalToolUser.app、dist/ops/SatelliteDebugTool.app
+#         release/SatelliteDebugTool-{user,ops}-macOS-<arch>.zip
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,49 +36,5 @@ $PIP install --quiet --upgrade pip
 $PIP install --quiet -r "$HERE/satellite_debug_tool/requirements.txt"
 $PIP install --quiet pyinstaller
 
-# ---- 国际化资源完整性 ----
-echo "[build_macos] 校验 TS/QM 翻译资源..."
-$PY "$HERE/scripts/update_translations.py" check
-
-# ---- 清旧产物 ----
-rm -rf "$HERE/build" "$HERE/dist"
-
-echo "[build_macos] 1/2 打包主程序..."
-$PY -m PyInstaller --noconfirm satellite_debug_tool.spec
-$PY "$HERE/scripts/verify_model_assets.py" "$HERE/dist/SatelliteDebugTool.app"
-
-echo "[build_macos] 2/2 打包 updater..."
-$PY -m PyInstaller --noconfirm updater.spec
-
-# ---- 嵌入单文件 updater 到 .app ----
-APP_PATH="$HERE/dist/SatelliteDebugTool.app"
-if [[ -d "$APP_PATH" && -f "$HERE/dist/updater" ]]; then
-  APP_MACOS="$APP_PATH/Contents/MacOS"
-  cp "$HERE/dist/updater" "$APP_MACOS/updater"
-  chmod +x "$APP_MACOS/updater"
-  echo "[build_macos] ✅ updater 已嵌入 .app/Contents/MacOS/"
-fi
-
-# updater 是在 PyInstaller 完成 BUNDLE 后嵌入的，必须对最终目录重新签名。
-# 未配置 Developer ID 时使用 ad-hoc 签名，至少保证 bundle seal 完整且可验证。
-echo "[build_macos] 校验最终应用签名..."
-codesign --force --deep --sign - "$APP_PATH"
-codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
-# ---- 清 quarantine（本机直接打开不再报"无法验证开发者"） ----
-xattr -cr "$APP_PATH" 2>/dev/null || true
-
-# ---- 分发用 zip（ditto 保 symlink，避免之前 7z 那种 symlink 被毁的坑）----
-APP_ZIP="$RELEASE_DIR/SatelliteDebugTool-macOS-${ARCH}.zip"
-rm -f "$APP_ZIP"
-( cd "$HERE/dist" && ditto -c -k --sequesterRsrc --keepParent "SatelliteDebugTool.app" "$APP_ZIP" )
-
-echo ""
-echo "==== ✅ 打包完成 ===="
-echo "本机直接跑：  open '$APP_PATH'"
-echo "分发 zip：    $APP_ZIP"
-echo ""
-ls -lh "$APP_ZIP"
-echo ""
-echo "对方拿到 zip 解压后首次双击若报"无法验证开发者"，让对方终端跑："
-echo "    xattr -cr <解压目录>/SatelliteDebugTool.app"
+# Two immutable product editions; separate work/output directories.
+"$PY" "$HERE/scripts/build_editions.py" "${1:-ops}"

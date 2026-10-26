@@ -1,225 +1,102 @@
 # 打包可执行文件
 
-本工具基于 PySide6，打包成桌面可执行文件后用户无需安装 Python/依赖，双击即可使用。
+本工具使用一套源码生成两个独立桌面产物。用户无需安装 Python；两版版本号统一读取 `satellite_debug_tool/__init__.py.__version__`。
 
-## 产物
+## 版本与产物
 
-每次构建会在 `release/` 下生成主程序 zip：
+| 内容 | 用户版 `user` | 运维版 `ops` |
+|---|---|---|
+| 功能 | 总览、RF 控制、回放、加密固件升级、Shell（TCP/串口/YMODEM） | 全量客户、工程、试产、测试与夹具工具 |
+| 源码启动 | `python3 -m satellite_debug_tool.main_user` | `python3 -m satellite_debug_tool.main` |
+| Windows 安装目录 | `dist/user/SatelliteTerminalToolUser/` | `dist/ops/SatelliteDebugTool/` |
+| macOS app | `dist/user/SatelliteTerminalToolUser.app` | `dist/ops/SatelliteDebugTool.app` |
+| macOS bundle identifier | `com.satellite-debug-tool.user` | `com.satellite-debug-tool.desktop` |
+| 设置、日志与更新目录 | `~/.satellite_debug_tool/user/` | `~/.satellite_debug_tool/` |
 
-| 文件 | 内容 |
-|------|------|
-| `SatelliteDebugTool-<OS>-<arch>.zip` | 上位机主程序（GUI） |
+用户版首次启动使用空设备目录，由用户显式添加。运维版继续使用原全量版配置；两版独立设置，部分共享模型缓存仍沿用原路径。
 
-目录结构（onedir 模式）：
+Windows 两版均运行安装目录内的 `SatelliteDebugTool.exe`，并保留同层 `updater.exe` 与 `_internal/`。独立目录允许两版共存。构建身份保存在包内 `satellite_debug_tool/build_identity.json`，包含 edition、version、platform；运行时采用固定入口及该身份。
 
-```
-SatelliteDebugTool/
-├── SatelliteDebugTool(.exe)       ← 双击运行
-└── _internal/                      ← Python/Qt 运行时，勿改
-```
-
-macOS 额外产出 `SatelliteDebugTool.app`，可拖进 /Applications。
-
----
-
-## 方式一：本地一键打包
-
-### macOS / Linux
+## 本地一键打包
 
 ```bash
-# 先确保 venv 已装好依赖（pip install -r satellite_debug_tool/requirements.txt）
-./scripts/build_macos.sh
+# macOS；省略参数时构建 ops
+./scripts/build_macos.sh user
+./scripts/build_macos.sh ops
+./scripts/build_macos.sh both
 ```
 
-生成 `release/SatelliteDebugTool-macOS-<arm64|x86_64>.zip`。
+```bat
+rem Windows；省略参数时构建 ops
+scripts\build_windows.bat user
+scripts\build_windows.bat ops
+scripts\build_windows.bat both
+```
 
-**首次启动系统提示"无法验证开发者"**：
+平台脚本准备 venv、安装依赖，再调用 `scripts/build_editions.py`。该 Python 构建器统一执行翻译检查、主程序与 updater 打包、模型资源及模块裁剪审计；macOS 额外执行 ad-hoc 签名、签名验证、清检疫属性与 `ditto` 归档。
 
-- 系统设置 → 隐私与安全性 → "仍要打开"
-- 或终端执行：`xattr -dr com.apple.quarantine dist/SatelliteDebugTool.app`
+| 本地文件 | 用途 |
+|---|---|
+| `release/SatelliteDebugTool-user-macOS-<arch>.zip` | mac 用户版 |
+| `release/SatelliteDebugTool-ops-macOS-<arch>.zip` | mac 运维版 |
+| `release/SatelliteDebugTool-user-Windows-<arch>.zip` | Windows 用户版手动安装 |
+| `release/SatelliteDebugTool-ops-Windows-<arch>.zip` | Windows 运维版手动安装 |
+| `release/build-user.json`、`build-ops.json` | 包体积、路径与构建耗时 |
 
-### Windows
+macOS zip 保留 app 内符号链接，可解压后拖入 Applications。Linux 当前没有受支持的发行构建流程。
 
-双击 `scripts\build_windows.bat`（或 cmd 里运行）。
+## 裁剪与资源验证
 
-生成 `release\SatelliteDebugTool-Windows-x86_64.zip`。
+主程序 spec 读取构建参数 `SATELLITE_BUILD_EDITION`，分别使用固定 user/ops 入口。用户版按 `scripts/edition_policy.py` 裁剪运维 UI、执行模块及专用依赖，保留 3D、曲线、录制/回放、认证 OTA 与完整 Shell 所需组件。Leaflet/map、QtWebEngine、python-docx 等运维依赖从用户包移除。历史 SDB 读取需要的纯数据模型仍共享。
 
-**首次启动提示 SmartScreen 未签名**：
-
-- 点 "更多信息" → "仍要运行"
-
-### 依赖
-
-脚本会自动检查 `PySide6 / pyqtgraph / pyserial / numpy / pyinstaller`，缺了会 `pip install`。
-如果系统 Python 干净建议先创建 venv：
+构建器自动运行：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install -r satellite_debug_tool/requirements.txt
-pip install pyinstaller
+python3 scripts/verify_model_assets.py <payload>
+python3 scripts/verify_edition_package.py <payload> --edition user --toc build/user/satellite_debug_tool/Analysis-00.toc
 ```
 
-### 国际化资源
+原生冻结包烟测使用临时设置、回环设备目录，验证总览 SNR/模块温度面板已入布局且可见、遍历本版页面、载入 3D 模型并验证 Shell 弹窗复用/关闭，不连接硬件：
 
-代码中的英文是源文案，简体中文维护在：
-
-```text
-satellite_debug_tool/i18n/translations/satellite_debug_tool_zh_CN.ts
-satellite_debug_tool/i18n/translations/satellite_debug_tool_zh_CN.qm
+```bash
+QT_QPA_PLATFORM=cocoa SATELLITE_UPDATE_CHECK=0 dist/user/SatelliteTerminalToolUser.app/Contents/MacOS/SatelliteDebugTool --smoke-test --smoke-output=/tmp/user-smoke.json
 ```
 
-修改第一方界面文案后先更新并校验：
+另行检查两种语言、三种主题和正常退出。源码测试不能替代冻结包资源检查；软件烟测不能替代设备连接、RF、固件升级及夹具实测。
+
+## Windows CI 与自动更新
+
+`.github/workflows/build.yml` 的 `build-windows` 采用 user/ops 矩阵。每份载荷通过检查后上传 workflow artifact，由唯一 `publish-windows` job 在两版成功后共同发布。推送 master/main 仅运行双版 `ci-only-build`、上传 artifact；tag 或手动 dispatch 进入发布链路。提交、推送与发布需按用户明确指令执行。
+
+同一 Release 的正式资产：
+
+| edition | 资产名称 |
+|---|---|
+| user | `satellite_terminal_tool-user-windows-v<version>.7z` |
+| ops | `satellite_debug_tool-win-v<version>.7z` |
+
+7z 根目录直接包含 `SatelliteDebugTool.exe`、`updater.exe`、`_internal/`；从对应 Windows 安装目录的内容压缩，使用 `-mf=off`。CI 调用 `scripts/verify_update_archive.py <archive> --edition <user|ops> --version <tag>` 校验唯一载荷与身份。
+
+用户资产名称避开旧全量更新器的 `-win-*.7z` 正则。当前更新器精确匹配 edition/platform/version，并在替换安装前验证载荷与已安装身份。只有历史 ops 目标版本 `<=1.7.0` 允许缺少身份文件；后续版本两版均要求身份。macOS 继续本地分发 zip，当前不提供应用内自动更新资产。
+
+发布步骤见 [doc/RELEASING.md](doc/RELEASING.md)。
+
+## 翻译与图标
+
+修改第一方 UI 文案后同时更新 TS/QM：
 
 ```bash
 python3 scripts/update_translations.py update
 python3 scripts/update_translations.py check
 ```
 
-`check` 会拒绝 `unfinished`、空翻译、占位符不一致、过期词条和不同步的 QM。
-macOS/Windows 构建脚本都会在 PyInstaller 前执行该检查。不要只提交 TS 而遗漏 QM。
+`check` 检查 unfinished、空翻译、占位符、词条与 QM 同步。构建前必须通过。
 
----
+应用显示名称为“卫星通信终端工具 / Satellite Terminal Tool”，窗口与包使用同一卫星图标。主图为 `satellite_debug_tool/ui/assets/icons/app_icon_master.png`；更换已确认图稿后运行 `python3 scripts/generate_application_icons.py`，生成 Windows ico、macOS icns 与 Qt PNG。
 
-## 方式二：GitHub Actions 自动构建与发版
+## 排查
 
-`.github/workflows/build.yml` 包含以下 job：
-
-| Job | 触发条件 | 用途 |
-|------|---------|------|
-| `prepare-release` | tag `v*` / 手动 dispatch | 解析发布 tag |
-| `build-windows` | tag / dispatch | windows-latest 生成单个 7z 并上传 GitHub Release |
-| `ci-only-build` | 推 master/main | 仅 win 本地构建验证，结果上传 GH artifact，不发版 |
-
-> **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 压缩兼容性问题，
-> 改本地脚本 `./scripts/build_macos.sh` 自动 venv + 装依赖 + ditto 打包。
-> 详见下方"本地 mac 打包"章节。
-
-### 发版流程（标准）
-
-```bash
-# 1. 改 satellite_debug_tool/__init__.py.__version__
-vim satellite_debug_tool/__init__.py    # 例如 "1.0.0" → "1.1.0"
-
-# 2. commit + 打 tag（tag 名要与 __version__ 一致 + 加 v 前缀）
-git add satellite_debug_tool/__init__.py
-git commit -m "chore: bump version to 1.1.0"
-git tag v1.1.0
-git push origin master
-git push github master
-git push origin v1.1.0      # 同步 Gitee 源码 tag
-git push github v1.1.0      # 推 GitHub tag 触发 release CI
-
-# 3. 在 GitHub Actions 页面看进度
-#    - prepare-release   ~30s
-#    - build-windows     ~10min
-
-# 4. 完成后查 GitHub Releases
-#    https://github.com/xnn0703/satellite_debug_tool/releases
-#    应能看到一个 Windows .7z 资产
-
-# 5. mac 包本地出（仅 win 走 CI；mac 见下一节"本地 mac 打包"）
-./scripts/build_macos.sh
-# 产物 release/SatelliteDebugTool-macOS-<arch>.zip 自行分发给 mac 用户
-```
-
----
-
-## 方式三：本地 mac 打包（mac 不走 CI）
-
-```bash
-./scripts/build_macos.sh
-```
-
-脚本自动：
-- 创建 `.venv`（如无）
-- 装 requirements.txt + pyinstaller
-- 跑 PyInstaller（主程序 + updater）
-- 把 updater 嵌入 `.app/Contents/MacOS/`
-- `xattr -cr` 清 quarantine（本机直接双击就能开）
-- `ditto -c -k` 出单文件 zip 给同事分发
-
-产物：
-- `dist/SatelliteDebugTool.app` — 本机直接 `open` 打开
-- `release/SatelliteDebugTool-macOS-<arch>.zip` — 分发给同事
-
-对方拿到 zip 解压后首次打开若报"无法验证开发者"，让对方终端跑：
-```bash
-xattr -cr <解压目录>/SatelliteDebugTool.app
-```
-
-### 失败排查
-
-- **build-windows/mac 失败**：查 PyInstaller 输出；通常是新依赖没在 spec 的 `hiddenimports` 里
-- **GitHub Release 上传失败**：检查 workflow 的 `permissions: contents: write` 和仓库 Actions 权限
-- **资产缺失**：确认 `Create 7z archive` 生成的文件名与 `softprops/action-gh-release` 的 `files` 完全一致
-
-### 仅 CI 构建（不发版）
-
-push 到 master/main 不打 tag → 跑 `ci-only-build`，产物上传 GH artifact（7 天保留）。
-Actions → run → Artifacts 卡片下载。
-
-### 手动触发
-
-Actions 页面 → Build & Release → Run workflow → 填 tag（例 `v0.1.0-rc1`）→ Run。
-适合预发版本测试，不需要打真实 git tag。
-
----
-
-## 手动调用 PyInstaller
-
-如果想改细节（加 icon、嵌入 data 文件等），直接编辑 `satellite_debug_tool.spec` 再：
-
-```bash
-pyinstaller --noconfirm satellite_debug_tool.spec
-```
-
-主程序 spec 显式包含 TS/QM、Leaflet/map 资源和 macOS `InfoPlist.strings`。
-打包后至少检查：
-
-```text
-SatelliteDebugTool/_internal/satellite_debug_tool/i18n/translations/
-SatelliteDebugTool/_internal/satellite_debug_tool/ui/assets/map.html
-```
-
-macOS `.app` 还应包含 `Contents/Resources/en.lproj` 和
-`Contents/Resources/zh_CN.lproj`。最终验收必须分别以 `en_US`、`zh_CN`
-启动产物，源码运行成功不能替代打包资源检查。
-
----
-
-## 文件说明
-
-| 文件 | 作用 |
-|------|------|
-| `satellite_debug_tool.spec` | PyInstaller 主程序 spec，含 `collect_all(PySide6/pyqtgraph)` |
-| `scripts/build_macos.sh` | macOS/Linux 一键脚本 |
-| `scripts/build_windows.bat` | Windows 一键脚本 |
-| `.github/workflows/build.yml` | Windows CI 构建与可选 Release |
-
----
-
-## 常见问题
-
-### Q：.app 体积 228 MB 太大？
-
-A：onedir 自带完整 PySide6 + Qt runtime + pyqtgraph。想要小可以换 `onefile` 模式
-（改 spec 把 `COLLECT/BUNDLE` 去掉，改 `EXE` 的 `exclude_binaries=False`），
-单文件 ~120MB，但启动慢且 Qt 插件路径偶有坑。目前保持 onedir。
-
-### Q：打出的包在另一台 Mac 提示"已损坏"
-
-A：未签名 + 沙箱检疫。在目标机上执行：
-```bash
-xattr -dr com.apple.quarantine /Applications/SatelliteDebugTool.app
-```
-
-### Q：Windows 版能在 XP / Win7 上跑吗？
-
-A：不能。PyInstaller 打包的 Python 3.11 + Qt6 最低支持 **Windows 10**。
-
-### Q：Linux 产物呢？
-
-A：CI 没加 Linux runner，本地 `build_macos.sh` 在 Linux 上能直接跑（Ubuntu/Debian 预装 Qt 依赖即可）。
-如果要加 CI，在 `.github/workflows/build.yml` 里复制一条 `ubuntu-latest` matrix item、
-脚本也用 `bash scripts/build_macos.sh`（文件名不贴切，里面代码 Linux 通用）。
+- 构建缺模块：检查实际导入路径、spec 和 user 模块白名单，再重新执行本版构建与冻结包烟测。
+- Mac 检疫提示：确认来源后，通过系统设置的隐私与安全性允许打开；必要时对实际解压 app 执行 `xattr -dr com.apple.quarantine <app>`。构建采用 ad-hoc 签名，尚未进行 Apple 公证。
+- Release 上传失败：检查 `contents: write`、Actions 权限与两份验证后的资产。
+- 用户版体积仍包含 Qt/OpenGL/numpy：这些组件服务于保留的 3D 和曲线功能；包体积以本次平台实际构建指标为准。

@@ -24,10 +24,6 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.comm import DeviceConnectionPhase
-from satellite_debug_tool.core.external_power_monitor import (
-    ExternalPowerPhase,
-    ExternalPowerStore,
-)
 from satellite_debug_tool.core.product import (
     Availability,
     ControlMode,
@@ -48,7 +44,6 @@ from satellite_debug_tool.ui.component_temperature_window import (
     ComponentTemperatureAnchor,
     ComponentTemperatureWindow,
 )
-from satellite_debug_tool.ui.external_power_window import ExternalPowerAnchor
 from satellite_debug_tool.ui.semantic_style import (
     set_semantic_properties,
     set_semantic_property,
@@ -270,6 +265,7 @@ class CustomerOverviewView(QWidget):
         enable_3d: bool = True,
         playback_mode: bool = False,
         external_power_store: Optional[ExternalPowerStore] = None,
+        enable_external_power: bool = True,
         external_power_presenter: Optional[Callable[[QWidget], None]] = None,
     ) -> None:
         super().__init__(parent)
@@ -277,6 +273,7 @@ class CustomerOverviewView(QWidget):
         self._settings = settings
         self._theme = "dark"
         self._playback_mode = bool(playback_mode)
+        self._enable_external_power = bool(enable_external_power)
         self._external_power_store = external_power_store
         self._external_power_presenter = external_power_presenter
         self._projector = LegacyV2Projector(
@@ -610,26 +607,28 @@ class CustomerOverviewView(QWidget):
             self._component_title_sources[key] = title
             self._component_layout.addWidget(item, 1)
 
-        power_item = ExternalPowerAnchor()
-        power_item.setObjectName("customerComponentItem")
-        power_item.activated.connect(self._show_external_power_history)
-        power_layout = QVBoxLayout(power_item)
-        power_layout.setContentsMargins(10, 1, 10, 1)
-        power_layout.setSpacing(1)
-        power_name = QLabel(tr("External power"))
-        power_name.setObjectName("customerComponentName")
-        power_name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        power_detail = QLabel(tr("Not configured"))
-        power_detail.setObjectName("customerComponentDetail")
-        power_detail.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        power_detail.setMinimumWidth(0)
-        power_detail.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        power_layout.addWidget(power_name)
-        power_layout.addWidget(power_detail)
-        self._component_widgets["external_power"] = power_item
-        self._component_names["external_power"] = power_name
-        self._component_details["external_power"] = power_detail
-        self._component_layout.addWidget(power_item, 1)
+        if self._enable_external_power:
+            from satellite_debug_tool.ui.external_power_window import ExternalPowerAnchor
+            power_item = ExternalPowerAnchor()
+            power_item.setObjectName("customerComponentItem")
+            power_item.activated.connect(self._show_external_power_history)
+            power_layout = QVBoxLayout(power_item)
+            power_layout.setContentsMargins(10, 1, 10, 1)
+            power_layout.setSpacing(1)
+            power_name = QLabel(tr("External power"))
+            power_name.setObjectName("customerComponentName")
+            power_name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            power_detail = QLabel(tr("Not configured"))
+            power_detail.setObjectName("customerComponentDetail")
+            power_detail.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            power_detail.setMinimumWidth(0)
+            power_detail.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            power_layout.addWidget(power_name)
+            power_layout.addWidget(power_detail)
+            self._component_widgets["external_power"] = power_item
+            self._component_names["external_power"] = power_name
+            self._component_details["external_power"] = power_detail
+            self._component_layout.addWidget(power_item, 1)
 
         self._root_layout.addWidget(self._signal_panel)
         self._root_layout.addWidget(self._component_panel)
@@ -988,6 +987,8 @@ class CustomerOverviewView(QWidget):
                 if op.tracking_phase.availability is Availability.VALID
                 and op.tracking_phase.value == TrackingPhase.LOCKED
                 else "warn"
+                if op.tracking_phase.availability in (Availability.VALID, Availability.STALE)
+                else "neutral"
             ),
         )
         lock = (
@@ -1005,6 +1006,8 @@ class CustomerOverviewView(QWidget):
                 "ok"
                 if op.locked.availability is Availability.VALID and op.locked.value
                 else "warn"
+                if op.locked.availability in (Availability.VALID, Availability.STALE)
+                else "neutral"
             ),
         )
         navigation = (
@@ -1021,6 +1024,8 @@ class CustomerOverviewView(QWidget):
                 if op.navigation.availability is Availability.VALID
                 and op.navigation.value == NavigationState.READY
                 else "warn"
+                if op.navigation.availability in (Availability.VALID, Availability.STALE)
+                else "neutral"
             ),
         )
         self._set_status("gnss", "GNSS fix", self._display(op.gnss_fix))
@@ -1042,6 +1047,8 @@ class CustomerOverviewView(QWidget):
             else "neutral"
             if op.tx_enabled.availability is Availability.VALID
             else "warn"
+            if tx_control_supported or op.tx_enabled.availability is Availability.STALE
+            else "neutral"
         )
         self._set_status("tx", "TX", tx, tx_status)
         modem = (
@@ -1197,14 +1204,15 @@ class CustomerOverviewView(QWidget):
         self._beam_polar.set_satellites((), max_off_axis_deg=90.0)
 
     def _update_beam_legend(self, *, profile_characterized: bool) -> None:
+        pal = S.palette(self._theme)
         entries = [
-            f'<span style="color:#22C55E">●</span> {tr("Current target")}',
-            f'<span style="color:#F59E0B">●</span> {tr("Geometric candidate")}',
-            f'<span style="color:#38BDF8">●</span> {tr("Other satellite")}',
-            f'<span style="color:#64748B">●</span> {tr("Stale")}',
+            f'<span style="color:{pal["ok"]}">●</span> {tr("Current target")}',
+            f'<span style="color:{pal["warn"]}">●</span> {tr("Geometric candidate")}',
+            f'<span style="color:{pal["info"]}">●</span> {tr("Other satellite")}',
+            f'<span style="color:{pal["text_muted"]}">●</span> {tr("Stale")}',
         ]
         if not profile_characterized:
-            entries.append(f'<span style="color:#F59E0B">⚠</span> {tr("Profile fallback")}')
+            entries.append(f'<span style="color:{pal["warn"]}">⚠</span> {tr("Profile fallback")}')
         self._beam_legend.setText(" · ".join(entries))
 
     @Slot(int)
@@ -1402,6 +1410,9 @@ class CustomerOverviewView(QWidget):
             self._refresh_external_power()
 
     def _refresh_external_power(self) -> None:
+        if not self._enable_external_power:
+            return
+        from satellite_debug_tool.core.external_power_monitor import ExternalPowerPhase
         store = self._external_power_store
         if store is None:
             text = tr("Not configured")
@@ -1461,8 +1472,8 @@ class CustomerOverviewView(QWidget):
             f"#customerStatusItem {{ background: {pal['card_2']}; border: 1px solid {pal['border']}; "
             f"border-radius: 5px; padding: 3px 7px; color: {pal['text_2']}; }}"
             f"#customerStatusItem[density='dense'] {{ padding: 1px 3px; font-size: 10px; }}"
-            f"#customerStatusItem[status='ok'] {{ color: {pal['ok']}; border-color: {pal['ok']}; }}"
-            f"#customerStatusItem[status='warn'] {{ color: {pal['warn']}; border-color: {pal['warn']}; }}"
+            f"#customerStatusItem[status='ok'] {{ color: {pal['ok']}; }}"
+            f"#customerStatusItem[status='warn'] {{ color: {pal['warn']}; }}"
             f"#customerDataItem {{ background: {pal['card_2']}; border: 1px solid {pal['border']}; "
             f"border-radius: 4px; padding: 2px 5px; color: {pal['text_2']}; }}"
             f"#customerDataItem[density='dense'] {{ padding: 1px 3px; font-size: 10px; }}"
@@ -1491,7 +1502,7 @@ class CustomerOverviewView(QWidget):
             f"#customerBeamLegend {{ color: {pal['text_2']}; font-size: 10px; }}"
             f"#customerSnrReadout {{ border-right: 1px solid {pal['border_2']}; }}"
             f"#customerSnrReadout #customerMetricTitle {{ font-size: 13px; }}"
-            f"#customerSnrReadout #customerMetricValue {{ color: {pal['accent_2']}; "
+            f"#customerSnrReadout #customerMetricValue {{ color: {pal['value_number']}; "
             f"font-size: 32px; font-weight: 700; }}"
             f"#customerSnrReadout[density='compact'] #customerMetricValue {{ font-size: 27px; }}"
             f"#customerSnrReadout[density='dense'] #customerMetricTitle {{ font-size: 10px; }}"
@@ -1504,6 +1515,8 @@ class CustomerOverviewView(QWidget):
             f"#customerComponentItem[density='dense'] #customerComponentName {{ font-size: 9px; }}"
             f"#customerComponentItem[density='dense'] #customerComponentDetail {{ font-size: 10px; }}"
         )
+        sky = None if self._orbit_store is None else self._orbit_store.sky_snapshot()
+        self._update_beam_legend(profile_characterized=bool(sky is None or sky.profile_characterized))
         self._snr_plot.setBackground(pal["panel"])
         self._snr_curve.setPen(pg.mkPen(pal["accent_2"], width=2))
         for axis in ("left", "bottom"):
@@ -1529,10 +1542,12 @@ class CustomerOverviewView(QWidget):
             component_item = self._component_widgets[key]
             if isinstance(component_item, ComponentTemperatureAnchor):
                 component_item.retranslate_ui()
-        self._component_names["external_power"].setText(tr("External power"))
-        power_item = self._component_widgets["external_power"]
-        if isinstance(power_item, ExternalPowerAnchor):
-            power_item.retranslate_ui()
+        if self._enable_external_power:
+            from satellite_debug_tool.ui.external_power_window import ExternalPowerAnchor
+            self._component_names["external_power"].setText(tr("External power"))
+            power_item = self._component_widgets["external_power"]
+            if isinstance(power_item, ExternalPowerAnchor):
+                power_item.retranslate_ui()
         self._refresh_external_power()
         for window in self._temperature_windows.values():
             window.retranslate_ui()

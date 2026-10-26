@@ -139,3 +139,146 @@
 - 验证：5 项新回归（文件创建与内容、关闭停写保留文件、hex 不影响记录、shutdown 收尾、
   取消目录选择回退开关）；离屏确认 `192.168.1.12_20261015_152304.log` 生成且内容正确；
   全量 `1544 passed`；翻译 1408 条 0 未完成。
+
+## 2026-10-19：移除 YMODEM 上位机自加的 4 MiB 文件大小上限
+
+- 需求（用户）：TCP Shell 本身是调试端口，上位机不应限制文件传输；大于 4 MiB 的文件
+  （如 LittleFS 大资源）此前直接被拒。
+- 根因：`ymodem_sender.py` 实现时自加 `MAX_PAYLOAD_BYTES = 4 MiB` 上限；M37 计划/验收/
+  开发记录均无此合同，固件侧合同也无对应值——该上限无任何来源，YMODEM 头包 size 字段
+  本身为 ASCII 十进制、协议无固有大小限制。
+- 修复：删除 `MAX_PAYLOAD_BYTES` 与上限检查（常量与 `__all__` 导出一并移除，全仓无残留
+  引用）。文件能否容纳由设备端权威决定：空间不足时设备 abort 发单个 CAN（M37 已核实的
+  固件行为），上位机如实呈现设备拒绝。仅保留"payload 非空"检查——空文件头包与批结束
+  帧（空文件名）不可区分，是协议层事实而非上位机策略。
+- 回归：新增 2 项（4 MiB+1 spec 构造成功——旧实现稳定抛 "payload size out of range"；
+  空 payload 仍被拒绝）；TCP Shell 四测试文件 65 项、全量 `1546 passed`。
+
+## 2026-10-19：修复 XESA01（RT-Thread rym 接收端）YMODEM 批结束失败
+
+- 现象（用户真机）：TCP Shell 给 4-xesa01 项目设备 YMODEM 传输失败，当时只能改用
+  WindTerm 绕过；WindTerm 传同一文件成功证明设备侧文件准入放行。
+- 根因（固件源码实证）：M37 发送机所有帧固定 STX/1024。4-xesa01 的 YMODEM 接收端是
+  RT-Thread `rym` 组件（`ry` 命令写文件系统、`ymodem_ota` 写 OTA 分区，on_begin 均无
+  文件名白名单），其 `_rym_do_fin` 对批结束头**硬编码按 SOH 包长读取校验**——无论帧头
+  是什么都只读 133 字节、按前 128 字节 payload 算 CRC（`ymodem.c` data_sz 赋值后未用）。
+  STX 批结束帧在 RT-Thread 取 CRC 的位置读到的是全零 payload，CRC 必然失败，数据块
+  100% ACK 后整批在最后一步失败。WindTerm 的批结束帧是 SOH/128，因此成功。
+- 修复（上位机 `ymodem_sender.py`）：块类型合同改为头包与批结束帧 SOH/128、数据块
+  STX/1024。AFD01 接收端按帧头字节自适应块长（`ymodem.c` 同时支持 SOH/STX 并分别
+  计数），SOH 头包/批结束对既有 AFD01 路径无影响；超长头包（filename+size > 128B）
+  回退 STX，两类接收端都接受。`_build_frame` 参数化 marker，新增 `HEADER_BLOCK_SIZE`。
+- 回归：新增 3 项（镜像 RT-Thread fin 的固定 133 字节校验、头包 SOH/128、超长头包回退
+  STX）；既有帧合同断言更新为按帧头解析；worker 端到端假设备改为按 marker 解析块长。
+  TCP Shell 四测试文件 68 项、全量 `1549 passed`。
+
+## 2026-10-19：修复 XESA01 yota 头包 ACK 前擦分区导致的握手超时
+
+- 现象（用户真机，会话 `20261019T071000Z-70f88b40`）：SOH 头包修复后重测 XESA01
+  （RT-Thread msh，手动 `yota` 进入接收），进度 0% 失败，报
+  `timeout waiting for header acknowledgement`。
+- 根因（transcript 字节+时间戳实证）：上位机 `+0.00s` 发出正确的 SOH/133 头包；
+  `+5.00s` 按块确认窗口（`ack_timeout_s`）超时发 CAN CAN 放弃；**`+6.87s` 设备的
+  ACK+C 才到达**——RT-Thread `yota` 的 `on_begin` 在头包 ACK 前**同步擦除整个
+  download 分区**（552 KiB 实测 ~7 s；分区为 NOR flash 1 MiB，见 `fal_cfg.h`）。
+  上位机退出后设备每 3 s 发 NAK 等数据块，NAK 用尽后打印 `Update firmware fail.`
+  退出。M37 原实现只对 EOT 阶段（AFD01 落盘）设了 20 s 存储窗口，头包 ACK 用的是
+  5 s 块窗口——但"设备在确认前做耗时存储操作"是同一类事实，头包 ACK 同样会被推迟。
+- 修复（`ymodem_sender.py` `_send_header`）：头包 ACK 等待改用存储操作窗口
+  `final_ack_timeout_s`（默认 20 s，覆盖 1 MiB 分区满擦 ~12.5 s），数据块 ACK 保持
+  块窗口。AFD01 路由 ACK 即时返回，长窗口无副作用。
+- 操作约定（真机）：XESA01 上设备侧接收命令是 `yota`（msh，无 `rb`）；每次传输
+  开始前需在终端手动输入 `yota`，失败/取消后设备已退出，重试前必须重新输入。上位机
+  自动发送的 `rb\r` 在 yota 等待期间只是 3 个被跳过的噪声字节，在空闲 msh 下报
+  `b: command not found`，均无害。
+- 回归：`ScriptedTransport` 支持 (data, delay) 到期交付项（真实 socket 超时语义）；
+  新增 3 项（头包 ACK 擦除延迟下完成传输、头包窗口==存储窗口的反向锁定、worker
+  端到端延迟传输）；TCP Shell 四测试文件 71 项、全量 `1552 passed`。
+
+## 2026-10-19：弹窗布局改为"终端主区 + 右侧栏"（用户反馈）
+
+- 真机确认：XESA01（192.168.1.6，msh `yota`）YMODEM 传输完成、进度 100%——SOH/128
+  帧合同与头包 ACK 存储窗口两项修复均经真机验证。
+- 布局重构（用户需求"连接、会话事件、文件传输放到侧边，给终端更大显示区域"）：
+  原四段垂直堆叠（终端仅占约 38% 高度）改为水平 QSplitter——左侧 Shell 终端主区
+  （全高、约 2/3 宽），右侧栏垂直收拢 TCP Shell 目标（地址/端口/连接/状态三行紧凑）、
+  YMODEM 固件传输（路径行 + 开始/取消行 + 信息/进度/结果）、会话事件（占剩余高度）。
+  两侧不可折叠，比例可拖动；侧栏内容下限 300px，弹窗最小尺寸 880→960 宽。
+- 顺带修复：`retranslate_ui` 此前不刷新三个 QGroupBox 标题（语言切换后残留旧语言）；
+  文件路径框补 tooltip 显示完整路径。
+- 验证：UI 34 项、全量 `1552 passed`；翻译 check 通过（1408 条，无新增文案，全部复用
+  既有源键）；离屏渲染 1040×720 与 960×560 检查——按钮无换行截断、分组无重叠、终端
+  在最小窗口仍约 60% 宽。
+
+## 2026-10-19：终端行首接收时间戳与可见光标（WindTerm 风格，用户反馈）
+
+- 需求：终端跟 WindTerm 一样——每行行首显示本地时间、显示光标。
+- 实现（`tcp_shell_workspace.py`）：
+  - 每行行首插入接收时刻时间戳 `[HH:MM:SS.mmm] `（灰色 `#7f848e`，等宽定长 15 字符），
+    时刻取该行首个字节到达时间；hex 视图每条 hex 行同样加时间戳。
+  - 时间戳是本地装饰，设备侧行编辑动作只作用于时间戳之后：`\r` 行首覆盖与 ESC[K
+    清行的"行首"重定义为时间戳之后（进度条反复重绘不会吃掉时间戳，且该逻辑行保持
+    初次创建时刻）；设备退格在时间戳边界停止。
+  - `TerminalEdit` 设 `cursorWidth=2`——哑终端光标跟随设备回显的写入位置，渲染后
+    停在末尾闪烁。
+  - 会话日志 `.log` 保持纯设备文本合同，不写入时间戳。
+- 验证：新增 7 项回归（每行时间戳格式、`\r` 覆盖单一时间戳、EL2 清行保留时间戳、
+  退格停在时间戳、hex 行时间戳、日志无时间戳、caret 宽度）；既有整行断言改为剥时间
+  戳后比较、SGR 颜色位置断言加时间戳偏移。UI 41 项、全量 `1559 passed`；离屏渲染
+  确认真实字节流（banner/EL2 日志/进度条四帧覆盖）时间戳统一对齐、无重复残留。
+
+## 2026-10-20：光标改自绘（用户反馈"看不到光标"根因）
+
+- 现象：真机看不到终端光标。根因不是颜色——**Qt 只读 QTextEdit 不绘制 text caret**，
+  `setCursorWidth` 对只读控件无效（上一版仅设宽度，光标从未画出来过）。
+- 修复（`TerminalEdit`）：viewport 自绘闪烁光标——530ms 半周期定时器切换 `_caret_on`，
+  `paintEvent` 尾声在 `cursorRect()` 画 2px 竖条，颜色取 palette Text 色（深背景白色、
+  浅背景黑色，自动反差）。焦点进入启动闪烁、离开停止并清除残影；位置跟随设备回显
+  写入位置（渲染后 textCursor 停在末尾）。连接成功即 `setFocus(terminal)`，键盘输入
+  与光标立即可用。
+- 验证：caret 回归更新为完整合同（focusIn 启动定时器、翻转点亮、paint 冒烟、focusOut
+  停止清除）；离屏像素级验证——点亮时 cursorRect 区域从背景色变为文字色。UI 41 项、
+  全量 `1559 passed`。
+
+## 2026-10-20：终端右键菜单增加"清屏"（用户反馈）
+
+- 需求：右键目前只有全选/复制（Qt 只读 QTextEdit 默认菜单），补 WindTerm 同级的清屏。
+- 实现：`TerminalEdit` 覆写 `contextMenuEvent`——默认菜单（全选/复制）后加分隔线与
+  "清屏"，emit `clear_requested`；workspace `_on_clear_terminal` 清空终端并整体复位
+  渲染管线状态（增量 UTF-8 解码器、挂起 `\r`、覆盖模式、SGR 颜色、行时间戳状态），
+  防止残留的半个 ANSI 序列或颜色污染清屏后的新内容；事件区记录"终端已清屏"。
+- 验证：新增 2 项回归（菜单含清屏项 + 分隔线；清屏后状态复位、新行时间戳正常、事件
+  记录）；翻译 update + check（1410 条 0 未完成，新增"清屏"/"终端已清屏"中文）。
+  UI 43 项、全量 `1561 passed`。
+
+## 2026-10-22：Shell 弹窗支持串口连接（UDP 拒绝），入口更名 "Shell…"
+
+- 需求（用户）：目前只支持 TCP，扩展 UDP/串口；入口按钮名称改为 Shell。
+- 设备侧事实（固件源码实证）：AFD01 letter shell 与 XESA01 msh 的 shell 都在 TCP 1235
+  和串口（letter shell UART / msh 控制台）两路；UDP 口只跑 DEBUG v2 协议，无 UDP shell
+  服务——UDP 明确不做，`create_link` 对未知 transport 抛 `unsupported`。
+- 架构：新增 `core/tcp_shell/transport.py` 字节流 link 层（`ShellLink` 接口 +
+  `TcpShellLink` / `SerialShellLink`，pyserial 8N1）；`TcpShellWorker` 保持命令队列单
+  owner 模型，`_ConnectCommand` 改 target dict（`{"transport": "tcp"|"serial", ...}`），
+  socket 操作全部委托 link；`connected` 信号 (host, port) → (label)；controller
+  `connect_device(target)`；recorder `config.json`/`summary.json` 记完整 target。串口
+  target 无管理 endpoint（unmanaged 直传，与手填 TCP 同语义）。
+- UI：连接区改类型下拉（TCP/串口）+ `QStackedWidget` 两页（TCP：地址+端口；串口：端口
+  枚举+手填、波特率 8 档默认 115200）；settings 新键 `tcp_shell.last_transport` /
+  `serial_last_port` / `serial_baudrate`；会话日志文件名 TCP 用地址、串口用串口名；三
+  工作区入口按钮与弹窗标题更名 "Shell…" / "Shell"。
+- 测试：新增 19 项（transport 11：TCP 真 socket 对拍、Serial mock pyserial、UDP 拒绝、
+  controller 串口开路失败端到端；UI 6：两页互斥、target 组装、串口枚举保留手填、
+  settings 记忆恢复、串口 endpoint=None、日志文件名随类型；入口文案 1）；既有 TCP
+  socket 假设备端到端全保留。worker 层不为 serial 另做端到端——命令循环/YMODEM 与
+  物理口无关（全经 link 接口），TCP 路径已覆盖。全量 `1578 passed`；翻译 1413 条
+  0 未完成。
+
+
+## 2026-10-23 Shell Shift 字符诊断（源码验证）
+
+用户反馈 Shift+- 后出现乱码及减号。对现有 TerminalEdit 的原生 macOS 键盘事件和 bytes_entered 信号进行无设备探针记录：纯 Shift text 为空且不发送数据；Shift+- 的 Qt key 为 U+2014、text 为两个中文破折号 U+2014，实际发送 e28094e28094；Shift+1 产生全角 U+FF01，发送 efbc81；Shift+A 产生 A，发送 41。终端保留输入法产出的字符，Shift 修饰键没有丢失。设备若按单字节处理上述中文标点，其显示可呈乱码；本轮未在实际设备上确认乱码的具体解码路径。
+
+英文文本事件的本地回归：Shift+_、Shift+A、Shift++ 分别发出 5f、41、2b；纯 Shift 不产生字节。建议使用英文/ABC 输入法输入 Shell 命令，保留现有 UTF-8 输入语义。终端代码保持原实现。探针原始记录位于 /tmp/sdt-shell-native-keys.jsonl；测试窗口已关闭，过程未连接设备。
+
+按用户新约定，本轮仅提供源码运行命令；未执行打包。用户版：`.venv/bin/python -m satellite_debug_tool.main_user`；运维版：`.venv/bin/python -m satellite_debug_tool.main`。

@@ -13,6 +13,7 @@
   DownloadWorker → 后台 download_all + 进度信号
 """
 from __future__ import annotations
+from satellite_debug_tool.edition import edition_of
 
 import logging
 import os
@@ -388,7 +389,7 @@ class UpdateDialog(QDialog):
 
         # 有更新可用
         platform = current_platform()
-        assets = latest.assets_for_platform(platform)
+        assets = latest.assets_for_platform(platform, edition=edition_of(self._settings))
         if not assets:
             self._show_error(
                 "Version {version} has no {platform} package.\n"
@@ -426,14 +427,14 @@ class UpdateDialog(QDialog):
     def _on_start_download(self) -> None:
         if self._latest is None:
             return
-        assets = self._latest.assets_for_platform(current_platform())
+        assets = self._latest.assets_for_platform(current_platform(), edition=edition_of(self._settings))
         if not assets:
             self._show_error("Release package is missing; try again later")
             return
 
         # 下载目录：~/.satellite_debug_tool/updates/<tag>/
         from pathlib import Path as _P
-        base = _P.home() / ".satellite_debug_tool" / "updates" / self._latest.tag_name
+        base = _P(self._settings.config_directory) / "updates" / self._latest.tag_name
         base.mkdir(parents=True, exist_ok=True)
         self._download_dir = base
 
@@ -519,6 +520,7 @@ class UpdateDialog(QDialog):
             target_version = "" if self._latest is None else self._latest.tag_name
             self._launch_request = prepare_update_launch_request(
                 target_version=target_version,
+                edition=edition_of(self._settings),
                 install_dir=install_dir,
                 updater_executable=updater_exe,
                 volumes=volumes,

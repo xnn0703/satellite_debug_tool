@@ -784,7 +784,7 @@ class PowerSupplyDebugWorkspace(QWidget):
         palette = S.palette(theme)
         self.setStyleSheet(
             f"PowerSupplyDebugWorkspace {{ background: {palette['bg']}; }}"
-            f"#powerDebugNotice {{ color: {palette['warn']}; background: {palette['warn_soft']}; "
+            f"#powerDebugNotice {{ color: {palette['warn']}; background: {S.qss_color(palette['warn_soft'])}; "
             f"padding: 6px 9px; border: 1px solid {palette['warn']}; border-radius: 5px; }}"
             f"#powerValidationPolicy {{ color: {palette['text_2']}; padding: 4px 2px; }}"
         )

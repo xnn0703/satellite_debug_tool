@@ -43,20 +43,7 @@ from satellite_debug_tool.i18n import (
 from satellite_debug_tool.ui import styles as S
 
 
-# ---- 色标（与 DEBUG_ENUM_LEVEL_* 对齐） ----
-
-_ENUM_LEVEL_COLORS = {
-    0: "#4EC9B0",   # INFO (绿)
-    1: "#DCDCAA",   # WARN (黄)
-    2: "#F14C4C",   # ERROR (红)
-    3: "#808080",   # NEUTRAL (灰)
-}
-
-_BOOL_ON_COLOR = "#4EC9B0"     # 绿
-_BOOL_OFF_COLOR = "#555555"    # 深灰
-
-# A3: 最近变化 2 秒内边框高亮
-_HIGHLIGHT_BORDER = "#FFC107"    # 琥珀
+# A3: 最近变化 2 秒内使用信息色边框高亮
 _HIGHLIGHT_MS = 2000
 
 
@@ -134,6 +121,7 @@ class StateItemRow(QFrame):
     def __init__(self, entry: StateDefEntry, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._entry = entry
+        self._current_value: Optional[int] = None
         self._is_dark = True
         self._theme = "dark"
         self._scale = "medium"
@@ -146,7 +134,7 @@ class StateItemRow(QFrame):
         layout.setVerticalSpacing(0)
 
         self._dot = QLabel()
-        self._dot.setStyleSheet(_dot_stylesheet(_BOOL_OFF_COLOR))
+        self._dot.setStyleSheet(_dot_stylesheet(S.palette(self._theme)["text_muted"]))
         self._name_label = QLabel(entry.name)
         mark_raw_text(self._name_label)
         self._value_label = QLabel("—")
@@ -225,19 +213,22 @@ class StateItemRow(QFrame):
         self._scale = scale
         p = S.palette(self._theme)
         name_px = S.font_px(12, scale)
-        # A3: 默认"无边框"视觉（边与背景同色），flash 时换琥珀色
+        # 常规边框与表面同色；最近变化使用信息色，独立于设备告警。
         self._normal_border = p["card_alt"]
-        self.setStyleSheet(self._make_style(self._normal_border))
         self._name_label.setStyleSheet(
             f"font-weight: 500; color: {p['text']}; font-size: {name_px}px;"
         )
-        # value_label 颜色由 set_value/set_unknown 设置，不在此覆盖
+        self.setStyleSheet(self._make_style(p["info"] if self._highlight_timer.isActive() else self._normal_border))
+        if self._current_value is None:
+            self.set_unknown()
+        else:
+            self.set_value(self._current_value)
 
     # ----- A3: 最近变化 2 秒高亮 -----
 
     def flash_highlight(self) -> None:
         """值变化时，外框高亮 2 秒后恢复。"""
-        self.setStyleSheet(self._make_style(_HIGHLIGHT_BORDER))
+        self.setStyleSheet(self._make_style(S.palette(self._theme)["info"]))
         self._highlight_timer.start(_HIGHLIGHT_MS)
 
     def _clear_highlight(self) -> None:
@@ -249,12 +240,14 @@ class StateItemRow(QFrame):
 
     def set_unknown(self) -> None:
         """状态未知（未曾上报）。"""
-        self._dot.setStyleSheet(_dot_stylesheet(_BOOL_OFF_COLOR))
+        self._current_value = None
+        self._dot.setStyleSheet(_dot_stylesheet(S.palette(self._theme)["text_faint"]))
         self._value_label.setText("—")
         p = S.palette(self._theme)
         self._value_label.setStyleSheet(f"color: {p['text_faint']};")
 
     def set_value(self, value: int) -> None:
+        self._current_value = value
         if self._entry.state_type == int(StateType.BOOL):
             self._render_bool(value)
         else:
@@ -264,7 +257,8 @@ class StateItemRow(QFrame):
         inverse = bool(self._entry.flags & STATE_FLAG_INVERSE)
         # inverse: 0=on(绿), 1=off(灰/红) 的含义反了；这里简化：inverse 时颜色取反
         on = (value != 0) ^ inverse
-        color = _BOOL_ON_COLOR if on else _BOOL_OFF_COLOR
+        p = S.palette(self._theme)
+        color = p["ok"] if on else p["text_muted"]
         self._dot.setStyleSheet(_dot_stylesheet(color))
         self._value_label.setText("ON" if value != 0 else "OFF")
         self._value_label.setStyleSheet(f"color: {color};")
@@ -273,11 +267,12 @@ class StateItemRow(QFrame):
         match = next((e for e in self._entry.enums if e.value == value), None)
         if match is None:
             # 未知枚举值：显示原始整数
-            self._dot.setStyleSheet(_dot_stylesheet(_BOOL_OFF_COLOR))
+            color = S.palette(self._theme)["text_muted"]
+            self._dot.setStyleSheet(_dot_stylesheet(color))
             self._value_label.setText(str(value))
-            self._value_label.setStyleSheet("color: #888888;")
+            self._value_label.setStyleSheet(f"color: {color};")
             return
-        color = _ENUM_LEVEL_COLORS.get(match.level, "#888888")
+        color = S.enum_color(match.level, self._theme)
         self._dot.setStyleSheet(_dot_stylesheet(color))
         self._value_label.setText(match.name)
         self._value_label.setStyleSheet(f"color: {color}; font-weight: 500;")
@@ -292,6 +287,7 @@ class ChannelItemRow(QFrame):
 
     def __init__(self, channel: ChannelDefEntry, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._current_value: Optional[float] = None
         self._channel = channel
         self._theme = "dark"
         self._scale = "medium"
@@ -303,7 +299,7 @@ class ChannelItemRow(QFrame):
 
         # 跟 StateItemRow 视觉对齐：左圆点（恒灰色占位）+ name + value 右对齐
         self._dot = QLabel()
-        self._dot.setStyleSheet(_dot_stylesheet("#3A6E66"))  # 青色，区分 state 圆点
+        self._dot.setStyleSheet(_dot_stylesheet(S.palette(self._theme)["text_muted"]))
         self._name_label = QLabel(channel.name)
         mark_raw_text(self._name_label)
         self._value_label = QLabel("—")
@@ -350,11 +346,15 @@ class ChannelItemRow(QFrame):
             f"font-weight: 500; color: {p['text']}; font-size: {px}px;"
         )
 
+        self._dot.setStyleSheet(_dot_stylesheet(p["text_muted"]))
+        self.set_value(self._current_value)
+
     def set_dark_theme(self, is_dark: bool) -> None:
         self.set_theme("dark" if is_dark else "light", self._scale)
 
     def set_value(self, value: Optional[float]) -> None:
         """更新数值显示。value=None → 显示 '—'"""
+        self._current_value = value
         p = S.palette(self._theme)
         if value is None:
             self._value_label.setText("—")

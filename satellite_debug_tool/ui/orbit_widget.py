@@ -81,20 +81,20 @@ class OrbitSkyPlot(QWidget):
         super().__init__(parent)
         self.setMinimumSize(330, 330)
         self._samples: tuple[OrbitCurrentSample, ...] = ()
-        self._dark = True
+        self._theme = "dark"
 
     def set_samples(self, samples: Sequence[OrbitCurrentSample]) -> None:
         self._samples = tuple(samples)
         self.update()
 
     def set_theme(self, theme: str, _scale: str = "small") -> None:
-        self._dark = theme == "dark"
+        self._theme = S._normalize_theme(theme)
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        palette = S.palette("dark" if self._dark else "light")
+        palette = S.palette(self._theme)
         painter.fillRect(self.rect(), QColor(palette["panel"]))
         center = QPointF(self.width() / 2.0, self.height() / 2.0)
         radius = max(20.0, min(self.width(), self.height()) / 2.0 - 38.0)
@@ -118,7 +118,7 @@ class OrbitSkyPlot(QWidget):
             visible = bool(
                 getattr(sample, "visible", getattr(sample, "geographic_visible", False))
             )
-            color = QColor("#F59E0B" if sample.stale else "#22C55E" if visible else "#3B82F6")
+            color = QColor(palette["warn"] if sample.stale else palette["ok"] if visible else palette["info"])
             painter.setPen(QPen(color, 1.5))
             painter.setBrush(color)
             painter.drawEllipse(point, 5.0, 5.0)
@@ -541,7 +541,7 @@ class OrbitWidget(QWidget):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if stale:
-                    item.setForeground(QColor("#F59E0B"))
+                    item.setForeground(QColor(S.palette(self._theme)["warn"]))
                 self._catalog_table.setItem(row, column, item)
             self._target_combo.addItem(f"{entry.name} · {entry.norad_id}", entry.norad_id)
         index = self._target_combo.findData(selected)
@@ -565,7 +565,7 @@ class OrbitWidget(QWidget):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if sample.stale:
-                    item.setForeground(QColor("#F59E0B"))
+                    item.setForeground(QColor(S.palette(self._theme)["warn"]))
                 self._current_table.setItem(row, column, item)
 
     def _render_prediction(self) -> None:
@@ -575,8 +575,8 @@ class OrbitWidget(QWidget):
         if samples:
             start = samples[0].utc_unix_ms
             x = [(item.utc_unix_ms - start) / 1000.0 for item in samples]
-            self._prediction_plot.plot(x, [item.elevation_deg for item in samples], pen=pg.mkPen("#22C55E", width=2), name="Elevation")
-            self._prediction_plot.plot(x, [item.azimuth_deg for item in samples], pen=pg.mkPen("#3B82F6", width=1), name="Azimuth")
+            self._prediction_plot.plot(x, [item.elevation_deg for item in samples], pen=pg.mkPen(S.palette(self._theme)["ok"], width=2), name="Elevation")
+            self._prediction_plot.plot(x, [item.azimuth_deg for item in samples], pen=pg.mkPen(S.palette(self._theme)["info"], width=1), name="Azimuth")
             self._prediction_table.setColumnCount(6)
             self._prediction_table.setHorizontalHeaderLabels(
                 [tr("UTC"), tr("Azimuth"), tr("Elevation"), tr("Range km"), tr("Satellite LLA"), tr("TLE status")]
@@ -747,6 +747,10 @@ class OrbitWidget(QWidget):
         self._prediction_plot.setBackground(palette["panel"])
         self._prediction_plot.getAxis("left").setTextPen(palette["text_muted"])
         self._prediction_plot.getAxis("bottom").setTextPen(palette["text_muted"])
+        for axis_name in ("left", "bottom"):
+            self._prediction_plot.getAxis(axis_name).setPen(palette["border_2"])
+        self._render_prediction()
+        self._render_current()
 
 
 __all__ = ["OrbitWidget", "OrbitSkyPlot"]

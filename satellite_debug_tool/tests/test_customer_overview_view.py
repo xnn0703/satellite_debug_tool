@@ -156,6 +156,19 @@ def _channel(cid: int, name: str):
     return ChannelDefEntry(cid, 1, 0, 0, name, "", -1000.0, 1000.0)
 
 
+def test_pending_telemetry_uses_neutral_status_color(app):
+    """待确认表示尚无遥测证据，告警由有效异常或明确的回读缺失触发。"""
+    live = _LiveDouble()
+    live.connected = False
+    view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
+    try:
+        view.refresh()
+        for key in ("tracking", "lock", "navigation", "tx"):
+            assert view._status_values[key].property("status") == "neutral"
+    finally:
+        view.deleteLater()
+
+
 def test_customer_overview_renders_afd01_values_and_empty_components(app, monkeypatch):
     live = _LiveDouble()
     live.profiles.apply_meta(MetaInfo(2, "0.0.130", "afd01", "AFD01-0001"))
@@ -726,3 +739,45 @@ def test_customer_record_button_renders_armed_active_and_restoring_states(app) -
     live.customer_recording_state_changed.emit("restoring", "/tmp/support.sdb")
     assert view._record_btn.text() == tr("Restoring...")
     assert not view._record_btn.isEnabled()
+
+
+@pytest.mark.parametrize("enable_external_power", [False, True])
+@pytest.mark.parametrize("connected", [False, True])
+def test_overview_common_panels_are_visible_with_optional_power(
+    app, enable_external_power, connected
+) -> None:
+    live = _LiveDouble()
+    live.connected = connected
+    view = CustomerOverviewView(
+        live, _SettingsDouble(), enable_3d=False,
+        enable_external_power=enable_external_power,
+    )
+    view.resize(1280, 720)
+    view.show()
+    try:
+        view.refresh()
+        app.processEvents()
+        for panel in (view._signal_panel, view._component_panel):
+            assert view._root_layout.indexOf(panel) >= 0
+            assert panel.parentWidget() is view
+            assert panel.isVisibleTo(view)
+            assert view.rect().contains(panel.geometry())
+        assert view._root_layout.indexOf(view._component_panel) == view._root_layout.count() - 1
+        assert view._snr_plot.isVisibleTo(view)
+        assert set(view._component_widgets) == {
+            "converter", "tx_array", "rx_array",
+        } | ({"external_power"} if enable_external_power else set())
+
+        live.products.feed(ServiceIdentity(1, 1000, 0x17, "AFD01", "SNR-TEST", "0.0.130", "", 2))
+        live.products.feed(ServiceFastState(
+            1, 1000, 1 << 11, 0, 0, False, 0, 0, False,
+            0.0, 0.0, 0.0, 0.0, 0.0, 18.5,
+        ))
+        view.refresh()
+        times, values = view._snr_curve.getData()
+        assert times.tolist() == pytest.approx([1.0])
+        assert values.tolist() == pytest.approx([18.5])
+    finally:
+        view.close()
+        view.deleteLater()
+        app.processEvents()

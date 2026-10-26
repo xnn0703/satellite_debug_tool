@@ -59,13 +59,24 @@ class LatestRelease:
     html_url: str = ""
     assets: List[Asset] = field(default_factory=list)
 
-    def assets_for_platform(self, platform: str) -> List[Asset]:
+    def assets_for_platform(self, platform: str, *, edition=None) -> List[Asset]:
         """按平台过滤资产；优先单文件 7z，否则返回旧分卷。
 
         Args:
             platform: "mac" / "win"（current_platform() 返回值）
         """
+        from satellite_debug_tool.edition import Edition, build_edition
+        selected = build_edition() if edition is None else Edition(edition)
+        if selected is Edition.USER:
+            label = {"win": "windows", "mac": "macos", "linux": "linux"}.get(platform)
+            expected = f"satellite_terminal_tool-user-{label}-{self.tag_name}.7z"
+            matches = [asset for asset in self.assets if asset.name == expected]
+            return matches if len(matches) == 1 else []
         platform_token = re.escape(platform)
+        if compare_versions(self.tag_name, "1.7.0") > 0:
+            expected = f"satellite_debug_tool-{platform}-{self.tag_name}.7z"
+            matches = [asset for asset in self.assets if asset.name == expected]
+            return matches if len(matches) == 1 else []
         single_pat = re.compile(rf"-{platform_token}-.*\.7z$", re.IGNORECASE)
         singles = sorted(
             (a for a in self.assets if single_pat.search(a.name)),

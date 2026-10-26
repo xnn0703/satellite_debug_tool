@@ -1,16 +1,17 @@
-"""Raw TCP shell worker: single socket owner for shell bytes and YMODEM (M37).
+"""Raw shell session worker: single link owner for shell bytes and YMODEM (M37).
 
-The worker is the only read/write owner of the TCP connection. Shell mode
-forwards received bytes to the UI; YMODEM mode feeds the sender state machine
-directly so binary control bytes never pass through text decoding.
+The worker is the only read/write owner of the byte-stream link (TCP socket or
+serial port). Shell mode forwards received bytes to the UI; YMODEM mode feeds
+the sender state machine directly so binary control bytes never pass through
+text decoding.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 import queue
-import socket
 import threading
 import time
 from typing import Optional
@@ -18,6 +19,7 @@ from typing import Optional
 from PySide6.QtCore import QThread, Signal
 
 from .recorder import TcpShellSessionRecorder
+from .transport import ShellLink, ShellLinkError, create_link
 from .ymodem_sender import (
     YmodemFileSpec,
     YmodemSendOutcome,
@@ -38,8 +40,7 @@ class TcpShellWorkerState(str, Enum):
 
 @dataclass
 class _ConnectCommand:
-    host: str
-    port: int
+    pass
 
 
 @dataclass
@@ -61,8 +62,8 @@ class _LinkClosed(RuntimeError):
     pass
 
 
-class _SocketYmodemTransport(YmodemTransport):
-    """Bind the YMODEM sender to the worker-owned socket."""
+class _LinkYmodemTransport(YmodemTransport):
+    """Bind the YMODEM sender to the worker-owned link."""
 
     def __init__(self, worker: "TcpShellWorker") -> None:
         self._worker = worker
@@ -78,9 +79,9 @@ class _SocketYmodemTransport(YmodemTransport):
 
 
 class TcpShellWorker(QThread):
-    """Own the TCP connection, the YMODEM transfer and the session recorder."""
+    """Own the shell link, the YMODEM transfer and the session recorder."""
 
-    connected = Signal(str, int)
+    connected = Signal(str)
     connect_failed = Signal(str)
     disconnected = Signal(str)
     state_changed = Signal(str)
@@ -92,21 +93,21 @@ class TcpShellWorker(QThread):
     def __init__(
         self,
         *,
-        host: str,
-        port: int,
+        target: dict,
         managed_session: bool,
         operator: str = "",
         recorder: Optional[TcpShellSessionRecorder] = None,
+        session_root: Optional[Path] = None,
         connect_timeout_s: float = 3.0,
         sender: Optional[YmodemSender] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._host = str(host)
-        self._port = int(port)
+        self._target = dict(target)
         self._managed_session = bool(managed_session)
         self._operator = operator
         self._recorder = recorder
+        self._session_root = session_root
         self._connect_timeout_s = float(connect_timeout_s)
         # None 时在 _run_ymodem 里构造带进度/证据回调的 sender；
         # 此处不能预建默认实例，否则会吞掉传输期回调（进度恒为 0 的根因）。
@@ -114,7 +115,7 @@ class TcpShellWorker(QThread):
         self._commands: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
         self._ymodem_cancel = threading.Event()
-        self._socket: Optional[socket.socket] = None
+        self._link: Optional[ShellLink] = None
         self._state = TcpShellWorkerState.DISCONNECTED
         self._last_ymodem_payload: Optional[dict] = None
 
@@ -124,8 +125,8 @@ class TcpShellWorker(QThread):
     def state(self) -> TcpShellWorkerState:
         return self._state
 
-    def submit_connect(self, host: str, port: int) -> None:
-        self._commands.put(_ConnectCommand(str(host), int(port)))
+    def submit_connect(self) -> None:
+        self._commands.put(_ConnectCommand())
 
     def submit_disconnect(self, reason: str = "") -> None:
         self._commands.put(_DisconnectCommand(reason))
@@ -156,47 +157,45 @@ class TcpShellWorker(QThread):
                 except queue.Empty:
                     continue
                 if isinstance(command, _ConnectCommand):
-                    if self._socket is not None:
+                    if self._link is not None:
                         continue
-                    if self._connect(command.host, command.port):
+                    if self._connect():
                         self._shell_loop()
                 elif isinstance(command, _DisconnectCommand):
                     break
         finally:
-            self._close_socket()
+            self._close_link()
             self._finalize_recorder(reason="worker-stopped")
             self._set_state(TcpShellWorkerState.DISCONNECTED)
 
-    def _connect(self, host: str, port: int) -> bool:
+    def _connect(self) -> bool:
         self._set_state(TcpShellWorkerState.CONNECTING)
         try:
-            connection = socket.create_connection(
-                (host, port), timeout=self._connect_timeout_s
-            )
-        except OSError as exc:
+            link = create_link(self._target, connect_timeout_s=self._connect_timeout_s)
+            link.open()
+        except ShellLinkError as exc:
             self._set_state(TcpShellWorkerState.DISCONNECTED)
-            self.connect_failed.emit(f"{type(exc).__name__}: {exc}")
+            self.connect_failed.emit(str(exc))
             return False
-        connection.settimeout(0.05)
-        self._socket = connection
+        self._link = link
         if self._recorder is None:
             self._recorder = TcpShellSessionRecorder(
-                host=host,
-                port=port,
+                target=self._target,
                 managed_session=self._managed_session,
                 operator=self._operator,
+                root=self._session_root,
             )
         try:
             session_dir = self._recorder.start()
         except Exception:
-            self._close_socket()
+            self._close_link()
             self._set_state(TcpShellWorkerState.DISCONNECTED)
             self.connect_failed.emit("session evidence directory unavailable")
             return False
         self._set_state(TcpShellWorkerState.CONNECTED)
         self.session_started.emit(self._recorder.session_id)
-        self.connected.emit(host, port)
-        self._record_event("connected", {"host": host, "port": port})
+        self.connected.emit(link.label)
+        self._record_event("connected", {"target": dict(self._target), "label": link.label})
         return True
 
     def _shell_loop(self) -> None:
@@ -221,18 +220,18 @@ class TcpShellWorker(QThread):
                         close_reason = str(exc) or "link-closed"
                 elif isinstance(command, _StartYmodemCommand):
                     self._run_ymodem(command.spec)
-                    if self._socket is None:
+                    if self._link is None:
                         close_reason = "link-closed-during-ymodem"
                 elif isinstance(command, _DisconnectCommand):
                     self._record_event("disconnect_requested", {"reason": command.reason})
                     self._commands.put(command)  # let the outer loop exit too
-                    self._close_socket()
+                    self._close_link()
                     self._finalize_recorder(reason=command.reason or "operator")
                     self._emit_disconnected(command.reason or "operator")
                     return
                 elif isinstance(command, _ConnectCommand):
                     continue
-        self._close_socket()
+        self._close_link()
         self._finalize_recorder(reason=close_reason)
         self._emit_disconnected(close_reason)
 
@@ -261,7 +260,7 @@ class TcpShellWorker(QThread):
             )
             return
         self._drain_echo(_ECHO_DRAIN_S)
-        if self._socket is None:
+        if self._link is None:
             self._finish_ymodem(
                 spec, YmodemSendOutcome.ERROR, 0, 0, 0.0, error="link-closed"
             )
@@ -278,7 +277,7 @@ class TcpShellWorker(QThread):
             ),
         )
 
-        result = sender.send_batch(spec, _SocketYmodemTransport(self))
+        result = sender.send_batch(spec, _LinkYmodemTransport(self))
         self._finish_ymodem(
             spec,
             result.outcome,
@@ -320,7 +319,7 @@ class TcpShellWorker(QThread):
         self._record_event("ymodem_finished", payload)
         self._last_ymodem_payload = payload
         self.ymodem_finished.emit(payload)
-        if self._socket is not None:
+        if self._link is not None:
             self._set_state(TcpShellWorkerState.CONNECTED)
         else:
             self._set_state(TcpShellWorkerState.DISCONNECTED)
@@ -336,46 +335,35 @@ class TcpShellWorker(QThread):
             if data:
                 self.rx_payload.emit(data)
 
-    # -- socket helpers (worker thread only) ------------------------------------
+    # -- link helpers (worker thread only) ------------------------------------
 
     def _recv_bytes(self, timeout_s: float) -> bytes:
-        connection = self._socket
-        if connection is None:
-            raise _LinkClosed("socket-closed")
-        connection.settimeout(max(timeout_s, 0.001))
+        link = self._link
+        if link is None:
+            raise _LinkClosed("link-closed")
         try:
-            data = connection.recv(65536)
-        except socket.timeout:
-            return b""
-        except OSError as exc:
-            self._close_socket()
-            raise _LinkClosed(f"{type(exc).__name__}: {exc}") from exc
-        if not data:
-            self._close_socket()
-            raise _LinkClosed("peer-closed")
-        if self._recorder is not None:
+            data = link.recv(timeout_s)
+        except ShellLinkError as exc:
+            raise _LinkClosed(str(exc)) from exc
+        if self._recorder is not None and data:
             self._recorder.record_transcript("rx", data)
         return data
 
     def _send_bytes(self, data: bytes) -> None:
-        connection = self._socket
-        if connection is None:
-            raise _LinkClosed("socket-closed")
+        link = self._link
+        if link is None:
+            raise _LinkClosed("link-closed")
         try:
-            connection.sendall(data)
-        except OSError as exc:
-            self._close_socket()
-            raise _LinkClosed(f"{type(exc).__name__}: {exc}") from exc
+            link.send(data)
+        except ShellLinkError as exc:
+            raise _LinkClosed(str(exc)) from exc
         if self._recorder is not None:
             self._recorder.record_transcript("tx", data)
 
-    def _close_socket(self) -> None:
-        connection, self._socket = self._socket, None
-        if connection is not None:
-            try:
-                connection.close()
-            except OSError:
-                pass
+    def _close_link(self) -> None:
+        link, self._link = self._link, None
+        if link is not None:
+            link.close()
 
     def _finalize_recorder(self, *, reason: str) -> None:
         recorder = self._recorder

@@ -46,6 +46,8 @@ class PayloadContract:
     executable_name: str
     updater_name: str
     runtime_dir_name: str = "_internal"
+    edition: str | None = None
+    target_version: str = ""
 
 
 class Applier:
@@ -166,6 +168,12 @@ class Applier:
                 "apply_payload_ambiguous",
                 candidates=[str(path) for path in unique],
             )
+        if contract.edition is not None:
+            from satellite_debug_tool.edition import Edition, validate_payload_identity
+            try:
+                validate_payload_identity(unique[0], Edition(contract.edition), contract.target_version)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise ApplyError("apply_payload_identity", str(exc)) from exc
         self._progress("validate", 1.0)
         return unique[0]
 
@@ -225,6 +233,16 @@ class Applier:
 
         workdir 用于放合并后的 7z 和 staging 解压目录；调用方负责事后清理。
         """
+        if payload_contract.edition is not None:
+            import json
+            from satellite_debug_tool.edition import Edition
+            identity = install_dir / "_internal" / "satellite_debug_tool" / "build_identity.json"
+            try:
+                installed = Edition(json.loads(identity.read_text())["edition"]) if identity.exists() else Edition.OPS
+                if installed is not Edition(payload_contract.edition):
+                    raise ValueError("installed edition differs from updater request")
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise ApplyError("apply_payload_identity", str(exc)) from exc
         workdir.mkdir(parents=True, exist_ok=True)
         merged = workdir / "_merged.7z"
         staging = workdir / "_staging"

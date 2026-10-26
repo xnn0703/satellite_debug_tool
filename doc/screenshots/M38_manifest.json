@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-22",
+  "qt_platform": "cocoa",
+  "snapshots": [
+    {
+      "file": "M38_customer_dark.png",
+      "source": "customer-dark.png",
+      "sha256": "7e32c6d21aa9cf9a3a822c8b48bd39a3d22f4bb8561e7247f58f5b858d919a7f",
+      "bytes": 298409
+    },
+    {
+      "file": "M38_customer_light.png",
+      "source": "customer-light.png",
+      "sha256": "a6f610972906ebd32a549fee93d90b92826cf8afb14471ce60819dd400c9f57f",
+      "bytes": 299088
+    },
+    {
+      "file": "M38_engineering_dark.png",
+      "source": "engineering-dark.png",
+      "sha256": "4ba3bcc0609beae1c47dd22e76d34ff330c96127e01f04e6b944ce012c6a8670",
+      "bytes": 181674
+    },
+    {
+      "file": "M38_production_light.png",
+      "source": "zh_CN-1280-production-0-light.png",
+      "sha256": "afbb1f06fcf0152182a45c6a5bc36006ef1ae0c9e8dba87effd22e42e452400c",
+      "bytes": 335366
+    },
+    {
+      "file": "M38_shell_light.png",
+      "source": "shell-light.png",
+      "sha256": "9cd52187c4d1490e5caa2e6e8043dee5dfb03979ea88e8632f4fe69cf04ee8f2",
+      "bytes": 92550
+    },
+    {
+      "file": "M38_progress_dark.png",
+      "source": "progress-dark.png",
+      "sha256": "7802c42bf43f7f016dcb2bef3312e7422c1e018b12ae5c49f0714eaf1e8c5b25",
+      "bytes": 2987
+    },
+    {
+      "file": "M38_progress_light.png",
+      "source": "progress-light.png",
+      "sha256": "e3d14587ce65e9689a044d6f6481fed5d7cb4be65964959fc5d2f167124ee8a9",
+      "bytes": 2957
+    }
+  ]
+}

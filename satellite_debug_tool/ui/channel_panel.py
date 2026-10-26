@@ -51,6 +51,7 @@ class _ChannelRow(QWidget):
     ):
         super().__init__(parent)
         self._name = name
+        self._theme = "dark"
         self._color = color
         self.setFixedHeight(_ROW_HEIGHT)
         self.setCursor(Qt.PointingHandCursor)
@@ -92,7 +93,8 @@ class _ChannelRow(QWidget):
     def _apply_checked_visual(self, checked: bool) -> None:
         """未勾选 = 整行变暗（色块去饱和、文字弱化），所见即所得。"""
         # 色块：勾选用真彩，未勾用弱灰
-        dot_color = self._color if checked else "#586976"
+        p = getattr(self, "_pal", S.palette("dark"))
+        dot_color = S.chart_color(self._color, self._theme) if checked else p["text_muted"]
         self._dot.setStyleSheet(
             f"background-color: {dot_color}; border-radius: {_DOT_SIZE // 2}px;"
         )
@@ -122,6 +124,8 @@ class _ChannelRow(QWidget):
     # ---- API ----
 
     def set_color(self, color: str) -> None:
+        if self._color == color:
+            return
         self._color = color
         self._apply_dot_color()
 
@@ -141,9 +145,10 @@ class _ChannelRow(QWidget):
         self._checkbox.blockSignals(False)
         self._apply_checked_visual(checked)
 
-    def apply_theme_styles(self, p: dict, value_px: int, name_px: int) -> None:
+    def apply_theme_styles(self, p: dict, value_px: int, name_px: int, theme: str = "dark") -> None:
         # 缓存供 _apply_checked_visual 复用
         self._pal = p
+        self._theme = theme
         self._name_px = name_px
         self._value_px = value_px
         try:
@@ -318,6 +323,7 @@ class ChannelPanel(QWidget):
             S.palette(self._theme),
             S.font_px(10, self._scale),
             S.font_px(11, self._scale),
+            self._theme,
         )
         self.update_count()
 
@@ -352,6 +358,11 @@ class ChannelPanel(QWidget):
         row = self._rows.get(name)
         if row is not None:
             row.set_value(value_text)
+
+    def set_channel_color(self, name: str, color: str) -> None:
+        row = self._rows.get(name)
+        if row is not None:
+            row.set_color(color)
 
     def is_checked(self, name: str) -> bool:
         row = self._rows.get(name)
@@ -420,7 +431,7 @@ class ChannelPanel(QWidget):
                 f"font-weight: 600; padding: 10px 6px 4px; background: transparent; }}"
             )
         for row in self._rows.values():
-            row.apply_theme_styles(p, value_px, name_px)
+            row.apply_theme_styles(p, value_px, name_px, self._theme)
 
     # ---- internal ----
 

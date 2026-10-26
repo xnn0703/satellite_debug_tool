@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from satellite_debug_tool.edition import Edition, edition_of
 from typing import Callable, Optional
 
 from PySide6.QtCore import QEventLoop, QObject, QTimer, Signal, Slot
@@ -15,19 +16,10 @@ from satellite_debug_tool.core.customer.device_directory import (
 from satellite_debug_tool.core.customer.session_binding import (
     CustomerEndpointSessionBinding,
 )
-from satellite_debug_tool.core.external_power_monitor import (
-    ExternalPowerMonitor,
-    ExternalPowerStore,
-)
-from satellite_debug_tool.core.iperf_test import IperfTestController, IperfTestStore
-from satellite_debug_tool.ui.customer_iperf_view import CustomerIperfView
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
-from satellite_debug_tool.ui.device_view import DeviceView
 from satellite_debug_tool.ui.live_view import LiveView
-from satellite_debug_tool.ui.external_power_window import ExternalPowerHistoryWindow
-from satellite_debug_tool.ui.tracking_simulator_view import TrackingSimulatorView
 from satellite_debug_tool.ui.view_lifecycle import deactivate_view
 
 
@@ -53,6 +45,7 @@ class CustomerEndpointSessionBundle:
     ) -> None:
         self.endpoint = normalize_customer_endpoint(endpoint)
         self._settings = settings
+        self._operations = edition_of(settings) is Edition.OPS
         self._status_sink = status_sink
         self._facts_changed = facts_changed
         self._on_shutdown = on_shutdown
@@ -85,6 +78,10 @@ class CustomerEndpointSessionBundle:
         self._iperf_controller: Optional[IperfTestController] = None
         record_provider = getattr(device_directory, "device_record", None)
         if callable(record_provider):
+            self.device_id = str(record_provider(self.endpoint).get("id", ""))
+        if self._operations and callable(record_provider):
+            from satellite_debug_tool.core.external_power_monitor import ExternalPowerMonitor, ExternalPowerStore
+            from satellite_debug_tool.core.iperf_test import IperfTestController, IperfTestStore
             record = record_provider(self.endpoint)
             self.device_id = str(record.get("id", ""))
             self._power_profile = dict(record.get("external_power", {}))
@@ -197,6 +194,7 @@ class CustomerEndpointSessionBundle:
                     self._settings,
                     external_power_store=self._external_power_store,
                     external_power_presenter=self._show_external_power,
+                    enable_external_power=self._operations,
                 )
             )
         return self._overview
@@ -212,6 +210,9 @@ class CustomerEndpointSessionBundle:
         return self._rf
 
     def _create_iperf(self) -> CustomerIperfView:
+        if not self._operations:
+            raise RuntimeError("network testing requires the operations edition")
+        from satellite_debug_tool.ui.customer_iperf_view import CustomerIperfView
         if self._iperf is None:
             if self._iperf_controller is None or self._iperf_store is None:
                 raise RuntimeError("device iperf owner is unavailable")
@@ -235,6 +236,7 @@ class CustomerEndpointSessionBundle:
         if self._external_power_store is None:
             return
         if self._power_window is None:
+            from satellite_debug_tool.ui.external_power_window import ExternalPowerHistoryWindow
             self._power_window = ExternalPowerHistoryWindow(
                 self._external_power_store,
                 theme=self._theme,
@@ -275,6 +277,12 @@ class CustomerEndpointSessionBundle:
         self._power_monitor.set_active(self._customer_active or iperf_active)
 
     def device_view(self) -> DeviceView:
+        if not self._operations:
+            if self._device is None:
+                from satellite_debug_tool.ui.customer_ota_adapter import CustomerOtaAdapter
+                self._device = CustomerOtaAdapter(self.live, self.binding)
+            return self._device
+        from satellite_debug_tool.ui.device_view import DeviceView
         if self._device is None:
             device = DeviceView(
                 settings=self._settings,
@@ -302,11 +310,15 @@ class CustomerEndpointSessionBundle:
                     self.device_view(),
                     self._settings,
                     operation_gateway_factory=self.binding.new_operation_gateway,
+                    firmware_only=not self._operations,
                 )
             )
         return self._maintenance
 
     def tracking_view(self) -> TrackingSimulatorView:
+        if not self._operations:
+            raise RuntimeError("tracking simulation requires the operations edition")
+        from satellite_debug_tool.ui.tracking_simulator_view import TrackingSimulatorView
         if self._tracking is None:
             self._tracking = self._finish_view(
                 TrackingSimulatorView(
@@ -440,6 +452,7 @@ class CustomerEndpointSessionBundleFactory(QObject):
     ) -> None:
         super().__init__(parent)
         self._settings = settings
+        self._operations = edition_of(settings) is Edition.OPS
         self._session_directory = session_directory
         self._fixture_telemetry = fixture_telemetry
         self._status_sink = status_sink

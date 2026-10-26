@@ -76,7 +76,7 @@ def _station(*, branch_count: int = 4, branch_current_a: float = 10.0) -> Statio
         branch_count=branch_count,
         branch_current_a=branch_current_a,
         report_branding={
-            "company_name": "软赫",
+            "company_name": "客户公司",
             "header": "试产质量中心",
             "footer": "受控文件",
             "tester_role": "测试员",
@@ -177,7 +177,7 @@ def test_bundle_round_trip_and_revision_conflict_are_atomic(tmp_path: Path) -> N
     destination.import_bundle(bundle)
     resolved = destination.resolve("afd01c-standard", "line-1", 2)
     assert resolved.sha256 == source.resolve("afd01c-standard", "line-1", 2).sha256
-    assert resolved.station_profile.report_branding["company_name"] == "软赫"
+    assert resolved.station_profile.report_branding["company_name"] == "客户公司"
 
     payload = json.loads(bundle.read_text(encoding="utf-8"))
     payload["product_templates"][0]["display_name"] = "冲突内容"

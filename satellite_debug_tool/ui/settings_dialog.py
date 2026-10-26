@@ -66,6 +66,10 @@ class SettingsDialog(QDialog):
         self._profile_store = profile_store
         self._device_udp_port_editable = device_udp_port_editable
         self._scope = str(scope)
+        from satellite_debug_tool.edition import Edition, edition_of
+        self._operations = edition_of(settings) is Edition.OPS
+        if not self._operations and self._scope != SETTINGS_SCOPE_CUSTOMER:
+            raise ValueError("user edition provides customer settings only")
         if self._scope not in _SETTINGS_SCOPES:
             raise ValueError(f"unknown settings scope: {scope}")
         self._recovery_active = bool(
@@ -103,7 +107,7 @@ class SettingsDialog(QDialog):
             int(self._settings.get("device_udp.local_port", 45678))
         )
         self._device_udp_port.setToolTip(
-            tr("Customer and production sessions share this UDP socket")
+            tr("Customer and production sessions share this UDP socket") if self._operations else tr("Local UDP port used by customer devices.")
         )
         self._refresh_device_udp_port_editability()
         device_udp_row.addWidget(self._device_udp_label)
@@ -202,7 +206,10 @@ class SettingsDialog(QDialog):
         )
         td_row.addWidget(td_lbl)
         td_row.addWidget(self._tianditu_edit, 1)
-        outer.addLayout(td_row)
+        td_container = QWidget()
+        td_container.setLayout(td_row)
+        td_container.setVisible(self._operations)
+        outer.addWidget(td_container)
 
         # M10 F2：图表分组管理入口（profile_store 提供时启用）
         chart_row = QHBoxLayout()
@@ -332,7 +339,8 @@ class SettingsDialog(QDialog):
             tr(
                 "Leave a folder blank to use the system default "
                 "(the last opened location).\n"
-                "Configuration file: ~/.satellite_debug_tool/settings.json"
+                "Configuration file: {path}",
+                path=str(self._settings._config_file),
             )
         )
         hint.setStyleSheet("color: #888; font-size: 11px;")
@@ -364,7 +372,10 @@ class SettingsDialog(QDialog):
         row.addWidget(lbl)
         row.addWidget(edit, 1)
         row.addWidget(browse_btn)
-        layout.addLayout(row)
+        container = QWidget()
+        container.setLayout(row)
+        container.setVisible(self._operations or browse_title_id != "log")
+        layout.addWidget(container)
         return edit
 
     @staticmethod
@@ -485,7 +496,7 @@ class SettingsDialog(QDialog):
         # remain editable while normal device paths are fail-closed.
         self._device_udp_port.setEnabled(bool(self._recovery_active or editable))
         self._device_udp_port.setToolTip(
-            tr("Customer and production sessions share this UDP socket")
+            tr("Customer and production sessions share this UDP socket") if self._operations else tr("Local UDP port used by customer devices.")
             if editable or self._recovery_active
             else tr("Disconnect all UDP device sessions before changing this port")
         )
@@ -571,6 +582,9 @@ class SettingsDialog(QDialog):
             self._profile_store.profile_changed.emit(hw)
 
     def _on_open_production_configurations(self) -> None:
+        from satellite_debug_tool.edition import Edition, edition_of
+        if edition_of(self._settings) is Edition.USER:
+            raise RuntimeError("production settings require the operations edition")
         from satellite_debug_tool.ui.production_configuration_dialog import (
             ProductionConfigurationDialog,
         )

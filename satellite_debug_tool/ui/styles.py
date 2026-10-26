@@ -1,183 +1,169 @@
-"""UI 样式中心：主题色板 + 字号档位 + 等宽字体选择。
-
-M6 扩展：
-- 主题三档：dark / dark_hc / light
-- 字号四档：small(1.0) / medium(1.17) / large(1.5) / xlarge(1.83)
-    基准 12px → 12 / 14 / 18 / 22
-- Dashboard KPI 数字字体锁定等宽族（跨平台挑一个存在的）
-
-兼容性：
-- `palette(is_dark: bool)` 老签名仍可用（False→"light"，True→"dark"）
-"""
+"""UI 颜色单一来源：三主题角色、数据类别色与字体工具。"""
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Dict, Literal, Union
-
-# --------------------------------------------------------------------
-# 老常量（少数模块仍 import，保留以免破坏外部引用）
-# 2026-06：值迁移到 "Mission Console" 设计语言（深蓝仪表台 + 青色强调）
-# --------------------------------------------------------------------
-
-BG_DARK = "#090D12"
-PANEL_DARK = "#0E141C"
-BORDER = "#1F2C38"
-TEXT = "#D6E0E9"
-PRIMARY = "#2DD4BF"        # 青色 accent（原深蓝 → Mission Console teal）
-SUCCESS = "#34D399"
-WARNING = "#FBBF24"
-ERROR = "#FB7185"
-INPUT_DARK = "#10171F"
-BUTTON_DARK = "#16202C"
-
-BG_LIGHT = "#EEF1F4"
-PANEL_LIGHT = "#F6F8FA"
-BORDER_LIGHT = "#D8DEE4"
-TEXT_LIGHT = "#1B2630"
-TEXT_LIGHT_MUTED = "#5A6976"
-PRIMARY_LIGHT = "#0EA5A4"
-INPUT_LIGHT = "#FFFFFF"
-BUTTON_LIGHT = "#F4F7F9"
-CARD_LIGHT = "#FFFFFF"
-CARD_DARK = "#121A24"
-CARD_ALT_DARK = "#16202C"
-CARD_ALT_LIGHT = "#F4F7F9"
-
-# --------------------------------------------------------------------
-# Mission Console 信号色板（曲线专用，16 色高区分度）
-# 相邻通道色相拉开；同一通道在三主题下保持一致。
-# --------------------------------------------------------------------
-
-SIGNAL_PALETTE: tuple[str, ...] = (
-    "#2DD4BF", "#38BDF8", "#FBBF24", "#FB7185",
-    "#A78BFA", "#4ADE80", "#FB923C", "#22D3EE",
-    "#F472B6", "#A3E635", "#818CF8", "#FCD34D",
-    "#2DD4BF", "#F87171", "#60A5FA", "#C084FC",
-)
-
-# --------------------------------------------------------------------
-# 主题
-# --------------------------------------------------------------------
 
 Theme = Literal["dark", "dark_hc", "light"]
 THEMES: tuple[str, ...] = ("dark", "dark_hc", "light")
-THEME_LABELS: Dict[str, str] = {
-    "dark": "Dark",
-    "dark_hc": "High contrast",
-    "light": "Light",
-}
+THEME_LABELS: Dict[str, str] = {"dark": "Dark", "dark_hc": "High contrast", "light": "Light"}
 
 
 def _normalize_theme(theme: Union[str, bool, None]) -> str:
-    """把 bool/None/别名归一化到 THEMES 内。"""
-    if theme is None:
-        return "dark"
     if isinstance(theme, bool):
         return "dark" if theme else "light"
-    t = str(theme).strip().lower().replace(" ", "_").replace("-", "_")
-    if t in THEMES:
-        return t
-    # 中文 / 老 UI 文案兼容
-    if t in ("深色", "dark_theme"):
-        return "dark"
-    if t in ("浅色", "light_theme"):
-        return "light"
-    if t in ("深色_高对比", "高对比", "hc", "highcontrast", "dark_highcontrast"):
-        return "dark_hc"
-    return "dark"
+    value = str(theme or "dark").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {"深色": "dark", "dark_theme": "dark", "浅色": "light", "light_theme": "light",
+               "深色_高对比": "dark_hc", "高对比": "dark_hc", "hc": "dark_hc",
+               "highcontrast": "dark_hc", "dark_highcontrast": "dark_hc"}
+    return value if value in THEMES else aliases.get(value, "dark")
+
+
+# 表面逐层提亮；操作前景与实底按钮分别配对。
+_THEME_COLORS = {
+    "dark": dict(bg="#18191B", panel="#202225", card="#25272B", card_alt="#292C31",
+                 border="#36393F", text="#E8E9EC", text_muted="#ADB1BA", text_faint="#A2A8B3",
+                 input_bg="#25272B", input_border="#747B87", button_bg="#292C31",
+                 card_hover="#32353B", selected_bg="#2C3442", selected_text="#E8E9EC",
+                 selected_border="#85ADFF", focus="#A9C7FF", accent="#85ADFF",
+                 accent_2="#A9C7FF", accent_dim="#5B8CE0", accent_ink="#111C32",
+                 primary_bg="#345FAE", primary_hover="#3C6ABD", primary_pressed="#2B5098",
+                 primary_text="#FFFFFF", ok="#79C59B", warn="#E6B566", err="#F19B9B",
+                 info="#85ADFF", violet="#C0A8EA", recording="#F19B9B", grid_line="#FFFFFF12"),
+    "dark_hc": dict(bg="#000000", panel="#080808", card="#121212", card_alt="#1B1B1B",
+                    border="#8B8B8B", text="#FFFFFF", text_muted="#E0E0E0", text_faint="#C0C0C0",
+                    input_bg="#121212", input_border="#A0A0A0", button_bg="#1B1B1B",
+                    card_hover="#252525", selected_bg="#16355D", selected_text="#FFFFFF",
+                    selected_border="#9DC4FF", focus="#FFFFFF", accent="#9DC4FF",
+                    accent_2="#C7DDFF", accent_dim="#6FA7FF", accent_ink="#000000",
+                    primary_bg="#164A9A", primary_hover="#245BAD", primary_pressed="#123D80",
+                    primary_text="#FFFFFF", ok="#7FF0AE", warn="#FFD580", err="#FFACAC",
+                    info="#9DC4FF", violet="#DEC4FF", recording="#FFACAC", grid_line="#FFFFFF24"),
+    "light": dict(bg="#F4F5F7", panel="#FFFFFF", card="#FFFFFF", card_alt="#F0F1F3",
+                  border="#D5D8DE", text="#25282D", text_muted="#5D636E", text_faint="#5D636E",
+                  input_bg="#FFFFFF", input_border="#7A808B", button_bg="#F0F1F3",
+                  card_hover="#E6E8EB", selected_bg="#E9EFFA", selected_text="#234F9A",
+                  selected_border="#245EC7", focus="#174C9E", accent="#245EC7",
+                  accent_2="#234F9A", accent_dim="#174C9E", accent_ink="#FFFFFF",
+                  primary_bg="#245EC7", primary_hover="#1E51B0", primary_pressed="#19438F",
+                  primary_text="#FFFFFF", ok="#226D43", warn="#88520A", err="#B12E37",
+                  info="#245EC7", violet="#7042A0", recording="#B12E37", grid_line="#25282D12"),
+}
 
 
 def palette(theme: Union[str, bool, None] = "dark") -> Dict[str, str]:
-    """返回当前主题各类色值。所有 UI 模块通过此函数获取颜色，禁止硬编码。
+    """返回独立角色字典；历史键继续从同一权威色板派生。"""
+    p = dict(_THEME_COLORS[_normalize_theme(theme)])
+    p.update(panel_2=p["card"], card_2=p["card_alt"], border_2=p["input_border"],
+             value_number=p["text"], text_2=p["text_muted"], text_3=p["text_faint"],
+             text_inv=p["primary_text"], success=p["ok"], warning=p["warn"], error=p["err"],
+             primary=p["accent"], bg_grid=p["bg"], border_glow=p["accent"] + "33")
+    # 百分比文字同时跨越已完成与剩余区，两种背景共同满足对比度。
+    p["progress_bg"] = {"dark": "#5075A5", "dark_hc": "#456EA5", "light": "#6E95D0"}[_normalize_theme(theme)]
+    p["progress_text"] = p["text"] if _normalize_theme(theme) == "light" else "#FFFFFF"
+    for role in ("accent", "ok", "warn", "err", "info"):
+        p[role + "_soft"] = p[role] + "14"
+    return p
 
-    兼容老签名：`palette(True)` == `palette("dark")`，`palette(False)` == `palette("light")`。
 
-    2026-06 "Mission Console" 设计语言：深蓝仪表台 + 青色 accent。三主题同源，
-    所有组件只引用语义角色，切主题零改动。
+# 历史导出继续履行已有调用合同，所有值均由主题中心派生。
+BG_DARK, PANEL_DARK, BORDER, TEXT, PRIMARY, SUCCESS, WARNING, ERROR, INPUT_DARK, BUTTON_DARK = (
+    palette("dark")[key] for key in
+    ("bg", "panel", "border", "text", "primary", "success", "warning", "error", "input_bg", "button_bg")
+)
+BG_LIGHT, PANEL_LIGHT, BORDER_LIGHT, TEXT_LIGHT, TEXT_LIGHT_MUTED, PRIMARY_LIGHT, INPUT_LIGHT, BUTTON_LIGHT = (
+    palette("light")[key] for key in
+    ("bg", "panel", "border", "text", "text_muted", "primary", "input_bg", "button_bg")
+)
+CARD_LIGHT, CARD_DARK = palette("light")["card"], palette("dark")["card"]
+CARD_ALT_DARK, CARD_ALT_LIGHT = palette("dark")["card_alt"], palette("light")["card_alt"]
 
-    返回字典键分两类：
+# 数据颜色保留既有类别顺序，主题只调整在真实表面上的亮度。
+SIGNAL_PALETTE: tuple[str, ...] = (
+    "#2DD4BF", "#38BDF8", "#FBBF24", "#FB7185", "#A78BFA", "#4ADE80", "#FB923C", "#22D3EE",
+    "#F472B6", "#A3E635", "#818CF8", "#FCD34D", "#2DD4BF", "#F87171", "#60A5FA", "#C084FC",
+)
+ATTITUDE_COLORS = {"roll": "#5B8FF9", "pitch": "#00B8A9", "yaw": "#F6BD16"}
+GNSS_SYSTEM_COLORS = {0: "#3B82F6", 1: "#EF4444", 2: "#F59E0B", 3: "#A855F7",
+                      4: "#22C55E", 5: "#06B6D4", 6: "#EC4899", 7: "#94A3B8"}
+GNSS_BAND_COLORS = {"L1": "#F59E0B", "L2": "#22C55E", "L5": "#2563EB", "G1": "#F59E0B", "G2": "#22C55E",
+                    "E1": "#F59E0B", "E5a": "#2563EB", "E5b": "#22C55E", "E6": "#A855F7",
+                    "E5 AltBOC": "#06B6D4", "B1": "#F59E0B", "B2": "#22C55E", "B3": "#2563EB"}
+ANSI_FOREGROUND = {30: "#5C6370", 31: "#E06C75", 32: "#98C379", 33: "#E5C07B",
+                   34: "#61AFEF", 35: "#C678DD", 36: "#56B6C2", 37: "#D7DAE0",
+                   90: "#7F848E", 91: "#FF7B86", 92: "#B5E890", 93: "#FFD479",
+                   94: "#84C1FF", 95: "#E2A2FF", 96: "#8CE0E8", 97: "#FFFFFF"}
 
-    **兼容键**（test_styles 契约 + 老代码引用，勿删）：
-        bg / panel / card / card_alt / border
-        text / text_muted / text_faint
-        input_bg / input_border / button_bg / value_number
-        success / warning / error / primary
 
-    **新语义键**（Mission Console，新组件优先用这些）：
-        bg_grid / panel_2 / card_2 / card_hover / border_2 / border_glow
-        text_2 / text_3 / text_inv
-        accent / accent_2 / accent_dim / accent_soft / accent_ink
-        ok / warn / err / info / violet
-        ok_soft / warn_soft / err_soft / info_soft / accent_soft
-        grid_line
-    """
-    t = _normalize_theme(theme)
+def enum_role(level: int) -> str:
+    return {0: "ok", 1: "warn", 2: "err"}.get(level, "text_muted")
 
-    if t == "dark":
-        accent, accent_2, accent_dim = "#2DD4BF", "#5EEAD4", "#14B8A6"
-        ok, warn, err, info, violet = "#34D399", "#FBBF24", "#FB7185", "#38BDF8", "#A78BFA"
-        return {
-            # 兼容键
-            "bg": "#090D12", "panel": "#0E141C", "card": "#121A24",
-            "card_alt": "#16202C", "border": "#1F2C38",
-            "text": "#D6E0E9", "text_muted": "#8696A4", "text_faint": "#586976",
-            "input_bg": "#10171F", "input_border": "#2A3B49", "button_bg": "#16202C",
-            "value_number": "#D6E0E9",
-            "success": ok, "warning": warn, "error": err, "primary": accent,
-            # 新语义键
-            "bg_grid": "#0D1219", "panel_2": "#10171F", "card_2": "#16202C",
-            "card_hover": "#1A2632", "border_2": "#2A3B49", "border_glow": "#2DD4BF33",
-            "text_2": "#8696A4", "text_3": "#586976", "text_inv": "#04110F",
-            "accent": accent, "accent_2": accent_2, "accent_dim": accent_dim,
-            "accent_soft": "#2DD4BF1F", "accent_ink": "#04110F",
-            "ok": ok, "warn": warn, "err": err, "info": info, "violet": violet,
-            "ok_soft": "#34D3991F", "warn_soft": "#FBBF241F",
-            "err_soft": "#FB71851F", "info_soft": "#38BDF81F",
-            "grid_line": "#FFFFFF0A",
-        }
 
-    if t == "dark_hc":
-        # 纯黑底 + 纯白字 + 饱和强调色，用于 500cd/m² 车载强光屏
-        accent, accent_2, accent_dim = "#00F5D4", "#5BFFE6", "#00D9BD"
-        ok, warn, err, info, violet = "#00FF95", "#FFD000", "#FF5470", "#4DC4FF", "#C4A6FF"
-        return {
-            "bg": "#000000", "panel": "#060606", "card": "#0E0E0E",
-            "card_alt": "#141414", "border": "#3A3A3A",
-            "text": "#FFFFFF", "text_muted": "#C8C8C8", "text_faint": "#909090",
-            "input_bg": "#0A0A0A", "input_border": "#545454", "button_bg": "#141414",
-            "value_number": "#FFFFFF",
-            "success": ok, "warning": warn, "error": err, "primary": accent,
-            "bg_grid": "#000000", "panel_2": "#0A0A0A", "card_2": "#141414",
-            "card_hover": "#1C1C1C", "border_2": "#545454", "border_glow": "#00F5D466",
-            "text_2": "#C8C8C8", "text_3": "#909090", "text_inv": "#000000",
-            "accent": accent, "accent_2": accent_2, "accent_dim": accent_dim,
-            "accent_soft": "#00F5D422", "accent_ink": "#00120F",
-            "ok": ok, "warn": warn, "err": err, "info": info, "violet": violet,
-            "ok_soft": "#00FF9522", "warn_soft": "#FFD00022",
-            "err_soft": "#FF547022", "info_soft": "#4DC4FF22",
-            "grid_line": "#FFFFFF14",
-        }
+def enum_color(level: int, theme: Union[str, bool] = "dark") -> str:
+    """DEBUG ENUM 的 0/1/2/3 分别表示正常/告警/错误/中性。"""
+    return palette(theme)[enum_role(level)]
 
-    # light
-    accent, accent_2, accent_dim = "#0EA5A4", "#0D9488", "#0F766E"
-    ok, warn, err, info, violet = "#059669", "#B45309", "#DC2626", "#0284C7", "#7C3AED"
-    return {
-        "bg": "#EEF1F4", "panel": "#F6F8FA", "card": "#FFFFFF",
-        "card_alt": "#F4F7F9", "border": "#D8DEE4",
-        "text": "#1B2630", "text_muted": "#5A6976", "text_faint": "#8895A0",
-        "input_bg": "#FFFFFF", "input_border": "#C2CCD4", "button_bg": "#F4F7F9",
-        "value_number": "#1B2630",
-        "success": ok, "warning": warn, "error": err, "primary": accent,
-        "bg_grid": "#E7EBEF", "panel_2": "#FFFFFF", "card_2": "#F4F7F9",
-        "card_hover": "#EDF1F4", "border_2": "#C2CCD4", "border_glow": "#0EA5A433",
-        "text_2": "#5A6976", "text_3": "#8895A0", "text_inv": "#FFFFFF",
-        "accent": accent, "accent_2": accent_2, "accent_dim": accent_dim,
-        "accent_soft": "#0EA5A414", "accent_ink": "#FFFFFF",
-        "ok": ok, "warn": warn, "err": err, "info": info, "violet": violet,
-        "ok_soft": "#05966914", "warn_soft": "#B4530914",
-        "err_soft": "#DC262614", "info_soft": "#0284C714",
-        "grid_line": "#10203005",
-    }
+
+def event_color(level: int, theme: Union[str, bool] = "dark") -> str:
+    """事件 INFO 表示信息，独立于 ENUM 的正常级别。"""
+    return palette(theme)[{1: "info", 2: "warn", 3: "err"}.get(level, "text_muted")]
+
+
+def _luminance(color: str) -> float:
+    values = (int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    return sum((v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4) * w
+               for v, w in zip(values, (0.2126, 0.7152, 0.0722)))
+
+
+@lru_cache(maxsize=1024)
+def chart_color(color: str, theme: Union[str, bool] = "dark") -> str:
+    """类别身份保持稳定；通过集中亮度映射保证图例文字与数据线均可读。"""
+    from PySide6.QtGui import QColor
+
+    source = QColor(color)
+    if source.isValid():
+        color = source.name()
+    else:
+        raise ValueError(f"Invalid chart color: {color}")
+    p = palette(theme)
+    bg = _luminance(p["card_hover"])
+    target = 0 if _normalize_theme(theme) == "light" else 255
+    rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+    for step in range(101):
+        adjusted = "#" + "".join(f"{round(v + (target - v) * step / 100):02X}" for v in rgb)
+        low, high = sorted((_luminance(adjusted), bg))
+        if (high + 0.05) / (low + 0.05) >= 4.5:
+            return adjusted
+    return p["text"]
+
+
+def signal_palette(theme: Union[str, bool] = "dark") -> tuple[str, ...]:
+    return tuple(chart_color(color, theme) for color in SIGNAL_PALETTE)
+
+
+def qss_color(color: str) -> str:
+    """应用色板使用 RGBA，统一转换为 Qt 无歧义的 rgba() 写法。"""
+    if len(color) == 9 and color.startswith("#"):
+        rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+        return f"rgba({rgb[0]},{rgb[1]},{rgb[2]},{int(color[7:9], 16)})"
+    return color
+
+
+def apply_application_palette(app, theme: str) -> None:
+    """Qt 原生绘制、占位文字及弹出视图与 QSS 消费同一颜色角色。"""
+    from PySide6.QtGui import QColor, QPalette
+
+    p = palette(theme)
+    qt_palette = QPalette()
+    roles = {"Window": "bg", "WindowText": "text", "Base": "input_bg", "AlternateBase": "card_alt",
+             "Text": "text", "Button": "button_bg", "ButtonText": "text", "BrightText": "text",
+             "ToolTipBase": "card", "ToolTipText": "text", "Highlight": "selected_bg",
+             "HighlightedText": "selected_text", "PlaceholderText": "text_muted", "Link": "accent",
+             "LinkVisited": "violet"}
+    for name, role in roles.items():
+        qt_palette.setColor(getattr(QPalette.ColorRole, name), QColor(p[role]))
+    app.setPalette(qt_palette)
 
 
 # --------------------------------------------------------------------
@@ -338,7 +324,9 @@ __all__ = [
     "CARD_ALT_DARK", "CARD_ALT_LIGHT",
     "SIGNAL_PALETTE",
     # 主题
-    "Theme", "THEMES", "THEME_LABELS", "palette",
+    "Theme", "THEMES", "THEME_LABELS", "palette", "qss_color", "enum_role", "enum_color", "event_color", "apply_application_palette",
+    "chart_color", "signal_palette", "ATTITUDE_COLORS", "GNSS_SYSTEM_COLORS", "GNSS_BAND_COLORS",
+    "ANSI_FOREGROUND",
     # 字号
     "FontScale", "FONT_SCALES", "FONT_SCALE_LABELS", "font_px",
     # 字体

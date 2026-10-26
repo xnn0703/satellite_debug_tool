@@ -223,7 +223,7 @@ class BeamPolarWidget(QWidget):
                         QPointF(center.x() + endpoint[0] * radius, center.y() + endpoint[1] * radius)
                     )
             if len(trail_points) >= 2:
-                trail_color = QColor("#64748B" if marker.stale else "#38BDF8")
+                trail_color = QColor(pal["text_muted"] if marker.stale else pal["info"])
                 trail_color.setAlpha(80)
                 painter.setPen(QPen(trail_color, 1.4))
                 for start, end in zip(trail_points, trail_points[1:]):
@@ -240,18 +240,18 @@ class BeamPolarWidget(QWidget):
             color = QColor(
                 pal["text_3"]
                 if marker.stale
-                else "#22C55E"
+                else pal["ok"]
                 if marker.active_target
-                else "#F59E0B"
+                else pal["warn"]
                 if marker.candidate
-                else "#38BDF8"
+                else pal["info"]
             )
             painter.setPen(QPen(color, 2.0 if marker.active_target else 1.2))
             painter.setBrush(color)
             size = 6.5 if marker.active_target else 4.5
             painter.drawEllipse(point, size, size)
             if marker.candidate and not marker.active_target:
-                halo = QColor("#F59E0B")
+                halo = QColor(pal["warn"])
                 halo.setAlpha(190)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(QPen(halo, 1.5, Qt.PenStyle.DashLine))

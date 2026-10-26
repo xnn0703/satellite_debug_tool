@@ -35,7 +35,13 @@ python3 scripts/update_translations.py check
 
 **没有 linter / typecheck / formatter 配置。** pytest 是当前唯一自动化验证手段；当前没有固定允许失败的 baseline，全量测试失败按真实回归调查。
 
-## 工作区（顶层 `MainWindow`）
+## 构建版本与工作区
+
+- **用户版 `main_user.py` / `UserWindow`**：固定总览、RF 控制、客户回放、独立加密固件升级四页；使用客户固定 endpoint 会话。总览的 SNR 五分钟曲线和三模块温度属于始终装配的公共面板；侧栏保留按需创建的 Shell（TCP、串口及 YMODEM）；电源、iperf、夹具、安装标定及工程/试产页面由运维版提供。用户版入口拒绝运维命令行，构建产物裁剪运维专属模块。
+- **运维版 `main.py` / `MainWindow`**：现有全量功能；源码 `python -m satellite_debug_tool.main` 默认启动运维版。两版共用领域模型、会话、录制、OTA 状态机及更新事务；构建身份来自打包的 `build_identity.json`。
+- 用户设置/日志/更新事务位于 `~/.satellite_debug_tool/user/`；运维版保留原根目录。已有模型覆盖和 profile 缓存继续按原路径复用。
+
+### 运维版工作区（顶层 `MainWindow`）
 
 `MainWindow` 是个 `QStackedWidget`，三页：
 
@@ -100,7 +106,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/production/fixture_profile.py` — **M19-A.11** 摇摆台型号模板、v4 工作站档案、运行包线和控制租约；型号预置直接控制端点与运动学参数，旧 `192.168.15.101:9800` 厂家服务端点不解释为控制器地址，现场只确认轴符号并由引导标定生成真实 calibration ID
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 AES-256-GCM 认证解密（`firmware_package.py`）
-- `core/tcp_shell/` — **M37** AFD01 Raw TCP Shell + 严格 YMODEM Batch Sender：`ymodem_sender.py` 纯状态机（C 握手、STX/1024 块、CRC16-CCITT、EOT 两阶段、空文件名批结束）、`worker.py` 单 socket 读写 owner（QThread）、`controller.py` YMODEM 准入租约与最小版本回读、`recorder.py` 会话证据
+- `core/tcp_shell/` — **M37** Shell 弹窗（TCP 1235 / 串口）+ YMODEM Batch Sender：`transport.py` 字节流 link 层（`TcpShellLink` / `SerialShellLink`，UDP 明确拒绝——设备侧无 UDP shell 服务）、`ymodem_sender.py` 纯状态机（C 握手、SOH/128 头包与批结束 + STX/1024 数据块、CRC16-CCITT、EOT 两阶段、空文件名批结束）、`worker.py` 单 link 读写 owner（QThread，target dict 驱动）、`controller.py` YMODEM 准入租约与最小版本回读、`recorder.py` 会话证据
 - `core/link_trace.py` — 帧 trace 日志
 - `core/config.py` — `Settings` 类，JSON 存 `~/.satellite_debug_tool/settings.json`
 - `ui/` — PySide6 呈现层；`view_lifecycle.py` 定义页面生命周期，`lazy_view_host.py` 提供首次访问构建，`semantic_style.py` 只在语义属性变化时刷新样式
@@ -112,6 +118,9 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `platform/macos/{en,zh_CN}.lproj/InfoPlist.strings` — macOS `CFBundleLocalizations` 用的本地化 InfoPlist 字符串
 
 ### 关键约定
+
+- **M40 中性产品命名**：客户可见名称统一为“卫星通信终端工具 / Satellite Terminal Tool”，顶栏简称“终端工具 / Terminal Tool”；应用元数据与 macOS 包信息使用中性标识。报告默认公司名为空，由用户工位配置提供；已发布固件包的 AES-GCM 认证域按格式合同保留固定字节。
+- **M41 下拉框排版**：全局 QComboBox 与其弹出视图使用同一 UI 字体角色，数值输入保留等宽字体；回放/日志的 TimeRangeControl 使用标准列表委托和按内容调整宽度，语言切换由 Qt 重新计算尺寸，保持当前预设与范围。两页面将文件信息和时间范围分行，保证英文选项在页面布局中完整显示。
 
 - 所有 import 用 `satellite_debug_tool.` 前缀（绝对导入；这是为什么必须 `python3 -m ...`）
 - UI 在 `ui/`，业务在 `core/`，持久化在 `io/`，**试产业务在 `core/production/`，客户产品服务领域在 `core/product/`**
@@ -126,7 +135,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - 测试在 `satellite_debug_tool/tests/`（100 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
 - `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_UPDATE_CHECK=0` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
 - 字号已固化 `small`（`base_px=13`，`main.py` 调 `S.apply_global_font(app, scale="small", base_px=13)`）；`styles.FONT_SCALES` / `FontScale` API 仅保留兼容 `test_styles.py`，UI 不再暴露
-- 主题三档 `dark / dark_hc / light`，由 `S.palette()` 出语义色键（兼容键 + Mission Console 新语义键），顶栏图标按钮循环切换
+- **M38 配色**：`dark / dark_hc / light` 三主题由 `ui/styles.py` 统一提供石墨灰/中性浅灰、蓝色操作与选择、独立状态色及 Qt 原生调色板。实底按钮、选中项、焦点和进度条分别使用成对角色；曲线/GNSS/姿态/ANSI 保持类别含义并集中调整主题亮度。常规数值使用正文色；切主题立即重绘已有状态和终端格式，顶栏图标按钮循环切换。
 - 离线地图约定 GPS channel 名 `gps_lat` / `gps_lon`（可选 `gps_alt`），Playback / Log 检测到自动启用"地图"按钮
 - **客户多设备页面按 endpoint 固定绑定**——每个 endpoint bundle 复用 Directory 的唯一 Runtime/Core/Store；禁止把已有 widget/controller 动态 rebind 到另一 endpoint。工程“共享客户 UDP”复用当前 bundle，工程串口保持独立。
 - **AFD01 新型号身份**——AFD01A 沿用原 AFD01 的产品使用方式与 3D 几何；`afd01` / `afd01a` / `afd01b2` / `afd01c` / `afd01d` 各自独立注册，按 Debug hw_type、Product Identity 与 service protocol 精确准入，recipe 和加密 OTA 包不互作别名。A/B2/C/D 仅接受 protocol 8；B2 未提供独立 STL 时使用占位模型，C/D 共用外观几何但分别打包为 `afd01c.stl` / `afd01d.stl`，CAD 轴按 `+Z=机头、+X=左翼、+Y=天顶` 映射到 FLU。
@@ -136,10 +145,10 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **夹具姿态按设备录制并相关回放**——活动 SDB v3 以 `fixture_attitude_sample/v1` metadata 保存共享夹具事实；回放只在同一设备启动代际的有效主机接收时间/设备 uptime 锚点内插值。设备姿态、平台目标和 MS 相对 FRD 在同一姿态区域按颜色与线型区分；无效或缺口用 NaN 断开，未对齐样本不进入曲线。
 - **客户网络测试是设备级状态**——每个 endpoint bundle 拥有固定 `IperfTestController/Store`，切换页面不重绑、不停止后台测试；不同设备只在本地 IPv4和服务端端口不冲突时并行，应用退出前逐个完成进程和证据收尾。
 - 全局设置弹窗按 Customer / Engineering / Production scope 呈现；客户和工程 scope 不显示试产配置与试产报告，Production scope 保留这些业务设置。
-- Customer 侧栏、Engineering 顶栏与 Production 导航的“TCP Shell…”入口复用同一个弹窗实例（`CustomerWorkspace.open_tcp_shell_dialog` 懒创建缓存）；弹窗内置 AFD01 Raw TCP Shell 终端（默认端口 1235）与 YMODEM Sender，跨工作区切换存活，关闭即断开会话并收尾证据。
+- Customer 侧栏、Engineering 顶栏与 Production 导航的“Shell…”入口复用同一个弹窗实例（`CustomerWorkspace.open_tcp_shell_dialog` 懒创建缓存）；弹窗连接类型支持 TCP（默认端口 1235）与串口（8N1，波特率默认 115200，枚举 + 手填；对应 letter shell 串口 / RT-Thread msh 控制台），内置哑终端与 YMODEM Sender，跨工作区切换存活，关闭即断开会话并收尾证据。UDP 不是支持类型——两个固件家族的 shell 都只在 TCP 与串口上，`create_link` 明确拒绝。
 - Customer 侧栏与 Engineering 顶栏的“摇摆台…”入口复用同一个弹窗实例和进程级 `FixtureRuntime`；提供日常相对姿态、回中、组合连续摇摆、受控停止、MS 绝对航向和有界姿态修正，目标/MS 实测/误差共用一张姿态图。回原点、档案编辑和资格标定仍由 Production 工程页面负责。
 - 第一方可翻译复合控件显式实现 `retranslate_ui()`；语言切换使用稳定源键，禁止扫描对象树或根据当前可见文本反查业务状态。
-- **TCP Shell/YMODEM 是工程工具路径**——Shell 观察与输入不持设备事务租约；YMODEM 开始前对有管理会话的 endpoint 以 `tcp-shell-ymodem` purpose 抢占操作网关（客户/工程走 attachment 网关，批次外设备要求 gate 空闲），手填未管理目标允许直传并在证据记录 `managed_session: false`。YMODEM 文件名原样保留：`<target>_app_X.Y.Z_release|beta.bin` → 设备 DOWNLOAD 区、`app_factory.bin` → FACTORY 区、其他 → LittleFS、跨产品被设备拒绝。YMODEM 完成只证明字节已被设备接收校验；升级生效由重启后握手回读独立呈现，不自动判 PASS。
+- **Shell/YMODEM 是两版共享工具路径**——Shell 观察与输入不持设备事务租约；YMODEM 开始前对有管理会话的 endpoint 以 `tcp-shell-ymodem` purpose 抢占操作网关（客户/工程走 attachment 网关，批次外设备要求 gate 空闲；仅 TCP 目标可命中设备目录），手填 TCP 目标与串口目标允许直传并在证据记录 `managed_session: false`。YMODEM 文件名原样保留：`<target>_app_X.Y.Z_release|beta.bin` → 设备 DOWNLOAD 区、`app_factory.bin` → FACTORY 区、其他 → LittleFS、跨产品被设备拒绝；接收端准入（如 XESA01 RT-Thread `ry`/`ymodem_ota` 或 AFD01 系文件名路由）由各设备固件权威决定。YMODEM 帧块类型合同：头包与批结束帧 SOH/128、数据块 STX/1024——RT-Thread rym 接收端（4-xesa01）对批结束头固定按 128 字节校验，AFD01 接收端按帧头自适应两种块长；超长头包（>128B）回退 STX，两类接收端都接受。头包 ACK 与最终 EOT ACK 都等待在存储操作窗口（`final_ack_timeout_s` 20 s）：RT-Thread `yota` 在头包 ACK 前同步擦除 download 分区（XESA01 552 KiB 实测 ~7 s，分区 1 MiB），AFD01 在最终 EOT ACK 前落盘 flash；数据块 ACK 用短块窗口。XESA01 设备侧接收命令是 `yota`（每次开始前手动输入），`rb` 仅存在于 AFD01 letter-shell。YMODEM 完成只证明字节已被设备接收校验；升级生效由重启后握手回读独立呈现，不自动判 PASS。
 
 ## 持久化路径（`~/.satellite_debug_tool/`）
 
@@ -159,23 +168,30 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 | `ms6222_sessions/<session_id>/` | MS-6222 独立调试的配置、原始帧、解析 CSV、统计、事件、summary 与 manifest |
 | `power_supply_sessions/<session_id>/` | PSW 独立工程调试的配置、身份、SCPI 记录、事件与 manifest |
 | `iperf_sessions/<device_id>/<session_id>/` | 设备级 iperf3 配置、UL/DL 原始 JSONL、网络/功耗 CSV、事件与 summary |
-| `tcp_shell_sessions/<session_id>/` | M37 TCP Shell 会话证据：config、TX/RX transcript、YMODEM 记录、事件、summary 与 manifest |
+| `tcp_shell_sessions/<session_id>/`（用户版为 `user/tcp_shell_sessions/`） | M37 TCP Shell 会话证据：config、TX/RX transcript、YMODEM 记录、事件、summary 与 manifest |
 
 ## 构建与发版
 
-- **macOS 本地打包**：`./scripts/build_macos.sh`（自动 venv + 装依赖 + 跑 `update_translations.py check` + PyInstaller 主程序+updater + 嵌入 `.app/Contents/MacOS/updater` + `codesign --force --deep --sign -` ad-hoc 签名 + `xattr -cr` 清 quarantine + `ditto -c -k` 出 zip）
-- **Windows 一键打包**：`scripts\build_windows.bat`（PyInstaller + `verify_model_assets.py` 校验 3D 模型 + updater 嵌入 + `Compress-Archive` 出 zip）
+- **开发验证方式（2026-10-23 用户确认）**：每轮修复默认验证源码并提供运行命令；用户完成功能验证、明确要求打包后，再执行本地打包或主动触发发行构建。
+
+- **M39 应用图标**：`ui/assets/icons/app_icon_master.png` 是已确认图稿，`scripts/generate_application_icons.py` 从母版生成 Windows 多尺寸 ICO、macOS ICNS 和实际尺寸预览。主程序/updater 的 Windows spec、macOS BUNDLE、QApplication 与顶栏共用该资源；运行时入口为 `ui/application_icon.py`。
+
+- **macOS 本地打包**：`./scripts/build_macos.sh user|ops|both`（默认 ops）（自动 venv + 装依赖 + 跑 `update_translations.py check` + PyInstaller 主程序+updater + 嵌入 `.app/Contents/MacOS/updater` + `codesign --force --deep --sign -` ad-hoc 签名 + `xattr -cr` 清 quarantine + `ditto -c -k` 出 zip）
+- **Windows 一键打包**：`scripts\build_windows.bat user|ops|both`（默认 ops）；两平台均由 `scripts/build_editions.py` 调用 spec、验证模型与构建身份、嵌入 updater 并生成独立 zip。用户 Windows 安装目录为 `SatelliteTerminalToolUser`，EXE 保留 `SatelliteDebugTool.exe`。
 - **Windows 自动更新包合同**：GitHub Release `.7z` 的归档根直接包含 `SatelliteDebugTool.exe`、`updater.exe` 与 `_internal/`，兼容旧 updater 安装修复版；上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷
-- **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，7z 分卷上传 GitHub Release；推 master/main 触发 `ci-only-build` 上传 artifact 不发版）
+- **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，user/ops 矩阵完成冻结启动/总览/Shell/退出烟测，再生成并验证单文件 7z，两份构建成功后由唯一 publish job 上传；推 master/main 触发双版本 `ci-only-build` 上传 artifact 不发版）
 - **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 兼容性问题，强制本地脚本。updater 二进制仍嵌入但 mac 平台不发版，触发频率为零
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.5.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
-- **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；mac 本地手动 `./scripts/build_macos.sh`
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.8.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；mac 本地手动 `./scripts/build_macos.sh both`
 - **`release.config.json`** 配 GitHub owner/repo/api；updater 用 `release_config.py` 读取
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
 
+- **双版更新合同**：用户包名 `satellite_terminal_tool-user-windows-vX.Y.Z.7z`，运维包名保留 `satellite_debug_tool-win-vX.Y.Z.7z`。更新选择匹配 edition/platform/version，安装前验证载荷身份与当前安装；仅截至 1.7.0 的历史全量 ops 包可采用旧无身份清单合同。macOS 继续通过独立签名 app 手动分发。
+- **用户包模块边界**：`scripts/edition_policy.py` 明确共享 UI 模块；其余 UI、生产执行模块和 QtWebEngine 由运维版提供，Shell UI/传输/YMODEM 两版共享，`verify_edition_package.py` 审计冻结 TOC 并验证用户包完整包含 Shell 模块。`core.production` 与 `ui` 的包导出按需加载，保留公共 API 并消除聚合 import 带来的运维依赖。
+
 ### Spec 关键钩子
 
-- `satellite_debug_tool.spec` — 主程序 spec；`collect_all(PySide6/pyqtgraph/OpenGL)`；过滤掉 PySide6 自带但不需要的 Designer/Assistant/Linguist.app（保留 `QtWebEngineProcess.app`）；`tests` 子模块不进发行包
+- `satellite_debug_tool.spec` — 主程序双版 spec；ops 保留全量 Qt/WebEngine 与运维依赖，user 使用 Qt hooks 和明确模块白名单裁剪；两版保留 pyqtgraph/OpenGL、翻译、图标与模型，`tests` 子模块不进发行包。运维包过滤掉 Designer/Assistant/Linguist.app，保留其地图需要的 QtWebEngineProcess.app。
 - `updater.spec` — 单文件 updater 二进制
 - 新依赖若 PyInstaller 找不到：`hiddenimports` 加一行；常见坑：GLU 子模块（`collect_all("OpenGL")` 已覆盖）
 
@@ -189,6 +205,11 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M35_firmware_package_version_policy_*.md` — 客户固件包默认允许升级、同版本重装和降级的跨仓发布合同
 - `doc/M36_debug_ota_response_contract_*.md` — 旧固件有界 OTA 响应合同（`OK` / `dup OK` / `OK, rebooting`）与 `0.0.131_beta` 起严格合同的迁移边界
 - `doc/M37_tcp_shell_ymodem_*.md` — 三工作区 TCP Shell + YMODEM 弹窗计划、验收与开发记录；真机引导升级路径
+- `doc/M38_ui_color_system_*.md` — 石墨灰与蓝色 UI 配色计划、验收与开发记录；三主题、三工作区、状态与数据颜色角色；Windows 原生视觉验收待补
+- `doc/M39_application_icon_*.md` — 应用品牌图标、Windows/macOS/Qt 接入、资源生成与验收记录
+- `doc/M40_neutral_product_naming_*.md` — 客户交付中性命名、应用/打包/翻译范围、认证格式边界与验收记录
+- `doc/M41_combobox_text_layout_*.md` — 时间范围下拉框裁切根因、字体/列表委托/内容尺寸修复、回归与原生视觉证据
+- `doc/M42_user_operations_editions_*.md` — 用户版/运维版功能矩阵、装配与打包、独立配置与更新合同；用户已确认保留用户版独立固件升级，已完成实现与 macOS 双版构建验证，Windows 冻结与真机验收待执行
 - `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
 - `doc/M7_*.md` ~ `doc/M36_*.md` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配、M23 部件温度窗口、M24 Tracking 仿真、M25 客户多设备共享会话、M25R 会话恢复简化、M26 外接电源监测、M27 iperf3 功耗测试、M28 客户设备独立电源与 iperf3、M29 AFD01A/B2 产品接入、M30 Windows 自动更新可靠性、M31 生产出货整备、M33 上位机解密固件包）

@@ -153,8 +153,8 @@ class KpiCard(QFrame):
         """Mission Console KPI 卡：左 2px accent 竖条（告警变 err），微标签 + 等宽数字。"""
         p = S.palette(self._theme)
         card_bg = p["card"]
-        # 左竖条颜色：正常 accent，告警 err
-        bar = p["accent"] if normal else p["err"]
+        # 左竖条：常规中性分隔，异常按设备证据着色
+        bar = p["border"] if normal else p["err"]
         name_px = S.font_px(self._NAME_BASE_PX, self._scale)
         unit_px = S.font_px(self._UNIT_BASE_PX, self._scale)
         self.setStyleSheet(
@@ -193,12 +193,7 @@ class KpiCard(QFrame):
 # ============================================================
 
 # 与 state_panel_widget 同源色标
-_ENUM_LEVEL_COLORS = {
-    0: "#4EC9B0",   # INFO (绿)
-    1: "#DCDCAA",   # WARN (黄)
-    2: "#F14C4C",   # ERROR (红)
-    3: "#808080",   # NEUTRAL (灰)
-}
+
 
 
 class EnumStatusChip(QFrame):
@@ -287,7 +282,7 @@ class EnumStatusChip(QFrame):
         p = S.palette(self._theme)
         if value is None:
             self._dot.setStyleSheet(
-                "background-color: #555555; border-radius: 6px;"
+                f"background-color: {p['text_muted']}; border-radius: 6px;"
             )
             self._value_label.setText("UNKNOWN")
             self._value_label.setStyleSheet(
@@ -296,10 +291,10 @@ class EnumStatusChip(QFrame):
             return
         match = next((e for e in self._state.enums if e.value == value), None)
         if match is None:
-            color = "#888888"
+            color = p["text_muted"]
             text = str(value)
         else:
-            color = _ENUM_LEVEL_COLORS.get(match.level, "#888888")
+            color = S.enum_color(match.level, self._theme)
             text = match.name
         self._dot.setStyleSheet(
             f"background-color: {color}; border-radius: 6px;"
@@ -398,8 +393,8 @@ class ModeButtonGroup(QFrame):
             f"border: 1px solid {p['input_border']}; border-radius: 3px; "
             f"padding: 4px 10px; font-size: {btn_px}px; }}"
             f"QPushButton:hover {{ background-color: {p['card_alt']}; }}"
-            f"QPushButton:checked {{ background-color: {p['primary']}; color: white; "
-            f"border-color: {p['primary']}; font-weight: 600; }}"
+            f"QPushButton:checked {{ background-color: {p['selected_bg']}; color: {p['selected_text']}; "
+            f"border-color: {p['selected_border']}; font-weight: 600; }}"
         )
         btn_h = btn_px + 14   # 字号 + padding
         for btn in self._buttons.values():

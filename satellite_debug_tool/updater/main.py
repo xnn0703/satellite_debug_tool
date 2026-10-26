@@ -212,6 +212,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Seconds to wait for the main process to exit")
     parser.add_argument("--relocated", action="store_true",
                         help="Internal: updater is running from its relocated runtime")
+    parser.add_argument("--edition", choices=("user", "ops"), default="ops")
     args = parser.parse_args(arguments)
 
     _setup_logging(args.log)
@@ -276,6 +277,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         contract = PayloadContract(
             executable_name="SatelliteDebugTool.exe",
             updater_name="updater.exe",
+            edition=args.edition,
+            target_version=args.target_version,
         )
         result = applier.apply(
             args.volumes,

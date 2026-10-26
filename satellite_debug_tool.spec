@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec — SoftHertz Phased-Array Terminal Tool 主程序。
+"""PyInstaller spec — Satellite Terminal Tool 主程序。
 
 构建：
     pyinstaller --noconfirm satellite_debug_tool.spec
@@ -13,11 +13,52 @@
 from pathlib import Path
 import re
 import sys
+import os
+import json
+from satellite_debug_tool.edition import Edition
 
 block_cipher = None
 APP_NAME = "SatelliteDebugTool"
 ROOT = Path(SPECPATH)
-ENTRY = str(ROOT / "satellite_debug_tool" / "main.py")
+sys.path.insert(0, str(ROOT))
+from scripts.edition_policy import operations_modules
+ICON_DIR = ROOT / "satellite_debug_tool" / "ui" / "assets" / "icons"
+EDITION = Edition(os.environ.get("SATELLITE_BUILD_EDITION", "ops"))
+USER = EDITION is Edition.USER
+ENTRY = str(ROOT / "satellite_debug_tool" / ("main_user.py" if USER else "main.py"))
+BUNDLE_NAME = "SatelliteTerminalToolUser" if USER else APP_NAME
+COLLECT_NAME = "SatelliteTerminalToolUser" if USER and sys.platform == "win32" else APP_NAME
+OPERATIONS_MODULES = (
+    "satellite_debug_tool.main", "satellite_debug_tool.ui.main_window",
+    "satellite_debug_tool.ui.production_workspace", "satellite_debug_tool.ui.fixture_debug_workspace",
+    "satellite_debug_tool.ui.customer_fixture_dialog",
+    "satellite_debug_tool.ui.device_view",
+    "satellite_debug_tool.ui.engineering_session_host", "satellite_debug_tool.ui.playback_view",
+    "satellite_debug_tool.ui.map_widget",
+    "satellite_debug_tool.ui.log_view", "satellite_debug_tool.ui.tracking_simulator_view",
+    "satellite_debug_tool.ui.customer_iperf_view", "satellite_debug_tool.ui.power_supply_debug_workspace",
+    "satellite_debug_tool.ui.external_power_window", "satellite_debug_tool.ui.ms6222_debug_workspace",
+    "satellite_debug_tool.ui.channel_panel", "satellite_debug_tool.ui.control_panel_widget",
+    "satellite_debug_tool.ui.dashboard_widget", "satellite_debug_tool.ui.event_timeline_widget",
+    "satellite_debug_tool.ui.state_panel_widget", "satellite_debug_tool.ui.status_strip_widget",
+    "satellite_debug_tool.core.external_power_monitor", "satellite_debug_tool.core.iperf_test",
+    "satellite_debug_tool.core.motion_platform",
+)
+
+
+OPERATIONS_MODULES += operations_modules(ROOT)
+
+
+def included_module(name):
+    if "tests" in name.split("."):
+        return False
+    if USER:
+        if any(name == item or name.startswith(item + ".") for item in OPERATIONS_MODULES):
+            return False
+        if name.startswith("satellite_debug_tool.core.production."):
+            return name == "satellite_debug_tool.core.production.fixture_telemetry"
+    return True
+
 
 # 从 satellite_debug_tool/__init__.py 读取 __version__（单一来源）
 _init_src = (ROOT / "satellite_debug_tool" / "__init__.py").read_text(encoding="utf-8")
@@ -29,11 +70,11 @@ print(f"[spec] APP_VERSION = {APP_VERSION}")
 # 否则运行时会随机缺 Qt plugin / pyqtgraph shader 导致启动失败。
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-pyside6_datas, pyside6_binaries, pyside6_hidden = collect_all("PySide6")
+pyside6_datas, pyside6_binaries, pyside6_hidden = ([], [], []) if USER else collect_all("PySide6")
 pyqtgraph_datas, pyqtgraph_binaries, pyqtgraph_hidden = collect_all("pyqtgraph")
 # M11 fix: PyOpenGL（pyqtgraph.opengl 3D 姿态显示需要），全包确保 GLU/GL 子模块齐
 opengl_datas, opengl_binaries, opengl_hidden = collect_all("OpenGL")
-docx_datas, docx_binaries, docx_hidden = collect_all("docx")
+docx_datas, docx_binaries, docx_hidden = ([], [], []) if USER else collect_all("docx")
 # AESGCM 在固件包路径内延迟导入；显式收集其绑定和后端，避免 Windows 冻结包遗漏。
 cryptography_datas, cryptography_binaries, cryptography_hidden = collect_all("cryptography")
 
@@ -62,9 +103,15 @@ pyside6_binaries = [
 # 本项目包本身：tests 目录不要进发行包
 extra_hidden = collect_submodules(
     "satellite_debug_tool",
-    filter=lambda name: "tests" not in name.split("."),
+    filter=included_module,
 )
+identity_dir = ROOT / "build" / "identity" / EDITION.value
+identity_dir.mkdir(parents=True, exist_ok=True)
+identity_path = identity_dir / "build_identity.json"
+identity_path.write_text(json.dumps({"edition": EDITION.value, "version": APP_VERSION,
+                                    "platform": "mac" if sys.platform == "darwin" else "win"}), encoding="utf-8")
 app_datas = [
+    (str(identity_path), "satellite_debug_tool"),
     (
         str(ROOT / "satellite_debug_tool" / "i18n" / "translations"),
         "satellite_debug_tool/i18n/translations",
@@ -78,6 +125,10 @@ app_datas = [
         "satellite_debug_tool/resources",
     ),
 ]
+if USER:
+    app_datas = [entry for entry in app_datas if entry[1] != "satellite_debug_tool/ui/assets"]
+    app_datas.extend((str(ROOT / "satellite_debug_tool/ui/assets" / name),
+                      "satellite_debug_tool/ui/assets/" + name) for name in ("icons", "models", "fonts"))
 if sys.platform == "darwin":
     app_datas.extend([
         (
@@ -138,7 +189,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
+    excludes=(list(OPERATIONS_MODULES) + ["docx", "lxml", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineQuick"] if USER else []) + [
         "tkinter",
         "matplotlib",
         "test",
@@ -171,7 +222,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=str(ICON_DIR / "app_icon.ico") if sys.platform == "win32" else None,
 )
 
 coll = COLLECT(
@@ -182,19 +233,19 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name=APP_NAME,
+    name=COLLECT_NAME,
 )
 
 # macOS：同步生成 .app bundle，方便双击
 if sys.platform == "darwin":
     app = BUNDLE(
         coll,
-        name=f"{APP_NAME}.app",
-        icon=None,
-        bundle_identifier="com.softhz.satellite-debug-tool",
+        name=f"{BUNDLE_NAME}.app",
+        icon=str(ICON_DIR / "app_icon.icns"),
+        bundle_identifier="com.satellite-debug-tool.user" if USER else "com.satellite-debug-tool.desktop",
         info_plist={
             "CFBundleName": APP_NAME,
-            "CFBundleDisplayName": "SoftHertz Phased-Array Terminal Tool",
+            "CFBundleDisplayName": "Satellite Terminal Tool",
             "CFBundleDevelopmentRegion": "en",
             "CFBundleLocalizations": ["en", "zh_CN"],
             "CFBundleShortVersionString": APP_VERSION,
