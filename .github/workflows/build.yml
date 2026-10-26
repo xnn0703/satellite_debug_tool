@@ -71,6 +71,7 @@ jobs:
   # ============================================================
   build-windows:
     strategy:
+      fail-fast: false
       matrix:
         edition: [user, ops]
     runs-on: windows-latest
@@ -98,28 +99,15 @@ jobs:
 
       - name: Smoke-test the frozen edition
         timeout-minutes: 3
-        shell: pwsh
-        run: |
-          $edition = "${{ matrix.edition }}"
-          $folder = if ($edition -eq "user") { "SatelliteTerminalToolUser" } else { "SatelliteDebugTool" }
-          $exe = Join-Path $PWD "dist/$edition/$folder/SatelliteDebugTool.exe"
-          $result = Join-Path $PWD "release/smoke-$edition.json"
-          $env:SATELLITE_UPDATE_CHECK = "0"
-          $process = Start-Process -FilePath $exe -ArgumentList @("--smoke-test", "--smoke-output=$result") -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Frozen $edition smoke failed: $($process.ExitCode)" }
-          $proof = Get-Content $result -Raw | ConvertFrom-Json
-          $expected = "${{ needs.prepare-release.outputs.tag }}" -replace '^v', ''
-          if ($proof.edition -ne $edition -or $proof.version -ne $expected -or $proof.overview_panels -ne "PASS" -or $proof.shell_dialog -ne "PASS") {
-            throw "Frozen edition smoke evidence differs from the release contract"
-          }
-          Get-Content $result
+        run: python scripts/check_frozen_application.py --edition ${{ matrix.edition }} --version "${{ needs.prepare-release.outputs.tag }}"
 
       - name: Upload frozen smoke evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: smoke-${{ matrix.edition }}
-          path: release/smoke-*.json
-          if-no-files-found: error
+          path: release/smoke-*
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Layout release dir
@@ -197,6 +185,7 @@ jobs:
   # ============================================================
   ci-only-build:
     strategy:
+      fail-fast: false
       matrix:
         edition: [user, ops]
     name: CI build (no release, win only)
@@ -216,6 +205,17 @@ jobs:
       - name: Build
         shell: cmd
         run: scripts\build_windows.bat ${{ matrix.edition }}
+      - name: Smoke-test the frozen edition
+        timeout-minutes: 3
+        run: python scripts/check_frozen_application.py --edition ${{ matrix.edition }}
+      - name: Upload CI smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-smoke-${{ matrix.edition }}
+          path: release/smoke-*
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload CI artifact
         uses: actions/upload-artifact@v4
         with:

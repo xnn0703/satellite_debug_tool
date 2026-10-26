@@ -188,7 +188,7 @@ a = Analysis(
     ),
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / "scripts/frozen_smoke_hook.py")],
     excludes=(list(OPERATIONS_MODULES) + ["docx", "lxml", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineQuick"] if USER else []) + [
         "tkinter",
         "matplotlib",

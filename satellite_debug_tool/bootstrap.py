@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication
 from satellite_debug_tool.core.application_logging import configure_application_logging
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.edition import Edition, build_edition
+from satellite_debug_tool.smoke_diagnostics import stage
 from satellite_debug_tool.i18n import initialize_translation_manager
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.ui.application_icon import application_icon
@@ -26,6 +27,7 @@ def run_application(edition, window_factory, *, started=None):
     temporary = tempfile.TemporaryDirectory(prefix="sdt-frozen-smoke-") if smoke else None
     if smoke:
         os.environ["SATELLITE_UPDATE_CHECK"] = "0"
+    stage("create-application")
     app = QApplication([arg for arg in sys.argv if arg not in ("--production", "--smoke-test") and not arg.startswith("--smoke-output=")])
     app.setWindowIcon(application_icon())
     settings = Settings(edition=edition, **({"config_directory": temporary.name} if smoke else {}))
@@ -36,9 +38,11 @@ def run_application(edition, window_factory, *, started=None):
     initialize_translation_manager(app, settings)
     S.load_bundled_fonts()
     S.apply_global_font(app, scale="small", base_px=13)
+    stage("create-window")
     window = window_factory(settings=settings)
     if production:
         window.unlock_production_for_session()
+    stage("show-window")
     window.show()
     if smoke:
         import json
@@ -48,6 +52,7 @@ def run_application(edition, window_factory, *, started=None):
         initial = {"first_window_seconds": round(time.perf_counter() - started, 3),
                    "initial_rss_bytes": psutil.Process().memory_info().rss,
                    "initial_thread_count": psutil.Process().num_threads()}
+        stage("overview-panels")
         overview = window._customer.session_page("overview", ensure=True)
         if overview is None:
             raise RuntimeError("overview page is required")
@@ -60,9 +65,11 @@ def run_application(edition, window_factory, *, started=None):
             if not overview._attitude.try_load_device_model("afd01"):
                 raise RuntimeError("bundled model could not be loaded")
             app.processEvents()
+        stage("customer-pages")
         for page in window._customer._page_ids:
             window._customer.set_page(page)
             app.processEvents()
+        stage("shell-dialog")
         shell = window._customer.open_tcp_shell_dialog()
         app.processEvents()
         if window._customer.open_tcp_shell_dialog() is not shell or shell.workspace._controller.worker is not None:
@@ -71,6 +78,7 @@ def run_application(edition, window_factory, *, started=None):
             raise RuntimeError("shell dialog shutdown was refused")
         app.processEvents()
         if edition is Edition.OPS:
+            stage("engineering-pages")
             window.unlock_engineering_for_session()
             for index in range(window._tabs.count()):
                 window._tabs.setCurrentIndex(index)
@@ -89,6 +97,7 @@ def run_application(edition, window_factory, *, started=None):
         if destination:
             Path(destination).write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps(result), flush=True)
+        stage("shutdown")
         if not window.close():
             raise RuntimeError("frozen smoke shutdown was refused")
         app.processEvents()
