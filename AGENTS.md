@@ -88,7 +88,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/protocol/` — v2 包络、CRC、Handshake 与领域注册表；`domains/{debug,product,orbit}.py` 独占各自命令解码，`FrameReceiverV2` 只做包络解析和领域分发
 - `core/session/` — **M21/M25** `DeviceSessionCore`、`EndpointSessionDirectory`、`EndpointSessionRuntime` 与 Debug/参数/OTA/Product 控制器；一个 UDP endpoint 只有一个权威会话
 - `core/customer/` — **M25** 客户显式设备目录、attached 意图、固定 endpoint binding；选择设备只切换呈现，不重绑 Core 或控制目标
-- `core/external_power_monitor.py` — **M28** 每个客户设备独立的 PSW80-27 串行监测/控制 owner 与 Store；同一 TCP 会话完成轮询、设参、启停和回读闭环，保留 30 分钟 V/A 历史
+- `core/external_power_monitor.py` — **M28** 每个客户设备独立的 PSW80-27 串行监测/控制 owner 与 Store；同一 TCP 会话完成轮询、设参、启停和回读闭环，保留 30 分钟 V/A 历史。底层 `GwInstekPswAdapter` 独占连接内配置验证事实，正常轮询保留已验证关闭状态；开启前重新回读输出、保护及电压/电流设定值，通信失败、保护、参数漂移或重连撤销相应准入证据。修复计划与证据见 `doc/M26_power_enable_readiness_fix_*.md`。
 - `core/iperf_test.py` — **M28** 每个客户设备独立的 iperf3 客户端 owner/Store；双 QProcess 独立运行 UL/DL，解析 3.18+ JSON-stream，并将网络指标与该设备的 PSW 样本写入同一测试会话
 - `core/comm/udp_endpoint_broker.py` — **M25** Customer/Production 共用的进程级单 UDP socket、admission claim、来源 endpoint 分流与定向发送
 - `core/product/` — **M18+** 客户 Product Service 模型、注册策略、Store、回放/legacy 投影与整快照来源状态机；每个 `ProductValue` 携带可用性、来源、接收时间和质量
@@ -106,7 +106,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/production/fixture_profile.py` — **M19-A.11** 摇摆台型号模板、v4 工作站档案、运行包线和控制租约；型号预置直接控制端点与运动学参数，旧 `192.168.15.101:9800` 厂家服务端点不解释为控制器地址，现场只确认轴符号并由引导标定生成真实 calibration ID
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 AES-256-GCM 认证解密（`firmware_package.py`）
-- `core/tcp_shell/` — **M37** Shell 弹窗（TCP 1235 / 串口）+ YMODEM Batch Sender：`transport.py` 字节流 link 层（`TcpShellLink` / `SerialShellLink`，UDP 明确拒绝——设备侧无 UDP shell 服务）、`ymodem_sender.py` 纯状态机（C 握手、SOH/128 头包与批结束 + STX/1024 数据块、CRC16-CCITT、EOT 两阶段、空文件名批结束）、`worker.py` 单 link 读写 owner（QThread，target dict 驱动）、`controller.py` YMODEM 准入租约与最小版本回读、`recorder.py` 会话证据
+- `core/tcp_shell/` — **M37** Shell 弹窗（TCP 1235 / 串口）+ YMODEM Batch Sender：`transport.py` 字节流 link 层（`TcpShellLink` / `SerialShellLink`，UDP 明确拒绝——设备侧无 UDP shell 服务；单次读取统一 ≤ `MAX_READ_CHUNK` 64 KiB）、`ymodem_sender.py` 纯状态机（C 握手、SOH/128 头包与批结束 + STX/1024 数据块、CRC16-CCITT、EOT 两阶段、空文件名批结束）、`worker.py` 单 link 读写 owner（QThread，target dict 驱动；shell 字节经 ring 入界、YMODEM 二进制 recv 不经 ring）、`rx_bridge.py` **M45** 有界接收环（单会话单生产者单消费者：分段接纳、有界等待片段、`push_final` 残余移交、清屏代际与锁内通知边沿）、`controller.py` YMODEM 准入租约与最小版本回读、`recorder.py` 会话证据
 - `core/link_trace.py` — 帧 trace 日志
 - `core/config.py` — `Settings` 类，JSON 存 `~/.satellite_debug_tool/settings.json`
 - `ui/` — PySide6 呈现层；`view_lifecycle.py` 定义页面生命周期，`lazy_view_host.py` 提供首次访问构建，`semantic_style.py` 只在语义属性变化时刷新样式
@@ -119,6 +119,8 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 ### 关键约定
 
+- **M46 电源面板交还与 MS-6222 对照**：客户外接电源页“退出遥控（恢复面板）”由同一 worker 完成当前操作、发送 `SYST:COMM:RLST LOC` 并关闭会话；monitor 保留面板控制意图，后续页面活动变化保持停止监测，显式“保存并连接”恢复监测。写入成功只呈现“已发送返回本地指令”，输出与设定值保持。`FixtureTelemetryBus` 同时拥有当前参考姿态快照，独立 MS 页和摇摆台入口发布 INS 样本与连接生命周期；总览在设备 3D 角度下方显示共享 MS 参考，固定显示原始 INS/真实航向（三位小数），摇摆台继续显示标定后的设备 FRD/相对航向，3 秒过期及断开时清除实时数字。原始快照仅服务实时对照，SDB 姿态记录继续使用既有类型化总线合同。见 `doc/M46_power_local_ms6222_readout_*.md`。
+
 - **M40 中性产品命名**：客户可见名称统一为“卫星通信终端工具 / Satellite Terminal Tool”，顶栏简称“终端工具 / Terminal Tool”；应用元数据与 macOS 包信息使用中性标识。报告默认公司名为空，由用户工位配置提供；已发布固件包的 AES-GCM 认证域按格式合同保留固定字节。
 - **M41 下拉框排版**：全局 QComboBox 与其弹出视图使用同一 UI 字体角色，数值输入保留等宽字体；回放/日志的 TimeRangeControl 使用标准列表委托和按内容调整宽度，语言切换由 Qt 重新计算尺寸，保持当前预设与范围。两页面将文件信息和时间范围分行，保证英文选项在页面布局中完整显示。
 
@@ -130,9 +132,9 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - 高频页面必须实现幂等 `activate_view()` / `deactivate_view()`；隐藏时停止呈现定时器，恢复时先从 Store 即时刷新一次。
 - 新增重量级页面使用 `LazyViewHost` 首次构建并保留实例；首次构建前到达的数据必须由权威 Store 在激活时补齐。
 - **每个离线 Tab 使用独立 `DataStore` / `ProfileStore`**；共享 UDP 的 Customer 与 Engineering 通过当前 endpoint bundle 消费同一个 Runtime Store，工程串口和 Playback/Log 分别独立，切换不污染
-- 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x11`、`0x20..0x2C`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
+- 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x12`、`0x20..0x2C`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
 - 通用长帧扩容不改变专用上传分片合同：`OTA_DATA` 每片 1..1021 B（UI 通常发送 512 B），Orbit `UPLOAD_CHUNK` 每片 1..1012 B
-- 测试在 `satellite_debug_tool/tests/`（100 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapp` fixture 复用它
+- 测试在 `satellite_debug_tool/tests/`（100 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapplication_session` fixture 复用它
 - `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_UPDATE_CHECK=0` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
 - 字号已固化 `small`（`base_px=13`，`main.py` 调 `S.apply_global_font(app, scale="small", base_px=13)`）；`styles.FONT_SCALES` / `FontScale` API 仅保留兼容 `test_styles.py`，UI 不再暴露
 - **M38 配色**：`dark / dark_hc / light` 三主题由 `ui/styles.py` 统一提供石墨灰/中性浅灰、蓝色操作与选择、独立状态色及 Qt 原生调色板。实底按钮、选中项、焦点和进度条分别使用成对角色；曲线/GNSS/姿态/ANSI 保持类别含义并集中调整主题亮度。常规数值使用正文色；切主题立即重绘已有状态和终端格式，顶栏图标按钮循环切换。
@@ -148,6 +150,9 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - Customer 侧栏、Engineering 顶栏与 Production 导航的“Shell…”入口复用同一个弹窗实例（`CustomerWorkspace.open_tcp_shell_dialog` 懒创建缓存）；弹窗连接类型支持 TCP（默认端口 1235）与串口（8N1，波特率默认 115200，枚举 + 手填；对应 letter shell 串口 / RT-Thread msh 控制台），内置哑终端与 YMODEM Sender，跨工作区切换存活，关闭即断开会话并收尾证据。UDP 不是支持类型——两个固件家族的 shell 都只在 TCP 与串口上，`create_link` 明确拒绝。
 - Customer 侧栏与 Engineering 顶栏的“摇摆台…”入口复用同一个弹窗实例和进程级 `FixtureRuntime`；提供日常相对姿态、回中、组合连续摇摆、受控停止、MS 绝对航向和有界姿态修正，目标/MS 实测/误差共用一张姿态图。回原点、档案编辑和资格标定仍由 Production 工程页面负责。
 - 第一方可翻译复合控件显式实现 `retranslate_ui()`；语言切换使用稳定源键，禁止扫描对象树或根据当前可见文本反查业务状态。
+- **M43 Shell 输入/回显合同**：普通命令文字采用 ASCII，键盘、输入法 commit 与粘贴统一原子校验，非 ASCII/非法控制字节在发送前明确提示。接收流由 `core/tcp_shell/terminal.py` 单次解析；`TerminalScreen` 独占行、单元格、光标和颜色，Qt 文档仅投影。BS 左移后覆盖，水平游标跨包保持；正文/HEX 使用独立文档并持续消费同一接收流。原始字节与 YMODEM 文件名保持既有合同。
+- **M45 Shell 有界消费与按帧投影**：shell 接收字节由 worker 独占推入每连接一个的有界 `RxRing`（512 KiB，满载有界等待片段 ≤20ms 并在片段间泵命令，YMODEM 启动不进入环等待栈）；`rx_pending` 仅在锁内"待观察态"翻转边沿发射，UI 以 33ms 单次定时器按帧消费——每帧 16 KiB 预算、4 KiB 分段、8ms 解析软预算，帧内多个 `TerminalUpdate` 用平移公式合并后单 edit block 投影。TCP/串口单次读取统一 ≤64 KiB；停止/退出把已读未入环残余 `push_final` 非阻塞移交，UI 分帧终排空后 `decoder.finish`、文本日志最后关闭；应用退出与关闭弹窗共用该收尾状态机。文档物理淘汰由 `maximumBlockCount(=max_rows)` 拥有（手动从头删除是与块数无关的 O(文档) ~160ms，该路径已删除），寻址偏移只计帧前已存在的被淘汰行；清屏以 ring 代际划界，已入环与在途旧字节不进入新屏幕。controller `disconnected/ymodem_finished` 直连转发且私有状态先更新后外发。实测：满载 5000 行持续消费 92,160 B/s、洪水中键→命令入队 p99 ~24ms、按帧可持续 ~756 KiB/s。
+- **M44 采集时间代际**：`DeviceSessionCore` 在入库前使用 `TelemetryClock` 统一准入；周期流连续三个推进的反向时间样本确认采集新段（256 帧/5 秒有界候选），u32 回绕结合主机经过时间，单个旧包保留原事实。新段重建 Product 动态事实、Debug 与相关历史锚点；移动时间围栏隔离迟到旧段包。`telemetry_epoch` 与连接 generation 独立，旧操作 scope 失效，参数/控制与 OTA 重启验证消费同一代际事件，Runtime 身份授权重建，endpoint 传输继续。显示清空保留时间锚点。SDB 原始帧完整留存，派生回放分段并插入 NaN；boot ID 缺失与 SDB v2 缺少逐帧主机时间的辨识边界见 M44 计划。
 - **Shell/YMODEM 是两版共享工具路径**——Shell 观察与输入不持设备事务租约；YMODEM 开始前对有管理会话的 endpoint 以 `tcp-shell-ymodem` purpose 抢占操作网关（客户/工程走 attachment 网关，批次外设备要求 gate 空闲；仅 TCP 目标可命中设备目录），手填 TCP 目标与串口目标允许直传并在证据记录 `managed_session: false`。YMODEM 文件名原样保留：`<target>_app_X.Y.Z_release|beta.bin` → 设备 DOWNLOAD 区、`app_factory.bin` → FACTORY 区、其他 → LittleFS、跨产品被设备拒绝；接收端准入（如 XESA01 RT-Thread `ry`/`ymodem_ota` 或 AFD01 系文件名路由）由各设备固件权威决定。YMODEM 帧块类型合同：头包与批结束帧 SOH/128、数据块 STX/1024——RT-Thread rym 接收端（4-xesa01）对批结束头固定按 128 字节校验，AFD01 接收端按帧头自适应两种块长；超长头包（>128B）回退 STX，两类接收端都接受。头包 ACK 与最终 EOT ACK 都等待在存储操作窗口（`final_ack_timeout_s` 20 s）：RT-Thread `yota` 在头包 ACK 前同步擦除 download 分区（XESA01 552 KiB 实测 ~7 s，分区 1 MiB），AFD01 在最终 EOT ACK 前落盘 flash；数据块 ACK 用短块窗口。XESA01 设备侧接收命令是 `yota`（每次开始前手动输入），`rb` 仅存在于 AFD01 letter-shell。YMODEM 完成只证明字节已被设备接收校验；升级生效由重启后握手回读独立呈现，不自动判 PASS。
 
 ## 持久化路径（`~/.satellite_debug_tool/`）
@@ -183,7 +188,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **Windows 自动更新包合同**：GitHub Release `.7z` 的归档根直接包含 `SatelliteDebugTool.exe`、`updater.exe` 与 `_internal/`，兼容旧 updater 安装修复版；上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷
 - **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，user/ops 矩阵完成冻结离屏启动/总览/Shell/退出烟测，再生成并验证单文件 7z，两份构建成功后由唯一 publish job 创建草稿，核对资产后发布；推 master/main 触发双版本 `ci-only-build` 上传 artifact 不发版）
 - **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 兼容性问题，强制本地脚本。updater 二进制仍嵌入但 mac 平台不发版，触发频率为零
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.8.0`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.8.1`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；mac 本地手动 `./scripts/build_macos.sh both`
 - **`release.config.json`** 配 GitHub owner/repo/api；updater 用 `release_config.py` 读取
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
@@ -212,6 +217,9 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M40_neutral_product_naming_*.md` — 客户交付中性命名、应用/打包/翻译范围、认证格式边界与验收记录
 - `doc/M41_combobox_text_layout_*.md` — 时间范围下拉框裁切根因、字体/列表委托/内容尺寸修复、回归与原生视觉证据
 - `doc/M42_user_operations_editions_*.md` — 用户版/运维版功能矩阵、装配与打包、独立配置与更新合同；用户已确认保留用户版独立固件升级，已完成实现与 macOS 双版构建验证，Windows 冻结与真机验收待执行
+- `doc/M43_shell_terminal_reliability_*.md` — Shell 单次流解码、终端状态模型与 ASCII 命令输入校验；现场输入法及设备交互待验证。
+- `doc/M45_shell_terminal_throughput_*.md` — Shell 有界消费与按帧投影计划、验收与开发记录；含三轮评审合同修订与两次 P0 投影升级的实测依据（头删 O(文档) 归因、maximumBlockCount 接管、16 KiB 帧预算）。
+- `doc/M44_snr_time_axis_recovery_*.md` — 客户 SNR/温度历史的同连接采集代际恢复、u32/乱序准入、事务授权与回放断点证据。
 - `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构
 - `doc/optimization_plan.md` — M1–M6 整体优化计划（v1.2）
 - `doc/M7_*.md` ~ `doc/M36_*.md` — 各里程碑 plan/acceptance/dev_log（M7 Tab 化、M8 离线地图、M10/M11 升级、M12 归一化、M13 通道语义、M14 ESA01、M15 GNSS truth、M16 i18n English、M17 内置 3D 模型、M18 客户工作台 + Product Service、M19 批量试产与夹具调试、M20 根因修复与状态完整性、M21 单进程架构收敛、M22 AFD01C 适配、M23 部件温度窗口、M24 Tracking 仿真、M25 客户多设备共享会话、M25R 会话恢复简化、M26 外接电源监测、M27 iperf3 功耗测试、M28 客户设备独立电源与 iperf3、M29 AFD01A/B2 产品接入、M30 Windows 自动更新可靠性、M31 生产出货整备、M33 上位机解密固件包）

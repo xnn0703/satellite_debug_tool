@@ -362,6 +362,7 @@ class CaptureProfileController(QObject):
         session.product_store.updated.connect(self._on_store_updated)
         session.connection_changed.connect(self._on_connection_changed)
         session.generation_changed.connect(self._on_generation_changed)
+        session.telemetry_epoch_changed.connect(self._on_generation_changed)
         self.destroyed.connect(self._on_destroyed)
 
     @property
@@ -619,6 +620,7 @@ class ProductControlController(QObject):
         session.product_store.updated.connect(self._check_readback)
         session.connection_changed.connect(self._on_connection_changed)
         session.generation_changed.connect(self._on_generation_changed)
+        session.telemetry_epoch_changed.connect(self._on_generation_changed)
         self.destroyed.connect(self._on_destroyed)
 
     @property
@@ -924,6 +926,7 @@ class MountConfigurationController(QObject):
         session.product_store.updated.connect(self._check_readback)
         session.connection_changed.connect(self._on_connection_changed)
         session.generation_changed.connect(self._on_generation_changed)
+        session.telemetry_epoch_changed.connect(self._on_generation_changed)
         self.destroyed.connect(self._on_destroyed)
 
     @property

@@ -306,19 +306,25 @@ class ProductServiceStore(QObject):
         return self._slow
 
     def clear(self) -> None:
-        self._telemetry_epoch += 1
         self._identity = None
         self._hardware_identity = None
         self._navigation_source = None
-        self._external_ins = None
+        self._capabilities = None
+        self._received.clear()
+        self.begin_telemetry_epoch()
+
+    def begin_telemetry_epoch(self) -> None:
+        """新采集段保留已知静态身份；动态回读、历史和时间锚点共同失效。"""
+        self._telemetry_epoch += 1
         self._fast = None
         self._slow = None
+        self._external_ins = None
         self._link_detail = None
         self._rf_lock_status = None
         self._components = None
-        self._capabilities = None
         self._mount_status = None
-        self._received.clear()
+        for key in ("fast", "slow", "external_ins", "link_detail", "rf_lock_status", "components", "mount_status"):
+            self._received.pop(key, None)
         self._snr_history.clear()
         self._snr_timestamp.reset()
         for history in self._component_temperature_history.values():

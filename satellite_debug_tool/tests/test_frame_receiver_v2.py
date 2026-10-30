@@ -150,12 +150,12 @@ class TestErrors:
 class TestUnknownCmd:
     def test_unknown_cmd_returns_raw_frame(self):
         r = FrameReceiverV2()
-        # 0x12 仍在顶层命令空间中保留，不因 0x11 合法化而被注册。
-        frame = build_frame(0x12, b"\x11\x22\x33")
+        # 0x13 仍在顶层命令空间保留，0x12 已分配给 INS 工程流。
+        frame = build_frame(0x13, b"\x11\x22\x33")
         records = r.feed(frame)
         assert len(records) == 1
         assert isinstance(records[0], RawFrame)
-        assert records[0].cmd_type == 0x12
+        assert records[0].cmd_type == 0x13
         assert records[0].data == b"\x11\x22\x33"
 
     def test_gnss_extensions_are_raw_frames_without_new_decoders(self, monkeypatch):

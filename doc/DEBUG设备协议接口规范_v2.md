@@ -60,7 +60,7 @@
 └────────┴──────────┴──────────┴──────────┴────────┴────────┴────────┘
 ```
 
-`*` 命令空间分段分配：通用 Debug/GNSS/Tracking 为 `0x01..0x11`，Product Service（AFD01 / AFD01A / AFD01B2 / AFD01C / AFD01D / ESA01）为
+`*` 命令空间分段分配：通用 Debug/GNSS/Tracking/INS 工程流为 `0x01..0x12`，Product Service（AFD01 / AFD01A / AFD01B2 / AFD01C / AFD01D / ESA01）为
 `0x20..0x2C`，XESA01 Orbit 为 `0x30..0x31`；中间保留值不因图中范围而成为有效命令。
 
 CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末尾（不含 CRC 和帧尾）。
@@ -92,6 +92,7 @@ CRC16-CCITT（poly=0x1021, init=0xFFFF），计算范围：帧头起至数据末
 | 0x0F | `GNSS_SAT_REPORT`   | D→H | MG902 NAV-SAT 分片 | 约 1 Hz |
 | 0x10 | `GNSS_SIGNAL_REPORT`| D→H | MG902 NAV-SIG 分片 | 约 1 Hz |
 | 0x11 | `TRACKING_SIMULATION`| H→D | Debug Tracking 场景仿真 | 50 Hz / 按需 |
+| 0x12 | `INS_TRACE` | D→H | 原始输入、内部 ESKF 与 RF 观测工程录制 | 按新输入 / 20 Hz |
 | 0x20 | `SERVICE_IDENTITY` | D→H | 产品身份 | 接入时 + 0.2 Hz |
 | 0x21 | `SERVICE_FAST_STATE` | D→H | 客户实时状态 | 默认 10 Hz，可配 1~20 Hz |
 | 0x22 | `SERVICE_SLOW_STATE` | D→H | 位置/RF 回读 | 1 Hz |
@@ -1267,6 +1268,60 @@ ufd45 同理实现 `ufd45_debug_profile_register()`，两套互不影响。
 - `session_id` 必须非零；活动会话只接受相同 ID，停止后的迟到包会被拒绝。
 
 START/SAMPLE 连续 2000 ms 未到达时设备自动退出仿真。仿真期间设备强制关闭 TX；显式 STOP 或超时后恢复原 TX 策略，原请求仍成立时 TX 可能重新开启。
+
+## INS 工程录制流（0x12）
+
+只由 AFD01 系列 Debug 固件产生，Release 不编入原始记录 producer。复用现有 envelope/CRC，小端编码，
+不占用标量 channel ID，不改变 Product Service。普通 SDB v3 录制保存收到的全部原始 RX chunk，因此无需额外弹窗即可保留该流；
+新解析器通过 `InsTraceRecord` 提供精确 us 时刻与 kind 对应的字段，旧解析器按未知 RawFrame 忽略。
+
+公共头固定32B：`schema:u8=1 | kind:u8 | source:u8 | health:u8 | seq:u32 | source_seq:u32 |
+measurement_us:u64 | received_us:u64 | flags:u32`。
+
+- `source/health` 为固件统一 nav_sensor 枚举；filter/update 的source/health为0，不代表传感器健康。
+- `measurement_us` 为MCU单调测量/滤波时刻，`received_us` 为完整帧提交/consumer接收/快照时刻；不得用主机到达时间覆盖。
+- `seq` 为原始topic或观测身份；filter/update采用本次状态的ms时刻。`source_seq=0`表示来源没有独立包序号。
+- float无效值原样保留，用于定位数值或质量拒绝；解码成功不表示该输入被ESKF接受。
+
+| kind | DATA总长 | 头后固定载荷与单位 |
+|---:|---:|---|
+| 1 IMU | 68B | `sample_type:u8,time_quality:u8,mount_rot:u16,dt:f32,temp:f32,gyro_or_delta[3]:f32,accel_or_delta[3]:f32` |
+| 2 GNSS | 100B | `lat/lon:f64`；依次12个f32：MSL高、椭球高、水平/垂直位置std、N/E/D速度、地速、水平/垂直速度std、COG、COGstd；末尾`fix_class/raw_fix_type/raw_fix_flags/num_svs:u8` |
+| 3 FILTER | 196B | 内部四元数、姿态std、bg与std、ba、静止证据、GNSS平移/激励资格、计数、载体速度辅助诊断、yaw量测累计注入，详见下文 |
+| 4 RF | 80B | `target_generation/authority_epoch/rf_measurement_timestamp_ms:u32`；`type/ownership/reject/reserved:u8`；7个f32：value、variance、innovation、applied、beam_az、beam_el、SNR；最后`internal_shadow_correction_sequence:u32` |
+| 5 UPDATE | 192B | 四组GNSS NIS与更新事实、实际增益、ZARU与数值诊断，详见下文 |
+
+IMU为设备body FRD，`sample_type=0`时向量单位rad/s和m/s²，`sample_type=1`时为采样窗增量rad和m/s，dt为对应窗秒数；
+mount_rot只说明上游已经应用的旋转，不得重复应用。温度单位℃，flags.bit0为温度有效。
+GNSS位置单位deg/m，速度m/s，COG及std为rad；flags.bit0..3依次为has_fix/ellipsoid_height_valid/velocity_valid/cog_valid。
+RF的header.source_seq保存已发送命令身份；rf_measurement_timestamp_ms为原始RF测量时刻，公共measurement_us可为内部相对yaw传输后的状态时刻。
+RF的internal_shadow_correction_sequence保存观测传输所依据的内部yaw校正身份；locate在锁内与当前filter身份比较，跨校正拒绝可由此追查。累计录制丢弃数仍由kind3记录。
+RF value/innovation/applied为rad，variance为rad²，波束角deg，SNR为dB；flags.bit0/1表示accepted/affects_active_pose，影子ACK不得被当成业务姿态修正。
+
+FILTER公共头之后：
+
+1. `q_body_to_nav[4]`(wxyz)、`att_std_deg[3]`、`gyro_bias_dps[3]`、`bg_std_dps[3]`、`accel_bias_m_s2[3]`，均f32。
+2. 7个f32：stationary gyro mean/std(dps)、accel mean/std(m/s²)、净位移(m)、要求净位移(m)、速度变化(m/s)。
+3. 7个u32：ZARU接受数、yaw更新数、ZARU settle(ms)、update_mask、运动持续(ms)、激励计数、trace丢失数。
+4. 12个u8：internal_state、stationary_reason、zaru_gate、filter_update_status、tilt_gate、motion_reason、motion_flags、yaw_regime、gnss_pv_reject、gnss_yaw_accepted、gnss_yaw_reject、stationary。
+5. 载体方向诊断：`direction_measurement_us:u64,gnss_seq:u32,forward/lateral/down:f32,direction/external_assisted/valid/reserved:u8`。
+   direction=0未知/1向前/2向后/3近静止；该诊断有独立GNSS时刻，external_assisted必须明确，不能冒充内部自主定向。
+6. 偏移192的`yaw_correction_sum_deg:f32`：全部实际量测yaw注入之和，wrapped[-180,180]deg，不包含IMU传播；与nominal yaw共同复盘RF运输增量。
+
+FILTER flags.bit0..3为RP有效/yaw有效/bias_stationary/最近P/V接受；motion_flags.bit0..2为真实平移/yaw辅助/bias学习资格。
+FILTER至多20Hz，producer每次只记录内部ESKF公开快照，不以已选中北云的业务姿态替代。
+
+UPDATE公共头后依次为水平位置、垂直位置、水平速度、垂直速度四个28B组：
+`last_update_ms:u32,nis/residual_norm/effective_std:f32,update_count/reject_count:u32,status/recovery_reason/source/reserved:u8`。
+随后6个f32：P/V raw/effective gyro-bias gain max、同期RAWIMU水平Δv(m/s)、IMU覆盖比、ZARU gain max、ZARU有效噪声(dps)；
+4个u32：numeric_fault、covariance_repair、ZARU接受数、tilt接受数；4个u8：last_measurement/last_update/last_zaru_update/last_numeric_reason；最后yaw_correction_seq:u32（滤波更新确实改变内部yaw时递增，用于拒绝RF构造至consumer之间的校正竞态）。
+UPDATE flags.bit0..3为initialized/healthy/covariance_psd/bias_converged。分组各有自身更新时间，不能将所有NIS解释成本拍新GNSS。
+
+采集和发送采用既有单个有界Debug环：16槽，工程流最多占12槽，普通事件保留4槽；满时丢工程记录并计数，不阻塞IMU或滤波。
+原有事件1秒去重不作用于INS_TRACE。worker每10ms最多发送4条；发送失败及被普通事件挤出的工程记录也计入丢失数。
+Debug队列每槽204B，比原72B增加132B，共增加2112B，另有4B累计计数；Release每槽仍72B，仅新增4B累计计数。
+以200Hz IMU、10Hz GNSS、20Hz FILTER+UPDATE计，净新增完整帧约24.6KB/s（不含原有遥测与RF观测）；
+100Hz IMU时约16.9KB/s。计数/序号出现缺口的段不能作为完整原始重放验收。
 
 ---
 

@@ -64,6 +64,11 @@ class HostUptimeAligner:
 
     def __init__(self) -> None:
         self._anchors: list[_Anchor] = []
+        self._epoch_boundary = False
+
+    def begin_epoch(self) -> None:
+        """显式采集代际边界与长缺口使用相同的相关性隔离。"""
+        self._epoch_boundary = True
 
     def add_anchor(self, host_ns: int, uptime_ms: float) -> None:
         host_ns = int(host_ns)
@@ -75,11 +80,13 @@ class HostUptimeAligner:
             return
         generation = 0 if previous is None else previous.generation
         if previous is not None and (
-            host_ns - previous.host_ns > _MAX_ANCHOR_GAP_NS
+            self._epoch_boundary
+            or host_ns - previous.host_ns > _MAX_ANCHOR_GAP_NS
             or uptime_ms < previous.uptime_ms - _RESET_BACKSTEP_MS
         ):
             generation += 1
         self._anchors.append(_Anchor(host_ns, uptime_ms, generation))
+        self._epoch_boundary = False
 
     def align(self, host_ns: int) -> Optional[tuple[float, float]]:
         if len(self._anchors) < 2:

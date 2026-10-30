@@ -221,7 +221,7 @@ class WorkerHarness:
             "connect_failed",
             "disconnected",
             "state_changed",
-            "rx_payload",
+            "rx_pending",
             "ymodem_progress",
             "ymodem_finished",
             "session_started",

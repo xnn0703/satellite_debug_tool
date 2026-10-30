@@ -75,3 +75,15 @@ physical RF remain independent evidence layers.
 Host automation can prove single-socket routing, session isolation, fixed page ownership, operation exclusion, and file
 ownership. Real AFD01C + ESA01 continuous operation, power-cycle recovery, device acceptance, applied telemetry,
 OTA/TX, and physical RF still require separate bench acceptance.
+
+## 8. Shell command input
+
+Shell command text uses ASCII. Select an English/ABC input method; for example, both underscores in `para ext_ins_rot 4` are `_`. Keyboard text, input-method commits, and clipboard paste share one validation rule. A submission containing Chinese dashes, full-width punctuation, or unsupported control characters is rejected as a whole, with feedback above the terminal. The device owns command history and editing.
+
+Received logs support UTF-8. Invalid bytes produce visible replacement marks and feedback. Switching to HEX keeps the normal terminal model processing incoming data. For exact diagnosis, inspect raw TX/RX in `tcp_shell_sessions/<session_id>/transcript.jsonl` under the edition configuration directory. Confirm parameter application, persistence, and reboot results through device readback.
+
+## 9. Power panel control and MS-6222 comparison (operations edition)
+
+Select “Exit remote (panel control)” in the external power window to send the local-control command and close the monitoring session after its current operation. Output and voltage/current settings are preserved. “Panel control command sent; monitoring stopped” confirms software transmission; confirm panel operation on the instrument. Communication failures show that panel control requires confirmation. History is retained. Select “Save and connect” to resume remote monitoring and control. Closing the history window retains its existing background-monitoring lifecycle.
+
+Connect MS-6222 from its independent page or the motion-platform dialog. The overview adds a shared reference row below the device's current 3D attitude, showing Roll, Pitch and Yaw. The overview always shows raw INS roll/pitch and absolute heading to three decimal places, labeled “Raw INS, true heading”. The motion-platform view uses installation-calibrated relative device FRD angles. Waiting, invalid quality, data older than three seconds and disconnection have explicit states. Device attitude continues to drive the 3D model.

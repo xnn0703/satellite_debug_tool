@@ -9,7 +9,7 @@ import time
 from typing import Callable, Optional
 
 import pyqtgraph as pg
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from serial.tools import list_ports
 
 from satellite_debug_tool.core.config import Settings
+from satellite_debug_tool.core.production.fixture_telemetry import FixtureTelemetryBus
 from satellite_debug_tool.core.production import (
     Ms6222Conclusion,
     Ms6222ControlLease,
@@ -101,11 +102,13 @@ class Ms6222DebugWorkspace(QWidget):
         session_root: Optional[Path] = None,
         worker_factory: Callable[..., Ms6222SerialWorker] = Ms6222SerialWorker,
         profile_port: str = "",
+        telemetry: Optional[FixtureTelemetryBus] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._lease = lease
+        self._telemetry = telemetry
         self._session_root = session_root
         self._worker_factory = worker_factory
         self._profile_port = str(profile_port).strip()
@@ -365,14 +368,21 @@ class Ms6222DebugWorkspace(QWidget):
         if worker.wait(5000) and self._worker is worker:
             self._worker = None
             self._connected = False
+            if self._telemetry is not None:
+                self._telemetry.set_reference_connected(False)
             self._lease.release(self._lease_handle)
             self._lease_handle = None
             self._connection_state.setText(tr("Serial port closed"))
             worker.deleteLater()
             self._update_actions()
 
+    @Slot(bool, str)
     def _on_connection_changed(self, connected: bool, port: str) -> None:
+        if self.sender() is not None and self.sender() is not self._worker:
+            return
         self._connected = bool(connected)
+        if self._telemetry is not None:
+            self._telemetry.set_reference_connected(connected)
         self._connection_state.setText(
             tr("Serial port open: {port}", port=port)
             if connected
@@ -392,6 +402,8 @@ class Ms6222DebugWorkspace(QWidget):
             return
         self._worker = None
         self._connected = False
+        if self._telemetry is not None:
+            self._telemetry.set_reference_connected(False)
         self._lease.release(self._lease_handle)
         self._lease_handle = None
         self._connect_button.setEnabled(True)
@@ -400,14 +412,22 @@ class Ms6222DebugWorkspace(QWidget):
             worker.deleteLater()
         self._update_actions()
 
+    @Slot(str)
     def _on_error(self, details: str) -> None:
+        if self.sender() is not None and self.sender() is not self._worker:
+            return
+        if self._telemetry is not None:
+            self._telemetry.set_reference_connected(False)
         message = tr("MS-6222 serial error: {details}", details=details)
         self._show_error(message)
         self.runtime_state_changed.emit("reference", "fault", str(details))
         if self.session_active:
             self._finish_capture(abort_reason=message)
 
+    @Slot(object)
     def _on_frame(self, envelope: Ms6222FrameEnvelope) -> None:
+        if self.sender() is not None and self.sender() is not self._worker:
+            return
         recorder = self._recorder
         if recorder is not None:
             try:
@@ -431,6 +451,12 @@ class Ms6222DebugWorkspace(QWidget):
         )
         record = envelope.record
         if isinstance(record, Ms6222InsRecord):
+            if self._telemetry is not None:
+                self._telemetry.publish_reference_attitude(
+                    host_monotonic_ns=envelope.host_monotonic_ns,
+                    roll_deg=record.roll_deg, pitch_deg=record.pitch_deg,
+                    yaw_deg=record.yaw_deg, gnss_state=record.gnss_state,
+                )
             self._latest_ins = record
             self._attitude_samples.append(
                 (envelope.host_monotonic_ns, record.roll_deg, record.pitch_deg, record.yaw_deg)

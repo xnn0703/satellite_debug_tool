@@ -47,6 +47,7 @@ from .codec_v2 import (
     build_orbit_upload_chunk,
     build_orbit_upload_end,
     build_orbit_upload_abort,
+    decode_ins_trace,
     decode_para_table_report,
     decode_profile_semantics,
     decode_gnss_sky_report,
@@ -69,6 +70,7 @@ from .codec_v2 import (
 )
 from .frame_receiver_v2 import FrameReceiverV2
 from .frame_v2 import (
+    InsTraceRecord,
     PROTOCOL_VERSION,
     FRAME_HEADER_0, FRAME_HEADER_1, FRAME_FOOTER, DEVICE_TYPE,
     MAX_DATA_LENGTH, MAX_FRAME_LENGTH,
@@ -115,6 +117,7 @@ from .frame_v2 import (
 
 
 __all__ = [
+    "InsTraceRecord", "decode_ins_trace",
     # crc
     "Crc16",
     # envelope & builders

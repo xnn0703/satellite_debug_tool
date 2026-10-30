@@ -903,6 +903,14 @@ def test_long_session_analysis_runs_outside_the_ui_thread(
 
     profile_store = FixtureProfileStore(tmp_path / "profiles-background-analysis")
     profile_store.save(_profile())
+    finalization_threads = []
+    original_finalizer = fixture_ui._SessionFinalizeThread
+
+    def observed_finalizer(*args, **kwargs):
+        finalization_threads.append(threading.get_ident())
+        return original_finalizer(*args, **kwargs)
+
+    monkeypatch.setattr(fixture_ui, "_SessionFinalizeThread", observed_finalizer)
     workspace = fixture_ui.FixtureDebugWorkspace(
         _settings(tmp_path, monkeypatch),
         FixtureControlLease(),
@@ -971,6 +979,7 @@ def test_long_session_analysis_runs_outside_the_ui_thread(
         lambda: not workspace.session_active and workspace._finalizer is None,
     )
 
+    assert finalization_threads == [ui_thread]
     assert analysis_threads and analysis_threads[0] != ui_thread
     summary = json.loads((session_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["counts"]["comparisons"] == 1

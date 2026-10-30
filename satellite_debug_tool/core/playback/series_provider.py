@@ -132,6 +132,17 @@ class PlaybackSeriesProvider:
             channel_counts=dict(self._channel_counts),
         )
 
+    def begin_epoch(self) -> None:
+        """在派生回放边界保留 NaN，原始录制和通道值保持完整。"""
+        if self._last_timestamp_ms is None:
+            return
+        boundary = self._last_timestamp_ms + 0.5
+        for channel_id in self._channel_counts:
+            self._sample_rows.append((channel_id, boundary, None))
+        for (level_ms, channel_id), bucket in self._buckets.items():
+            self._queue_peak(level_ms, channel_id, bucket)
+        self._buckets.clear()
+
     def append_report(self, report: DataReport) -> None:
         if self._finalized:
             raise RuntimeError("playback series is already finalized")

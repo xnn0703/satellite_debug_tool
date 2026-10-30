@@ -1,0 +1,534 @@
+{
+  "source_session": "20261026T124831Z-61d7ca65",
+  "scope": "Two rejected ext_ins_rot edits; authentication and parameter listings excluded",
+  "entries": [
+    {
+      "direction": "tx",
+      "hex": "70"
+    },
+    {
+      "direction": "rx",
+      "hex": "70"
+    },
+    {
+      "direction": "tx",
+      "hex": "61"
+    },
+    {
+      "direction": "rx",
+      "hex": "61"
+    },
+    {
+      "direction": "tx",
+      "hex": "72"
+    },
+    {
+      "direction": "rx",
+      "hex": "72"
+    },
+    {
+      "direction": "tx",
+      "hex": "61"
+    },
+    {
+      "direction": "rx",
+      "hex": "61"
+    },
+    {
+      "direction": "tx",
+      "hex": "20"
+    },
+    {
+      "direction": "rx",
+      "hex": "20"
+    },
+    {
+      "direction": "tx",
+      "hex": "65"
+    },
+    {
+      "direction": "rx",
+      "hex": "65"
+    },
+    {
+      "direction": "tx",
+      "hex": "78"
+    },
+    {
+      "direction": "rx",
+      "hex": "78"
+    },
+    {
+      "direction": "tx",
+      "hex": "74"
+    },
+    {
+      "direction": "rx",
+      "hex": "74"
+    },
+    {
+      "direction": "tx",
+      "hex": "e28094e28094"
+    },
+    {
+      "direction": "rx",
+      "hex": "e28094e28094"
+    },
+    {
+      "direction": "tx",
+      "hex": "69"
+    },
+    {
+      "direction": "rx",
+      "hex": "69"
+    },
+    {
+      "direction": "tx",
+      "hex": "6e"
+    },
+    {
+      "direction": "rx",
+      "hex": "6e"
+    },
+    {
+      "direction": "tx",
+      "hex": "73"
+    },
+    {
+      "direction": "rx",
+      "hex": "73"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "5f"
+    },
+    {
+      "direction": "rx",
+      "hex": "5f"
+    },
+    {
+      "direction": "tx",
+      "hex": "69"
+    },
+    {
+      "direction": "rx",
+      "hex": "69"
+    },
+    {
+      "direction": "tx",
+      "hex": "6e"
+    },
+    {
+      "direction": "rx",
+      "hex": "6e"
+    },
+    {
+      "direction": "tx",
+      "hex": "73"
+    },
+    {
+      "direction": "rx",
+      "hex": "73"
+    },
+    {
+      "direction": "tx",
+      "hex": "5f"
+    },
+    {
+      "direction": "rx",
+      "hex": "5f"
+    },
+    {
+      "direction": "tx",
+      "hex": "72"
+    },
+    {
+      "direction": "rx",
+      "hex": "72"
+    },
+    {
+      "direction": "tx",
+      "hex": "6f"
+    },
+    {
+      "direction": "rx",
+      "hex": "6f"
+    },
+    {
+      "direction": "tx",
+      "hex": "74"
+    },
+    {
+      "direction": "rx",
+      "hex": "74"
+    },
+    {
+      "direction": "tx",
+      "hex": "20"
+    },
+    {
+      "direction": "rx",
+      "hex": "20"
+    },
+    {
+      "direction": "tx",
+      "hex": "34"
+    },
+    {
+      "direction": "rx",
+      "hex": "34"
+    },
+    {
+      "direction": "tx",
+      "hex": "0d"
+    },
+    {
+      "direction": "rx",
+      "hex": "0d0a1b5b33326d5b323030362d30312d30312030383a30343a33395d204920506172614d616e6167653a1b5b33396d200a706172612d73797374656d2320706172613a206572726f7220706172616d65746572210d0a0d0a0d0a726f6f743a2f2420"
+    },
+    {
+      "direction": "tx",
+      "hex": "1b5b41"
+    },
+    {
+      "direction": "rx",
+      "hex": "7061726120657874e28094e25f696e735f726f742034"
+    },
+    {
+      "direction": "tx",
+      "hex": "1b5b44"
+    },
+    {
+      "direction": "rx",
+      "hex": "08"
+    },
+    {
+      "direction": "tx",
+      "hex": "1b5b43"
+    },
+    {
+      "direction": "rx",
+      "hex": "34"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "5f"
+    },
+    {
+      "direction": "rx",
+      "hex": "5f"
+    },
+    {
+      "direction": "rx",
+      "hex": "1b5b324b0d1b5b33326d5b323030362d30312d30312030383a30343a34385d204920616466343030325f6366675f646566616c75743a1b5b33396d2061646634303032206366672064656661756c740d0a726f6f743a2f24207061726120657874e2805f"
+    },
+    {
+      "direction": "tx",
+      "hex": "69"
+    },
+    {
+      "direction": "rx",
+      "hex": "69"
+    },
+    {
+      "direction": "tx",
+      "hex": "6e"
+    },
+    {
+      "direction": "rx",
+      "hex": "6e"
+    },
+    {
+      "direction": "tx",
+      "hex": "73"
+    },
+    {
+      "direction": "rx",
+      "hex": "73"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "rx",
+      "hex": "1b5b324b0d1b5b33326d5b323030362d30312d30312030383a30343a34395d204920616466343030325f6366675f6672656572756e3a1b5b33396d206164663430303220636667206672656572756e0d0a726f6f743a2f24207061726120657874e2805f69"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "08"
+    },
+    {
+      "direction": "rx",
+      "hex": "082008"
+    },
+    {
+      "direction": "tx",
+      "hex": "74"
+    },
+    {
+      "direction": "rx",
+      "hex": "74"
+    },
+    {
+      "direction": "tx",
+      "hex": "5f"
+    },
+    {
+      "direction": "rx",
+      "hex": "5f"
+    },
+    {
+      "direction": "tx",
+      "hex": "69"
+    },
+    {
+      "direction": "rx",
+      "hex": "69"
+    },
+    {
+      "direction": "tx",
+      "hex": "6e"
+    },
+    {
+      "direction": "rx",
+      "hex": "6e"
+    },
+    {
+      "direction": "tx",
+      "hex": "73"
+    },
+    {
+      "direction": "rx",
+      "hex": "73"
+    },
+    {
+      "direction": "tx",
+      "hex": "5f"
+    },
+    {
+      "direction": "rx",
+      "hex": "5f"
+    },
+    {
+      "direction": "tx",
+      "hex": "72"
+    },
+    {
+      "direction": "rx",
+      "hex": "72"
+    },
+    {
+      "direction": "tx",
+      "hex": "6f"
+    },
+    {
+      "direction": "rx",
+      "hex": "6f"
+    },
+    {
+      "direction": "tx",
+      "hex": "74"
+    },
+    {
+      "direction": "rx",
+      "hex": "74"
+    },
+    {
+      "direction": "tx",
+      "hex": "20"
+    },
+    {
+      "direction": "rx",
+      "hex": "20"
+    },
+    {
+      "direction": "tx",
+      "hex": "34"
+    },
+    {
+      "direction": "rx",
+      "hex": "34"
+    },
+    {
+      "direction": "tx",
+      "hex": "0d"
+    },
+    {
+      "direction": "rx",
+      "hex": "0d0a1b5b33326d5b323030362d30312d30312030383a30343a35345d204920506172614d616e6167653a1b5b33396d200a706172612d73797374656d2320706172613a206572726f7220706172616d65746572210d0a0d0a0d0a726f6f743a2f2420"
+    }
+  ]
+}

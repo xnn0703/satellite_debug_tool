@@ -121,12 +121,14 @@ class ExternalPowerHistoryWindow(QMainWindow):
         self._prepare = QPushButton(tr("Apply settings and confirm OFF"))
         self._enable = QPushButton(tr("Enable output"))
         self._disable = QPushButton(tr("Disable output"))
+        self._local = QPushButton(tr("Exit remote (panel control)"))
         for button in (
             self._save,
             self._read,
             self._prepare,
             self._enable,
             self._disable,
+            self._local,
         ):
             controls.addWidget(button)
         controls.addStretch(1)
@@ -144,6 +146,7 @@ class ExternalPowerHistoryWindow(QMainWindow):
         self._disable.clicked.connect(
             lambda: self._request_action(ExternalPowerAction.DISABLE)
         )
+        self._local.clicked.connect(self._release_local)
         if monitor is not None:
             monitor.action_finished.connect(self._on_action_finished)
         self.set_profile(profile or {})
@@ -199,9 +202,15 @@ class ExternalPowerHistoryWindow(QMainWindow):
                 self._save_profile(profile)
             if self._monitor is not None:
                 self._monitor.configure(**profile)
-                self._monitor.set_active(True)
+                self._monitor.resume_monitoring()
         except Exception as exc:
             QMessageBox.warning(self, tr("External power"), str(exc))
+
+    @Slot()
+    def _release_local(self) -> None:
+        if self._monitor is not None:
+            self._monitor.release_local()
+            self.refresh()
 
     def _request_action(self, action: ExternalPowerAction) -> None:
         if self._monitor is None:
@@ -223,6 +232,9 @@ class ExternalPowerHistoryWindow(QMainWindow):
 
     @Slot(object)
     def _on_action_finished(self, outcome: ExternalPowerActionOutcome) -> None:
+        if outcome.action is ExternalPowerAction.RELEASE_LOCAL:
+            self.refresh()
+            return
         if outcome.succeeded:
             confirmed = {
                 ExternalPowerAction.PREPARE: tr(
@@ -291,6 +303,12 @@ class ExternalPowerHistoryWindow(QMainWindow):
 
     def refresh(self) -> None:
         snapshot = self._store.snapshot
+        releasing = snapshot.phase is ExternalPowerPhase.RELEASING
+        held = snapshot.phase in {ExternalPowerPhase.LOCAL_REQUESTED, ExternalPowerPhase.LOCAL_UNCONFIRMED}
+        for button in (self._read, self._prepare, self._enable, self._disable):
+            button.setEnabled(self._monitor is not None and not releasing and not held)
+        self._save.setEnabled(not releasing)
+        self._local.setEnabled(self._monitor is not None and not releasing and not held)
         times, voltages, currents = self._store.history()
         self._voltage_curve.setData(times, voltages)
         self._current_curve.setData(times, currents)
@@ -300,6 +318,12 @@ class ExternalPowerHistoryWindow(QMainWindow):
 
     @staticmethod
     def _snapshot_text(snapshot: ExternalPowerSnapshot) -> str:
+        if snapshot.phase is ExternalPowerPhase.RELEASING:
+            return tr("Returning panel control...")
+        if snapshot.phase is ExternalPowerPhase.LOCAL_REQUESTED:
+            return tr("Panel control command sent; monitoring stopped")
+        if snapshot.phase is ExternalPowerPhase.LOCAL_UNCONFIRMED:
+            return tr("Panel control requires confirmation; monitoring stopped: {detail}", detail=snapshot.error)
         if snapshot.phase is ExternalPowerPhase.UNCONFIGURED:
             return tr("External power is not configured")
         if snapshot.phase is ExternalPowerPhase.INACTIVE:
@@ -381,6 +405,7 @@ class ExternalPowerHistoryWindow(QMainWindow):
         self._prepare.setText(tr("Apply settings and confirm OFF"))
         self._enable.setText(tr("Enable output"))
         self._disable.setText(tr("Disable output"))
+        self._local.setText(tr("Exit remote (panel control)"))
         self._plot.setLabel("left", tr("Voltage"), units="V")
         self._plot.setLabel("right", tr("Current"), units="A")
         self._plot.setLabel("bottom", tr("Sample time"))

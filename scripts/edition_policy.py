@@ -23,6 +23,8 @@ USER_SHELL_MODULES = frozenset({
     "satellite_debug_tool.core.tcp_shell.transport",
     "satellite_debug_tool.core.tcp_shell.ymodem_sender",
     "satellite_debug_tool.core.tcp_shell.recorder",
+    "satellite_debug_tool.core.tcp_shell.rx_bridge",
+    "satellite_debug_tool.core.tcp_shell.terminal",
 })
 
 

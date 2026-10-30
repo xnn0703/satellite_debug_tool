@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import codecs
 from datetime import datetime
 import hashlib
-import re
 from pathlib import Path
+import time
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPalette, QTextCharFormat, QTextCursor, QTextFormat
+from PySide6.QtCore import QCoreApplication, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPalette, QGuiApplication, QKeySequence, QTextCharFormat, QTextCursor, QTextDocument, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -37,14 +36,28 @@ from satellite_debug_tool.core.tcp_shell.controller import (
     parse_target_version,
     ymodem_route_hint,
 )
+from satellite_debug_tool.core.tcp_shell.rx_bridge import PushStatus, RxRing
 from satellite_debug_tool.core.tcp_shell.worker import TcpShellWorkerState
+from satellite_debug_tool.core.tcp_shell.terminal import (
+    ShellInputError, TerminalScreen, TerminalStreamDecoder, TerminalStyle, TerminalUpdate, Token,
+    command_text_bytes,
+)
 from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
 
-_ANSI_TOKEN = re.compile(
-    rb"\x1b(?:\[([0-9;?]*)([A-Za-z])|\][^\x07\x1b]*(?:\x07|\x1b\\))"
-)
 _DEFAULT_TCP_PORT = 1235
+
+# M45 帧合同：帧起点间隔 33 ms；每帧字节预算 16 KiB（对 92,160 B/s 目标留
+# 5 倍余量，同时把单帧回调压在 ~50 ms 内，键事件不被长帧阻塞）；drain 按
+# 4 KiB 分段取用，8 ms 是分段之间检查的软预算（不切断跨段 UTF-8/CSI），
+# 不约束文档提交本身。
+_FRAME_INTERVAL_MS = 33
+_FRAME_BYTE_BUDGET = 16 * 1024
+_DRAIN_SEGMENT_BYTES = 4096
+_PARSE_SOFT_BUDGET_S = 0.008
+_BACKLOG_VISIBLE_BYTES = 64 * 1024
+_SHUTDOWN_DRAIN_TIMEOUT_S = 10.0
+# 文档块上限跟随 TerminalScreen.max_rows（投影每次同步设置）。
 
 # 每行行首的接收时刻时间戳（WindTerm 风格）：灰色、固定宽度，覆盖/清行/退格
 # 等设备侧行编辑动作只作用于时间戳之后的设备文本。
@@ -65,51 +78,7 @@ def _timestamp_format(theme: str = "dark") -> QTextCharFormat:
 
 _SGR_FOREGROUND = S.ANSI_FOREGROUND
 
-class _TerminalDecoder:
-    """Decode UTF-8 incrementally and split ANSI sequences from text.
-
-    Returns a token list: ``("text", str)`` chunks, ``("sgr", params)`` for
-    colour changes and ``("el", mode)`` for Erase-in-Line. Other control
-    sequences (cursor moves, OSC) are dropped. A partial escape sequence
-    split across TCP packets is buffered.
-    """
-
-    def __init__(self) -> None:
-        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        self._pending_ansi = b""
-
-    def feed(self, data: bytes) -> list[tuple[str, str]]:
-        data = self._pending_ansi + data
-        self._pending_ansi = b""
-        tokens: list[tuple[str, str]] = []
-        position = 0
-        for match in _ANSI_TOKEN.finditer(data):
-            if match.start() > position:
-                tokens.append(
-                    ("text", self._decoder.decode(data[position : match.start()]))
-                )
-            final = match.group(2)
-            if final == b"m":
-                tokens.append(("sgr", (match.group(1) or b"0").decode("ascii")))
-            elif final == b"K":
-                tokens.append(("el", (match.group(1) or b"0").decode("ascii")))
-            position = match.end()
-        tail = data[position:]
-        keep = 0
-        escape = tail.rfind(b"\x1b")
-        if escape != -1 and _ANSI_TOKEN.match(tail, escape) is None:
-            keep = len(tail) - escape
-        if keep < len(tail):
-            tokens.append(("text", self._decoder.decode(tail[: len(tail) - keep])))
-        self._pending_ansi = tail[len(tail) - keep :] if keep else b""
-        return tokens
-
-    def reset(self) -> None:
-        self._decoder.reset()
-        self._pending_ansi = b""
-
-
-def _log_text(tokens) -> str:
+def _log_text(tokens: list[Token]) -> str:
     """Normalise decoded shell text for the .log file: CR becomes LF, drop BS."""
 
     chunks: list[str] = []
@@ -145,13 +114,14 @@ class ShellLogWriter:
 
 
 class TerminalEdit(QTextEdit):
-    """Dumb terminal: keystrokes become device bytes; the device echoes back.
+    """普通命令文字按 ASCII 合同提交，控制键由设备处理并回显。
 
-    Line editing, history and echo live in the firmware Letter Shell, exactly
-    like a physical debug serial line in WindTerm. Local text stays read-only.
+    命令编辑与历史属于设备；本地文档只投影接收终端模型。
     """
 
     bytes_entered = Signal(bytes)
+    input_rejected = Signal(str)
+    text_accepted = Signal()
     clear_requested = Signal()
 
     # 类级默认值：构造期间的 Qt 事件就可能进入 event() 覆写。
@@ -196,6 +166,7 @@ class TerminalEdit(QTextEdit):
         # 文字色，深浅背景都与底色形成反差。
         self.setCursorWidth(2)
         self._caret_on = False
+        self._output_cursor: QTextCursor | None = None
         self._blink_timer = QTimer(self)
         self._blink_timer.setInterval(530)
         self._blink_timer.timeout.connect(self._toggle_caret)
@@ -219,7 +190,7 @@ class TerminalEdit(QTextEdit):
         super().paintEvent(event)
         if not (self._caret_on and self.hasFocus()):
             return
-        caret = self.cursorRect()
+        caret = self.cursorRect(self._output_cursor) if self._output_cursor is not None else self.cursorRect()
         if caret.isValid():
             painter = QPainter(self.viewport())
             painter.fillRect(
@@ -227,8 +198,39 @@ class TerminalEdit(QTextEdit):
                 self.palette().color(QPalette.ColorRole.Text),
             )
 
+    def set_output_cursor(self, cursor: QTextCursor) -> None:
+        self._output_cursor = QTextCursor(cursor)
+        if not self.textCursor().hasSelection():
+            self.setTextCursor(cursor)
+        self.viewport().update()
+
     def set_input_enabled(self, enabled: bool) -> None:
         self._input_enabled = bool(enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, self._input_enabled)
+
+    def inputMethodQuery(self, query):  # noqa: N802
+        if query == Qt.InputMethodQuery.ImEnabled:
+            return self._input_enabled
+        return super().inputMethodQuery(query)
+
+    def inputMethodEvent(self, event) -> None:  # noqa: N802
+        if self._input_enabled:
+            data = self._command_text(event.commitString())
+            if data:
+                self.bytes_entered.emit(data)
+            event.accept()
+            return
+        super().inputMethodEvent(event)
+
+    def _command_text(self, text: str) -> bytes:
+        try:
+            data = command_text_bytes(text)
+        except ShellInputError as error:
+            self.input_rejected.emit(str(error))
+            return b""
+        if data:
+            self.text_accepted.emit()
+        return data
 
     def _build_context_menu(self):
         # 只读默认菜单（全选/复制）追加清屏；WindTerm 终端右键同级操作。
@@ -236,6 +238,8 @@ class TerminalEdit(QTextEdit):
 
         menu = self.createStandardContextMenu()
         menu.addSeparator()
+        paste = menu.addAction(tr("Paste"), self._paste_clipboard)
+        paste.setEnabled(self._input_enabled)
         menu.addAction(tr("Clear screen"), self.clear_requested.emit)
         return menu
 
@@ -256,7 +260,15 @@ class TerminalEdit(QTextEdit):
             return True
         return super().event(event)
 
+    @Slot()
+    def _paste_clipboard(self) -> None:
+        self.insertFromMimeData(QGuiApplication.clipboard().mimeData())
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._input_enabled and event.matches(QKeySequence.StandardKey.Paste):
+            self._paste_clipboard()
+            event.accept()
+            return
         if self._input_enabled:
             data = self._key_bytes(event)
             if data:
@@ -266,7 +278,9 @@ class TerminalEdit(QTextEdit):
 
     def insertFromMimeData(self, source) -> None:  # noqa: N802
         if self._input_enabled and source.hasText():
-            self.bytes_entered.emit(str(source.text()).encode("utf-8"))
+            data = self._command_text(str(source.text()))
+            if data:
+                self.bytes_entered.emit(data)
             return
         super().insertFromMimeData(source)
 
@@ -284,7 +298,7 @@ class TerminalEdit(QTextEdit):
         if key in self._SPECIAL_KEYS:
             return self._SPECIAL_KEYS[key]
         if text:
-            return text.encode("utf-8")
+            return self._command_text(text)
         return b""
 
 
@@ -309,14 +323,22 @@ class TcpShellWorkspace(QWidget):
             session_directory=session_directory,
             session_root=Path(settings.config_directory) / "tcp_shell_sessions",
         )
-        self._decoder = _TerminalDecoder()
-        self._pending_cr = False
-        self._overwrite_mode = False
-        self._sgr_foreground: str | None = None
-        self._sgr_bold = False
+        self._decoder = TerminalStreamDecoder()
+        self._screen = TerminalScreen(_timestamp_text)
+        self._input_issue = ""
+        self._rx_issue = ""
         self._log_writer: ShellLogWriter | None = None
         self._hex_view = False
-        self._line_stamped = False
+        # 每帧消费的活动接收环：连接建立时绑定 worker 的 ring，断开终排空后
+        # 重建本地空环。代际来自 ring 的清屏计数，帧内观察到推进即重置解码/模型。
+        self._active_ring = RxRing()
+        self._rx_epoch = self._active_ring.epoch
+        self._final_drain_pending = False
+        self._shutdown_draining = False
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setSingleShot(True)
+        self._frame_timer.setInterval(_FRAME_INTERVAL_MS)
+        self._frame_timer.timeout.connect(self._flush_frame)
         self._selected_file: Optional[Path] = None
         self._build_ui()
         self._bind_controller()
@@ -334,7 +356,10 @@ class TcpShellWorkspace(QWidget):
             f"selection-background-color: {palette['selected_bg']}; selection-color: {palette['selected_text']}; }}"
         )
         # 每段保存其 ANSI 源色或时间戳角色；主题切换只更新格式，保留原文、游标与解析状态。
-        document = self._terminal.document()
+        for document in (self._output_document, self._hex_document):
+            self._recolor_document(document, palette)
+
+    def _recolor_document(self, document: QTextDocument, palette: dict) -> None:
         edits = []
         block = document.begin()
         while block.isValid():
@@ -369,9 +394,18 @@ class TcpShellWorkspace(QWidget):
         self._terminal_box = terminal_box = QGroupBox(tr("Shell terminal"))
         terminal_layout = QVBoxLayout(terminal_box)
         self._terminal = TerminalEdit()
-        self._terminal.document().setMaximumBlockCount(5000)
+        self._output_document = QTextDocument(self)
+        self._hex_document = QTextDocument(self)
+        for document in (self._output_document, self._hex_document):
+            document.setDefaultFont(self._terminal.font())
+            # 文档级关闭：widget 级开关对 setDocument() 后换入的文档无效（M45 缺陷 1）。
+            document.setUndoRedoEnabled(False)
+        self._hex_document.setMaximumBlockCount(5000)
+        self._terminal.setDocument(self._output_document)
         self._terminal.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self._terminal.bytes_entered.connect(self._on_terminal_bytes)
+        self._terminal.input_rejected.connect(self._on_input_rejected)
+        self._terminal.text_accepted.connect(self._on_text_accepted)
         self._terminal.clear_requested.connect(self._on_clear_terminal)
         self._hex_check = QCheckBox(tr("Show raw hex"))
         self._hex_check.toggled.connect(self._on_hex_toggled)
@@ -379,11 +413,22 @@ class TcpShellWorkspace(QWidget):
         self._log_check.toggled.connect(self._on_log_toggled)
         self._log_path_label = QLabel("")
         self._log_path_label.setWordWrap(False)
+        self._backlog_label = QLabel("")
+        self._backlog_label.setVisible(False)
         header_row = QHBoxLayout()
         header_row.addWidget(self._hex_check)
         header_row.addWidget(self._log_check)
+        header_row.addWidget(self._backlog_label)
         header_row.addWidget(self._log_path_label, 1)
         terminal_layout.addLayout(header_row)
+        self._input_feedback = QLabel("")
+        self._input_feedback.setWordWrap(True)
+        self._input_feedback.setVisible(False)
+        self._rx_feedback = QLabel("")
+        self._rx_feedback.setWordWrap(True)
+        self._rx_feedback.setVisible(False)
+        terminal_layout.addWidget(self._input_feedback)
+        terminal_layout.addWidget(self._rx_feedback)
         terminal_layout.addWidget(self._terminal, 1)
         splitter.addWidget(terminal_box)
 
@@ -501,7 +546,7 @@ class TcpShellWorkspace(QWidget):
         self._controller.connect_failed.connect(self._on_connect_failed)
         self._controller.disconnected.connect(self._on_disconnected)
         self._controller.state_changed.connect(self._on_state_changed)
-        self._controller.rx_payload.connect(self._on_rx_payload)
+        self._controller.rx_pending.connect(self._on_rx_pending)
         self._controller.ymodem_progress.connect(self._on_ymodem_progress)
         self._controller.ymodem_finished.connect(self._on_ymodem_finished)
         self._controller.session_started.connect(self._on_session_started)
@@ -540,10 +585,22 @@ class TcpShellWorkspace(QWidget):
         return answer is QMessageBox.StandardButton.Yes
 
     def shutdown(self) -> None:
+        # M45 关停顺序：controller 先收尾（worker join，已读残余已入环），
+        # 终排空按帧泵事件完成（禁止单回调清空），文本日志最后关闭。
+        self._controller.shutdown()
+        self._shutdown_draining = True
+        self._final_drain_pending = True
+        deadline = time.monotonic() + _SHUTDOWN_DRAIN_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if self._active_ring.backlog_bytes == 0 and not self._final_drain_pending:
+                break
+            self._flush_frame()
+            QCoreApplication.processEvents()
+        self._frame_timer.stop()
+        self._shutdown_draining = False
         writer, self._log_writer = self._log_writer, None
         if writer is not None:
             writer.close()
-        self._controller.shutdown()
 
     def retranslate_ui(self) -> None:
         self._target_box.setTitle(tr("Shell target"))
@@ -565,6 +622,7 @@ class TcpShellWorkspace(QWidget):
             else tr("No firmware file selected")
         )
         self._events_box.setTitle(tr("Session events"))
+        self._refresh_input_feedback()
         self._refresh_state_label()
 
     # -- target resolution -----------------------------------------------------------
@@ -697,6 +755,21 @@ class TcpShellWorkspace(QWidget):
         self._sync_controls()
 
     def _on_connected(self, label: str) -> None:
+        ring = self._controller.rx_ring
+        if ring is not None:
+            self._active_ring = ring
+        self._rx_epoch = self._active_ring.epoch
+        self._final_drain_pending = False
+        self._decoder.reset()
+        self._input_issue = ""
+        self._rx_issue = ""
+        self._refresh_input_feedback()
+        boundary = "\r\n" if self._screen.row.cells else ""
+        rows_before = len(self._screen.rows)
+        self._project_updates(
+            [self._ingest_tokens([("text", boundary), ("sgr", "0")])], rows_before=rows_before
+        )
+        self._sync_terminal_cursor()
         self._append_event(tr("Connected to {label}").format(label=label))
         # 连接即聚焦终端：键盘输入与自绘光标立即可用。
         self._terminal.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -707,6 +780,10 @@ class TcpShellWorkspace(QWidget):
         self._sync_controls()
 
     def _on_disconnected(self, reason: str) -> None:
+        # worker 已退出且残余已入环：终排空按帧完成，最后一帧执行 decoder.finish。
+        self._final_drain_pending = True
+        if not self._frame_timer.isActive():
+            self._frame_timer.start()
         self._append_event(tr("Disconnected: {reason}").format(reason=reason))
         self._sync_controls()
 
@@ -721,172 +798,224 @@ class TcpShellWorkspace(QWidget):
     def _on_terminal_bytes(self, data: bytes) -> None:
         self._controller.send_raw(data)
 
+    @Slot(str)
+    def _on_input_rejected(self, characters: str) -> None:
+        self._input_issue = characters
+        self._refresh_input_feedback()
+
+    @Slot()
+    def _on_text_accepted(self) -> None:
+        self._input_issue = ""
+        self._refresh_input_feedback()
+
+    def _refresh_input_feedback(self) -> None:
+        self._input_feedback.setText(
+            tr("Input was not sent. Use English/ABC for ASCII shell commands. Characters: {characters}")
+            .format(characters=self._input_issue)
+        )
+        self._input_feedback.setVisible(bool(self._input_issue))
+        self._rx_feedback.setText(
+            tr("The received stream contains invalid UTF-8 or control sequences ({details}). "
+               "Inspect raw hex or the session transcript.")
+            .format(details=self._rx_issue)
+        )
+        self._rx_feedback.setVisible(bool(self._rx_issue))
+
     def _on_clear_terminal(self) -> None:
-        # 清屏清的是呈现；渲染管线状态必须一并复位，否则残留的半个 ANSI
-        # 序列、挂起的 "\r"、SGR 颜色会污染清屏后的新内容。
-        self._terminal.clear()
+        # UI 立即清呈现；worker 按命令序划界（丢弃在途旧字节并推进 ring 代际），
+        # 下一帧观察到代际推进时重置解码与模型——边界前分片不进入新屏幕。
         self._decoder.reset()
-        self._pending_cr = False
-        self._overwrite_mode = False
-        self._sgr_foreground = None
-        self._sgr_bold = False
-        self._line_stamped = False
+        self._screen.reset()
+        self._output_document.clear()
+        self._hex_document.clear()
+        self._input_issue = ""
+        self._rx_issue = ""
+        self._refresh_input_feedback()
+        self._sync_terminal_cursor()
+        self._controller.clear_display()
         self._append_event(tr("Terminal cleared"))
 
-    def _on_rx_payload(self, data: bytes) -> None:
+    def _on_rx_pending(self) -> None:
+        if not self._frame_timer.isActive():
+            self._frame_timer.start()
+
+    def feed_rx(self, data: bytes) -> None:
+        """确定性同步入口：接纳并完成给定字节的消费与投影，与真实路径共用实现。
+
+        分段接纳；接纳遇容量先执行一帧消费再继续，UI 线程不对满环做无界等待。
+        """
+
+        remaining = bytes(data)
+        while remaining:
+            result = self._active_ring.push(remaining)
+            remaining = remaining[result.accepted:]
+            if remaining or result.status is not PushStatus.ACCEPTED:
+                self._flush_frame()
+        while self._active_ring.backlog_bytes:
+            self._flush_frame()
+
+    def _flush_frame(self) -> None:
+        """一帧：预算内排空接收环，帧内合并更新，单 edit block 投影，末尾一次同步。"""
+
+        ring = self._active_ring
+        updates: list[TerminalUpdate] = []
+        log_buffer: list[str] = []
+        hex_segments: list[bytes] = []
+        rows_before = len(self._screen.rows)
+        budget = _FRAME_BYTE_BUDGET
+        deadline = time.perf_counter() + _PARSE_SOFT_BUDGET_S
+        while budget > 0:
+            data, epoch = ring.drain(min(budget, _DRAIN_SEGMENT_BYTES))
+            if epoch != self._rx_epoch:
+                self._rx_epoch = epoch
+                self._decoder.reset()
+                self._screen.reset()
+                self._output_document.clear()
+            if not data:
+                break
+            budget -= len(data)
+            updates.append(self._ingest_segment(data, log_buffer))
+            if self._hex_view:
+                hex_segments.append(data)
+            if time.perf_counter() >= deadline:
+                break
+        if log_buffer and self._log_writer is not None:
+            self._log_writer.write("".join(log_buffer))
+        if hex_segments:
+            cursor = QTextCursor(self._hex_document)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            for segment in hex_segments:
+                cursor.insertText(_timestamp_text(), _timestamp_format(self._theme))
+                cursor.insertText(segment.hex(" ") + "\n", QTextCharFormat())
+        if updates:
+            self._project_updates(updates, rows_before=rows_before)
+        self._sync_terminal_cursor()
+        self._refresh_backlog_indicator(ring.backlog_bytes)
+        if self._final_drain_pending and ring.backlog_bytes == 0:
+            self._complete_final_drain()
+            return
+        if ring.backlog_bytes and not self._shutdown_draining and not self._frame_timer.isActive():
+            self._frame_timer.start()
+
+    def _ingest_segment(self, data: bytes, log_buffer: list[str]) -> TerminalUpdate:
         tokens = self._decoder.feed(data)
+        log_buffer.append(_log_text(tokens))
+        self._report_rx_issues(tokens)
+        return self._screen.feed(tokens)
+
+    def _ingest_tokens(self, tokens: list[Token]) -> TerminalUpdate:
         if self._log_writer is not None:
             self._log_writer.write(_log_text(tokens))
-        if self._hex_view:
-            self._append_terminal(_timestamp_text() + data.hex(" ") + "\n")
+        self._report_rx_issues(tokens)
+        return self._screen.feed(tokens)
+
+    def _report_rx_issues(self, tokens: list[Token]) -> None:
+        issues = [value for kind, value in tokens if kind in ("invalid_utf8", "invalid_escape")]
+        if issues:
+            self._rx_issue = ", ".join(dict.fromkeys(issues))
+            self._refresh_input_feedback()
+
+    def _complete_final_drain(self) -> None:
+        tokens = self._decoder.finish()
+        rows_before = len(self._screen.rows)
+        updates: list[TerminalUpdate] = []
+        if tokens:
+            updates.append(self._ingest_tokens(tokens))
+        if updates:
+            self._project_updates(updates, rows_before=rows_before)
+        self._sync_terminal_cursor()
+        self._final_drain_pending = False
+        self._active_ring = RxRing()
+        self._rx_epoch = self._active_ring.epoch
+
+    def _refresh_backlog_indicator(self, backlog: int) -> None:
+        if backlog > _BACKLOG_VISIBLE_BYTES:
+            self._backlog_label.setText(
+                tr("RX backlog: {kib} KiB").format(kib=backlog // 1024)
+            )
+            self._backlog_label.setVisible(True)
+        else:
+            self._backlog_label.setVisible(False)
+
+    def _project_updates(self, updates: list[TerminalUpdate], *, rows_before: int) -> None:
+        """帧内合并投影：先平移既有脏行过本次淘汰，再吸收新更新；单 edit block。
+
+        文档物理淘汰由 maximumBlockCount(=模型 max_rows) 拥有（Qt 内部按块摊销，
+        满载 5000 块实测 ~4-5 ms/帧；手动从头删除是 O(文档) 且与块数无关的
+        ~160ms，已删除该路径）。语义淘汰 owner 仍是 TerminalScreen；寻址偏移只
+        计帧前已存在的被淘汰行——帧内"先创建后被淘汰"的行从未进入文档。
+        """
+
+        dirty_first: int | None = None
+        removed_total = 0
+        for update in updates:
+            if dirty_first is None:
+                dirty_first = update.first_row
+            else:
+                dirty_first = min(max(0, dirty_first - update.removed_rows), update.first_row)
+            removed_total += update.removed_rows
+        if dirty_first is None:
             return
-        cursor = self._terminal.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        pending: list[str] = []
+        document = self._output_document
+        document.setMaximumBlockCount(self._screen.max_rows)
+        cursor = QTextCursor(document)
+        cursor.beginEditBlock()
+        offset = min(removed_total, rows_before)
+        block = document.findBlockByNumber(dirty_first + offset)
+        if block.isValid():
+            cursor.setPosition(block.position())
+            cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+        else:
+            # 帧内淘汰超过旧文档内容：脏行起点已在文档尾，追加新块而非并入末块。
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            if document.lastBlock().length() > 1:
+                cursor.insertBlock()
+        for index, row in enumerate(self._screen.rows[dirty_first:]):
+            if index:
+                cursor.insertBlock()
+            if row.timestamp:
+                cursor.insertText(row.timestamp, _timestamp_format(self._theme))
+            run: list[str] = []
+            style = TerminalStyle()
+            for cell in row.cells:
+                if cell.style != style:
+                    if run:
+                        cursor.insertText("".join(run), self._cell_format(style))
+                        run.clear()
+                    style = cell.style
+                run.append(cell.text)
+            if run:
+                cursor.insertText("".join(run), self._cell_format(style))
+        cursor.endEditBlock()
 
-        def flush() -> None:
-            if pending:
-                chunk = "".join(pending)
-                if self._overwrite_mode:
-                    cursor.movePosition(
-                        cursor.MoveOperation.Right,
-                        cursor.MoveMode.KeepAnchor,
-                        len(chunk),
-                    )
-                cursor.insertText(chunk, self._current_char_format())
-                pending.clear()
-                self._overwrite_mode = False
-
-        def resolve_pending_cr() -> None:
-            # "\r\n" 是一次换行；单独 "\r" 回到行首进入覆盖模式。行首定义为
-            # 时间戳之后——覆盖重绘只替换设备文本，不动本地时间戳。
-            if self._pending_cr:
-                self._pending_cr = False
-                cursor.movePosition(cursor.MoveOperation.StartOfLine)
-                cursor.movePosition(
-                    cursor.MoveOperation.Right, cursor.MoveMode.MoveAnchor, _TIMESTAMP_LEN
-                )
-                self._overwrite_mode = True
-
-        def ensure_stamp() -> None:
-            if not self._line_stamped:
-                self._line_stamped = True
-                cursor.insertText(_timestamp_text(), _timestamp_format(self._theme))
-
-        def erase_line(mode: str) -> None:
-            # 设备日志/进度合同：先打提示符，再 ESC[2K 清整行、\r 回行首重绘。
-            # 丢弃 EL 会残留提示符尾部并逐帧累积（"每次进度多一个 /$ root:"）。
-            # 清行同样保留行首时间戳，只清设备文本。
-            flush()
-            resolve_pending_cr()
-            if mode == "1":
-                anchor = cursor.position()
-                cursor.movePosition(cursor.MoveOperation.StartOfLine)
-                cursor.movePosition(
-                    cursor.MoveOperation.Right, cursor.MoveMode.MoveAnchor, _TIMESTAMP_LEN
-                )
-                cursor.setPosition(anchor, cursor.MoveMode.KeepAnchor)
-            elif mode == "2":
-                cursor.movePosition(cursor.MoveOperation.StartOfLine)
-                cursor.movePosition(
-                    cursor.MoveOperation.Right, cursor.MoveMode.MoveAnchor, _TIMESTAMP_LEN
-                )
-                cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
-            else:
-                cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
-            if cursor.hasSelection():
-                cursor.removeSelectedText()
-
-        def render_text(text: str) -> None:
-            for char in text:
-                if char == "\r":
-                    flush()
-                    self._pending_cr = True
-                    continue
-                if char == "\n":
-                    flush()
-                    if self._pending_cr:
-                        self._pending_cr = False
-                    cursor.insertText("\n")
-                    self._line_stamped = False
-                    continue
-                resolve_pending_cr()
-                ensure_stamp()
-                if char == "\b":
-                    flush()
-                    # 设备退格修正输入行，但不得吃掉本地时间戳。
-                    if cursor.positionInBlock() > _TIMESTAMP_LEN:
-                        cursor.deletePreviousChar()
-                elif char == "\t":
-                    # 等宽字体下按固定 4 列展开，保持设备空格对齐。
-                    pending.append("    ")
-                else:
-                    pending.append(char)
-
-        for kind, value in self._decoder.feed(data):
-            if kind == "sgr":
-                flush()
-                self._apply_sgr(value)
-            elif kind == "el":
-                erase_line(value)
-            else:
-                render_text(value)
-        # 包尾的 "\r" 不提前决断：TCP 包边界不得改变语义——下一字符是 "\n"
-        # 则换行，是其他字符才进入行首覆盖（boot 进度条与 shell 提示符并发
-        # 交错时，提前决断会把覆盖意图泄漏到无关文本上产生半替换碎片）。
-        flush()
-        self._terminal.setTextCursor(cursor)
-        scrollbar = self._terminal.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-
-    def _current_char_format(self) -> QTextCharFormat:
-        if self._sgr_foreground is None and not self._sgr_bold:
-            return QTextCharFormat()
+    def _cell_format(self, style: TerminalStyle) -> QTextCharFormat:
         char_format = QTextCharFormat()
-        if self._sgr_foreground is not None:
-            char_format.setProperty(_COLOR_SOURCE_PROPERTY, self._sgr_foreground)
-            char_format.setForeground(QColor(S.chart_color(self._sgr_foreground, self._theme)))
-        if self._sgr_bold:
+        source = _SGR_FOREGROUND.get(style.foreground)
+        if source is not None:
+            char_format.setProperty(_COLOR_SOURCE_PROPERTY, source)
+            char_format.setForeground(QColor(S.chart_color(source, self._theme)))
+        if style.bold:
             char_format.setFontWeight(QFont.Weight.Bold)
         return char_format
 
-    def _apply_sgr(self, params: str) -> None:
-        codes: list[int] = []
-        for part in params.split(";"):
-            codes.append(int(part) if part.isdigit() else 0)
-        if not codes:
-            codes = [0]
-        index = 0
-        while index < len(codes):
-            code = codes[index]
-            if code == 0:
-                self._sgr_foreground = None
-                self._sgr_bold = False
-            elif code == 1:
-                self._sgr_bold = True
-            elif code == 22:
-                self._sgr_bold = False
-            elif code == 39:
-                self._sgr_foreground = None
-            elif code in _SGR_FOREGROUND:
-                self._sgr_foreground = _SGR_FOREGROUND[code]
-            elif code in (38, 48):
-                # 256/RGB 扩展色：跳过其后参数（38;5;n / 38;2;r;g;b），保持当前色。
-                if index + 1 < len(codes) and codes[index + 1] == 5:
-                    index += 2
-                elif index + 1 < len(codes) and codes[index + 1] == 2:
-                    index += 4
-            index += 1
-
-    def _append_terminal(self, text: str) -> None:
-        cursor = self._terminal.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.insertText(text)
+    def _sync_terminal_cursor(self) -> None:
+        if self._hex_view:
+            cursor = QTextCursor(self._hex_document)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+        else:
+            row = self._screen.row
+            cursor = QTextCursor(self._output_document.lastBlock())
+            cursor.setPosition(cursor.position() + len(row.timestamp)
+                               + row.text_offset(self._screen.column))
+        self._terminal.set_output_cursor(cursor)
         scrollbar = self._terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
     def _on_hex_toggled(self, checked: bool) -> None:
         self._hex_view = bool(checked)
+        self._terminal.setDocument(self._hex_document if checked else self._output_document)
+        self._sync_terminal_cursor()
 
     def _on_log_toggled(self, checked: bool) -> None:
         if checked:

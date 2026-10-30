@@ -123,6 +123,7 @@ class ParameterController(QObject):
 
         session.connection_changed.connect(self.set_connected)
         session.generation_changed.connect(self._on_generation_changed)
+        session.telemetry_epoch_changed.connect(self._on_generation_changed)
         session.record_received.connect(self.feed_record)
         session.profile_store.profile_changed.connect(self._on_profile_changed)
         self.destroyed.connect(self._on_destroyed)

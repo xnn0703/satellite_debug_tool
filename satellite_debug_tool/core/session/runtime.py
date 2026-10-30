@@ -797,6 +797,7 @@ class EndpointSessionRuntime(QObject):
         self._presence_timer = QTimer(self)
         self._presence_timer.setInterval(250)
         self._presence_timer.timeout.connect(self.refresh_presence)
+        self.core.telemetry_epoch_changed.connect(self._on_telemetry_epoch_changed)
 
     @property
     def presence_phase(self) -> RuntimePresencePhase:
@@ -1478,11 +1479,11 @@ class EndpointSessionRuntime(QObject):
         if not self._claim_datagram(datagram):
             return ()
         self.datagram_received.emit(datagram)
-        self.core.apply_records(
+        accepted = self.core.apply_records(
             records,
             received_monotonic=datagram.monotonic_ns / 1_000_000_000.0,
         )
-        return self._after_records(datagram, tuple(records))
+        return self._after_records(datagram, accepted)
 
     @Slot()
     def refresh_presence(self, now_monotonic: float | None = None) -> None:
@@ -1672,6 +1673,10 @@ class EndpointSessionRuntime(QObject):
                 self._termination_reason = str(reason).strip()
             if not self._terminal_timeout.isActive():
                 self._terminal_timeout.start(self._terminal_timeout_ms)
+
+    @Slot(int, object)
+    def _on_telemetry_epoch_changed(self, _epoch: int, _endpoint: object) -> None:
+        self._begin_presence_epoch()
 
     def _begin_presence_epoch(self) -> None:
         self._presence_epoch += 1

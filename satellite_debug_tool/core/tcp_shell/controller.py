@@ -78,7 +78,7 @@ class TcpShellController(QObject):
     connect_failed = Signal(str)
     disconnected = Signal(str)
     state_changed = Signal(str)
-    rx_payload = Signal(bytes)
+    rx_pending = Signal()
     ymodem_progress = Signal(object)
     ymodem_finished = Signal(object)
     session_started = Signal(str)
@@ -103,6 +103,7 @@ class TcpShellController(QObject):
         self._target_version = ""
         self._readback_active = False
         self._readback_runtime = None
+        self._session_generation = 0
 
     @property
     def worker(self) -> Optional[TcpShellWorker]:
@@ -111,6 +112,19 @@ class TcpShellController(QObject):
     @property
     def state(self) -> TcpShellWorkerState:
         return self._worker.state if self._worker is not None else TcpShellWorkerState.DISCONNECTED
+
+    @property
+    def rx_ring(self):
+        """当前会话的接收环；无活动连接时为 None。"""
+
+        worker = self._worker
+        return worker.rx_ring if worker is not None else None
+
+    @property
+    def session_generation(self) -> int:
+        """连接代际：每次 connect_device 递增，UI 据此丢弃迟到通知。"""
+
+        return self._session_generation
 
     # -- session lifecycle ------------------------------------------------------
 
@@ -128,6 +142,7 @@ class TcpShellController(QObject):
         addresses stay unmanaged.
         """
         self.disconnect_device("reconnect")
+        self._session_generation += 1
         worker = TcpShellWorker(
             target=target,
             managed_session=endpoint is not None,
@@ -143,6 +158,7 @@ class TcpShellController(QObject):
         self._release_lease()
         worker = self._worker
         if worker is not None:
+            worker.submit_disconnect(reason)  # 断开原因进入会话证据与 UI 通知
             worker.stop_and_join()
             self._unbind_worker(worker)
         self._worker = None
@@ -159,6 +175,13 @@ class TcpShellController(QObject):
             return False
         worker.submit_send_raw(data)
         return True
+
+    def clear_display(self) -> None:
+        """清屏代际请求：由 worker 按命令序划界并推进 ring 代际。"""
+
+        worker = self._worker
+        if worker is not None:
+            worker.submit_clear_rx()
 
     def shutdown(self) -> None:
         self.disconnect_device("shutdown")
@@ -227,11 +250,14 @@ class TcpShellController(QObject):
     def _bind_worker(self, worker: TcpShellWorker) -> None:
         worker.connected.connect(self.connected)
         worker.connect_failed.connect(self.connect_failed)
+        # 私有状态先更新（租约/回读），同信号再向外转发：连接顺序即送达顺序。
         worker.disconnected.connect(self._on_disconnected)
+        worker.disconnected.connect(self.disconnected)
         worker.state_changed.connect(self.state_changed)
-        worker.rx_payload.connect(self.rx_payload)
+        worker.rx_pending.connect(self.rx_pending)
         worker.ymodem_progress.connect(self.ymodem_progress)
         worker.ymodem_finished.connect(self._on_ymodem_finished)
+        worker.ymodem_finished.connect(self.ymodem_finished)
         worker.session_started.connect(self.session_started)
         self._worker = worker
         worker.start()
@@ -242,7 +268,7 @@ class TcpShellController(QObject):
             worker.connect_failed,
             worker.disconnected,
             worker.state_changed,
-            worker.rx_payload,
+            worker.rx_pending,
             worker.ymodem_progress,
             worker.ymodem_finished,
             worker.session_started,

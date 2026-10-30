@@ -38,6 +38,7 @@ from satellite_debug_tool.core.product import (
 from satellite_debug_tool.core.profile import CHANNEL_ROLE_SNR
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import icons, styles as S
+from satellite_debug_tool.core.production.fixture_telemetry import FixtureTelemetryBus
 from satellite_debug_tool.ui.attitude_widget import AttitudeWidget
 from satellite_debug_tool.ui.beam_polar_widget import BeamPolarWidget, BeamSatelliteMarker
 from satellite_debug_tool.ui.component_temperature_window import (
@@ -267,9 +268,11 @@ class CustomerOverviewView(QWidget):
         external_power_store: Optional[ExternalPowerStore] = None,
         enable_external_power: bool = True,
         external_power_presenter: Optional[Callable[[QWidget], None]] = None,
+        fixture_telemetry: Optional[FixtureTelemetryBus] = None,
     ) -> None:
         super().__init__(parent)
         self._live = live_view
+        self._fixture_telemetry = fixture_telemetry
         self._settings = settings
         self._theme = "dark"
         self._playback_mode = bool(playback_mode)
@@ -487,6 +490,13 @@ class CustomerOverviewView(QWidget):
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._model_layout.addWidget(placeholder)
 
+        self._reference_readout = QLabel()
+        self._reference_readout.setObjectName("ms6222AttitudeReadout")
+        self._reference_readout.setWordWrap(True)
+        self._reference_readout.setToolTip(tr("Shared MS-6222 reference for device attitude comparison"))
+        self._reference_readout.hide()
+        self._model_layout.addWidget(self._reference_readout)
+
         self._beam_panel = QFrame()
         self._beam_panel.setObjectName("customerSection")
         self._beam_layout = QVBoxLayout(self._beam_panel)
@@ -564,7 +574,7 @@ class CustomerOverviewView(QWidget):
         self._snr_plot.setLabel("left", "SNR", units="dB")
         self._snr_plot.setLabel("bottom", tr("Device uptime"), units="s")
         self._snr_plot.getAxis("bottom").enableAutoSIPrefix(False)
-        self._snr_curve = self._snr_plot.plot([], [])
+        self._snr_curve = self._snr_plot.plot([], [], connect="finite")
         self._signal_body_layout.addWidget(self._snr_plot, 1)
         self._signal_layout.addWidget(signal_body)
 
@@ -900,6 +910,7 @@ class CustomerOverviewView(QWidget):
         self._refresh_status(snapshot)
         self._refresh_data_and_beam(snapshot)
         self._refresh_model(snapshot)
+        self._refresh_reference_attitude()
         self._refresh_snr(snapshot)
         self._refresh_components(snapshot)
         self._refresh_external_power()
@@ -1317,6 +1328,30 @@ class CustomerOverviewView(QWidget):
             return ProductValue.stale(text, timestamp)
         return ProductValue.valid(text, timestamp)
 
+    def _refresh_reference_attitude(self) -> None:
+        telemetry = self._fixture_telemetry
+        if telemetry is None or self._attitude is None:
+            self._reference_readout.hide()
+            return
+        readout = telemetry.reference_readout()
+        self._reference_readout.setVisible(readout.status != "hidden")
+        if readout.status == "valid":
+            basis = tr("Raw INS, true heading")
+            roll, pitch, yaw = readout.angles
+            self._reference_readout.setText(tr(
+                "MS-6222 ({basis}) · Roll: {roll:.3f}°  Pitch: {pitch:.3f}°  Yaw: {yaw:.3f}°",
+                basis=basis, roll=roll, pitch=pitch, yaw=yaw,
+            ))
+        else:
+            states = {
+                "hidden": "",
+                "waiting": tr("Waiting for attitude"),
+                "disconnected": tr("Reference disconnected"),
+                "stale": tr("Attitude data is stale"),
+                "invalid": tr("Reference quality invalid"),
+            }
+            self._reference_readout.setText(f"MS-6222 · {states[readout.status]}")
+
     def _refresh_model(self, snapshot: ProductSnapshot) -> None:
         if self._attitude is None:
             return
@@ -1343,7 +1378,9 @@ class CustomerOverviewView(QWidget):
 
     def _refresh_snr(self, snapshot: ProductSnapshot) -> None:
         self._snr_readout.set_product_value(snapshot.operation.snr_db, 2)
-        if self._service_store is not None and self._service_store.has_snr_stream:
+        if (self._service_store is not None
+                and self._service_store.telemetry_ready
+                and snapshot.source == "product_service"):
             times, values = self._service_store.snr_history(window_s=300.0)
         else:
             times, values = self._projector.channel_history(CHANNEL_ROLE_SNR, window_s=300.0)
@@ -1362,11 +1399,15 @@ class CustomerOverviewView(QWidget):
                 minimum -= padding
                 maximum += padding
             self._snr_plot.setYRange(minimum, maximum, padding=0.0)
+        else:
+            self._snr_plot.setYRange(-1.0, 1.0, padding=0.0)
         if times.size:
             data_end = float(times[-1])
             end = max(300.0, data_end)
             start = max(0.0, end - 300.0)
             self._snr_plot.setXRange(start, end, padding=0.0)
+        else:
+            self._snr_plot.setXRange(0.0, 300.0, padding=0.0)
 
     def _refresh_components(self, snapshot: ProductSnapshot) -> None:
         rows = (
@@ -1478,6 +1519,7 @@ class CustomerOverviewView(QWidget):
             f"border-radius: 4px; padding: 2px 5px; color: {pal['text_2']}; }}"
             f"#customerDataItem[density='dense'] {{ padding: 1px 3px; font-size: 10px; }}"
             f"#customerDataItem[availability='stale'] {{ color: {pal['text_3']}; }}"
+            f"#ms6222AttitudeReadout {{ color: {pal['text_2']}; }}"
             f"#customerPllLockSummary {{ color: {pal['text_2']}; font-size: 11px; font-weight: 600; }}"
             f"#customerPllLockSummary[density='dense'] {{ font-size: 10px; }}"
             f"#customerPllLockSummary[status='ok'] {{ color: {pal['ok']}; }}"
@@ -1524,6 +1566,8 @@ class CustomerOverviewView(QWidget):
             self._snr_plot.getAxis(axis).setTextPen(pg.mkPen(pal["text_2"]))
 
     def retranslate_ui(self) -> None:
+        self._reference_readout.setToolTip(tr("Shared MS-6222 reference for device attitude comparison"))
+        self._refresh_reference_attitude()
         clear_text = tr("Clear this device's local display data")
         self._clear_btn.setToolTip(clear_text)
         self._clear_btn.setAccessibleName(clear_text)

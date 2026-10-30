@@ -286,6 +286,8 @@ class GwInstekPswAdapter:
         self._generation = 0
         self._records: list[PowerCommandRecord] = []
         self._identity: Optional[PowerIdentity] = None
+        # 本连接已验证的配置事实独立于实时输出状态，轮询不清除配置授权。
+        self._configuration_verified = False
         self._state = PowerSupplyState.DISCONNECTED
         self._evidence_level = PowerEvidenceLevel.NONE
 
@@ -339,6 +341,7 @@ class GwInstekPswAdapter:
             if transport is not None:
                 transport.close()
             self._identity = None
+            self._configuration_verified = False
             self._state = PowerSupplyState.DISCONNECTED
             self._evidence_level = PowerEvidenceLevel.NONE
 
@@ -373,6 +376,14 @@ class GwInstekPswAdapter:
 
     def inspect(self, *, fixture_action_id: str = "") -> PowerActionResult:
         with self._lock:
+            try:
+                return self._inspect(fixture_action_id=fixture_action_id)
+            except PowerSupplyError:
+                self._mark_unknown()
+                raise
+
+    def _inspect(self, *, fixture_action_id: str) -> PowerActionResult:
+        with self._lock:
             self._require_identity()
             output = parse_bool(self.query("OUTP?", fixture_action_id=fixture_action_id))
             measurement = parse_measurement(
@@ -388,13 +399,14 @@ class GwInstekPswAdapter:
                 self.query("OUTP:PROT:TRIP?", fixture_action_id=fixture_action_id)
             )
             if tripped or questionable:
+                self._configuration_verified = False
                 self._state = PowerSupplyState.PROTECTION_TRIPPED
                 self._evidence_level = PowerEvidenceLevel.NONE
             elif output and self._voltage_in_output_window(measurement.voltage_v):
                 self._state = PowerSupplyState.ON_CONFIRMED
                 self._evidence_level = PowerEvidenceLevel.VOLTAGE_CONFIRMED
             elif not output and measurement.voltage_v <= self._config.off_voltage_max_v:
-                self._state = PowerSupplyState.OFF_CONFIRMED
+                self._state = self._confirmed_off_state()
                 self._evidence_level = PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
             else:
                 self._state = PowerSupplyState.UNKNOWN
@@ -405,6 +417,7 @@ class GwInstekPswAdapter:
         """Force OFF, verify discharge, configure setpoints, and drain errors."""
         with self._lock:
             self._require_identity()
+            self._configuration_verified = False
             self._state = PowerSupplyState.TURNING_OFF
             self._command("OUTP 0", fixture_action_id=fixture_action_id)
             self._evidence_level = PowerEvidenceLevel.COMMAND_SENT
@@ -452,15 +465,36 @@ class GwInstekPswAdapter:
             if tripped or questionable:
                 self._state = PowerSupplyState.PROTECTION_TRIPPED
                 raise PowerSupplyError("power supply reports a protection or questionable state")
-            self._state = PowerSupplyState.READY_OFF
+            self._configuration_verified = True
+            self._state = self._confirmed_off_state()
             return self._result(False, measurement, operation, questionable, tripped)
 
     def enable_output(self, *, fixture_action_id: str) -> PowerActionResult:
         with self._lock:
-            if self._state != PowerSupplyState.READY_OFF:
-                raise PowerSupplyError("power supply must be READY_OFF before enabling output")
+            self._require_identity()
+            if not self._configuration_verified:
+                raise PowerSupplyError("power supply configuration must be verified before enabling output")
             if not fixture_action_id.strip():
                 raise PowerSupplyError("fixture_action_id is required for OUTPUT ON")
+            # 确认期间电源面板也可能被操作；发开启指令前重新回读，禁止沿用旧观测。
+            observed = self.inspect(fixture_action_id=fixture_action_id)
+            if observed.protection_tripped or observed.questionable_condition:
+                raise PowerSupplyError("power supply reports a protection or questionable state")
+            if observed.state != PowerSupplyState.READY_OFF:
+                self._configuration_verified = False
+                raise PowerSupplyError("power supply must confirm output OFF before enabling output")
+            try:
+                self._verify_setpoint(
+                    "voltage", parse_float(self.query("SOUR:VOLT?", fixture_action_id=fixture_action_id)),
+                    self._config.voltage_set_v, self._config.voltage_setpoint_tolerance_v,
+                )
+                self._verify_setpoint(
+                    "current", parse_float(self.query("SOUR:CURR?", fixture_action_id=fixture_action_id)),
+                    self._config.current_set_a, self._config.current_setpoint_tolerance_a,
+                )
+            except PowerSupplyError:
+                self._mark_unknown()
+                raise
             self._state = PowerSupplyState.TURNING_ON
             self._command("OUTP 1", fixture_action_id=fixture_action_id)
             self._evidence_level = PowerEvidenceLevel.COMMAND_SENT
@@ -484,10 +518,12 @@ class GwInstekPswAdapter:
                     self.query("OUTP:PROT:TRIP?", fixture_action_id=fixture_action_id)
                 )
                 if not output:
+                    self._configuration_verified = False
                     self._state = PowerSupplyState.UNKNOWN
                     raise PowerSupplyError("power supply did not confirm OUTPUT ON")
                 self._evidence_level = PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
                 if tripped or questionable:
+                    self._configuration_verified = False
                     self._state = PowerSupplyState.PROTECTION_TRIPPED
                     raise PowerSupplyError(
                         "power supply reports a protection or questionable state"
@@ -504,6 +540,7 @@ class GwInstekPswAdapter:
                     )
                 remaining_ns = deadline_ns - self._monotonic_clock_ns()
                 if remaining_ns <= 0:
+                    self._configuration_verified = False
                     self._state = PowerSupplyState.UNKNOWN
                     raise PowerSupplyError(
                         "power output did not enter the configured ON window within "
@@ -534,8 +571,10 @@ class GwInstekPswAdapter:
             self._state = (
                 PowerSupplyState.PROTECTION_TRIPPED
                 if tripped or questionable
-                else PowerSupplyState.OFF_CONFIRMED
+                else self._confirmed_off_state()
             )
+            if tripped or questionable:
+                self._configuration_verified = False
             return self._result(False, measurement, operation, questionable, tripped)
 
     def _wait_for_output_off(self, fixture_action_id: str) -> PowerMeasurement:
@@ -567,7 +606,11 @@ class GwInstekPswAdapter:
 
     def release_local(self) -> None:
         """Return panel control without changing or inferring output state."""
-        self._command("SYST:COMM:RLST LOC")
+        with self._lock:
+            self._command("SYST:COMM:RLST LOC")
+            self._configuration_verified = False
+            if self._state == PowerSupplyState.READY_OFF:
+                self._state = PowerSupplyState.OFF_CONFIRMED
 
     def _require_transport(self) -> ScpiTransport:
         if self._transport is None:
@@ -656,8 +699,12 @@ class GwInstekPswAdapter:
         )
 
     def _mark_unknown(self) -> None:
+        self._configuration_verified = False
         self._state = PowerSupplyState.UNKNOWN
         self._evidence_level = PowerEvidenceLevel.NONE
+
+    def _confirmed_off_state(self) -> PowerSupplyState:
+        return PowerSupplyState.READY_OFF if self._configuration_verified else PowerSupplyState.OFF_CONFIRMED
 
 
 def parse_identity(response: str) -> PowerIdentity:

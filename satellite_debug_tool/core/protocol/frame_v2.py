@@ -80,6 +80,7 @@ class CmdType(IntEnum):
     GNSS_SAT_REPORT = 0x0F
     GNSS_SIGNAL_REPORT = 0x10
     TRACKING_SIMULATION = 0x11
+    INS_TRACE = 0x12
     # M18: stable customer product-service records. The envelope stays compatible
     # with Debug v2 while customer UI no longer depends on dynamic channel names.
     SERVICE_IDENTITY = 0x20
@@ -954,8 +955,24 @@ class GnssSignalReport:
     records: List[GnssSignalRecord] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class InsTraceRecord:
+    """0x12 工程 INS 原始输入/内部快照，数值单位由 kind 的固定 schema 定义。"""
+
+    schema: int
+    kind: int
+    source: int
+    health: int
+    seq: int
+    source_seq: int
+    timestamp_us: int
+    received_timestamp_us: int
+    flags: int
+    values: dict[str, object]
+
 # 解析后返回的 union 类型
 FrameV2Record = Union[
+    InsTraceRecord,
     DataReport,
     CommandResponse,
     MetaInfo,
@@ -1031,7 +1048,7 @@ __all__ = [
     "EventDefEntry", "EventDefineTable",
     "ChannelSample", "DataReport",
     "StateSample", "StateReport",
-    "EventReport", "Heartbeat", "CommandResponse",
+    "EventReport", "Heartbeat", "CommandResponse", "InsTraceRecord",
     "ParaEntry", "ParaTableReport",
     "ProfileSemanticChannelEntry", "ProfileSemanticStateEntry",
     "ProfileSemanticCapabilityEntry", "ProfileSemanticsReport",

@@ -106,9 +106,9 @@ def test_shell_existing_ansi_and_timestamps_recolor_while_retaining_text(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     workspace = TcpShellWorkspace(Settings())
     try:
-        workspace._on_rx_payload(b"\x1b[32mgreen\x1b[0m plain\r")
+        workspace.feed_rx(b"\x1b[32mgreen\x1b[0m plain\r")
         original = workspace._terminal.toPlainText()
-        pending_cr = workspace._pending_cr
+        terminal_column = workspace._screen.column
         workspace.set_theme("light")
         cursor = QTextCursor(workspace._terminal.document())
         for position in (1, _TIMESTAMP_LEN + 1):
@@ -117,7 +117,7 @@ def test_shell_existing_ansi_and_timestamps_recolor_while_retaining_text(
             color = cursor.charFormat().foreground().color().name()
             assert contrast(color, S.palette("light")["card"]) >= 4.5
         assert workspace._terminal.toPlainText() == original
-        assert workspace._pending_cr == pending_cr
+        assert workspace._screen.column == terminal_column
     finally:
         workspace.shutdown()
         workspace.deleteLater()

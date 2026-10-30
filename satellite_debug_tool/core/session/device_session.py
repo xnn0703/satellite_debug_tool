@@ -44,6 +44,7 @@ from satellite_debug_tool.core.protocol import (
     build_request_meta_info,
 )
 from satellite_debug_tool.core.protocol.handshake import Handshake
+from satellite_debug_tool.core.session.telemetry_clock import TelemetryClock
 
 
 DeviceEndpoint = tuple[str, int]
@@ -63,6 +64,7 @@ class DeviceSessionScope:
     product_serial_number: str
     product_device_uid: str
     product_firmware: str
+    telemetry_epoch: int = 0
 
     @property
     def immutable_identity_facts(self) -> tuple[tuple[str, str], ...]:
@@ -152,6 +154,7 @@ class DeviceSessionCore(QObject):
     connection_changed = Signal(bool)
     generation_changed = Signal(int, object)
     device_transaction_changed = Signal(bool)
+    telemetry_epoch_changed = Signal(int, object)
 
     def __init__(
         self,
@@ -164,6 +167,7 @@ class DeviceSessionCore(QObject):
         super().__init__(parent)
         self.endpoint = self.normalize_endpoint(endpoint) if endpoint is not None else None
         self.generation = 0
+        self._telemetry_clock = TelemetryClock()
         self.transport: object | None = None
         self.meta_info: MetaInfo | None = None
         self.receiver = FrameReceiverV2()
@@ -271,6 +275,8 @@ class DeviceSessionCore(QObject):
 
     def clear_runtime_state(self) -> None:
         """Clear values whose validity belongs to the active connection."""
+        self._telemetry_clock.reset()
+        self.data_store.clear()
         self.meta_info = None
         self.state_store.clear()
         self.gnss_store.clear()
@@ -414,6 +420,7 @@ class DeviceSessionCore(QObject):
         )
         return DeviceSessionScope(
             generation=int(self.generation),
+            telemetry_epoch=self.product_store.telemetry_epoch,
             endpoint=self.endpoint,
             hardware_type=hardware,
             debug_serial_number=(
@@ -442,55 +449,71 @@ class DeviceSessionCore(QObject):
         received_monotonic: Optional[float] = None,
     ) -> tuple[object, ...]:
         records = tuple(self.receiver.feed(data))
-        self.apply_records(records, received_monotonic=received_monotonic)
-        return records
+        return self.apply_records(records, received_monotonic=received_monotonic)
 
     def apply_records(
         self,
         records: tuple[object, ...],
         *,
         received_monotonic: Optional[float] = None,
-    ) -> None:
+    ) -> tuple[object, ...]:
         """Apply already-decoded records to the canonical session state once."""
         if not records:
-            return
+            return ()
         received = time.monotonic() if received_monotonic is None else float(received_monotonic)
         self.activity.emit()
-        for record in records:
-            handled_by_domain = self.orbit_store.feed(record)
-            handled_by_product = self.product_store.feed(
+        accepted: list[object] = []
+        for incoming in records:
+            admission = self._telemetry_clock.admit(incoming, received)
+            if admission.starts_epoch:
+                self.data_store.clear()
+                self.state_store.clear()
+                self.gnss_store.clear()
+                self.orbit_store.clear()
+                self.product_store.begin_telemetry_epoch()
+                self.product_snapshot_resolver.reset()
+                self._clear_device_transaction()
+                self.telemetry_epoch_changed.emit(self.product_store.telemetry_epoch, self.endpoint)
+            for item in admission.records:
+                self._apply_record(item.record, item.received)
+                accepted.append(item.record)
+        return tuple(accepted)
+
+    def _apply_record(self, record: object, received: float) -> None:
+        handled_by_domain = self.orbit_store.feed(record)
+        handled_by_product = self.product_store.feed(
+            record,
+            received_monotonic=received,
+        )
+
+        if not handled_by_domain and not handled_by_product:
+            handshake = self._handshake
+            if handshake is not None:
+                handshake.feed(record)
+
+            if isinstance(record, DataReport):
+                self.data_store.update(record)
+            elif isinstance(record, MetaInfo):
+                self.meta_info = record
+            elif isinstance(record, CommandResponse):
+                self.command_response.emit(record)
+            elif isinstance(record, Heartbeat):
+                self.heartbeat_received.emit()
+            elif isinstance(
                 record,
-                received_monotonic=received,
-            )
+                (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport),
+            ):
+                self.gnss_store.update(record)
+            else:
+                hardware = self.profile_store.current_hw_type()
+                if hardware is not None:
+                    if isinstance(record, StateReport):
+                        self.state_store.update(hardware, record)
+                    elif isinstance(record, EventReport):
+                        self.event_log.add(hardware, record, self.profile_store)
 
-            if not handled_by_domain and not handled_by_product:
-                handshake = self._handshake
-                if handshake is not None:
-                    handshake.feed(record)
-
-                if isinstance(record, DataReport):
-                    self.data_store.update(record)
-                elif isinstance(record, MetaInfo):
-                    self.meta_info = record
-                elif isinstance(record, CommandResponse):
-                    self.command_response.emit(record)
-                elif isinstance(record, Heartbeat):
-                    self.heartbeat_received.emit()
-                elif isinstance(
-                    record,
-                    (GnssSkyReport, GnssCnrReport, GnssSatReport, GnssSignalReport),
-                ):
-                    self.gnss_store.update(record)
-                else:
-                    hardware = self.profile_store.current_hw_type()
-                    if hardware is not None:
-                        if isinstance(record, StateReport):
-                            self.state_store.update(hardware, record)
-                        elif isinstance(record, EventReport):
-                            self.event_log.add(hardware, record, self.profile_store)
-
-            # Observers always see a record after its canonical store has been updated.
-            self.record_received.emit(record)
+        # Observers always see a record after its canonical store has been updated.
+        self.record_received.emit(record)
 
     def _set_connected(self, connected: bool) -> None:
         connected = bool(connected)

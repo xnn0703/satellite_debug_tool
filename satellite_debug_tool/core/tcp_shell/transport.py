@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import socket
 
+# M45 读取合同：TCP 与串口单次读取的统一上限；worker 任一时刻最多持有
+# 一个未入环的读取块，停止残余（push_final）因此有同一上界。
+MAX_READ_CHUNK = 65536
+
 
 class ShellLinkError(RuntimeError):
     """Link open/reopen failure with an operator-readable reason."""
@@ -56,7 +60,7 @@ class TcpShellLink(ShellLink):
         connection = self._require_open()
         connection.settimeout(max(timeout_s, 0.001))
         try:
-            data = connection.recv(65536)
+            data = connection.recv(MAX_READ_CHUNK)
         except socket.timeout:
             return b""
         except OSError as exc:
@@ -120,7 +124,7 @@ class SerialShellLink(ShellLink):
             stream.timeout = max(timeout_s, 0.001)
             waiting = stream.in_waiting
             if waiting:
-                return bytes(stream.read(waiting))
+                return bytes(stream.read(min(waiting, MAX_READ_CHUNK)))
             return bytes(stream.read(1))
         except Exception as exc:  # noqa: BLE001 - unplug mid-read raises OSError
             self.close()

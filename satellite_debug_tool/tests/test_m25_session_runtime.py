@@ -114,7 +114,7 @@ def test_unknown_registered_envelope_does_not_establish_or_refresh_presence(
     transport = runtime.acquire_transport("customer-a")
 
     records = runtime.feed_datagram(
-        _datagram(endpoint, build_frame(0x12, b"unknown"), monotonic_s=1.0)
+        _datagram(endpoint, build_frame(0x13, b"unknown"), monotonic_s=1.0)
     )
 
     assert len(records) == 1
@@ -129,7 +129,7 @@ def test_unknown_registered_envelope_does_not_establish_or_refresh_presence(
     assert runtime.last_valid_record_at == pytest.approx(2.0)
 
     runtime.feed_datagram(
-        _datagram(endpoint, build_frame(0x12, b"still-unknown"), monotonic_s=4.0)
+        _datagram(endpoint, build_frame(0x13, b"still-unknown"), monotonic_s=4.0)
     )
     assert runtime.last_valid_record_at == pytest.approx(2.0)
 

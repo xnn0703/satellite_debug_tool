@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import math
 import time
-from typing import Mapping, Optional
+from typing import Literal, Mapping, Optional
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
@@ -73,6 +73,19 @@ class FixtureAttitudeSample:
         }
 
 
+@dataclass(frozen=True)
+class ReferenceAttitudeSample:
+    host_monotonic_ns: int
+    angles: tuple[float, float, float]
+    valid: bool
+
+
+@dataclass(frozen=True)
+class ReferenceAttitudeReadout:
+    status: Literal["hidden", "waiting", "disconnected", "stale", "invalid", "valid"]
+    angles: tuple[float, float, float] | None = None
+
+
 class FixtureTelemetryBus(QObject):
     """Publish immutable fixture facts without giving UI access to recorders."""
 
@@ -83,6 +96,42 @@ class FixtureTelemetryBus(QObject):
         self._minimum_ms_interval_ns = int(1_000_000_000 / max(1.0, ms_rate_hz))
         self._last_ms_ns: dict[FixtureAttitudeSource, int] = {}
         self._last_valid: dict[FixtureAttitudeSource, bool] = {}
+        self._reference_seen = False
+        self._reference_connected = False
+        self._reference_raw: ReferenceAttitudeSample | None = None
+
+    def set_reference_connected(self, connected: bool) -> None:
+        self._reference_seen = True
+        self._reference_connected = bool(connected)
+        self._reference_raw = None
+        self._last_ms_ns.clear()
+        self._last_valid.clear()
+
+    def publish_reference_attitude(
+        self, *, host_monotonic_ns: int, roll_deg: float, pitch_deg: float,
+        yaw_deg: float, gnss_state: int,
+    ) -> None:
+        angles = (roll_deg, pitch_deg, yaw_deg)
+        self._reference_raw = ReferenceAttitudeSample(
+            host_monotonic_ns, angles,
+            gnss_state in {1, 3} and all(math.isfinite(v) for v in angles),
+        )
+
+    def reference_readout(self, *, now_ns: int | None = None) -> ReferenceAttitudeReadout:
+        if not self._reference_seen:
+            return ReferenceAttitudeReadout("hidden")
+        if not self._reference_connected:
+            return ReferenceAttitudeReadout("disconnected")
+        raw = self._reference_raw
+        if raw is None:
+            return ReferenceAttitudeReadout("waiting")
+        now = time.monotonic_ns() if now_ns is None else now_ns
+        if now - raw.host_monotonic_ns > 3_000_000_000:
+            return ReferenceAttitudeReadout("stale")
+        angles = raw.angles
+        if not raw.valid:
+            return ReferenceAttitudeReadout("invalid")
+        return ReferenceAttitudeReadout("valid", angles=angles)
 
     def publish(self, sample: FixtureAttitudeSample) -> bool:
         if sample.source in {

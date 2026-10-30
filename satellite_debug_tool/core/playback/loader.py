@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from PySide6.QtCore import QThread, Signal
 
 from satellite_debug_tool.core.product import CustomerPlaybackProjector
 from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.core.product.timestamps import U32UptimeMapper
+from satellite_debug_tool.core.session.telemetry_clock import TelemetryClock
 from satellite_debug_tool.core.protocol import (
     DataReport,
     EventReport,
@@ -74,6 +76,36 @@ def _source_profile(sdb: SdbFile) -> tuple[Optional[ProfileStore], Optional[str]
     return store, hw_type
 
 
+def _epoch_records(
+    sdb: SdbFile, cancelled: Callable[[], bool]
+) -> Iterator[tuple[int, object, bool]]:
+    """录制保持原始字节；派生回放按同一准入合同分段并映射到连续显示轴。"""
+    clock = TelemetryClock(host_time_available=sdb.version >= 3)
+    mapper = U32UptimeMapper()
+    offset = 0
+    high_watermark: Optional[int] = None
+    for ordinal, (host_ns, record) in enumerate(sdb.iter_timed_records()):
+        if ordinal % 256 == 0:
+            _check_cancelled(cancelled)
+        admission = clock.admit(record, host_ns / 1_000_000_000.0)
+        starts_epoch = admission.starts_epoch
+        if starts_epoch:
+            mapper = U32UptimeMapper()
+            first = clock.timestamp(admission.records[0].record)
+            assert first is not None
+            offset = (0 if high_watermark is None else high_watermark + 1) - first
+        for item in admission.records:
+            projected = item.record
+            stamp = clock.timestamp(projected)
+            if stamp is not None:
+                mapped = mapper.add(stamp) + offset
+                high_watermark = mapped if high_watermark is None else max(high_watermark, mapped)
+                field = "uptime_ms" if hasattr(projected, "uptime_ms") else "timestamp"
+                projected = replace(projected, **{field: mapped})
+            yield int(round(item.received * 1_000_000_000)), projected, starts_epoch
+            starts_epoch = False
+
+
 def build_engineering_playback(
     path: Path,
     *,
@@ -86,9 +118,10 @@ def build_engineering_playback(
     events: deque[EventReport] = deque(maxlen=_MAX_EVENT_RECORDS)
     gnss_records: deque[FrameV2Record] = deque(maxlen=_MAX_GNSS_RECORDS)
     try:
-        for ordinal, (host_ns, record) in enumerate(sdb.iter_timed_records()):
-            if ordinal % 256 == 0:
-                _check_cancelled(cancelled)
+        for host_ns, record, starts_epoch in _epoch_records(sdb, cancelled):
+            if starts_epoch:
+                provider.begin_epoch()
+                aligner.begin_epoch()
             if isinstance(record, DataReport):
                 provider.append_report(record)
                 aligner.add_anchor(host_ns, record.timestamp)
@@ -148,9 +181,12 @@ def build_customer_playback(
     latest_identity: Optional[ServiceIdentity] = None
     gnss_records: deque[FrameV2Record] = deque(maxlen=_MAX_GNSS_RECORDS)
     try:
-        for ordinal, (host_ns, record) in enumerate(sdb.iter_timed_records()):
-            if ordinal % 256 == 0:
-                _check_cancelled(cancelled)
+        for host_ns, record, starts_epoch in _epoch_records(sdb, cancelled):
+            if starts_epoch:
+                product_provider.begin_epoch()
+                legacy_provider.begin_epoch()
+                product_aligner.begin_epoch()
+                legacy_aligner.begin_epoch()
             if isinstance(record, (ServiceFastState, ServiceSlowState)):
                 report = product_projector.project(record)
                 if report is not None:

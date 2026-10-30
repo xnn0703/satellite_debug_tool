@@ -28,12 +28,12 @@ class TestProtocolConstants:
         assert EVENT_ID_USER_MARK == 0xFFFF
 
     def test_cmd_values_match_spec(self):
-        # 规范 §4：通用 Debug/GNSS/Tracking 精确分配 0x01–0x11；
+        # 规范 §4：通用 Debug/GNSS/Tracking 精确分配 0x01–0x12；
         # Product Service 使用独立连续区间 0x20–0x2C。
         debug_values = [int(cmd) for cmd in CmdType if int(cmd) < 0x20]
         service_values = [int(cmd) for cmd in CmdType if 0x20 <= int(cmd) < 0x30]
         orbit_values = [int(cmd) for cmd in CmdType if int(cmd) >= 0x30]
-        assert debug_values == list(range(0x01, 0x12))
+        assert debug_values == list(range(0x01, 0x13))
         assert CmdType.TRACKING_SIMULATION == 0x11
         assert service_values == list(range(0x20, 0x2D))
         assert orbit_values == [0x30, 0x31]

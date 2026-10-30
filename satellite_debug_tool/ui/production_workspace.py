@@ -566,6 +566,7 @@ class ProductionWorkspace(QWidget):
         reference = Ms6222DebugWorkspace(
             self._settings,
             self._ms6222_control_lease,
+            telemetry=self._fixture_runtime.telemetry,
             profile_port=(
                 ""
                 if self._resolved_configuration is None

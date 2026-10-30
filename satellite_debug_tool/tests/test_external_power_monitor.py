@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Callable
 
 import pytest
 from PySide6.QtCore import QElapsedTimer
@@ -201,6 +202,88 @@ def test_worker_serializes_control_action_on_the_polling_session(
     ]
     assert outcomes[0].succeeded is True
     assert outcomes[0].sample is not None
+
+
+def test_real_power_session_enables_after_worker_background_polls(
+    qapplication_session, monkeypatch,
+) -> None:
+    """真实 worker/session/adapter：模拟 SCPI 设备，复现现场 24V/5A 操作序列。"""
+    from satellite_debug_tool.core import external_power_monitor as module
+    from satellite_debug_tool.core.production.power_supply import GwInstekPswAdapter
+
+    class SupplyTransport:
+        def __init__(self) -> None:
+            self.voltage = 12.0
+            self.current = 1.0
+            self.output = False
+            self.response = ""
+            self.commands: list[str] = []
+
+        def connect(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def write(self, data: bytes) -> None:
+            command = data.decode("ascii").strip()
+            self.commands.append(command)
+            if command.startswith("SOUR:VOLT "):
+                self.voltage = float(command.split()[1])
+            elif command.startswith("SOUR:CURR "):
+                self.current = float(command.split()[1])
+            elif command.startswith("OUTP "):
+                self.output = command == "OUTP 1"
+            else:
+                self.response = {
+                    "*IDN?": "GW-INSTEK,PSW 80-27,PSW1234,1.70",
+                    "*OPC?": "1", "SYST:ERR?": '0,"No error"',
+                    "OUTP?": str(int(self.output)),
+                    "MEAS:ALL?": f"{self.voltage if self.output else 0},0",
+                    "SOUR:VOLT?": str(self.voltage), "SOUR:CURR?": str(self.current),
+                    "STAT:OPER:COND?": "0", "STAT:QUES:COND?": "0",
+                    "OUTP:PROT:TRIP?": "0",
+                }[command]
+
+        def read_line(self) -> str:
+            return self.response
+
+    transport = SupplyTransport()
+    monkeypatch.setattr(module, "GwInstekPswAdapter", lambda config: GwInstekPswAdapter(
+        config, transport_factory=lambda _config: transport,
+    ))
+    worker = ExternalPowerWorker(ExternalPowerConfig(
+        "192.168.1.108", voltage_set_v=24, current_set_a=5, poll_interval_s=0.01,
+    ))
+    outcomes = []
+    samples = []
+    worker.action_finished.connect(outcomes.append)
+    worker.sample_ready.connect(samples.append)
+
+    def wait_for(predicate: Callable[[], bool]) -> None:
+        timer = QElapsedTimer()
+        timer.start()
+        while not predicate() and timer.elapsed() < 1500:
+            QTest.qWait(5)
+        assert predicate()
+
+    worker.start()
+    try:
+        worker.request_action(ExternalPowerAction.PREPARE, "PREPARE")
+        wait_for(lambda: len(outcomes) == 1)
+        assert outcomes[0].succeeded
+        count = len(samples)
+        wait_for(lambda: len(samples) >= count + 3)
+        worker.request_action(ExternalPowerAction.ENABLE, "ENABLE")
+        wait_for(lambda: len(outcomes) == 2)
+        assert outcomes[1].succeeded
+        assert outcomes[1].sample.output_enabled
+        assert outcomes[1].sample.voltage_v == pytest.approx(24)
+    finally:
+        worker.requestInterruption()
+        assert worker.wait(1500)
+    assert transport.commands.count("OUTP 1") == 1
+    assert transport.commands.count("SOUR:VOLT 24") == 1
 
 
 def test_history_window_renders_voltage_and_current_and_reuses_native_window(

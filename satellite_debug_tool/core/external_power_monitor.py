@@ -8,6 +8,7 @@ from enum import Enum
 import ipaddress
 import math
 import queue
+import threading
 import time
 from typing import Callable, Optional
 
@@ -37,6 +38,9 @@ class ExternalPowerPhase(str, Enum):
     CONNECTING = "connecting"
     ONLINE = "online"
     READ_FAILED = "read_failed"
+    RELEASING = "releasing"
+    LOCAL_REQUESTED = "local_requested"
+    LOCAL_UNCONFIRMED = "local_unconfirmed"
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,7 @@ class ExternalPowerAction(str, Enum):
     ENABLE = "enable"
     DISABLE = "disable"
     READ = "read"
+    RELEASE_LOCAL = "release_local"
 
 
 @dataclass(frozen=True)
@@ -203,6 +208,9 @@ class PswControlledSession:
         else:  # pragma: no cover - exhaustive enum guard
             raise PowerSupplyError(f"unsupported external power action: {action}")
         return self._sample(result, generation)
+
+    def release_local(self) -> None:
+        self._adapter.release_local()
 
     def close(self) -> None:
         self._adapter.close()
@@ -298,9 +306,16 @@ class ExternalPowerWorker(QThread):
         self._session_factory = session_factory
         self._initial_generation = 0
         self._actions: queue.Queue[tuple[ExternalPowerAction, str]] = queue.Queue()
+        self._release_requested = threading.Event()
+        self._release_action_id = ""
 
     def request_action(self, action: ExternalPowerAction, action_id: str) -> None:
         self._actions.put((ExternalPowerAction(action), str(action_id).strip()))
+
+    def request_release_local(self, action_id: str) -> None:
+        # 独立终止意图优先于尚未开始的控制动作；当前 SCPI 操作先完成。
+        self._release_action_id = action_id
+        self._release_requested.set()
 
     def set_initial_generation(self, generation: int) -> None:
         if self.isRunning():
@@ -309,7 +324,7 @@ class ExternalPowerWorker(QThread):
 
     def run(self) -> None:
         generation = self._initial_generation
-        while not self.isInterruptionRequested():
+        while not self.isInterruptionRequested() and not self._release_requested.is_set():
             generation += 1
             self.state_changed.emit(
                 ExternalPowerSnapshot(
@@ -329,11 +344,13 @@ class ExternalPowerWorker(QThread):
                         identity=identity,
                     )
                 )
-                while not self.isInterruptionRequested():
+                while not self.isInterruptionRequested() and not self._release_requested.is_set():
                     try:
                         action, action_id = self._actions.get_nowait()
                     except queue.Empty:
                         action = None
+                    if self._release_requested.is_set():
+                        break
                     if action is None:
                         self.sample_ready.emit(session.read_sample(generation))
                     else:
@@ -370,15 +387,36 @@ class ExternalPowerWorker(QThread):
                     )
                 )
             finally:
+                if self._release_requested.is_set():
+                    error = ""
+                    try:
+                        session.release_local()
+                    except (OSError, PowerSupplyError, ValueError) as exc:
+                        error = str(exc)
+                    finally:
+                        session.close()
+                    self.action_finished.emit(ExternalPowerActionOutcome(
+                        action=ExternalPowerAction.RELEASE_LOCAL,
+                        action_id=self._release_action_id,
+                        succeeded=not bool(error), error=error,
+                    ))
+                    return
                 session.close()
             if self.isInterruptionRequested():
                 break
             if self._wait_interruptibly(self._config.reconnect_interval_s):
                 break
 
+        if self._release_requested.is_set():
+            self.action_finished.emit(ExternalPowerActionOutcome(
+                action=ExternalPowerAction.RELEASE_LOCAL,
+                action_id=self._release_action_id, succeeded=False,
+                error="power supply connection is unavailable",
+            ))
+
     def _wait_interruptibly(self, duration_s: float) -> bool:
         deadline = time.monotonic() + max(0.0, float(duration_s))
-        while not self.isInterruptionRequested():
+        while not self.isInterruptionRequested() and not self._release_requested.is_set():
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
                 return False
@@ -407,6 +445,8 @@ class ExternalPowerMonitor(QObject):
         self._active = False
         self._worker: Optional[ExternalPowerWorker] = None
         self._pending_actions = 0
+        self._local_hold = False
+        self._last_generation = store.snapshot.generation
 
     @property
     def host(self) -> str:
@@ -459,6 +499,8 @@ class ExternalPowerMonitor(QObject):
             return
         self._active = active
         if not active:
+            if self._local_hold:
+                return
             self._stop_worker()
             self._store.apply_snapshot(
                 ExternalPowerSnapshot(
@@ -472,12 +514,42 @@ class ExternalPowerMonitor(QObject):
             return
         self._sync_worker()
 
+    def resume_monitoring(self) -> None:
+        if self.action_pending:
+            raise PowerSupplyError("power action is still running")
+        self._local_hold = False
+        self._active = True
+        self._sync_worker()
+
+    def release_local(self) -> None:
+        if self._local_hold:
+            return
+        self._local_hold = True
+        self._pending_actions = 1
+        self._store.apply_snapshot(ExternalPowerSnapshot(
+            ExternalPowerPhase.RELEASING, host=self._host,
+            generation=self._store.snapshot.generation,
+        ))
+        worker = self._worker
+        if worker is None or not worker.isRunning():
+            self._on_action_finished(ExternalPowerActionOutcome(
+                ExternalPowerAction.RELEASE_LOCAL, "", False,
+                error="power supply connection is unavailable",
+            ))
+            return
+        worker.request_release_local(f"local-{time.time_ns()}")
+
     def shutdown(self, timeout_ms: int = 5000) -> bool:
         self._active = False
         return self._stop_worker(timeout_ms=timeout_ms)
 
     def request_action(self, action: ExternalPowerAction, action_id: str = "") -> None:
+        if action is ExternalPowerAction.RELEASE_LOCAL:
+            self.release_local()
+            return
         worker = self._worker
+        if self._local_hold:
+            raise PowerSupplyError("power monitoring is stopped for panel control")
         if worker is None or not worker.isRunning():
             raise PowerSupplyError("external power supply is not connected")
         token = str(action_id).strip() or f"customer-{time.time_ns()}"
@@ -485,7 +557,7 @@ class ExternalPowerMonitor(QObject):
         worker.request_action(action, token)
 
     def _sync_worker(self) -> None:
-        if not self._active or not self._host or self._worker is not None:
+        if self._local_hold or not self._active or not self._host or self._worker is not None:
             return
         worker = self._worker_factory(
             ExternalPowerConfig(
@@ -494,9 +566,9 @@ class ExternalPowerMonitor(QObject):
                 current_set_a=self._current_set_a,
             )
         )
-        worker.set_initial_generation(self._store.snapshot.generation)
-        worker.state_changed.connect(self._store.apply_snapshot)
-        worker.sample_ready.connect(self._store.apply_sample)
+        worker.set_initial_generation(self._last_generation)
+        worker.state_changed.connect(self._apply_worker_snapshot)
+        worker.sample_ready.connect(self._apply_worker_sample)
         worker.action_finished.connect(self._on_action_finished)
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
@@ -515,15 +587,44 @@ class ExternalPowerMonitor(QObject):
         worker.deleteLater()
         return True
 
+    @Slot(object)
+    def _apply_worker_snapshot(self, snapshot: ExternalPowerSnapshot) -> None:
+        if self.sender() is self._worker:
+            self._last_generation = max(self._last_generation, snapshot.generation)
+            if not self._local_hold:
+                self._store.apply_snapshot(snapshot)
+
+    @Slot(object)
+    def _apply_worker_sample(self, sample: ExternalPowerSample) -> None:
+        if self.sender() is self._worker:
+            self._last_generation = max(self._last_generation, sample.connection_generation)
+            if not self._local_hold:
+                self._store.apply_sample(sample)
+
     @Slot()
     def _on_worker_finished(self) -> None:
         worker = self.sender()
         if worker is self._worker:
             self._worker = None
-        self._pending_actions = 0
+            self._pending_actions = 0
+            self._sync_worker()
+        if isinstance(worker, QThread):
+            worker.deleteLater()
 
     @Slot(object)
     def _on_action_finished(self, outcome: ExternalPowerActionOutcome) -> None:
+        if self.sender() is not None and self.sender() is not self._worker:
+            return
+        if outcome.action is ExternalPowerAction.RELEASE_LOCAL:
+            self._pending_actions = 0
+            self._store.apply_snapshot(ExternalPowerSnapshot(
+                ExternalPowerPhase.LOCAL_REQUESTED if outcome.succeeded
+                else ExternalPowerPhase.LOCAL_UNCONFIRMED,
+                host=self._host, generation=self._last_generation,
+                error=outcome.error,
+            ))
+        elif self._local_hold:
+            return
         self._pending_actions = max(0, self._pending_actions - 1)
         self.action_finished.emit(outcome)
 

@@ -34,6 +34,7 @@ from ..codec_v2 import (
     decode_gnss_signal_report,
     decode_gnss_sky_report,
     decode_heartbeat,
+    decode_ins_trace,
     decode_meta_info,
     decode_para_table_report,
     decode_profile_semantics,
@@ -52,6 +53,7 @@ from ..frame_v2 import (
     GnssSignalReport,
     GnssSkyReport,
     Heartbeat,
+    InsTraceRecord,
     MetaInfo,
     ParaTableReport,
     ProfileSemanticsReport,
@@ -61,6 +63,7 @@ from ..frame_v2 import (
 
 
 DECODERS = MappingProxyType({
+    int(CmdType.INS_TRACE): decode_ins_trace,
     int(CmdType.DATA_REPORT): decode_data_report,
     int(CmdType.COMMAND_RESPONSE): decode_command_response,
     int(CmdType.META_INFO): decode_meta_info,
@@ -91,6 +94,8 @@ __all__ = [
     "GnssSignalReport",
     "GnssSkyReport",
     "Heartbeat",
+    "InsTraceRecord",
+    "decode_ins_trace",
     "MetaInfo",
     "ParaTableReport",
     "ProfileSemanticsReport",

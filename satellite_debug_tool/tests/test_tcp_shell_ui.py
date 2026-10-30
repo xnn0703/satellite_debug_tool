@@ -91,17 +91,16 @@ def make_workspace(qapplication_session, tmp_path, monkeypatch, **kwargs) -> Tcp
 class TestTerminalRendering:
     def test_utf8_backspace_and_ansi_stripping(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"hello\x1b[32m world\x1b[0m")
-        workspace._on_rx_payload(b"\x08\x08x!")
+        workspace.feed_rx(b"hello\x1b[32m world\x1b[0m")
+        workspace.feed_rx(b"\x08\x08x!")
         text = workspace._terminal.toPlainText()
         assert "hello" in text
         assert "\x1b" not in text
-        assert "worlx!" not in text or True  # 退格删除两个字符后重写
-        assert "x!" in text
+        assert _strip_stamp(text) == "hello worx!"  # BS 移动光标，随后覆盖两格
 
     def test_crlf_produces_line_breaks(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"root:/$ ls\r\n[10:24:56] I system: table head\r\n[10:24:57] I system: row 2\r\n")
+        workspace.feed_rx(b"root:/$ ls\r\n[10:24:56] I system: table head\r\n[10:24:57] I system: row 2\r\n")
         text = workspace._terminal.toPlainText()
         lines = [_strip_stamp(line) for line in text.split("\n")]
         assert "root:/$ ls" in lines
@@ -110,15 +109,15 @@ class TestTerminalRendering:
 
     def test_crlf_split_across_packets(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"cmd\r")
-        workspace._on_rx_payload(b"\noutput\r\n")
+        workspace.feed_rx(b"cmd\r")
+        workspace.feed_rx(b"\noutput\r\n")
         lines = [_strip_stamp(line) for line in workspace._terminal.toPlainText().split("\n")]
         assert "cmd" in lines
         assert "output" in lines
 
     def test_lone_cr_keeps_overwrite_semantics(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"progress 10%\rprogress 90%\r\n")
+        workspace.feed_rx(b"progress 10%\rprogress 90%\r\n")
         text = workspace._terminal.toPlainText()
         assert "10%" not in text
         assert "progress 90%" in text
@@ -126,7 +125,7 @@ class TestTerminalRendering:
     def test_hex_view_switch(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._hex_check.setChecked(True)
-        workspace._on_rx_payload(b"AB")
+        workspace.feed_rx(b"AB")
         assert "41 42" in workspace._terminal.toPlainText()
 
 
@@ -142,7 +141,7 @@ class TestLineTimestampAndCaret:
         self, qapplication_session, tmp_path, monkeypatch
     ):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"first line\r\nsecond line\r\n")
+        workspace.feed_rx(b"first line\r\nsecond line\r\n")
         lines = self._lines(workspace)
         assert len(lines) == 2
         assert all(self.STAMP.match(line) for line in lines)
@@ -155,7 +154,7 @@ class TestLineTimestampAndCaret:
         from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
 
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"progress 10%\rprogress 90%\r\n")
+        workspace.feed_rx(b"progress 10%\rprogress 90%\r\n")
         lines = self._lines(workspace)
         assert len(lines) == 1
         assert self.STAMP.match(lines[0])
@@ -165,7 +164,7 @@ class TestLineTimestampAndCaret:
         self, qapplication_session, tmp_path, monkeypatch
     ):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"root:/$ \x1b[2K\r[TS] log line\r\n")
+        workspace.feed_rx(b"root:/$ \x1b[2K\r[TS] log line\r\n")
         lines = self._lines(workspace)
         assert len(lines) == 1
         assert self.STAMP.match(lines[0])
@@ -178,9 +177,10 @@ class TestLineTimestampAndCaret:
         from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
 
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"ab\x08\x08\x08\x08\x08")
+        workspace.feed_rx(b"ab\x08\x08\x08\x08\x08")
         line = self._lines(workspace)[0]
-        assert line[_TIMESTAMP_LEN:] == ""
+        assert line[_TIMESTAMP_LEN:] == "ab"
+        assert workspace._screen.column == 0
         assert self.STAMP.match(line)
 
     def test_hex_lines_carry_timestamp(
@@ -188,7 +188,7 @@ class TestLineTimestampAndCaret:
     ):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._hex_check.setChecked(True)
-        workspace._on_rx_payload(b"AB")
+        workspace.feed_rx(b"AB")
         line = self._lines(workspace)[0]
         assert self.STAMP.match(line)
         assert "41 42" in line
@@ -199,7 +199,7 @@ class TestLineTimestampAndCaret:
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         workspace._settings.set("tcp_shell.log_dir", str(tmp_path / "shell-logs"))
         workspace._log_check.setChecked(True)
-        workspace._on_rx_payload(b"payload\r\n")
+        workspace.feed_rx(b"payload\r\n")
         content = next((tmp_path / "shell-logs").glob("*.log")).read_text(encoding="utf-8")
         # 日志文件保持纯设备文本：不写入本地时间戳（\r 归一换行是既有日志合同）。
         assert "payload" in content
@@ -236,15 +236,15 @@ class TestLineTimestampAndCaret:
     ):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         # 制造残留状态：半个 ANSI 序列、挂起 \r、SGR 颜色、已盖时间戳的行
-        workspace._on_rx_payload(b"\x1b[32mcolored\r")
-        assert workspace._line_stamped is True
+        workspace.feed_rx(b"\x1b[32mcolored\r")
+        assert workspace._screen.row.timestamp
         workspace._on_clear_terminal()
         assert workspace._terminal.toPlainText() == ""
-        assert workspace._line_stamped is False
-        assert workspace._sgr_foreground is None
-        assert workspace._pending_cr is False
+        assert workspace._screen.row.timestamp == ""
+        assert workspace._screen.style.foreground is None
+        assert workspace._screen.column == 0
         # 清屏后新行照常带时间戳，且不残留旧颜色/覆盖语义
-        workspace._on_rx_payload(b"fresh line\r\n")
+        workspace.feed_rx(b"fresh line\r\n")
         lines = [line for line in workspace._terminal.toPlainText().split("\n") if line]
         assert len(lines) == 1
         assert _LINE_STAMP.match(lines[0])
@@ -590,9 +590,9 @@ class TestTabKeyDelivery:
 
 class TestSgrColourRendering:
     def test_decoder_splits_sgr_tokens_and_buffers_partial_escape(self):
-        from satellite_debug_tool.ui.tcp_shell_workspace import _TerminalDecoder
+        from satellite_debug_tool.core.tcp_shell.terminal import TerminalStreamDecoder
 
-        decoder = _TerminalDecoder()
+        decoder = TerminalStreamDecoder()
         tokens = decoder.feed(b"\x1b[32mOK\x1b[0m")
         assert tokens == [("sgr", "32"), ("text", "OK"), ("sgr", "0")]
         # ESC 序列被 TCP 拆开时，尾巴缓冲到下一包
@@ -609,7 +609,7 @@ class TestSgrColourRendering:
         from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
 
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"plain \x1b[32mgreen\x1b[0m tail")
+        workspace.feed_rx(b"plain \x1b[32mgreen\x1b[0m tail")
         cursor = workspace._terminal.textCursor()
         stamp = _TIMESTAMP_LEN  # 行首时间戳占位，设备文本整体右移
         cursor.setPosition(stamp + 6, cursor.MoveMode.MoveAnchor)  # "green" 起始位置
@@ -623,7 +623,7 @@ class TestSgrColourRendering:
         from satellite_debug_tool.ui.tcp_shell_workspace import _TIMESTAMP_LEN
 
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"\x1b[1mB\x1b[0mn")
+        workspace.feed_rx(b"\x1b[1mB\x1b[0mn")
         cursor = workspace._terminal.textCursor()
         stamp = _TIMESTAMP_LEN
         cursor.setPosition(stamp + 0, cursor.MoveMode.MoveAnchor)
@@ -648,7 +648,7 @@ class TestSgrColourRendering:
         self, qapplication_session, tmp_path, monkeypatch
     ):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"a\tb\r\n")
+        workspace.feed_rx(b"a\tb\r\n")
         assert "a    b" in workspace._terminal.toPlainText()
 
 class TestBootProgressBar:
@@ -656,9 +656,9 @@ class TestBootProgressBar:
 
     def test_progress_bar_frames_overwrite_one_line(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"\r[=====                                             ]  10%")
-        workspace._on_rx_payload(b"\r[==========================                        ]  50%")
-        workspace._on_rx_payload(b"\r[==================================================] 100%\n")
+        workspace.feed_rx(b"\r[=====                                             ]  10%")
+        workspace.feed_rx(b"\r[==========================                        ]  50%")
+        workspace.feed_rx(b"\r[==================================================] 100%\n")
         text = workspace._terminal.toPlainText()
         assert "10%" not in text
         assert "50%" not in text
@@ -667,16 +667,16 @@ class TestBootProgressBar:
     def test_packet_boundary_keeps_cr_undecided(self, qapplication_session, tmp_path, monkeypatch):
         """包尾 "\r" 不提前进入覆盖模式；下一包是文本才覆盖，是 "\n" 则换行。"""
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"abc\r")
-        workspace._on_rx_payload(b"xy")
+        workspace.feed_rx(b"abc\r")
+        workspace.feed_rx(b"xy")
         text = workspace._terminal.toPlainText()
         assert "abc" not in text
         assert "xyc" in text
 
     def test_packet_boundary_cr_then_lf_still_breaks_line(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"first\r")
-        workspace._on_rx_payload(b"\nsecond\r\n")
+        workspace.feed_rx(b"first\r")
+        workspace.feed_rx(b"\nsecond\r\n")
         lines = [_strip_stamp(line) for line in workspace._terminal.toPlainText().split("\n")]
         assert "first" in lines
         assert "second" in lines
@@ -687,9 +687,9 @@ class TestEraseLineContract:
     丢弃 EL 会使提示符尾部逐帧累积（"每次进度多一个 /$ root:"）。"""
 
     def test_decoder_emits_el_tokens(self):
-        from satellite_debug_tool.ui.tcp_shell_workspace import _TerminalDecoder
+        from satellite_debug_tool.core.tcp_shell.terminal import TerminalStreamDecoder
 
-        decoder = _TerminalDecoder()
+        decoder = TerminalStreamDecoder()
         tokens = decoder.feed(b"root:/$ \x1b[2K\r\r[== 50%")
         assert ("el", "2") in tokens
         assert ("text", "root:/$ ") in tokens
@@ -700,8 +700,8 @@ class TestEraseLineContract:
     ):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         # 两帧真实进度序列（含提示符前缀与 EL2 清行）
-        workspace._on_rx_payload(b"root:/$ \x1b[2K\r\r[==                        ]  50%")
-        workspace._on_rx_payload(b"root:/$ \x1b[2K\r\r[=========================  ]  51%")
+        workspace.feed_rx(b"root:/$ \x1b[2K\r\r[==                        ]  50%")
+        workspace.feed_rx(b"root:/$ \x1b[2K\r\r[=========================  ]  51%")
         text = workspace._terminal.toPlainText()
         assert "root:/$" not in text
         assert "[=========================  ]  51%" in text
@@ -711,7 +711,7 @@ class TestEraseLineContract:
         self, qapplication_session, tmp_path, monkeypatch
     ):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(
+        workspace.feed_rx(
             b"root:/$ \x1b[2K\r\x1b[32m[2006-01-01 08:25:01] I raw_fw:\x1b[39m "
             b"raw_fw: download region prepared (pre-erased)\r\n"
         )
@@ -721,7 +721,7 @@ class TestEraseLineContract:
 
     def test_el0_erases_to_end_of_line(self, qapplication_session, tmp_path, monkeypatch):
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
-        workspace._on_rx_payload(b"abcdef\r\x1b[0Kxy")
+        workspace.feed_rx(b"abcdef\r\x1b[0Kxy")
         text = workspace._terminal.toPlainText()
         assert "abcdef" not in text
         assert "xy" in text
@@ -739,7 +739,7 @@ class TestSessionLog:
         log_dir = tmp_path / "shell-logs"
         self._enable_logging(workspace, log_dir)
 
-        workspace._on_rx_payload(
+        workspace.feed_rx(
             b"root:/$ \x1b[32m[TS] I mod:\x1b[39m message\r\nnext line\r\n"
         )
         logs = list(log_dir.glob("192.168.1.12_*.log"))
@@ -756,10 +756,10 @@ class TestSessionLog:
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         log_dir = tmp_path / "shell-logs"
         self._enable_logging(workspace, log_dir)
-        workspace._on_rx_payload(b"first\r\n")
+        workspace.feed_rx(b"first\r\n")
         log_file = next(log_dir.glob("*.log"))
         workspace._log_check.setChecked(False)
-        workspace._on_rx_payload(b"second\r\n")
+        workspace.feed_rx(b"second\r\n")
         content = log_file.read_text(encoding="utf-8")
         assert "first" in content
         assert "second" not in content
@@ -772,7 +772,7 @@ class TestSessionLog:
         log_dir = tmp_path / "shell-logs"
         self._enable_logging(workspace, log_dir)
         workspace._hex_check.setChecked(True)
-        workspace._on_rx_payload(b"payload\r\n")
+        workspace.feed_rx(b"payload\r\n")
         content = next(log_dir.glob("*.log")).read_text(encoding="utf-8")
         assert "payload" in content
 
@@ -782,7 +782,7 @@ class TestSessionLog:
         workspace = make_workspace(qapplication_session, tmp_path, monkeypatch)
         log_dir = tmp_path / "shell-logs"
         self._enable_logging(workspace, log_dir)
-        workspace._on_rx_payload(b"tail\r\n")
+        workspace.feed_rx(b"tail\r\n")
         workspace.shutdown()
         assert workspace._log_writer is None
         assert "tail" in next(log_dir.glob("*.log")).read_text(encoding="utf-8")

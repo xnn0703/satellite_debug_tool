@@ -59,3 +59,28 @@ def unwrap_u32_series(timestamps_ms: Iterable[int]) -> tuple[np.ndarray, np.ndar
         np.asarray(unwrapped, dtype=np.float64),
         np.asarray(accepted, dtype=np.int64),
     )
+
+
+class U32UptimeMapper:
+    """Map u32 uptime values near a high-water mark while tolerating reordering."""
+
+    def __init__(self) -> None:
+        self._high_watermark: Optional[int] = None
+
+    def add(self, timestamp_ms: int) -> int:
+        raw = int(timestamp_ms) & (U32_MODULUS - 1)
+        if self._high_watermark is None:
+            self._high_watermark = raw
+            return raw
+        epoch = self._high_watermark - (self._high_watermark % U32_MODULUS)
+        candidates = (
+            epoch + raw,
+            epoch + raw - U32_MODULUS,
+            epoch + raw + U32_MODULUS,
+        )
+        mapped = min(candidates, key=lambda value: abs(value - self._high_watermark))
+        if mapped < 0:
+            mapped += U32_MODULUS
+        if mapped > self._high_watermark:
+            self._high_watermark = mapped
+        return mapped

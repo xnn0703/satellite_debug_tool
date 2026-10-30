@@ -45,6 +45,7 @@ class CustomerEndpointSessionBundle:
     ) -> None:
         self.endpoint = normalize_customer_endpoint(endpoint)
         self._settings = settings
+        self._fixture_telemetry = fixture_telemetry
         self._operations = edition_of(settings) is Edition.OPS
         self._status_sink = status_sink
         self._facts_changed = facts_changed
@@ -195,6 +196,7 @@ class CustomerEndpointSessionBundle:
                     external_power_store=self._external_power_store,
                     external_power_presenter=self._show_external_power,
                     enable_external_power=self._operations,
+                    fixture_telemetry=self._fixture_telemetry if self._operations else None,
                 )
             )
         return self._overview
@@ -452,9 +454,9 @@ class CustomerEndpointSessionBundleFactory(QObject):
     ) -> None:
         super().__init__(parent)
         self._settings = settings
+        self._fixture_telemetry = fixture_telemetry
         self._operations = edition_of(settings) is Edition.OPS
         self._session_directory = session_directory
-        self._fixture_telemetry = fixture_telemetry
         self._status_sink = status_sink
         self._external_power_store = external_power_store
         self._external_power_presenter = external_power_presenter

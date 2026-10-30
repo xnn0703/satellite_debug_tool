@@ -33,6 +33,7 @@ from .frame_v2 import (
     FRAME_HEADER_0,
     FRAME_HEADER_1,
     Heartbeat,
+    InsTraceRecord,
     MAX_DATA_LENGTH,
     MOUNT_STATUS_VALID_ANGLES,
     MOUNT_STATUS_VALID_CONTRACT,
@@ -1440,6 +1441,7 @@ def decode_profile_semantics(data: bytes) -> ProfileSemanticsReport:
 
 __all__ = [
     "CodecError",
+    "decode_ins_trace",
     "build_frame", "build_control",
     "build_debug_enable_v2",
     "build_request_meta_info", "build_request_channel_define",
@@ -1473,3 +1475,81 @@ __all__ = [
     "decode_service_capabilities", "decode_service_control_response",
     "decode_orbit_report",
 ]
+
+
+def decode_ins_trace(data: bytes) -> InsTraceRecord:
+    """解码 schema1 固定长度 INS 工程记录，不将诊断中的 NaN 伪造成有效测量。"""
+    header = struct.Struct("<4BIIQQI")
+    if len(data) < header.size:
+        raise CodecError("INS_TRACE header truncated")
+    schema, kind, source, health, seq, source_seq, timestamp_us, received_us, flags = header.unpack_from(data)
+    lengths = {1: 68, 2: 100, 3: 196, 4: 80, 5: 192}
+    masks = {1: 1, 2: 15, 3: 15, 4: 3, 5: 15}
+    if schema != 1 or kind not in lengths:
+        raise CodecError("INS_TRACE unsupported schema or kind")
+    if len(data) != lengths[kind] or flags & ~masks[kind]:
+        raise CodecError("INS_TRACE invalid length or flags")
+    values: dict[str, object] = {}
+    if kind == 1:
+        mode, time_quality, mount, dt, temperature, *axes = struct.unpack_from("<BBH8f", data, 32)
+        if mode not in (0, 1):
+            raise CodecError("INS_TRACE invalid IMU sample type")
+        values = {"sample_type": mode, "time_quality": time_quality, "mount_rot": mount,
+                  "dt_s": dt, "temperature_c": temperature,
+                  "gyro_rad_s" if mode == 0 else "delta_ang_rad": tuple(axes[:3]),
+                  "accel_m_s2" if mode == 0 else "delta_vel_m_s": tuple(axes[3:])}
+    elif kind == 2:
+        lat, lon, *items = struct.unpack_from("<dd12f4B", data, 32)
+        names = ("alt_m", "height_ellipsoid_m", "pos_h_std_m", "pos_v_std_m", "vel_n_ms", "vel_e_ms",
+                 "vel_d_ms", "speed_ms", "vel_h_std_ms", "vel_v_std_ms", "cog_rad", "cog_std_rad",
+                 "fix_class", "raw_fix_type", "raw_fix_flags", "num_svs")
+        values = {"lat_deg": lat, "lon_deg": lon, **dict(zip(names, items))}
+    elif kind == 3:
+        floats = struct.unpack_from("<23f", data, 32)
+        values = {"q_body_to_nav": tuple(floats[:4]), "att_std_deg": tuple(floats[4:7]),
+                  "gyro_bias_dps": tuple(floats[7:10]), "bg_std_dps": tuple(floats[10:13]),
+                  "accel_bias_m_s2": tuple(floats[13:16])}
+        evidence_names = ("stationary_gyro_mean_dps", "stationary_gyro_std_dps", "stationary_accel_mean_m_s2",
+                          "stationary_accel_std_m_s2", "displacement_m", "required_displacement_m", "delta_velocity_m_s")
+        values.update(zip(evidence_names, floats[16:]))
+        counter_names = ("zaru_update_count", "yaw_update_count", "zaru_settle_ms", "ins_update_mask",
+                         "motion_continuous_ms", "motion_excitation_count", "trace_dropped_records")
+        values.update(zip(counter_names, struct.unpack_from("<7I", data, 124)))
+        state_names = ("internal_ins_state", "stationary_reason", "zaru_gate_reason", "filter_update_status",
+                       "tilt_gate_reason", "motion_reason", "motion_flags", "yaw_regime", "gnss_pv_reject",
+                       "gnss_yaw_accepted", "gnss_yaw_reject", "stationary")
+        values.update(zip(state_names, struct.unpack_from("<12B", data, 152)))
+        direction_time, gnss_seq, forward, lateral, down, direction, assisted, valid, reserved = struct.unpack_from("<QI3f4B", data, 164)
+        if direction > 3 or assisted > 1 or valid > 1 or reserved != 0:
+            raise CodecError("INS_TRACE invalid direction metadata")
+        values.update({"direction_timestamp_us": direction_time, "direction_gnss_seq": gnss_seq,
+                       "longitudinal_m_s": forward, "lateral_m_s": lateral, "down_m_s": down,
+                       "direction": direction, "external_assisted": bool(assisted), "direction_valid": bool(valid)})
+        values["yaw_correction_sum_deg"] = struct.unpack_from("<f", data, 192)[0]
+    elif kind == 4:
+        target, epoch, rf_time_ms, obs_type, ownership, reject, reserved, *items = struct.unpack_from("<3I4B7fI", data, 32)
+        if reserved != 0:
+            raise CodecError("INS_TRACE invalid RF reserved byte")
+        names = ("value_rad", "variance_rad2", "innovation_rad", "applied_rad", "beam_az_deg", "beam_el_deg",
+                 "snr_db", "internal_shadow_correction_sequence")
+        values = {"target_generation": target, "authority_epoch": epoch, "rf_measurement_timestamp_ms": rf_time_ms, "source_command_seq": source_seq,
+                  "type": obs_type, "state_ownership": ownership, "reject": reject, **dict(zip(names, items))}
+    else:
+        groups = []
+        for index, name in enumerate(("horizontal_position", "vertical_position", "horizontal_velocity", "vertical_velocity")):
+            time_ms, nis, residual, std, updates, rejects, status, recovery, group_source, reserved = struct.unpack_from("<I3f2I4B", data, 32 + 28 * index)
+            if reserved != 0:
+                raise CodecError("INS_TRACE invalid update reserved byte")
+            groups.append({"name": name, "timestamp_ms": time_ms, "nis": nis, "residual_norm": residual,
+                           "effective_std": std, "update_count": updates, "reject_count": rejects,
+                           "status": status, "recovery_reason": recovery, "source": group_source})
+        values["gnss_groups"] = tuple(groups)
+        names = ("raw_gyro_bias_gain_max", "effective_gyro_bias_gain_max", "imu_delta_velocity_m_s", "imu_coverage_ratio",
+                 "last_zaru_bias_gain_max", "last_zaru_effective_noise_dps")
+        values.update(zip(names, struct.unpack_from("<6f", data, 144)))
+        names = ("numeric_fault_count", "covariance_repair_count", "zaru_update_count", "tilt_update_count")
+        values.update(zip(names, struct.unpack_from("<4I", data, 168)))
+        names = ("last_measurement", "last_update_status", "last_zaru_update_status", "last_numeric_reason")
+        values.update(zip(names, struct.unpack_from("<4B", data, 184)))
+        values["yaw_correction_seq"] = struct.unpack_from("<I", data, 188)[0]
+    return InsTraceRecord(schema, kind, source, health, seq, source_seq, timestamp_us, received_us, flags, values)

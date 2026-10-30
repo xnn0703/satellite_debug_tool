@@ -257,6 +257,7 @@ class CustomerWorkspace(QWidget):
             self._settings,
             external_power_store=self._external_power_store,
             external_power_presenter=self._external_power_presenter,
+            fixture_telemetry=None if self._fixture_runtime is None else self._fixture_runtime.telemetry,
         )
         self._rf_control: Optional[CustomerRfControlView] = None
         self._iperf: Optional[QWidget] = None

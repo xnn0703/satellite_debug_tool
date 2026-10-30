@@ -8,11 +8,11 @@ from itertools import islice
 import math
 from pathlib import Path
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -672,6 +672,7 @@ class FixtureDebugWorkspace(QWidget):
         self._ms_last_error = ""
         self._recorder: Optional[FixtureSessionRecorder] = None
         self._finalizer: Optional[_SessionFinalizeThread] = None
+        self._finish_after_control: Optional[Callable[[], None]] = None
         self._session_accepting_frames = False
         self._evidence_ready = True
         self._session_origin_ns = time.monotonic_ns()
@@ -1264,6 +1265,8 @@ class FixtureDebugWorkspace(QWidget):
         self._ms_worker = worker
         self._reference_lease_handle = lease_handle
         self._ms_connected = False
+        if self._telemetry is not None:
+            self._telemetry.set_reference_connected(False)
         self._ms_last_error = ""
         self._latest_ins_quality = None
         self._serial_connect.setEnabled(False)
@@ -1274,6 +1277,8 @@ class FixtureDebugWorkspace(QWidget):
         worker = self._ms_worker
         self._ms_worker = None
         self._ms_connected = False
+        if worker is not None and self._telemetry is not None:
+            self._telemetry.set_reference_connected(False)
         self._qualification_start_pending = False
         self._ms_last_error = ""
         self._latest_ins_quality = None
@@ -1287,8 +1292,13 @@ class FixtureDebugWorkspace(QWidget):
         self._serial_connect.setEnabled(True)
         self._ms_status.setText(tr("Reference disconnected"))
 
+    @Slot(bool, str)
     def _on_ms_connection_changed(self, connected: bool, port: str) -> None:
+        if self.sender() is not None and self.sender() is not self._ms_worker:
+            return
         self._ms_connected = bool(connected)
+        if self._telemetry is not None:
+            self._telemetry.set_reference_connected(connected)
         self._serial_connect.setEnabled(True)
         self._serial_connect.setText(
             tr("Disconnect reference") if connected else tr("Connect reference")
@@ -1308,9 +1318,14 @@ class FixtureDebugWorkspace(QWidget):
         )
         self._update_start_gate()
 
+    @Slot(str)
     def _on_ms_error(self, details: str) -> None:
+        if self.sender() is not None and self.sender() is not self._ms_worker:
+            return
         self._ms_last_error = str(details)
         self._ms_connected = False
+        if self._telemetry is not None:
+            self._telemetry.set_reference_connected(False)
         self._qualification_start_pending = False
         self._ms_status.setText(tr("Reference error: {details}", details=details))
         self._append_event(self._ms_status.text())
@@ -1325,6 +1340,8 @@ class FixtureDebugWorkspace(QWidget):
         if worker is self._ms_worker:
             self._ms_worker = None
             self._ms_connected = False
+            if self._telemetry is not None:
+                self._telemetry.set_reference_connected(False)
             self._qualification_start_pending = False
             self._serial_connect.setText(tr("Connect reference"))
             self._serial_connect.setEnabled(True)
@@ -1358,7 +1375,10 @@ class FixtureDebugWorkspace(QWidget):
                 )
             )
 
+    @Slot(object)
     def _on_ms_frame(self, envelope: Ms6222FrameEnvelope) -> None:
+        if self.sender() is not None and self.sender() is not self._ms_worker:
+            return
         recorder = self._recorder
         if recorder is not None and self._session_accepting_frames:
             try:
@@ -1373,6 +1393,12 @@ class FixtureDebugWorkspace(QWidget):
         record = envelope.record
         if not isinstance(record, Ms6222InsRecord):
             return
+        if self._telemetry is not None:
+            self._telemetry.publish_reference_attitude(
+                host_monotonic_ns=envelope.host_monotonic_ns,
+                roll_deg=record.roll_deg, pitch_deg=record.pitch_deg,
+                yaw_deg=record.yaw_deg, gnss_state=record.gnss_state,
+            )
         self._latest_ins_quality = (
             int(record.gnss_state),
             int(record.fix_type),
@@ -2470,10 +2496,11 @@ class FixtureDebugWorkspace(QWidget):
             self._finalizer = finalizer
             finalizer.start()
 
+        self._finish_after_control = finalize_after_control
         if control.isRunning():
             control.finished.connect(
-                finalize_after_control,
-                Qt.ConnectionType.SingleShotConnection,
+                self._on_control_stopped,
+                Qt.ConnectionType.QueuedConnection,
             )
             control.shutdown()
         else:
@@ -2482,6 +2509,12 @@ class FixtureDebugWorkspace(QWidget):
             self._append_event_display(tr("Finalizing incomplete fixture session..."))
         else:
             self._append_event(tr("Finishing session and calculating engineering metrics..."))
+
+    @Slot()
+    def _on_control_stopped(self) -> None:
+        """工作线程结束后，由主线程推进证据收尾与页面状态。"""
+        if self.sender() is self._control and self._finish_after_control is not None:
+            self._finish_after_control()
 
     def _on_session_finalized(self, result) -> None:
         if self._qualification_export_pending:
@@ -2518,6 +2551,7 @@ class FixtureDebugWorkspace(QWidget):
         self._release_session_state()
 
     def _release_session_state(self) -> None:
+        self._finish_after_control = None
         self._control = None
         self._recorder = None
         self._finalizer = None

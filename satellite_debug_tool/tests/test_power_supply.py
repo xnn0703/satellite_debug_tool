@@ -93,6 +93,129 @@ class FakeMonotonicClock:
         self.now_ns += int(elapsed * 1_000_000_000)
 
 
+def _off_observation() -> list[tuple[str, str | None]]:
+    return [
+        ("OUTP?", "0"), ("MEAS:ALL?", "0.01,0.00"),
+        ("STAT:OPER:COND?", "0"), ("STAT:QUES:COND?", "0"),
+        ("OUTP:PROT:TRIP?", "0"),
+    ]
+
+
+def _enable_preflight() -> list[tuple[str, str | None]]:
+    return _off_observation() + [("SOUR:VOLT?", "14"), ("SOUR:CURR?", "2")]
+
+
+def _preparation_script() -> list[tuple[str, str | None]]:
+    return [
+        ("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70"),
+        ("OUTP 0", None), ("OUTP?", "0"), ("MEAS:ALL?", "0.01,0.00"),
+        ("SOUR:VOLT 14", None), ("SOUR:CURR 2", None), ("*OPC?", "1"),
+        ("SOUR:VOLT?", "14"), ("SOUR:CURR?", "2"),
+        ("SYST:ERR?", '0,"No error"'), ("STAT:OPER:COND?", "0"),
+        ("STAT:QUES:COND?", "0"), ("OUTP:PROT:TRIP?", "0"),
+    ]
+
+
+def _prepared_adapter(
+    followup: list[tuple[str, str | None]],
+) -> tuple[GwInstekPswAdapter, ScriptedTransport]:
+    adapter, transport = _adapter(_preparation_script() + followup)
+    adapter.connect()
+    adapter.prepare_output_off(fixture_action_id="PREPARE")
+    return adapter, transport
+
+
+@pytest.mark.parametrize("poll_count", [1, 5])
+def test_output_enable_survives_background_polling(poll_count: int) -> None:
+    adapter, transport = _prepared_adapter([
+        *(_off_observation() * poll_count), *_enable_preflight(),
+        ("OUTP 1", None), ("OUTP?", "1"), ("MEAS:ALL?", "14,0"),
+        ("STAT:OPER:COND?", "0"), ("STAT:QUES:COND?", "0"),
+        ("OUTP:PROT:TRIP?", "0"),
+    ])
+    for _ in range(poll_count):
+        assert adapter.inspect().state == PowerSupplyState.READY_OFF
+    assert adapter.enable_output(fixture_action_id="ENABLE").state == PowerSupplyState.ON_CONFIRMED
+    assert transport.commands.count("OUTP 1") == 1
+    assert not transport.script
+
+
+@pytest.mark.parametrize("field", ["voltage", "current"])
+def test_output_enable_rechecks_panel_setpoints_and_revokes_configuration(field: str) -> None:
+    preflight = _enable_preflight()
+    if field == "voltage":
+        preflight[-2:] = [("SOUR:VOLT?", "24")]
+    else:
+        preflight[-1:] = [("SOUR:CURR?", "5")]
+    adapter, transport = _prepared_adapter(preflight + _off_observation())
+    with pytest.raises(PowerSupplyError, match=f"{field} setpoint readback"):
+        adapter.enable_output(fixture_action_id="ENABLE")
+    assert adapter.inspect().state == PowerSupplyState.OFF_CONFIRMED
+    with pytest.raises(PowerSupplyError, match="configuration must be verified"):
+        adapter.enable_output(fixture_action_id="RETRY")
+    assert "OUTP 1" not in transport.commands
+    assert not transport.script
+
+
+def test_output_enable_rechecks_protection_before_sending() -> None:
+    observed = _off_observation()
+    observed[-1] = ("OUTP:PROT:TRIP?", "1")
+    adapter, transport = _prepared_adapter(observed + _off_observation())
+    with pytest.raises(PowerSupplyError, match="protection or questionable"):
+        adapter.enable_output(fixture_action_id="ENABLE")
+    assert adapter.state == PowerSupplyState.PROTECTION_TRIPPED
+    assert adapter.inspect().state == PowerSupplyState.OFF_CONFIRMED
+    with pytest.raises(PowerSupplyError, match="configuration must be verified"):
+        adapter.enable_output(fixture_action_id="RETRY")
+    assert "OUTP 1" not in transport.commands
+
+
+@pytest.mark.parametrize("output,voltage", [("1", "14"), ("0", "8")])
+def test_output_enable_requires_fresh_off_measurement(output: str, voltage: str) -> None:
+    observed = _off_observation()
+    observed[:2] = [("OUTP?", output), ("MEAS:ALL?", f"{voltage},0")]
+    adapter, transport = _prepared_adapter(observed)
+    with pytest.raises(PowerSupplyError, match="confirm output OFF"):
+        adapter.enable_output(fixture_action_id="ENABLE")
+    assert "OUTP 1" not in transport.commands
+
+
+def test_output_observation_alone_does_not_authorize_enable() -> None:
+    adapter, transport = _adapter([
+        ("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70"), *_off_observation(),
+    ])
+    adapter.connect()
+    assert adapter.inspect().state == PowerSupplyState.OFF_CONFIRMED
+    with pytest.raises(PowerSupplyError, match="configuration must be verified"):
+        adapter.enable_output(fixture_action_id="ENABLE")
+    assert "OUTP 1" not in transport.commands
+
+
+def test_reconnect_revokes_previous_configuration() -> None:
+    adapter, transport = _prepared_adapter([
+        ("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70"), *_off_observation(),
+    ])
+    adapter.connect()
+    assert adapter.connection_generation == 2
+    assert adapter.inspect().state == PowerSupplyState.OFF_CONFIRMED
+    with pytest.raises(PowerSupplyError, match="configuration must be verified"):
+        adapter.enable_output(fixture_action_id="ENABLE")
+    assert "OUTP 1" not in transport.commands
+
+
+@pytest.mark.parametrize("response", [None, "bad"])
+def test_poll_failure_revokes_previous_configuration(response: str | None) -> None:
+    adapter, transport = _prepared_adapter([("OUTP?", response), *_off_observation()])
+    transport.fail_read = response is None
+    with pytest.raises(PowerSupplyError):
+        adapter.inspect()
+    transport.fail_read = False
+    assert adapter.inspect().state == PowerSupplyState.OFF_CONFIRMED
+    with pytest.raises(PowerSupplyError, match="configuration must be verified"):
+        adapter.enable_output(fixture_action_id="ENABLE")
+    assert "OUTP 1" not in transport.commands
+
+
 def test_psw80_27_policy_derives_limits_from_requested_setpoints() -> None:
     policy = psw80_27_validation_policy(12.0, 1.0)
 
@@ -207,6 +330,7 @@ def test_prepare_enable_and_disable_require_closed_loop_evidence() -> None:
         ("STAT:OPER:COND?", "0"),
         ("STAT:QUES:COND?", "0"),
         ("OUTP:PROT:TRIP?", "0"),
+        *_enable_preflight(),
         ("OUTP 1", None),
         ("OUTP?", "1"),
         ("MEAS:ALL?", "14.02,1.31"),
@@ -234,7 +358,7 @@ def test_prepare_enable_and_disable_require_closed_loop_evidence() -> None:
     assert enabled.measurement.voltage_v == pytest.approx(14.02)
 
     disabled = adapter.disable_output(fixture_action_id="PWR-002")
-    assert disabled.state == PowerSupplyState.OFF_CONFIRMED
+    assert disabled.state == PowerSupplyState.READY_OFF
     assert disabled.evidence_level == PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED
     assert not transport.script
     assert all(record.connection_generation == 1 for record in adapter.records)
@@ -257,6 +381,7 @@ def test_output_on_waits_for_voltage_ramp_before_confirming() -> None:
             ("STAT:OPER:COND?", "0"),
             ("STAT:QUES:COND?", "0"),
             ("OUTP:PROT:TRIP?", "0"),
+            *_enable_preflight(),
             ("OUTP 1", None),
             ("OUTP?", "1"),
             ("MEAS:ALL?", "-0.003,0.897"),
@@ -364,6 +489,7 @@ def test_output_on_reports_last_voltage_after_settle_timeout() -> None:
             ("STAT:OPER:COND?", "0"),
             ("STAT:QUES:COND?", "0"),
             ("OUTP:PROT:TRIP?", "0"),
+            *_enable_preflight(),
             ("OUTP 1", None),
             *status_cycle,
             *status_cycle,
@@ -408,6 +534,7 @@ def test_output_on_stops_stabilization_when_protection_trips() -> None:
             ("STAT:OPER:COND?", "0"),
             ("STAT:QUES:COND?", "0"),
             ("OUTP:PROT:TRIP?", "0"),
+            *_enable_preflight(),
             ("OUTP 1", None),
             ("OUTP?", "1"),
             ("MEAS:ALL?", "0.819,0.000"),
@@ -435,7 +562,7 @@ def test_output_on_requires_ready_state_and_action_id() -> None:
         [("*IDN?", "GW-INSTEK,PSW 80-27,PSW1234,1.70")]
     )
     adapter.connect()
-    with pytest.raises(PowerSupplyError, match="READY_OFF"):
+    with pytest.raises(PowerSupplyError, match="configuration must be verified"):
         adapter.enable_output(fixture_action_id="PWR-001")
 
 
