@@ -121,4 +121,3 @@ def test_framing_chunk_split_and_sdb_round_trip(tmp_path):
     assert ProductServiceStore().feed(result[0]) is False
     playback = build_engineering_playback(path)
     playback.close()
-

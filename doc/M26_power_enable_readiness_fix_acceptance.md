@@ -10,4 +10,3 @@
 - [x] adapter 与 PswControlledSession/worker 路径均覆盖 prepare → poll → enable；Customer 与独立调试专项用例通过，Production 使用同一 adapter，全量结果见开发记录。
 - [x] 电源相关及全量 pytest 通过（1745 passed in 220.25s）；翻译 check 通过，本轮未改 UI 翻译源文案。
 - [ ] 真机：192.168.1.16 上应用 24 V / 5 A，等待多个轮询周期，人工确认开启；分别记录 OUTP 回读、测量电压与保护状态。真机验证由用户执行，软件测试通过不代替物理输出证明。
-
