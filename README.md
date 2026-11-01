@@ -1,6 +1,6 @@
 # 卫通终端管理工具 / Satellite Terminal Manager
 
-卫星通信相控阵设备上位机，基于 PySide6，统一承载客户操作、内部工程诊断和批量试产。客户交付名称为“卫通终端管理工具 / Satellite Terminal Manager”。
+卫星通信相控阵设备上位机，基于 PySide6，统一承载客户操作、内部工程诊断和自动化测试。客户交付名称为“卫通终端管理工具 / Satellite Terminal Manager”。
 
 当前工程架构、运行约定和验证要求以根目录 [`AGENTS.md`](AGENTS.md) 为唯一权威入口。
 
@@ -13,11 +13,22 @@
 - 数据录制与回放：流式 `.sdb v2/v3` 导入，磁盘型 `PlaybackSeriesProvider` 按时间窗口和像素预算读取大文件
 - WindTerm 日志解析：`.log` 转虚拟 profile + 曲线
 - 设备管理：设备信息、参数表读写、工程 OTA，以及客户签名固件包 OTA
-- 批量试产：产品隔离的 recipe、设备身份门禁、批次状态与 SDB 证据；正式工艺阈值和量产放行仍需独立验收
+- 自动化测试：产品隔离的 recipe、设备身份门禁、批次状态与 SDB 证据；正式工艺阈值和量产放行仍需独立验收
 - 离线地图：Playback / Log 检测 `gps_lat` / `gps_lon` 后显示轨迹和事件 marker
 - 应用更新：仅运维版使用 TUF 签名更新源；Windows 可自动安装，macOS 校验下载包后由用户手动替换。客户版通过人工完整包交付，不提供应用在线更新。设备固件 OTA 与应用更新分开
 - 国际化：跟随系统 / 简体中文 / English，运行时即时切换
 - 主题：深色 / 深色高对比 / 浅色
+
+## 完整包下载（v1.9.0）
+
+客户版使用产品本名，全量运维版保留 Ops 标识。完整包从阿里云直接下载，包含所需运行环境，无需安装 Python。
+
+| 平台 | 客户版 | 全量运维版 |
+|---|---|---|
+| Windows x86_64（10.0.19041 起） | [下载](https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-windows-x86_64-v1.9.0.7z?build=a867cfed9da78186db33d67b4a389279e2d8dfa7) | [下载](https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z?build=a867cfed9da78186db33d67b4a389279e2d8dfa7) |
+| macOS 14+ Apple Silicon | [下载](https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-macos-arm64-v1.9.0.zip?build=a867cfed9da78186db33d67b4a389279e2d8dfa7) | [下载](https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip?build=a867cfed9da78186db33d67b4a389279e2d8dfa7) |
+
+[SHA-256 校验和](https://60.205.157.141/downloads/v1.9.0/SHA256SUMS.txt) · [逐包验证记录](doc/M53_release_validation.json)。首次从旧版迁移请退出旧程序，再解压到独立目录或替换 Mac 应用。当前 Windows 包未做系统代码签名，Mac 使用 ad-hoc 签名，尚未完成 Apple 公证。
 
 ## 安装与运行
 
@@ -34,7 +45,7 @@ pip3 install -r satellite_debug_tool/requirements.txt
 # 必须使用 -m 方式运行
 python3 -m satellite_debug_tool.main
 
-# 启动即进入批量试产工作区
+# 启动即进入自动化测试工作区
 python3 -m satellite_debug_tool.main --production
 
 # 或先安装 editable 包

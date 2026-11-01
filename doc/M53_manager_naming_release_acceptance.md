@@ -19,3 +19,5 @@
 - 连续普通文本追加的 Cell 构造次数不超过新增可见格数，等值单元在同一 Screen 内复用；每个 Screen 的池最多4096项，reset 清理自身池，各 Screen 保持独立，外部持有池构造器时 Screen 仍可释放。组合字累积字符串由 replace 形成当前单元快照。保留字形、样式、光标、列容量及换行/淘汰结果；5000行对象内存按实际分配测量，避免通过读取 `__dict__` 物化字典污染结论。终端边界回归与两平台真实帧/GC长尾分别记录，使用默认GC策略，满载帧150ms上限由真实测试断言验证。
 
 - 客户目录/app 为 SatelliteTerminalManager / SatelliteTerminalManager.app，客户归档为 satellite_terminal_manager-{platform}-{arch}-v{version}.{extension}；运维版目录/app 保留 Ops、归档保留 -ops-，客户版本栏仅显示版本。命名、冻结入口、人工交付和 UI 回归均覆盖，先记录旧实现失败再确认修复通过。
+
+- 发布 CLI 的同一已认证 SSH owner 在长 HTTPS 回读期间维持协议活动，随后完整验证的 bundle 能提交 timestamp、清理发布锁并关闭会话；回读失败保留先前 channel，错误向调用者传播且连接完成关闭。通过模拟 14 分钟空闲阶段的旧失败/新通过回归，现网结果单独记录。

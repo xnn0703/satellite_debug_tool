@@ -15,7 +15,7 @@
 ```bash
 # 启动 GUI（必须用 -m，包内绝对 import）
 python3 -m satellite_debug_tool.main
-python3 -m satellite_debug_tool.main --production   # 解锁批量试产工作区（启动即进）
+python3 -m satellite_debug_tool.main --production   # 打开自动化测试工作区（启动即进）
 
 # 测试（无 editable install 时需要 PYTHONPATH；conftest 已设 offscreen + 静默更新）
 PYTHONPATH=. pytest satellite_debug_tool/tests
@@ -193,7 +193,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **开发验证方式（2026-10-23 用户确认）**：每轮修复默认验证源码并提供运行命令；用户完成功能验证、明确要求打包后，再执行本地打包或主动触发发行构建。
 
-- **M52 分发策略（2026-11-02 用户确认）**：Windows 保留 GitHub Actions 构建，Mac 本地发行命令构建，两端验证后自动上传阿里云 ECS 候选。user 通过公开完整包直链人工交付，不进入更新渠道；ops 使用可信在线更新，首轮 Windows 自动安装、Mac 校验下载后人工安装。首轮使用 ECS 公网 IP 的 HTTPS 入口，域名/OSS/CDN/内网 Runner 后续按需部署；上传候选与签名晋升分开。源码最低 Python 3.10（TUF 7），发行工具链固定 Python 3.11。计划、验收、实现与现场记录见 `doc/M52_*`。
+- **M52 分发策略（2026-11-02 用户确认）**：Windows 保留 GitHub Actions 构建，Mac 本地发行命令构建，两端验证后自动上传阿里云 ECS 候选。user 通过公开完整包直链人工交付，不进入更新渠道；ops 使用可信在线更新，首轮 Windows 自动安装、Mac 校验下载后人工安装。首轮使用 ECS 公网 IP 的 HTTPS 入口，域名/OSS/CDN/内网 Runner 后续按需部署；上传候选与签名晋升分开。源码最低 Python 3.10（TUF 7），打包工具链固定 Python 3.11。计划、验收、实现与现场记录见 `doc/M52_*`。
 
 - **M39 应用图标**：`ui/assets/icons/app_icon_master.png` 是已确认图稿，`scripts/generate_application_icons.py` 从母版生成 Windows 多尺寸 ICO、macOS ICNS 和实际尺寸预览。主程序/updater 的 Windows spec、macOS BUNDLE、QApplication 与顶栏共用该资源；运行时入口为 `ui/application_icon.py`。
 
@@ -203,8 +203,10 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **Windows 包合同**：ops `.7z` 归档根包含 `SatelliteTerminalManager.exe`、`updater.exe` 与 `_internal/`；user 完整包保留主程序及运行依赖、裁剪应用 updater 和在线源配置。上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷。旧版本 <=1.8.1 首次人工取得 v1.9.0 完整包迁入新站；历史包保持原样。
 - **CI**：`.github/workflows/build.yml` 用 Windows Runner 构建 user/ops。tag/dispatch 精确解析并 checkout 标签 SHA，测试与冻结 smoke 后生成不可变候选；两版成功后通过受保护的 `release-candidate` environment 上传 ECS 暂存区。普通分支/PR 只产出 artifact。工作流不创建 GitHub Release，不持有正式签名密钥。
 - **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、冻结 smoke 并上传候选；ops 客户端首轮支持可信检查和校验下载，安装由人员退出旧程序后替换应用。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
+- **v1.9.0 发行证据**：四包均来自不可变标签 SHA `a867cfed9da78186db33d67b4a389279e2d8dfa7`，Mac 双版及 Windows Actions 双版完成构建/冻结/归档验证；四份完整包已公开至阿里云，ops 两平台通过独立新缓存 TUF 验证。逐包 SHA、平台签名边界、真实硬件及 Windows 实机升级边界见 `doc/M53_release_validation.json`。后续文档和发布CLI保活修复保持这四包字节与标签不变。
 - **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.0`，发布状态以 M53 验证记录为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；Mac 本地使用 Python 3.11 调用 `scripts/release_macos.py` 构建并上传候选；四包校验后 ops 签名晋升 stable，user 公开完整包
+- **签名晋升连接**：`scripts/promote_release.py` 的唯一 SSH Transport 在认证后启用30秒协议保活，跨完整 HTTPS 回读保持 SFTP 控制连接；包摘要通过后才原子提交 timestamp。恢复同一 bundle 的遗留锁前，先确认旧发布进程已经停止并核对远端版本围栏。
 - **`release.config.json`** 配 `app_id/repo_id/channel`、HTTPS metadata/target 入口和内嵌 TUF 公钥 root；未配置时明确等待部署，不回退 GitHub。私钥和上传凭据保存在仓库外。
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
 
@@ -231,7 +233,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M39_application_icon_*.md` — 应用品牌图标、Windows/macOS/Qt 接入、资源生成与验收记录
 - `doc/M40_neutral_product_naming_*.md` — 客户交付中性命名、应用/打包/翻译范围、认证格式边界与验收记录
 - `doc/M41_combobox_text_layout_*.md` — 时间范围下拉框裁切根因、字体/列表委托/内容尺寸修复、回归与原生视觉证据
-- `doc/M42_user_operations_editions_*.md` — 用户版/运维版功能矩阵、装配与打包、独立配置与更新合同；用户已确认保留用户版独立固件升级，已完成实现与 macOS 双版构建验证，Windows 冻结与真机验收待执行
+- `doc/M42_user_operations_editions_*.md` — 用户版/运维版功能矩阵、装配与打包、独立配置与更新合同；用户已确认保留用户版独立固件升级；当前双平台冻结验证见 M53，真机验收独立记录
 - `doc/M43_shell_terminal_reliability_*.md` — Shell 单次流解码、终端状态模型与 ASCII 命令输入校验；现场输入法及设备交互待验证。
 - `doc/M47_production_execution_progress_*.md` — 自动化开始准备、固定工况窗口、SNR 判据与执行进度。
 - `doc/M48_production_layout_*.md` — 准备/运行布局、冻结槽位与统一进度呈现。
@@ -239,7 +241,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M50_automation_full_capture_*.md` — 自动化 support_full 协商、实际分析帧准入与恢复后收尾。
 - `doc/M51_automation_presets_workflow_reports_*.md` — 六项型号供电预置、默认录制目录、开始/下一批次流程和报告质量边界。
 - `doc/M52_*` — 双平台候选构建、ECS 上传、TUF 可信更新与签名晋升。
-- `doc/M53_manager_naming_release_*.md` — Manager 命名与 v1.9.0 四包发行计划、验收及本轮记录。
+- `doc/M53_manager_naming_release_*.md`、`doc/M53_release_validation.json` — Manager 命名与 v1.9.0 四包发行计划、验收、逐包摘要和实际发布状态。
 - `doc/M45_shell_terminal_throughput_*.md` — Shell 有界消费与按帧投影计划、验收与开发记录；含三轮评审合同修订与两次 P0 投影升级的实测依据（头删 O(文档) 归因、maximumBlockCount 接管、16 KiB 帧预算）。
 - `doc/M44_snr_time_axis_recovery_*.md` — 客户 SNR/温度历史的同连接采集代际恢复、u32/乱序准入、事务授权与回放断点证据。
 - `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构
@@ -250,8 +252,8 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/i18n_terms.md` — 中英术语表
 - `doc/user_manual.md` / `doc/user_manual_en.md` — M16 工程工作区历史操作手册；当前三工作区事实以本文件为准
 - `doc/customer_workspace_guide.md`（含 `_en` 版） — 当前客户工作区多设备操作指南：endpoint 目录、连接阶段语义与设备级测试边界
-- `doc/production_automation_operator_guide.md` — 当前试产工程预览的配置、夹具检查、批次、证据和报告操作指南，明确尚未接通的正式自动工况边界
+- `doc/production_automation_operator_guide.md` — 当前自动化测试的型号选择、自动开始、测试阶段、收尾、证据目录和报告操作指南；物理工位验收独立记录
 - `doc/M32_formal_production_fixture_closure_*.md` — 电源、摇摆台、MS-6222 完整工作站配置、M31 出货整备和正式自动工况收口计划、验收与开发记录
-- `doc/RELEASING.md` — 发版 SOP（含 tag 重发、hotfix、rc 预发）
+- `doc/RELEASING.md` — 当前发版 SOP：双平台候选、签名晋升、完整包交付及已公开版本不可变合同
 - `doc/AFD01_encrypted_firmware_package.md` — 客户 OTA 加密固件包格式
 - `BUILDING.md` — 打包可执行文件完整指南

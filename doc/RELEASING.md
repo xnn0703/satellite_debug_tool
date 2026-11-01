@@ -1,6 +1,6 @@
 # 卫通终端管理工具发行 SOP
 
-适用 M52/M53 发行链路。本轮规划 v1.9.0；本文件描述操作流程，不表示本轮已经发布成功。源码与 tag 使用 GitHub `github` 远端，Windows 使用 GitHub Actions，Mac 使用本地 Python 3.11，完整包和 ops 可信更新由阿里云 ECS HTTPS 服务分发。
+适用 M52/M53 发行链路。当前发行版本为 v1.9.0；本文件描述操作流程，逐包公开状态及验收结果见 [发行验证记录](M53_release_validation.json)。源码与 tag 使用 GitHub `github` 远端，Windows 使用 GitHub Actions，Mac 使用本地 Python 3.11，完整包和 ops 可信更新由阿里云 ECS HTTPS 服务分发。
 
 ## 版本与迁移合同
 

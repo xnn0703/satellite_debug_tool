@@ -1,0 +1,467 @@
+{
+  "schema": "satellite.release-validation/v1",
+  "version": "1.9.0",
+  "source_commit": "a867cfed9da78186db33d67b4a389279e2d8dfa7",
+  "tag": "v1.9.0",
+  "release_state": "published",
+  "application_name": {
+    "zh_CN": "卫通终端管理工具",
+    "en": "Satellite Terminal Manager"
+  },
+  "ci": {
+    "run_id": 41346531510,
+    "url": "https://github.com/xnn0703/satellite_debug_tool/actions/runs/41346531510",
+    "builds": "both success",
+    "upload": "success",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "source_tests": {
+    "macos": {
+      "passed": 2136,
+      "seconds": 285.09,
+      "log": "release/validation/a867cfed9da78186db33d67b4a389279e2d8dfa7/logs/m53-mac-release-a867cfe.log"
+    },
+    "windows": {
+      "user": {
+        "passed": 2131,
+        "skipped": 5,
+        "seconds": 547.06,
+        "log": "release/validation/a867cfed9da78186db33d67b4a389279e2d8dfa7/logs/m53-windows-a867-user.log"
+      },
+      "ops": {
+        "passed": 2131,
+        "skipped": 5,
+        "seconds": 856.54,
+        "log": "release/validation/a867cfed9da78186db33d67b4a389279e2d8dfa7/logs/m53-windows-a867-ops.log"
+      }
+    }
+  },
+  "translation_messages": 1496,
+  "shell_performance": {
+    "macos": {
+      "window_seconds": 8,
+      "consumed_bytes_per_second": 92160.0,
+      "frame_ms": {
+        "max": 25.699,
+        "mean": 12.887,
+        "p50": 17.355,
+        "p95": 19.847
+      },
+      "gc_by_generation": {
+        "0": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        },
+        "1": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        },
+        "2": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        }
+      },
+      "frame_limit_ms": 150,
+      "status": "PASS"
+    },
+    "windows_user": {
+      "window_seconds": 8,
+      "consumed_bytes_per_second": 92160.0,
+      "frame_ms": {
+        "max": 28.731,
+        "mean": 15.561,
+        "p50": 15.325,
+        "p95": 16.453
+      },
+      "gc_by_generation": {
+        "0": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        },
+        "1": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        },
+        "2": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        }
+      },
+      "frame_limit_ms": 150,
+      "status": "PASS"
+    },
+    "windows_ops": {
+      "window_seconds": 8,
+      "consumed_bytes_per_second": 92160.0,
+      "frame_ms": {
+        "max": 31.448,
+        "mean": 16.01,
+        "p50": 16.796,
+        "p95": 25.452
+      },
+      "gc_by_generation": {
+        "0": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        },
+        "1": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        },
+        "2": {
+          "count": 0,
+          "max_ms": 0.0,
+          "total_ms": 0.0
+        }
+      },
+      "frame_limit_ms": 150,
+      "status": "PASS"
+    }
+  },
+  "artifacts": [
+    {
+      "edition": "user",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "name": "satellite_terminal_manager-windows-x86_64-v1.9.0.7z",
+      "size": 56977018,
+      "sha256": "a61f9b20218b9ad6e04a9979e87cacb423a08d959d97abe96f0672b25a466746",
+      "build_id": "a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "system_signature": "unsigned",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "complete_archive": true,
+      "download_url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-windows-x86_64-v1.9.0.7z?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "publication": "published",
+      "minimum_os": "10.0.19041",
+      "smoke": {
+        "first_window_seconds": 0.509,
+        "initial_rss_bytes": 122134528,
+        "initial_thread_count": 12,
+        "edition": "user",
+        "version": "1.9.0",
+        "qpa_platform": "offscreen",
+        "pages": [
+          "overview",
+          "rf",
+          "playback",
+          "maintenance"
+        ],
+        "application_update_policy": "manual",
+        "application_update_modules": [],
+        "startup_seconds": 0.856,
+        "rss_bytes": 157700096,
+        "thread_count": 12,
+        "operations_modules": [],
+        "shell_dialog": "PASS",
+        "overview_panels": "PASS"
+      },
+      "public_alias_verification": {
+        "name": "satellite_terminal_manager-windows-x86_64-v1.9.0.7z",
+        "url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-windows-x86_64-v1.9.0.7z?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+        "tls_verification": "PASS",
+        "http_status": 206,
+        "content_range_total": 56977018,
+        "prefix_bytes": 4096,
+        "prefix_matches_verified_archive": "PASS"
+      },
+      "server_sha256": "PASS",
+      "manual_server_publication": "receipt, archive CRC, identity and SHA verified before immutable copy"
+    },
+    {
+      "edition": "ops",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "name": "satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z",
+      "size": 217292671,
+      "sha256": "b42cb768895a92e6e8092341c3ebae055e8183f538305776da877171f21e91f6",
+      "build_id": "a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "system_signature": "unsigned",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "complete_archive": true,
+      "download_url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "publication": "published",
+      "minimum_os": "10.0.19041",
+      "smoke": {
+        "first_window_seconds": 1.117,
+        "initial_rss_bytes": 151097344,
+        "initial_thread_count": 12,
+        "edition": "ops",
+        "version": "1.9.0",
+        "qpa_platform": "offscreen",
+        "pages": [
+          "overview",
+          "rf",
+          "iperf",
+          "playback",
+          "maintenance"
+        ],
+        "application_update_policy": "online",
+        "application_update_modules": [],
+        "startup_seconds": 2.309,
+        "rss_bytes": 207433728,
+        "thread_count": 12,
+        "operations_modules": [
+          "satellite_debug_tool.core.motion_platform.evidence",
+          "satellite_debug_tool.core.motion_platform.models",
+          "satellite_debug_tool.core.motion_platform.lingjing_protocol",
+          "satellite_debug_tool.core.motion_platform.controller",
+          "satellite_debug_tool.core.motion_platform.trajectory",
+          "satellite_debug_tool.core.motion_platform",
+          "satellite_debug_tool.ui.device_view",
+          "satellite_debug_tool.core.production.reporting",
+          "satellite_debug_tool.ui.production_workspace",
+          "satellite_debug_tool.ui.main_window",
+          "satellite_debug_tool.core.external_power_monitor",
+          "satellite_debug_tool.core.iperf_test"
+        ],
+        "shell_dialog": "PASS",
+        "overview_panels": "PASS"
+      },
+      "public_alias_verification": {
+        "name": "satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z",
+        "url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+        "tls_verification": "PASS",
+        "http_status": 206,
+        "content_range_total": 217292671,
+        "prefix_bytes": 4096,
+        "prefix_matches_verified_archive": "PASS"
+      },
+      "server_sha256": "PASS",
+      "public_tuf_target_full_https_sha256": "PASS",
+      "trusted_catalog_verification": "PASS",
+      "download_alias": "hard link to verified public TUF target"
+    },
+    {
+      "edition": "user",
+      "platform": "macos",
+      "architecture": "arm64",
+      "name": "satellite_terminal_manager-macos-arm64-v1.9.0.zip",
+      "size": 70550750,
+      "sha256": "4f0256dff9977f4e4de1ad2ad0b8ed00f83f836862e6613b312135a662095231",
+      "build_id": "a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "system_signature": "adhoc-verified",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "complete_archive": true,
+      "download_url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-macos-arm64-v1.9.0.zip?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "publication": "published",
+      "minimum_os": "14.0",
+      "smoke": {
+        "first_window_seconds": 1.345,
+        "initial_rss_bytes": 240435200,
+        "initial_thread_count": 16,
+        "edition": "user",
+        "version": "1.9.0",
+        "qpa_platform": "cocoa",
+        "pages": [
+          "overview",
+          "rf",
+          "playback",
+          "maintenance"
+        ],
+        "application_update_policy": "manual",
+        "application_update_modules": [],
+        "startup_seconds": 1.906,
+        "rss_bytes": 384122880,
+        "thread_count": 16,
+        "operations_modules": [],
+        "shell_dialog": "PASS",
+        "overview_panels": "PASS"
+      },
+      "public_alias_verification": {
+        "name": "satellite_terminal_manager-macos-arm64-v1.9.0.zip",
+        "url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-macos-arm64-v1.9.0.zip?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+        "tls_verification": "PASS",
+        "http_status": 206,
+        "content_range_total": 70550750,
+        "prefix_bytes": 4096,
+        "prefix_matches_verified_archive": "PASS"
+      },
+      "server_sha256": "PASS",
+      "manual_server_publication": "receipt, archive CRC, identity and SHA verified before immutable copy"
+    },
+    {
+      "edition": "ops",
+      "platform": "macos",
+      "architecture": "arm64",
+      "name": "satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip",
+      "size": 284273746,
+      "sha256": "5616a447a635347f4b967eb9a7fd5953d25acfbcb22c9de6005d7248255bad2c",
+      "build_id": "a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "system_signature": "adhoc-verified",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "complete_archive": true,
+      "download_url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+      "publication": "published",
+      "minimum_os": "14.0",
+      "smoke": {
+        "first_window_seconds": 2.743,
+        "initial_rss_bytes": 279937024,
+        "initial_thread_count": 16,
+        "edition": "ops",
+        "version": "1.9.0",
+        "qpa_platform": "cocoa",
+        "pages": [
+          "overview",
+          "rf",
+          "iperf",
+          "playback",
+          "maintenance"
+        ],
+        "application_update_policy": "online",
+        "application_update_modules": [],
+        "startup_seconds": 3.968,
+        "rss_bytes": 376700928,
+        "thread_count": 16,
+        "operations_modules": [
+          "satellite_debug_tool.core.motion_platform.evidence",
+          "satellite_debug_tool.core.motion_platform.models",
+          "satellite_debug_tool.core.motion_platform.lingjing_protocol",
+          "satellite_debug_tool.core.motion_platform.controller",
+          "satellite_debug_tool.core.motion_platform.trajectory",
+          "satellite_debug_tool.core.motion_platform",
+          "satellite_debug_tool.ui.device_view",
+          "satellite_debug_tool.core.production.reporting",
+          "satellite_debug_tool.ui.production_workspace",
+          "satellite_debug_tool.ui.main_window",
+          "satellite_debug_tool.core.external_power_monitor",
+          "satellite_debug_tool.core.iperf_test"
+        ],
+        "shell_dialog": "PASS",
+        "overview_panels": "PASS"
+      },
+      "public_alias_verification": {
+        "name": "satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip",
+        "url": "https://60.205.157.141/downloads/v1.9.0/satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip?build=a867cfed9da78186db33d67b4a389279e2d8dfa7",
+        "tls_verification": "PASS",
+        "http_status": 206,
+        "content_range_total": 284273746,
+        "prefix_bytes": 4096,
+        "prefix_matches_verified_archive": "PASS"
+      },
+      "server_sha256": "PASS",
+      "public_tuf_target_full_https_sha256": "PASS",
+      "trusted_catalog_verification": "PASS",
+      "download_alias": "hard link to verified public TUF target"
+    }
+  ],
+  "trusted_repository": {
+    "url": "https://60.205.157.141/v1/apps/satellite-terminal-tool/",
+    "state": "published",
+    "fresh_client_verification": "PASS",
+    "catalogs": [
+      {
+        "identity": {
+          "app_id": "satellite-terminal-tool",
+          "architecture": "x86_64",
+          "build_id": "a867cfed9da78186db33d67b4a389279e2d8dfa7",
+          "edition": "ops",
+          "platform": "windows",
+          "version": "1.9.0"
+        },
+        "tag": "1.9.0",
+        "catalog_sha256": "a64b32b4ae0ef24af6712591d9079df5a60945dcc71d604b5e7804cfee896007",
+        "installation_mode": "automatic",
+        "asset": {
+          "name": "b42cb768895a92e6e8092341c3ebae055e8183f538305776da877171f21e91f6.satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z",
+          "url": "https://60.205.157.141/v1/apps/satellite-terminal-tool/targets/packages/ops/windows/x86_64/1.9.0/b42cb768895a92e6e8092341c3ebae055e8183f538305776da877171f21e91f6.satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z",
+          "size": 217292671,
+          "sha256": "b42cb768895a92e6e8092341c3ebae055e8183f538305776da877171f21e91f6",
+          "target_path": "packages/ops/windows/x86_64/1.9.0/satellite_terminal_manager-ops-windows-x86_64-v1.9.0.7z"
+        },
+        "delta_count": 0
+      },
+      {
+        "identity": {
+          "app_id": "satellite-terminal-tool",
+          "architecture": "arm64",
+          "build_id": "a867cfed9da78186db33d67b4a389279e2d8dfa7",
+          "edition": "ops",
+          "platform": "macos",
+          "version": "1.9.0"
+        },
+        "tag": "1.9.0",
+        "catalog_sha256": "41551fbb487142db947e2abb405d35f6ee89ab49978f288a3188decce638a898",
+        "installation_mode": "manual",
+        "asset": {
+          "name": "5616a447a635347f4b967eb9a7fd5953d25acfbcb22c9de6005d7248255bad2c.satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip",
+          "url": "https://60.205.157.141/v1/apps/satellite-terminal-tool/targets/packages/ops/macos/arm64/1.9.0/5616a447a635347f4b967eb9a7fd5953d25acfbcb22c9de6005d7248255bad2c.satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip",
+          "size": 284273746,
+          "sha256": "5616a447a635347f4b967eb9a7fd5953d25acfbcb22c9de6005d7248255bad2c",
+          "target_path": "packages/ops/macos/arm64/1.9.0/satellite_terminal_manager-ops-macos-arm64-v1.9.0.zip"
+        },
+        "delta_count": 0
+      }
+    ],
+    "publications": {
+      "macos": {
+        "state": "published",
+        "bundle_id": "1f8359345875fae14dba776b2f6ee7e94555eb816ef14d30cf4e2c30d45fb892",
+        "timestamp_sha256": "03c27d33098b7566a0ef30598399884cf2203c53365e3e05e1d48813ed717487",
+        "reused": false,
+        "recovery": "resume_after_successful_public_probe_and_server_sha_inventory",
+        "checked_at": "2026-11-01T21:23:48.126731+00:00"
+      },
+      "windows": {
+        "state": "published",
+        "bundle_id": "fcd9f735cf2174aac70b54bef089b5d5853d85b17b72fc24fde37d7eb3dc1ad9",
+        "timestamp_sha256": "23d37fd136c07a61696072e058fbb472e2e3726ee670f87c4d267bb15025d592",
+        "reused": false
+      }
+    },
+    "metadata": {
+      "root": {
+        "version": 1,
+        "expires": "2027-11-01T17:06:14Z"
+      },
+      "targets": {
+        "version": 3,
+        "expires": "2027-01-30T21:25:42Z"
+      },
+      "snapshot": {
+        "version": 4,
+        "expires": "2026-12-01T21:25:42Z"
+      },
+      "timestamp": {
+        "version": 5,
+        "expires": "2026-11-08T21:25:42Z"
+      }
+    }
+  },
+  "acceptance_boundaries": {
+    "windows_physical_upgrade_and_recovery": "pending separate real-machine acceptance",
+    "physical_devices_rf_and_fixtures": "pending separate bench acceptance",
+    "windows_system_signature": "unsigned; TUF signature is a separate update contract",
+    "macos_system_signature": "ad-hoc verified; Apple notarization not performed"
+  },
+  "windows_archive_posix_inspection": "py7zr 1.1 Windows file entries have Unix permission bits zero; local inspection adds owner-read only to temporary extracted identity files. Original archive bytes are unchanged; Windows extraction and server root publication do not apply this permission limitation.",
+  "local_evidence_root": "release/validation/a867cfed9da78186db33d67b4a389279e2d8dfa7",
+  "publication_connection_regression": {
+    "old_failed": 2,
+    "new_passed": 2,
+    "adjacent_passed": 32,
+    "ssh_keepalive_seconds": 30,
+    "application_artifacts_changed": false
+  },
+  "verified_at": "2026-11-01T21:44:26.946536+00:00",
+  "public_index_url": "https://60.205.157.141/downloads/v1.9.0/release.json",
+  "sha256sums_url": "https://60.205.157.141/downloads/v1.9.0/SHA256SUMS.txt",
+  "local_cleanup": {
+    "state": "duplicate_archives_removed",
+    "archive_count": 12,
+    "removed_logical_bytes": 2408919751,
+    "retained": "dist applications, source, candidate receipts/manifests, signed metadata, keys and validation evidence"
+  }
+}

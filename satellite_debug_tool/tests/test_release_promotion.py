@@ -301,3 +301,116 @@ def test_remote_metadata_signature_is_verified_before_preparation(deployment):
     timestamp.write_text(json.dumps(data))
     with pytest.raises(Exception, match="signature|signed"):
         prepare("second", initial=False, version="2.1.0", commit="b" * 40)
+
+
+@pytest.mark.parametrize("corrupt_public_package", [False, True])
+def test_cli_preserves_publication_connection_across_long_https_readback(
+        deployment, monkeypatch, corrupt_public_package):
+    """HTTPS 回读与 SFTP 控制共用 owner；长空闲后仍提交或完整报告校验失败。"""
+    import sys
+    from types import SimpleNamespace
+    from scripts import promote_release
+
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    manifest = prepare("idle-bundle")
+    events = []
+
+    class Transport:
+        def __init__(self):
+            self.authenticated = False
+            self.active = True
+            self.now = self.last_activity = self.interval = self.heartbeats = 0
+
+        def set_keepalive(self, interval):
+            assert self.authenticated
+            self.interval = interval
+
+        def advance(self, seconds):
+            # 传输替身模拟 120 秒协议空闲期限；不改变生产 SSH/SFTP 超时。
+            for _ in range(seconds):
+                self.now += 1
+                if self.interval and self.now - self.last_activity >= self.interval:
+                    self.last_activity = self.now
+                    self.heartbeats += 1
+                if self.now - self.last_activity >= 120:
+                    self.active = False
+                    break
+
+        def activity(self):
+            if not self.active:
+                raise ConnectionError("publication control connection expired while HTTPS was active")
+            self.last_activity = self.now
+
+    transport = Transport()
+
+    class Session:
+        def __enter__(self):
+            transport.activity()
+            return self
+
+        def __exit__(self, *_args):
+            events.append("sftp-closed")
+
+        def get_channel(self):
+            return SimpleNamespace(settimeout=lambda seconds: events.append(("sftp-timeout", seconds)))
+
+        def __getattr__(self, name):
+            operation = getattr(sftp, name)
+            def call(*args, **kwargs):
+                transport.activity()
+                return operation(*args, **kwargs)
+            return call
+
+    class Client:
+        def load_host_keys(self, _path):
+            events.append("host-keys-loaded")
+
+        def set_missing_host_key_policy(self, _policy):
+            events.append("host-key-policy-set")
+
+        def connect(self, *_args, **_kwargs):
+            transport.authenticated = True
+            events.append("authenticated")
+
+        def get_transport(self):
+            return transport
+
+        def open_sftp(self):
+            events.append("sftp-opened")
+            return Session()
+
+        def close(self):
+            transport.active = False
+            events.append("ssh-closed")
+
+    class LongReadback(Fetcher):
+        def _fetch(self, url):
+            for block in super()._fetch(url):
+                if url.endswith("complete.7z"):
+                    transport.advance(14 * 60)
+                    if corrupt_public_package:
+                        block = block[:-1] + b"!"
+                yield block
+
+    monkeypatch.setitem(sys.modules, "paramiko", SimpleNamespace(SSHClient=Client, RejectPolicy=object))
+    monkeypatch.setattr(promote_release, "HttpsFetcher", lambda *_args: LongReadback(sftp))
+    config = tmp / "connection.json"
+    config.write_text(json.dumps({"host": "example.test", "username": "publisher",
+                                  "public_root": PUBLIC_ROOT, "state_root": STATE_ROOT}))
+    known_hosts, identity = tmp / "known-hosts", tmp / "identity"
+    known_hosts.touch()
+    identity.touch()
+    arguments = ["commit", "--config", str(config), "--known-hosts", str(known_hosts),
+                 "--identity-file", str(identity), "--bundle", str(manifest)]
+    if corrupt_public_package:
+        with pytest.raises(ValueError, match="public publication file differs"):
+            promote_release.main(arguments)
+        assert not sftp.path(PUBLIC_ROOT + "/satellite-terminal-tool/metadata/timestamp.json").exists()
+    else:
+        promote_release.main(arguments)
+        assert sftp.moves[-1].endswith("/timestamp.json")
+        assert check().tag_name == "2.0.0"
+    assert transport.heartbeats > 0
+    assert events.count("authenticated") == 1
+    assert events[-2:] == ["sftp-closed", "ssh-closed"]
+    assert not sftp.path(STATE_ROOT + "/satellite-terminal-tool.publication.lock").exists()

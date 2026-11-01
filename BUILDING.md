@@ -1,6 +1,6 @@
 # 卫通终端管理工具构建指南
 
-产品名称为“卫通终端管理工具 / Satellite Terminal Manager”。同一源码生成 user、ops 两个独立产物；客户解压完整包即可使用，无需 Python。版本唯一来源为 `satellite_debug_tool/__init__.py.__version__`，本轮规划版本为 v1.9.0；发布完成状态以发行验证记录为准。
+产品名称为“卫通终端管理工具 / Satellite Terminal Manager”。同一源码生成 user、ops 两个独立产物；客户解压完整包即可使用，无需 Python。版本唯一来源为 `satellite_debug_tool/__init__.py.__version__`，当前发行版本为 v1.9.0；逐包发布状态、源码 SHA 和校验证据见 [发行验证记录](doc/M53_release_validation.json)。
 
 ## 产物与身份
 
@@ -22,7 +22,7 @@
 
 ## 本地构建
 
-源码最低 Python 3.10，发行工具链固定 Python 3.11。先使用 Python 3.11 建立构建 venv，再运行平台脚本；已有 venv 应先确认解释器版本。
+源码最低 Python 3.10，打包工具链固定 Python 3.11。先使用 Python 3.11 建立构建 venv，再运行平台脚本；已有 venv 应先确认解释器版本。
 
 ```bash
 python3.11 -m venv .venv
@@ -38,7 +38,7 @@ scripts\build_windows.bat both
 
 两平台脚本支持 `user|ops|both`，省略参数时为 ops。它们安装平台约束依赖，由 `scripts/build_editions.py` 完成翻译检查、PyInstaller 构建、模型与 edition 审计、归档。普通构建仅写本地；正式发行使用下节候选流程。
 
-macOS spec 声明 `LSMinimumSystemVersion=14.0`。实际冻结依赖的最低系统要求仍须检查，不把此声明视为兼容性实测。当前签名为 ad-hoc，构建包含签名验证，Apple 公证未完成。Linux 没有受支持的发行流程。
+v1.9.0 发行目录声明 Windows 最低系统为 `10.0.19041`；macOS spec 声明 `LSMinimumSystemVersion=14.0`。实际冻结依赖的最低系统要求仍须检查，不把此声明视为兼容性实测。当前签名为 ad-hoc，构建包含签名验证，Apple 公证未完成。Linux 没有受支持的发行流程。
 
 ## 验证与正式候选
 

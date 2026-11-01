@@ -106,3 +106,33 @@
 - 满载持续测试将既有150ms帧上限纳入自动断言，仍保留原8秒窗口、92,160B/s目标、积压与收尾验收；全量与两平台实际构建继续独立记录。
 
 - 值复用后的发布环境全量 `2136 passed / 286.49s`（`/tmp/m53-cell-pool-full.log`），消费92,160B/s；帧p50/p95/max为17.228/19.514/23.976ms，8秒窗口GC计数为0，默认GC策略保持。1496条翻译、compileall与diff检查通过；Windows按新候选独立验收。
+
+
+## a867cfe 四包同源验证与分发
+
+- 最终包构建源码为 `a867cfed9da78186db33d67b4a389279e2d8dfa7`，版本标签 `v1.9.0` 指向该提交。后续文档收尾不改变已冻结包字节。机器可读逐包证据见 `M53_release_validation.json`，正式公开状态由该文件及下文实际提交结果记录。
+- Mac 正式发行脚本在干净 SHA 重新验证 `2136 passed / 285.09s`，两版完成 Cocoa 冻结启动、ad-hoc 深度严格签名、ZIP CRC/身份和候选上传完整 SHA 回读。实际 `.app` 根分别为 `SatelliteTerminalManager.app`、`SatelliteTerminalManagerOps.app`；主程序/版本/最低系统元数据与候选身份匹配。
+- Windows run `41346531510` 两版真实 Source regression、1496条翻译、构建、冻结 smoke、归档树校验和artifact保存均通过；user `2131 passed / 5 skipped / 547.06s`，ops `2131 passed / 5 skipped / 856.54s`。跳过项为平台限定测试，测试失败仍阻止构建。
+- 相同8秒满载窗口的消费均为92,160B/s；Windows user/ops帧最大28.731/31.448ms，正式Mac流程最大25.699ms，各代GC观测计数均0。150ms帧上限已作为自动断言执行。
+- 本机从该run下载Windows双版完整候选，独立长度/SHA-256、完整7z CRC、唯一载荷根、包内身份与客户版应用更新裁剪均PASS。py7zr1.1在Windows生成的条目带文件类型但POSIX权限位为0；Mac检查时只给临时提取的177字节身份文件补owner-read，原7z字节保持。Windows提取不会恢复该POSIX位，服务器root校验路径可读；此为跨平台验证工具限制，后续可用有界内存读取收敛。
+- 四包已校验后，GitHub `release-candidate` 环境放行仅用于上传incoming（deployment `7478887823`）；正式ops签名晋升与客户完整包公开分别执行，先校验包和公开内容，再提交可信timestamp。当前实际提交进度继续记录于JSON。
+- 同步更新当前自动化测试现场指南，删除手动先上电、独立创建/开始、右侧流程、旧默认路径等已被替代的操作说明；按现行开始/收尾/下一批次、录制目录和报告质量合同呈现。
+
+
+## 发布控制连接跨 HTTPS 回读的生命周期
+
+- Mac 正式发布的完整公网回读返回后，最终指针提交前的 SFTP `lstat` 报 `Server connection dropped`；同一控制连接在约14分钟 HTTPS 下载期间没有协议活动。服务器检查为 `clientaliveinterval=0`、`tcpkeepalive=yes`，未取得具体网络节点断开原因的证据；因此不将故障归因到特定 NAT、服务器策略或网络运营商。原失败日志由本轮发行记录保存。
+- `scripts/promote_release.py:_connect` 在认证后取得当前唯一 Transport 并启用30秒 SSH 协议保活，完整回读和最终 timestamp 提交继续使用同一个 owner。既有握手/SFTP超时、完整摘要检查、锁和原子提交顺序保持；连接建立或保活设置异常仍关闭 owner 并传播。未增加自动重试。相邻 `upload_release.py` 在候选上传与完整回读期间持续使用 SFTP，没有独立长 HTTPS 阶段，本次保持该入口。
+- 以120秒空闲期限的传输替身模拟14分钟公网回读，旧实现两条场景均稳定失败；新增保活后，正常路径完成真实签名 bundle 的 timestamp 最后提交与锁释放，公开内容损坏路径保留旧 channel 并传播摘要错误，两条路径均由CLI关闭SFTP和SSH会话。旧 `2 failed / 0.26s`、新 `2 passed / 0.21s`，记录 `/tmp/m53-publication-keepalive-{old,new}.log`。
+- 晋升、候选与发行工作流邻接专项 `32 passed / 0.89s`，记录 `/tmp/m53-publication-keepalive-adjacent.log`；diff检查通过。本项只调整本机发布CLI及其测试，已冻结的四个v1.9.0安装包字节、版本与tag保持。实际云端恢复及Windows发布结果由发行记录另外确认。
+
+- Mac 本轮恢复证据：原发布进程明确 exit1，异常位置在完整 `_probe_public` 返回之后、最终指针写入之前；Nginx 在 `2026-11-02 05:19:22 +0800` 记录完整包 HTTP200/284273746字节。通过受认证的服务器执行通道重新完整校验9个不可变公开文件的大小/SHA，与冻结bundle逐项相同，远端timestamp仍为准备时摘要、锁owner仍为同bundle。一次性恢复脚本在原commit锁和同owner远端锁内再次核对文件mtime/size，仅续接原实现的root/timestamp原子提交及本地账本；原失败日志、服务器摘要证明和恢复回执保存在release/validation对应SHA目录，没有加入生产校验旁路。
+- Mac ops在 `2026-11-01T21:23:48Z` 完成发布，独立新缓存ReleaseChecker从公网验证签名目录、1.9.0/a867cfe身份及完整包摘要成功，installation_mode=manual、delta_count=0。下载直链为已验证TUF目标的同inode硬链接；TLS/HTTP206/总长度和4096字节前缀校验通过。
+
+## 四包正式公开验收
+
+- Windows run `41346531510` 及候选上传均 success；客户 Windows 完整包经服务器正式工具逐包CRC/身份/SHA验证后公开，receipt为published。Windows ops在启用SSH协议保活的同一发布连接中完成SFTP回读、完整公开HTTPS摘要验证及timestamp最后提交。
+- 两平台独立新缓存ReleaseChecker从公网验证当前签名目录，均为1.9.0/ops/a867cfe，首轮delta_count=0；Windows安装模式为automatic，Mac为manual。元数据版本为 root=1, targets=3, snapshot=4, timestamp=5。
+- 四个完整下载直链均通过TLS、HTTP206、完整长度及本地已验归档的4096字节前缀对比；ops下载别名与各自已完成全文公网SHA验证的TUF目标为同inode，客户包经过完整上传回读及服务器不可变复制前后SHA。公开SHA256SUMS及release.json与四包摘要一致；没有将Range校验表述为另一轮全文下载。
+- `M53_release_validation.json`记录实际发布状态、两平台源码测试与冻结结果、完整包大小/SHA、签名目录和系统签名/实机验收边界。README提供四包服务器直链；AGENTS、构建/发行指南及自动化测试现场指南同步更新。
+- 正式公开和逐包校验完成后，清理本轮12份候选/签名bundle重复归档，逻辑大小合计2,408,919,751字节；保留dist应用、源码、收据、payload manifest、签名元数据/密钥和验证日志。未创建Downloads副本，完整归档保留在服务器。

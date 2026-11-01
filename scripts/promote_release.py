@@ -378,6 +378,11 @@ def _connect(args):
     try:
         client.connect(host, port=port, username=username, key_filename=str(args.identity_file.resolve(strict=True)),
                        look_for_keys=False, allow_agent=False, timeout=20, banner_timeout=20, auth_timeout=20)
+        transport = client.get_transport()
+        if transport is None:
+            raise ConnectionError("publication SSH transport is unavailable")
+        # 完整 HTTPS 回读期间 SFTP 空闲；由同一 SSH owner 保持协议活动直至最终提交。
+        transport.set_keepalive(30)
     except Exception:
         client.close()
         raise
