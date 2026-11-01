@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from satellite_debug_tool.core.tcp_shell.terminal import (
-    ShellInputError, TerminalScreen, TerminalStreamDecoder, command_text_bytes,
+    ShellInputError, TerminalCell, TerminalScreen, TerminalStreamDecoder, command_text_bytes,
 )
 
 
@@ -50,12 +50,54 @@ def test_every_partition_preserves_terminal_state(payload):
     ('中x\rZ'.encode(), 'Z x', 1),
     ('中x\x1b[2DZ'.encode(), ' Zx', 2),
     ('e\u0301x\bZ'.encode(), 'e\u0301Z', 2),
+    ('中Z'.encode(), '中Z', 3),
+    ('中\u0301x\rZ'.encode(), 'Z x', 1),
+    ('e\u0301中x\x1b[2DZ'.encode(), 'e\u0301 Zx', 3),
     (b'abc\b \b', 'ab ', 2),
 ])
 def test_cell_and_cursor_semantics(payload, text, column):
     rows, actual_column, _style, _issues = _snapshot([payload])
     assert rows[-1][0] == text
     assert actual_column == column
+
+
+@pytest.mark.parametrize("chunk_size", (1, 100))
+def test_plain_text_constructs_one_cell_per_added_column(monkeypatch, chunk_size):
+    """连续可见文字每新增一格只分配一个 Cell，分包保持相同资源预算。"""
+    constructed = 0
+    initialize = TerminalCell.__init__
+
+    def count_construction(cell, *args, **kwargs):
+        nonlocal constructed
+        initialize(cell, *args, **kwargs)
+        constructed += 1
+
+    monkeypatch.setattr(TerminalCell, "__init__", count_construction)
+    payload = "0123456789" * 10
+    screen = TerminalScreen(lambda: "stamp")
+    for start in range(0, len(payload), chunk_size):
+        screen.feed([("text", payload[start:start + chunk_size])])
+    assert screen.row.text == payload
+    assert screen.column == len(screen.row.cells) == len(payload)
+    assert constructed == len(payload)
+
+
+def test_plain_append_preserves_column_capacity():
+    screen = TerminalScreen(lambda: "stamp", max_columns=2)
+    screen.feed([("text", "abC")])
+    assert screen.row.text == "ab"
+    assert screen.column == len(screen.row.cells) == 2
+
+
+def test_sgr_changes_preserve_previous_cell_style_snapshots():
+    screen = TerminalScreen(lambda: "stamp")
+    screen.feed([("sgr", "31"), ("text", "A")])
+    first_style = screen.row.cells[0].style
+    screen.feed([("sgr", "1"), ("text", "B"), ("sgr", "0"), ("text", "C")])
+    assert [(cell.style.foreground, cell.style.bold) for cell in screen.row.cells] == [
+        (31, False), (31, True), (None, False),
+    ]
+    assert (first_style.foreground, first_style.bold) == (31, False)
 
 
 def test_rows_and_control_sequences_are_bounded():

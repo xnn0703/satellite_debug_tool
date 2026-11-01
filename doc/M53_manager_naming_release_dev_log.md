@@ -83,3 +83,16 @@
 - Shell 吞吐测试原在断言之后才关闭 workspace/controller，性能失败会遗留线程及满载文档。修复测试 owner 收尾并在原测量窗口加入有界帧级诊断，分别记录帧间隔、等待、解析及投影耗时；生产帧预算与 92,160 B/s 门槛保持。下一轮真实 Windows 数据用于定位吞吐原因，Mac 专项通过不代替 Windows 验收。
 - 测试 cleanup 消费既有异步关闭合同，先等待 `shutdown_complete` 完成分帧排空，再销毁本项窗口。原缺少 finally 的两项回归失败；异步 pending 场景也在旧直接销毁路径下两项失败。最终吞吐与 M49 收尾专项 23 passed / 22.41s，证据 `/tmp/m53-shell-async-cleanup-old.log`、`/tmp/m53-shell-async-cleanup-new.log`。发布 Python 3.11 的 StateStore/Tracking 邻接复跑 101 passed / 1.28s。
 - 本轮合并后发布环境全量 `2112 passed / 283.18s`，日志 `/tmp/m53-revision-shell-diagnostics-full.log`；1496 条翻译、compileall 与 diff 检查通过。Windows 同 SHA 验收继续执行。
+
+## Windows 实际帧周期与运动反馈测试修复
+
+- `f5ca4dd` / Actions `41341875594` 的 Windows user 完整源码结果为 `2 failed, 2105 passed, 5 skipped / 576.25s`（`/tmp/m53-windows-f5ca-user-api.log`），失败分别为运动测试的 `controller feedback lost during motion` 和持续 Shell 吞吐。StateStore 新接收序列与其余回归通过。构建被独立 pytest step 阻止。
+- 同轮 Windows ops 为 `1 failed, 2106 passed, 5 skipped / 877.45s`，仅 Shell 持续吞吐失败（56,832 B/s，注入91,238 B/s）；平均帧间隔71.943ms，帧后空等44.026ms，frame/screen最大229.393/217.282ms。两版均跳过构建与上传，原始日志 `/tmp/m53-windows-f5ca-ops-api.log`。运动测试在两台 Runner 上结果不同，与已独立复现的接收调度前置问题一致。
+- Shell 114 帧全部消费 4096 字节；典型处理耗时 16.468ms，帧后空等中位数 46.545ms，平均帧起点间隔 69.807ms，持续消费 58,368 B/s，注入 90,317 B/s。单次 timer 原在处理完成后重新等待 33ms，且默认使用 CoarseTimer。已改为一个 PreciseTimer/deadline owner，下一周期从本次实际起点计算，处理结束只等待剩余时间；超期只排一次异步回调，不循环追帧。同步消费不启动实时排程；重复 pending、断链、终排空共用同一 owner。
+- 假时钟旧实现 4 failed / 4 passed，新模型 8 passed，证明帧处理时间包含在周期内、超期/早醒边界、同步入口、重复通知与终排空。Shell、交互、断开、M49/YMODEM 邻接 `129 passed / 29.88s`（`/tmp/m53-shell-cadence-specialized.log`）；Mac 实际持续消费 92,288 B/s，注入 93,082 B/s，积压峰值 10KiB，帧 p50/p95/max 为 14.403/22.764/66.948ms，输入 P99 42.3ms，洪水断开 49ms，300KiB 收尾 1.42s。Windows 新模型仍需独立验收；旧 Windows 的 265ms 长帧没有达到 M45 的150ms退化目标，继续保留分段耗时证据。
+- 运动测试原把反馈入队后 sleep 当成已建立稳定窗口；接收调度延迟可让两条反馈在同一刻度被消费，生产正确拒绝。四条移动/回原点/残差场景统一确认首帧已消费，并依据公开接收时间与实际配置证明稳定窗口已到后再注入第二帧。仓库加入慢接收同刻度的实际动作结果回归，旧 sleep 流程稳定失败，新流程与全部 component 测试共14 passed；生产运动算法和门限保持。证据 `/tmp/m53-motion-repo-regression-old-sleep.log`、`/tmp/m53-motion-repo-regression-fixed.log`。
+- 性能诊断只在原8秒窗口被动订阅 GC callback，按代际和实际帧/阶段记录重合耗时，finally 移除；没有主动收集或改变阈值。Mac 单项长 screen 帧57.158ms中有48.563ms与GC重合，此事实只证明该次Mac测量。新增观测与清理专项7 passed；单条有界JSON在 `capfd.disabled()` 中输出并flush，成功测试也能保留指标，其它pytest捕获保持。Windows的GC原因留待同平台实测。
+- 帧调度改后的阶段全量为 `2123 passed / 280.71s`（`/tmp/m53-cadence-motion-full.log`），但被动数据记录frame max159.367ms、screen154.102ms，其中147.914ms与GC重合；软件断言通过未被写成150ms退化目标通过。独立单项与全量GC长尾不同，说明全进程活对象也影响停顿，不能只凭阶段标签归因给某个类型。
+- 纯真实Screen的5000行探针在三个独立发布Python3.11进程保留329,934个Cell及9,998个Style，默认GC enabled/(700,10,10)。在读取 `__dict__` 前取得tracemalloc实际占用：基线36,773,822B，Style/Cell slots候选23,176,446B，slots+行尾直接追加23,176,382B，约减少37%。100字符普通追加的Cell构造从200个临时blank+100个glyph降为100个glyph。直接读取 `__dict__` 会物化Python3.11的延迟字典，因此未用该访问后的表观字节夸大收益；原始记录 `/tmp/m53-terminal-budget-{baseline,slots,slots_append}.json`。
+- 根据分配链和实测，Style/Cell保持冻结值语义并使用slots，正常width1行尾追加在组合字处理和容量检查之后直接保存最终单元；覆盖、宽字与游标补空继续使用既有模型。资源预算回归旧源码稳定2 failed / 39 passed，修复后终端语义、cadence及运动组件共63 passed；独立review确认字段读取、style快照、dataclasses.replace与光标/宽字边界一致。GC策略保持原样，完整帧耗时与Windows结果继续独立记录。
+- 最终合并工作树发布环境全量 `2130 passed / 276.63s`（`/tmp/m53-cadence-cell-motion-full.log`）；真实观测窗口累计消费737,280B，即92,160B/s，积压峰值10KiB，frame p50/p95/max为14.350/21.690/134.798ms，最长帧GC重合119.823ms。此轮Mac满足150ms退化目标，Windows继续用相同源码独立验证。1496条翻译、compileall与diff检查通过。

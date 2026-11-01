@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 from collections import Counter, deque
+import gc
 import json
+import sys
 import threading
 import time
 
@@ -41,6 +43,43 @@ class _FrameTimings:
         self.current = None
         self.last_start = None
         self.last_end = None
+        self.current_metric = None
+        self.gc_started = {}
+        self.gc_generations = {generation: {"count": 0, "total_ms": 0.0, "max_ms": 0.0}
+                               for generation in range(3)}
+
+    def begin(self) -> None:
+        if self.active:
+            return
+        self.active = True
+        gc.callbacks.append(self._observe_gc)
+
+    def stop(self) -> None:
+        self.active = False
+        if self._observe_gc in gc.callbacks:
+            gc.callbacks.remove(self._observe_gc)
+        self.gc_started.clear()
+
+    def _observe_gc(self, phase, info) -> None:
+        generation = info["generation"]
+        if not self.active or generation not in self.gc_generations:
+            return
+        if phase == "start":
+            self.gc_started[generation] = (time.perf_counter(), self.current, self.current_metric)
+        elif phase == "stop":
+            started = self.gc_started.pop(generation, None)
+            if started is None:
+                return
+            elapsed_ms = (time.perf_counter() - started[0]) * 1000
+            totals = self.gc_generations[generation]
+            totals["count"] += 1
+            totals["total_ms"] += elapsed_ms
+            totals["max_ms"] = max(totals["max_ms"], elapsed_ms)
+            frame = started[1]
+            if frame is not None:
+                frame["gc_ms"] += elapsed_ms
+                if started[2] == "screen_ms":
+                    frame["screen_gc_ms"] += elapsed_ms
 
     def observe_frames(self, widget_type, monkeypatch) -> None:
         from satellite_debug_tool.ui import tcp_shell_workspace as shell_ui
@@ -57,6 +96,7 @@ class _FrameTimings:
             start = time.perf_counter()
             frame = {"bytes": 0, "decoder_ms": 0.0, "screen_ms": 0.0,
                      "projection_ms": 0.0, "cursor_ms": 0.0, "drain_ms": 0.0,
+                     "gc_ms": 0.0, "screen_gc_ms": 0.0,
                      "last_drain_empty": True, "backlog_start": widget._active_ring.backlog_bytes}
             if self.last_start is not None:
                 frame["interval_ms"] = (start - self.last_start) * 1000
@@ -92,6 +132,8 @@ class _FrameTimings:
             if frame is None:
                 return method(*args, **kwargs)
             start = time.perf_counter()
+            previous_metric = self.current_metric
+            self.current_metric = metric
             try:
                 result = method(*args, **kwargs)
                 if metric == "drain_ms":
@@ -99,12 +141,13 @@ class _FrameTimings:
                     frame["last_drain_empty"] = len(result[0]) == 0
                 return result
             finally:
+                self.current_metric = previous_metric
                 frame[metric] += (time.perf_counter() - start) * 1000
 
         monkeypatch.setattr(owner, name, observed)
 
     def report(self, timer_type: str) -> None:
-        self.active = False
+        self.stop()
 
         def distribution(key):
             values = sorted(frame[key] for frame in self.frames if key in frame)
@@ -117,12 +160,58 @@ class _FrameTimings:
 
         summary = {"timer_type": timer_type, "frames": len(self.frames), "budgets": self.budgets,
                    "backlog_start_bytes": distribution("backlog_start"),
+                   "gc_by_generation": {generation: {key: round(value, 3) for key, value in totals.items()}
+                                        for generation, totals in self.gc_generations.items()},
+                   "longest_screen_frames": [
+                       {key: round(frame[key], 3) for key in ("bytes", "frame_ms", "screen_ms", "gc_ms", "screen_gc_ms")}
+                       for frame in sorted(self.frames, key=lambda frame: frame["screen_ms"], reverse=True)[:5]
+                   ],
                    "bytes_histogram": dict(Counter(frame["bytes"] for frame in self.frames)),
                    "exits": dict(Counter(frame["exit"] for frame in self.frames))}
         for key in ("interval_ms", "idle_gap_ms", "frame_ms", "drain_ms", "decoder_ms",
-                    "screen_ms", "projection_ms", "cursor_ms"):
+                    "screen_ms", "projection_ms", "cursor_ms", "gc_ms", "screen_gc_ms"):
             summary[key] = distribution(key)
-        print("PERF frame timing: " + json.dumps(summary, sort_keys=True))
+        stream = sys.__stdout__ if sys.__stdout__ is not None else sys.stdout
+        print("PERF frame timing: " + json.dumps(summary, sort_keys=True), file=stream, flush=True)
+
+
+class TestFrameTimingGcObserver:
+    def test_gc_duration_is_bound_to_its_generation_frame_and_stage(self, monkeypatch):
+        from types import SimpleNamespace
+        import satellite_debug_tool.tests.test_shell_throughput_budget as module
+
+        clock = SimpleNamespace(now=0.0)
+        monkeypatch.setattr(module, "time", SimpleNamespace(perf_counter=lambda: clock.now))
+        timings = _FrameTimings()
+        timings.active = True
+        timings.current = {"gc_ms": 0.0, "screen_gc_ms": 0.0}
+        timings.current_metric = "screen_ms"
+        timings._observe_gc("start", {"generation": 0})
+        clock.now = .004
+        timings._observe_gc("stop", {"generation": 0})
+        timings.current_metric = "projection_ms"
+        timings._observe_gc("start", {"generation": 2})
+        clock.now = .006
+        timings._observe_gc("stop", {"generation": 2})
+        assert timings.gc_generations[0]["count"] == 1
+        assert timings.gc_generations[0]["total_ms"] == pytest.approx(4.0)
+        assert timings.gc_generations[2]["total_ms"] == pytest.approx(2.0)
+        assert timings.current["gc_ms"] == pytest.approx(6.0)
+        assert timings.current["screen_gc_ms"] == pytest.approx(4.0)
+        assert timings.gc_started == {}
+        assert len(timings.gc_generations) == 3
+
+    def test_gc_callback_is_removed_when_observation_exits(self):
+        baseline = tuple(gc.callbacks)
+        timings = _FrameTimings()
+        try:
+            timings.begin()
+            timings.begin()
+            assert gc.callbacks.count(timings._observe_gc) == 1
+        finally:
+            timings.stop()
+        timings.stop()
+        assert tuple(gc.callbacks) == baseline
 
 
 def _pump(qapplication_session, seconds: float) -> None:
@@ -176,6 +265,7 @@ class TestSustainedRate:
         self, qapplication_session, tmp_path, monkeypatch, failure_stage, close_mode,
     ):
         """连接或吞吐断言失败时，测试拥有的 worker、控件和服务均被收尾。"""
+        from contextlib import nullcontext
         from types import SimpleNamespace
         import satellite_debug_tool.tests.test_shell_throughput_budget as module
         import satellite_debug_tool.ui.tcp_shell_workspace as ui
@@ -229,7 +319,7 @@ class TestSustainedRate:
                 return predicate()
             return failure_stage != "connect"
 
-        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(ticks), perf_counter=lambda: 0.0))
         monkeypatch.setattr(module, "_pump", noop)
         monkeypatch.setattr(module, "_wait_until", wait_until)
         monkeypatch.setattr(module, "ScriptServer", Server)
@@ -240,7 +330,9 @@ class TestSustainedRate:
             sendPostedEvents=lambda *_args: calls.append("workspace.disposed"),
         ))
         with pytest.raises(AssertionError, match="UI 实际消费速率未达目标" if failure_stage == "throughput" else None):
-            self.test_full_scrollback_sustains_serial_rate(qapplication_session, tmp_path, monkeypatch)
+            self.test_full_scrollback_sustains_serial_rate(
+                qapplication_session, tmp_path, monkeypatch, SimpleNamespace(disabled=nullcontext),
+            )
         assert calls.count("workspace.shutdown") == 1
         assert calls.count("workspace.disposed") == 1
         assert calls.count("controller.shutdown") == 1
@@ -250,7 +342,7 @@ class TestSustainedRate:
         if close_mode == "pending":
             assert calls.index("workspace.wait") < calls.index("workspace.disposed")
 
-    def test_full_scrollback_sustains_serial_rate(self, qapplication_session, tmp_path, monkeypatch):
+    def test_full_scrollback_sustains_serial_rate(self, qapplication_session, tmp_path, monkeypatch, capfd):
         monkeypatch.setenv("HOME", str(tmp_path))
         server = ScriptServer()
         controller = TcpShellController()
@@ -289,7 +381,7 @@ class TestSustainedRate:
             try:
                 _pump(qapplication_session, warmup_s)
                 consumed_at_warmup = consumed["bytes"]
-                timings.active = True
+                timings.begin()
                 backlog_peak = 0
                 samples = []
                 deadline = time.monotonic() + window_s
@@ -303,9 +395,13 @@ class TestSustainedRate:
                 rate = consumed_in_window / elapsed
                 injected_rate = injector.sent_bytes / (warmup_s + window_s)
             finally:
-                injector.stop()
-                injector = None
-                timings.report(str(workspace._frame_timer.timerType()))
+                timings.stop()
+                try:
+                    injector.stop()
+                    injector = None
+                finally:
+                    with capfd.disabled():
+                        timings.report(str(workspace._frame_timer.timerType()))
 
             print(
                 f"PERF sustained: consumed {rate:.0f} B/s (target {_SERIAL_RATE_BPS}), "
@@ -320,6 +416,7 @@ class TestSustainedRate:
             # 突发恢复指标（独立于持续速率）：停止注入后 5 s 内归零
             assert _wait_until(qapplication_session, lambda: ring.backlog_bytes == 0, timeout_s=5.0)
         finally:
+            timings.stop()
             if injector is not None:
                 injector.stop()
             try:

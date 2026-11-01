@@ -122,13 +122,13 @@ class TerminalStreamDecoder:
         return tokens
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TerminalStyle:
     foreground: int | None = None
     bold: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TerminalCell:
     text: str = ' '
     style: TerminalStyle = TerminalStyle()
@@ -207,6 +207,11 @@ class TerminalScreen:
             return
         width = 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
         if self.column + width > self.max_columns:
+            return
+        # 行尾单格追加直接保存最终字形，覆盖和宽字继续处理既有单元格。
+        if width == 1 and self.column == len(self.row.cells):
+            self.row.cells.append(TerminalCell(char, self.style, width))
+            self.column += width
             return
         self._pad(self.column + width)
         for index in range(self.column, self.column + width):

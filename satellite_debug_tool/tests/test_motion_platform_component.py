@@ -111,6 +111,92 @@ class _FakeSocket:
         self.incoming.put((frame, ("192.168.15.201", 7408)))
 
 
+class _DelayedFeedbackSocket(_FakeSocket):
+    """延迟首条目标帧交接；已经排队的两帧在同一接收刻度交付。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._enqueued = 0
+        self._received = 0
+        self._release_feedback = threading.Event()
+        self._delivery_timer: threading.Timer | None = None
+        self._batch_tick_ns: int | None = None
+        self._processing_batch = False
+        self._receiver_ident: int | None = None
+
+    def feedback(self, frame: bytes) -> None:
+        self._enqueued += 1
+        super().feedback(frame)
+        if self._enqueued == 2:
+            self._delivery_timer = threading.Timer(0.08, self._release_target_feedback)
+            self._delivery_timer.start()
+
+    def _release_target_feedback(self) -> None:
+        if self._enqueued >= 3:
+            self._batch_tick_ns = time.monotonic_ns()
+        self._release_feedback.set()
+
+    def recvfrom(self, size: int) -> tuple[bytes, tuple[str, int]]:
+        self._receiver_ident = threading.get_ident()
+        self._processing_batch = False
+        item = super().recvfrom(size)
+        self._received += 1
+        if self._received == 2:
+            assert self._release_feedback.wait(1.0)
+        self._processing_batch = self._received in (2, 3)
+        return item
+
+    def clock_ns(self) -> int:
+        if (
+            self._processing_batch
+            and threading.get_ident() == self._receiver_ident
+            and self._batch_tick_ns is not None
+        ):
+            return self._batch_tick_ns
+        return time.monotonic_ns()
+
+    def close(self) -> None:
+        if self._delivery_timer is not None:
+            self._delivery_timer.cancel()
+        self._release_feedback.set()
+        super().close()
+
+
+def _feed_stable_feedback(
+    controller: DirectMotionPlatformController,
+    transport: _FakeSocket,
+    pulses: tuple[int, ...],
+    *,
+    command: int = 0xC0,
+    result: int = 0,
+) -> None:
+    """首帧已消费且真实稳定窗口已到后，再交付第二帧反馈。"""
+    first_received = threading.Event()
+
+    def observe_feedback(snapshot) -> None:
+        if (
+            snapshot.actual_pulses == pulses
+            and snapshot.received_command == command
+            and snapshot.received_command_result == result
+        ):
+            first_received.set()
+
+    controller.add_snapshot_callback(observe_feedback)
+    transport.feedback(
+        _feedback_frame(pulses, sequence=2, controller_time=2, command=command, result=result)
+    )
+    assert first_received.wait(1.0)
+    first_received_ns = controller.snapshot.feedback_monotonic_ns
+    window_ns = controller.config.stationary_window_ms * 1_000_000
+    deadline = time.monotonic() + 1.0
+    while time.monotonic_ns() - first_received_ns < window_ns and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert time.monotonic_ns() - first_received_ns >= window_ns
+    transport.feedback(
+        _feedback_frame(pulses, sequence=3, controller_time=3, command=command, result=result)
+    )
+
+
 class _UnavailableAddressSocket(_FakeSocket):
     def bind(self, endpoint: tuple[str, int]) -> None:
         raise OSError(errno.EADDRNOTAVAIL, "Can't assign requested address")
@@ -174,9 +260,13 @@ def test_connect_explains_missing_local_feedback_address() -> None:
     assert transport.closed
 
 
-def test_move_completes_only_after_stable_controller_feedback() -> None:
-    transport = _FakeSocket()
-    controller = DirectMotionPlatformController(_config(), socket_factory=lambda: transport)
+@pytest.mark.parametrize("delayed_feedback", [False, True])
+def test_move_completes_only_after_stable_controller_feedback(delayed_feedback: bool) -> None:
+    transport = _DelayedFeedbackSocket() if delayed_feedback else _FakeSocket()
+    clock_ns = transport.clock_ns if delayed_feedback else time.monotonic_ns
+    controller = DirectMotionPlatformController(
+        _config(), socket_factory=lambda: transport, clock_ns=clock_ns,
+    )
     transport.feedback(_feedback_frame(sequence=1, controller_time=1))
     assert controller.connect().state == MotionPlatformState.READY
     pose = PlatformPose(1, 0, 0, 0, 0, 100)
@@ -198,9 +288,7 @@ def test_move_completes_only_after_stable_controller_feedback() -> None:
     assert transport.sent and transport.sent[0][1] == ("192.168.15.201", 7408)
     time.sleep(0.03)
     assert thread.is_alive(), "UDP send must not complete the action"
-    transport.feedback(_feedback_frame(target, sequence=2, controller_time=2))
-    time.sleep(0.03)
-    transport.feedback(_feedback_frame(target, sequence=3, controller_time=3))
+    _feed_stable_feedback(controller, transport, target)
     thread.join(1.0)
     controller.close()
     assert not failures
@@ -260,13 +348,6 @@ def test_home_requires_command_three_result_and_stable_zero_feedback() -> None:
     controller = DirectMotionPlatformController(_config(), socket_factory=lambda: transport)
     transport.feedback(_feedback_frame(sequence=1, controller_time=1))
     controller.connect()
-    first_home_feedback = threading.Event()
-
-    def observe_home_feedback(snapshot) -> None:
-        if snapshot.received_command == 3 and snapshot.received_command_result == 1:
-            first_home_feedback.set()
-
-    controller.add_snapshot_callback(observe_home_feedback)
     completed = []
     failures = []
     thread = threading.Thread(
@@ -277,11 +358,7 @@ def test_home_requires_command_three_result_and_stable_zero_feedback() -> None:
     while not transport.sent and time.monotonic() < deadline:
         time.sleep(0.005)
     assert transport.sent[0][0] == b"\xAA\x55\x00\x01\x03\xFB\xFB"
-    transport.feedback(_feedback_frame(sequence=2, controller_time=2, command=3, result=1))
-    # 先确认接收线程已经消费首帧，再建立两次接收间的稳定窗口。
-    assert first_home_feedback.wait(1.0)
-    time.sleep(0.03)
-    transport.feedback(_feedback_frame(sequence=3, controller_time=3, command=3, result=1))
+    _feed_stable_feedback(controller, transport, (0, 0, 0, 0, 0, 0), command=3, result=1)
     thread.join(1.0)
     assert not failures
     assert completed and completed[0].successful
@@ -312,9 +389,7 @@ def test_field_observed_residual_is_settled_within_physical_guard() -> None:
     deadline = time.monotonic() + 1.0
     while not transport.sent and time.monotonic() < deadline:
         time.sleep(0.005)
-    transport.feedback(_feedback_frame(stopped, sequence=2, controller_time=2))
-    time.sleep(0.03)
-    transport.feedback(_feedback_frame(stopped, sequence=3, controller_time=3))
+    _feed_stable_feedback(controller, transport, stopped)
     thread.join(1.0)
     controller.close()
     assert failures == []
@@ -344,9 +419,7 @@ def test_stopped_outside_target_is_reported_without_recovery_lock() -> None:
     deadline = time.monotonic() + 1.0
     while not transport.sent and time.monotonic() < deadline:
         time.sleep(0.005)
-    transport.feedback(_feedback_frame(stopped, sequence=2, controller_time=2))
-    time.sleep(0.03)
-    transport.feedback(_feedback_frame(stopped, sequence=3, controller_time=3))
+    _feed_stable_feedback(controller, transport, stopped)
     thread.join(1.0)
     assert failures == []
     assert completed and not completed[0].successful

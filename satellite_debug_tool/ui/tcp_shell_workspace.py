@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import hashlib
+import math
 from pathlib import Path
 import time
 from typing import Optional
@@ -342,7 +343,10 @@ class TcpShellWorkspace(QWidget):
         self._frame_timer = QTimer(self)
         self._frame_timer.setSingleShot(True)
         self._frame_timer.setInterval(_FRAME_INTERVAL_MS)
-        self._frame_timer.timeout.connect(self._flush_frame)
+        self._frame_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._frame_timer.timeout.connect(self._on_frame_timeout)
+        self._frame_due: Optional[float] = None
+        self._frame_running = False
         self._selected_file: Optional[Path] = None
         self._build_ui()
         self._bind_controller()
@@ -610,8 +614,8 @@ class TcpShellWorkspace(QWidget):
         self._final_drain_pending = True
         if self._active_ring.backlog_bytes == 0:
             self._complete_final_drain()
-        elif not self._frame_timer.isActive():
-            self._frame_timer.start()
+        else:
+            self._schedule_frame()
 
     def shutdown(self) -> bool:
         """请求同一关闭事务；调用方依据完成信号或返回值完成退出。"""
@@ -771,6 +775,7 @@ class TcpShellWorkspace(QWidget):
         self._sync_controls()
 
     def _on_connected(self, label: str) -> None:
+        self._reset_frame_schedule()
         ring = self._controller.rx_ring
         if ring is not None:
             self._active_ring = ring
@@ -798,8 +803,7 @@ class TcpShellWorkspace(QWidget):
     def _on_disconnected(self, reason: str) -> None:
         # link 已断开且残余已入环；线程结束由 shutdown_finished 独立确认。
         self._final_drain_pending = True
-        if not self._frame_timer.isActive():
-            self._frame_timer.start()
+        self._schedule_frame()
         self._append_event(tr("Disconnected: {reason}").format(reason=reason))
         self._sync_controls()
 
@@ -852,8 +856,44 @@ class TcpShellWorkspace(QWidget):
         self._append_event(tr("Terminal cleared"))
 
     def _on_rx_pending(self) -> None:
-        if not self._frame_timer.isActive():
-            self._frame_timer.start()
+        self._schedule_frame()
+
+    def _schedule_frame(self) -> None:
+        """同一实时帧 owner 只按当前帧起点 deadline 排一个单次回调。"""
+        if self._shutdown_complete or self._frame_running or self._frame_timer.isActive():
+            return
+        now = time.perf_counter()
+        if self._frame_due is None:
+            self._frame_due = now + _FRAME_INTERVAL_MS / 1000
+        delay_ms = max(0, math.ceil((self._frame_due - now) * 1000))
+        self._frame_timer.start(delay_ms)
+
+    def _reset_frame_schedule(self) -> None:
+        self._frame_timer.stop()
+        self._frame_due = None
+
+    @Slot()
+    def _on_frame_timeout(self) -> None:
+        if self._frame_due is None or self._frame_running:
+            return
+        started = time.perf_counter()
+        if started < self._frame_due:
+            self._schedule_frame()
+            return
+        # 下一周期从本次真实起点计算；超期只排一个回调，不累计追赶旧周期。
+        self._frame_due = started + _FRAME_INTERVAL_MS / 1000
+        self._frame_running = True
+        try:
+            self._flush_frame()
+        except Exception:
+            self._reset_frame_schedule()
+            raise
+        finally:
+            self._frame_running = False
+        if self._active_ring.backlog_bytes or self._final_drain_pending:
+            self._schedule_frame()
+        else:
+            self._reset_frame_schedule()
 
     def feed_rx(self, data: bytes) -> None:
         """确定性同步入口：接纳并完成给定字节的消费与投影，与真实路径共用实现。
@@ -910,8 +950,6 @@ class TcpShellWorkspace(QWidget):
         if self._final_drain_pending and ring.backlog_bytes == 0:
             self._complete_final_drain()
             return
-        if ring.backlog_bytes and not self._frame_timer.isActive():
-            self._frame_timer.start()
 
     def _ingest_segment(self, data: bytes, log_buffer: list[str]) -> TerminalUpdate:
         tokens = self._decoder.feed(data)
@@ -932,6 +970,7 @@ class TcpShellWorkspace(QWidget):
             self._refresh_input_feedback()
 
     def _complete_final_drain(self) -> None:
+        self._reset_frame_schedule()
         tokens = self._decoder.finish()
         rows_before = len(self._screen.rows)
         updates: list[TerminalUpdate] = []
@@ -944,7 +983,6 @@ class TcpShellWorkspace(QWidget):
         self._active_ring = RxRing()
         self._rx_epoch = self._active_ring.epoch
         if self._shutdown_pending and self._transport_shutdown_complete:
-            self._frame_timer.stop()
             writer = self._log_writer
             if writer is not None:
                 try:
