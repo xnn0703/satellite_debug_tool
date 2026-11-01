@@ -161,8 +161,7 @@ class TcpShellController(QObject):
     def disconnect_device(self, reason: str = "operator") -> None:
         worker = self._worker
         if worker is not None:
-            worker.submit_disconnect(reason)  # 断开原因进入会话证据与 UI 通知
-            worker.stop_and_join()
+            worker.stop_and_join(reason=reason)
             self._unbind_worker(worker)
         self._worker = None
         self._endpoint = None
@@ -197,7 +196,7 @@ class TcpShellController(QObject):
             self._finish_shutdown()
             return
         worker.finished.connect(self._finish_shutdown)
-        worker.request_stop()
+        worker.request_stop("shutdown")
         if not worker.isRunning():
             self._finish_shutdown()
 

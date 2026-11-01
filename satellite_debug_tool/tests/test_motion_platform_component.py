@@ -260,6 +260,13 @@ def test_home_requires_command_three_result_and_stable_zero_feedback() -> None:
     controller = DirectMotionPlatformController(_config(), socket_factory=lambda: transport)
     transport.feedback(_feedback_frame(sequence=1, controller_time=1))
     controller.connect()
+    first_home_feedback = threading.Event()
+
+    def observe_home_feedback(snapshot) -> None:
+        if snapshot.received_command == 3 and snapshot.received_command_result == 1:
+            first_home_feedback.set()
+
+    controller.add_snapshot_callback(observe_home_feedback)
     completed = []
     failures = []
     thread = threading.Thread(
@@ -271,6 +278,8 @@ def test_home_requires_command_three_result_and_stable_zero_feedback() -> None:
         time.sleep(0.005)
     assert transport.sent[0][0] == b"\xAA\x55\x00\x01\x03\xFB\xFB"
     transport.feedback(_feedback_frame(sequence=2, controller_time=2, command=3, result=1))
+    # 先确认接收线程已经消费首帧，再建立两次接收间的稳定窗口。
+    assert first_home_feedback.wait(1.0)
     time.sleep(0.03)
     transport.feedback(_feedback_frame(sequence=3, controller_time=3, command=3, result=1))
     thread.join(1.0)

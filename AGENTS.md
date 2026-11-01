@@ -17,7 +17,7 @@
 python3 -m satellite_debug_tool.main
 python3 -m satellite_debug_tool.main --production   # 解锁批量试产工作区（启动即进）
 
-# 测试（无 editable install 时需要 PYTHONPATH；100 个测试文件，conftest 已设 offscreen + 静默更新）
+# 测试（无 editable install 时需要 PYTHONPATH；conftest 已设 offscreen + 静默更新）
 PYTHONPATH=. pytest satellite_debug_tool/tests
 pytest satellite_debug_tool/tests/test_frame_v2.py -v      # 单文件
 pytest satellite_debug_tool/tests -k "crc"                 # 按 pattern
@@ -92,7 +92,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/iperf_test.py` — **M28** 每个客户设备独立的 iperf3 客户端 owner/Store；双 QProcess 独立运行 UL/DL，解析 3.18+ JSON-stream，并将网络指标与该设备的 PSW 样本写入同一测试会话
 - `core/comm/udp_endpoint_broker.py` — **M25** Customer/Production 共用的进程级单 UDP socket、admission claim、来源 endpoint 分流与定向发送
 - `core/product/` — **M18+** 客户 Product Service 模型、注册策略、Store、回放/legacy 投影与整快照来源状态机；每个 `ProductValue` 携带可用性、来源、接收时间和质量
-- `core/playback/` — **M21** 后台 SDB 构建线程与磁盘型 `PlaybackSeriesProvider`，按时间窗口和像素预算查询曲线数据
+- `core/playback/` — **M21** 后台 SDB 构建线程与磁盘型 `PlaybackSeriesProvider`，按时间窗口和像素预算查询曲线数据；每次窗口查询明确关闭自己的 SQLite 连接，正常和异常返回均释放文件句柄。
 - `core/comm/` — QThread worker：`BaseWorker`（QThread 基类）→ `SerialWorker` / `UdpWorker`
 - `core/data/` — `ChannelBuffer`、`DataStore`、`TelemetrySeriesStore`、`StateStore`、`EventLog` 与 GNSS/Orbit Store
 - `core/profile/` — `ProfileStore` + `ProfileCache`，设备 profile 驱动 UI；`semantics.py` 通道语义；`ins_yaw_display.py` 内部 INS 航向处理
@@ -145,7 +145,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **每个离线 Tab 使用独立 `DataStore` / `ProfileStore`**；共享 UDP 的 Customer 与 Engineering 通过当前 endpoint bundle 消费同一个 Runtime Store，工程串口和 Playback/Log 分别独立，切换不污染
 - 协议帧格式：`AA 55 0D` + cmd_type(1B) + len(2B LE) + data + CRC16-CCITT(2B LE) + `EE`；命令仅分配 `0x01..0x12`、`0x20..0x2C`、`0x30..0x31` 三段；DATA 段上限 `MAX_DATA_LENGTH=1536`，`MAX_FRAME_LENGTH=1548` 是设备端保守缓冲值（实际线上帧开销 9 B、最大 1545 B），DATA_REPORT 单帧最大 64 通道
 - 通用长帧扩容不改变专用上传分片合同：`OTA_DATA` 每片 1..1021 B（UI 通常发送 512 B），Orbit `UPLOAD_CHUNK` 每片 1..1012 B
-- 测试在 `satellite_debug_tool/tests/`（100 个文件），名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapplication_session` fixture 复用它
+- 测试在 `satellite_debug_tool/tests/`，名称和注释多为中文；`conftest.py` 的 session fixture 保持唯一 QApplication，UI 测试通过 `qapplication_session` fixture 复用它。HOME、USERPROFILE 和默认 ProfileCache 目录按测试项隔离。试产 UI 测试显式拥有本项创建的窗口，受控关闭后删除；Qt 全局窗口枚举不承担测试对象所有权。
 - `conftest.py` 自动设 `QT_QPA_PLATFORM=offscreen` + `SATELLITE_UPDATE_CHECK=0` + `SATELLITE_DEBUG_LOCALE=zh_CN`，**绝不要**在测试代码里访问 Gitee/GitHub API
 - 字号已固化 `small`（`base_px=13`，`main.py` 调 `S.apply_global_font(app, scale="small", base_px=13)`）；`styles.FONT_SCALES` / `FontScale` API 仅保留兼容 `test_styles.py`，UI 不再暴露
 - **M38 配色**：`dark / dark_hc / light` 三主题由 `ui/styles.py` 统一提供石墨灰/中性浅灰、蓝色操作与选择、独立状态色及 Qt 原生调色板。实底按钮、选中项、焦点和进度条分别使用成对角色；曲线/GNSS/姿态/ANSI 保持类别含义并集中调整主题亮度。常规数值使用正文色；切主题立即重绘已有状态和终端格式，顶栏图标按钮循环切换。
@@ -162,6 +162,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - Customer 侧栏与 Engineering 顶栏的“摇摆台…”入口复用同一个弹窗实例和进程级 `FixtureRuntime`；提供日常相对姿态、回中、组合连续摇摆、受控停止、MS 绝对航向和有界姿态修正，目标/MS 实测/误差共用一张姿态图。回原点、档案编辑和资格标定仍由 Production 工程页面负责。
 - 第一方可翻译复合控件显式实现 `retranslate_ui()`；语言切换使用稳定源键，禁止扫描对象树或根据当前可见文本反查业务状态。
 - **M43 Shell 输入/回显合同**：普通命令文字采用 ASCII，键盘、输入法 commit 与粘贴统一原子校验，非 ASCII/非法控制字节在发送前明确提示。接收流由 `core/tcp_shell/terminal.py` 单次解析；`TerminalScreen` 独占行、单元格、光标和颜色，Qt 文档仅投影。BS 左移后覆盖，水平游标跨包保持；正文/HEX 使用独立文档并持续消费同一接收流。原始字节与 YMODEM 文件名保持既有合同。
+- **M53 Shell 停止意图**：worker 的 `request_stop(reason)` 原子冻结本会话首个停止原因并唤醒读取、环等待与 YMODEM；同步断开与应用退出均进入这一 owner。残余字节移交、录制封口和断开通知共用收尾，已观察到的传输故障保留独立原因。普通命令队列只处理发送、清屏和传输，不再维护另一条断开状态。
 - **M45 Shell 有界消费与按帧投影**：shell 接收字节由 worker 独占推入每连接一个的有界 `RxRing`（512 KiB，满载有界等待片段 ≤20ms 并在片段间泵命令，YMODEM 启动不进入环等待栈）；`rx_pending` 仅在锁内"待观察态"翻转边沿发射，UI 以 33ms 单次定时器按帧消费——每帧 16 KiB 预算、4 KiB 分段、8ms 解析软预算，帧内多个 `TerminalUpdate` 用平移公式合并后单 edit block 投影。TCP/串口单次读取统一 ≤64 KiB；停止/退出把已读未入环残余 `push_final` 非阻塞移交，UI 分帧终排空后 `decoder.finish`、文本日志最后关闭；应用退出与关闭弹窗共用该收尾状态机。文档物理淘汰由 `maximumBlockCount(=max_rows)` 拥有（手动从头删除是与块数无关的 O(文档) ~160ms，该路径已删除），寻址偏移只计帧前已存在的被淘汰行；清屏以 ring 代际划界，已入环与在途旧字节不进入新屏幕。controller `disconnected/ymodem_finished` 直连转发且私有状态先更新后外发。实测：满载 5000 行持续消费 92,160 B/s、洪水中键→命令入队 p99 ~24ms、按帧可持续 ~756 KiB/s。
 - **M44 采集时间代际**：`DeviceSessionCore` 在入库前使用 `TelemetryClock` 统一准入；周期流连续三个推进的反向时间样本确认采集新段（256 帧/5 秒有界候选），u32 回绕结合主机经过时间，单个旧包保留原事实。新段重建 Product 动态事实、Debug 与相关历史锚点；移动时间围栏隔离迟到旧段包。`telemetry_epoch` 与连接 generation 独立，旧操作 scope 失效，参数/控制与 OTA 重启验证消费同一代际事件，Runtime 身份授权重建，endpoint 传输继续。显示清空保留时间锚点。SDB 原始帧完整留存，派生回放分段并插入 NaN；boot ID 缺失与 SDB v2 缺少逐帧主机时间的辨识边界见 M44 计划。
 - **Shell/YMODEM 是两版共享工具路径**——Shell 观察与输入不持设备事务租约；YMODEM 开始前对有管理会话的 endpoint 以 `tcp-shell-ymodem` purpose 抢占操作网关（客户/工程走 attachment 网关，批次外设备要求 gate 空闲；仅 TCP 目标可命中设备目录），手填 TCP 目标与串口目标允许直传并在证据记录 `managed_session: false`。YMODEM 文件名原样保留：`<target>_app_X.Y.Z_release|beta.bin` → 设备 DOWNLOAD 区、`app_factory.bin` → FACTORY 区、其他 → LittleFS、跨产品被设备拒绝；接收端准入（如 XESA01 RT-Thread `ry`/`ymodem_ota` 或 AFD01 系文件名路由）由各设备固件权威决定。YMODEM 帧块类型合同：头包与批结束帧 SOH/128、数据块 STX/1024——RT-Thread rym 接收端（4-xesa01）对批结束头固定按 128 字节校验，AFD01 接收端按帧头自适应两种块长；超长头包（>128B）回退 STX，两类接收端都接受。头包 ACK 与最终 EOT ACK 都等待在存储操作窗口（`final_ack_timeout_s` 20 s）：RT-Thread `yota` 在头包 ACK 前同步擦除 download 分区（XESA01 552 KiB 实测 ~7 s，分区 1 MiB），AFD01 在最终 EOT ACK 前落盘 flash；数据块 ACK 用短块窗口。XESA01 设备侧接收命令是 `yota`（每次开始前手动输入），`rb` 仅存在于 AFD01 letter-shell。YMODEM 完成只证明字节已被设备接收校验；升级生效由重启后握手回读独立呈现，不自动判 PASS。
@@ -198,10 +199,11 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **macOS 本地打包**：`./scripts/build_macos.sh user|ops|both`（默认 ops），准备约束依赖、检查翻译、PyInstaller 构建、验证 edition 身份并归档；ops 包含 updater，user 裁剪 updater。普通构建只写本地；`scripts/release_macos.py` 使用干净的指定 SHA 完成构建、冻结 smoke、候选校验及自动上传。
 - **Windows 一键打包**：`scripts\build_windows.bat user|ops|both`（默认 ops）；两平台均由 `scripts/build_editions.py` 调用 spec、验证模型与构建身份并生成独立 zip。Windows 安装目录分别为 `SatelliteTerminalManager`、`SatelliteTerminalManagerOps`，EXE 为 `SatelliteTerminalManager.exe`；macOS 使用对应同名 app，内部主程序为 `SatelliteTerminalManager`。
+- **CI 放行证据**：完整 pytest 与翻译检查分别作为独立 step 接收退出码；源码失败或原生崩溃立即阻止构建。Mac 与 Windows 测试、冻结 smoke、归档身份/CRC/SHA-256 和服务端公开下载分别记录，某一平台成功只证明该平台对应阶段。
 - **Windows 包合同**：ops `.7z` 归档根包含 `SatelliteTerminalManager.exe`、`updater.exe` 与 `_internal/`；user 完整包保留主程序及运行依赖、裁剪应用 updater 和在线源配置。上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷。旧版本 <=1.8.1 首次人工取得 v1.9.0 完整包迁入新站；历史包保持原样。
 - **CI**：`.github/workflows/build.yml` 用 Windows Runner 构建 user/ops。tag/dispatch 精确解析并 checkout 标签 SHA，测试与冻结 smoke 后生成不可变候选；两版成功后通过受保护的 `release-candidate` environment 上传 ECS 暂存区。普通分支/PR 只产出 artifact。工作流不创建 GitHub Release，不持有正式签名密钥。
 - **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、冻结 smoke 并上传候选；ops 客户端首轮支持可信检查和校验下载，安装由人员退出旧程序后替换应用。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（本轮规划 `1.9.0`，发布状态以 M53 验证记录为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.0`，发布状态以 M53 验证记录为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；Mac 本地使用 Python 3.11 调用 `scripts/release_macos.py` 构建并上传候选；四包校验后 ops 签名晋升 stable，user 公开完整包
 - **`release.config.json`** 配 `app_id/repo_id/channel`、HTTPS metadata/target 入口和内嵌 TUF 公钥 root；未配置时明确等待部署，不回退 GitHub。私钥和上传凭据保存在仓库外。
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败

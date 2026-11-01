@@ -8,6 +8,7 @@ pixel-sized window instead of every sample in the recording.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 import math
 import os
@@ -221,7 +222,7 @@ class PlaybackSeriesProvider:
             start, end = end, start
         point_budget = max(64, int(max_points_per_channel))
         store = DataStore(max_channels=64, buffer_capacity=point_budget)
-        with sqlite3.connect(str(self._path)) as connection:
+        with closing(sqlite3.connect(str(self._path))) as connection:
             counts = connection.execute(
                 """
                 SELECT channel_id, COUNT(*)

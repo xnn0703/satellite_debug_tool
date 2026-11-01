@@ -964,6 +964,7 @@ def test_gnss_header_reflows_without_clipping_under_real_qss(qapp, real_light_qs
 
     row_counts = {}
     font_sizes = {}
+    single_row_fits = {}
     for width in (1024, 800, 520):
         widget.resize(width, 700)
         qapp.processEvents()
@@ -980,9 +981,14 @@ def test_gnss_header_reflows_without_clipping_under_real_qss(qapp, real_light_qs
             for checkbox in (*widget._system_checks.values(), widget._cn0_color)
         })
         font_sizes[width] = widget._stats.font().pixelSize()
+        checkboxes = [*widget._system_checks.values(), widget._cn0_color]
+        required_width = sum(checkbox.sizeHint().width() for checkbox in checkboxes)
+        required_width += widget._filters_host.flow.horizontal_spacing() * (len(checkboxes) - 1)
+        single_row_fits[width] = required_width < widget._filters_host.width()
 
     assert row_counts[1024] == 1
-    assert row_counts[800] == 1
+    # Windows 与 macOS 的字体/indicator 度量不同，实际宽度决定 800 px 是否换行。
+    assert (row_counts[800] == 1) == single_row_fits[800]
     assert row_counts[520] > 1
     assert widget._filters_host.height() == widget._filters_host.heightForWidth(
         widget._filters_host.width()

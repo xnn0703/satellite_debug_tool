@@ -46,11 +46,6 @@ class _ConnectCommand:
 
 
 @dataclass
-class _DisconnectCommand:
-    reason: str = ""
-
-
-@dataclass
 class _SendTextCommand:
     payload: bytes
 
@@ -72,7 +67,6 @@ class _LinkClosed(RuntimeError):
 class _PumpDisposition(str, Enum):
     """命令泵在入环等待片段间遇到的中断类命令。"""
 
-    DISCONNECT = "disconnect"
     CLEAR_RX = "clear-rx"
 
 
@@ -129,6 +123,8 @@ class TcpShellWorker(QThread):
         self._sender = sender
         self._commands: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
+        self._stop_lock = threading.Lock()
+        self._stop_reason: Optional[str] = None
         self._ymodem_cancel = threading.Event()
         self._link: Optional[ShellLink] = None
         self._state = TcpShellWorkerState.DISCONNECTED
@@ -150,7 +146,7 @@ class TcpShellWorker(QThread):
         self._commands.put(_ConnectCommand())
 
     def submit_disconnect(self, reason: str = "") -> None:
-        self._commands.put(_DisconnectCommand(reason))
+        self.request_stop(reason or "operator")
 
     def submit_send_raw(self, payload: bytes) -> None:
         self._commands.put(_SendTextCommand(bytes(payload)))
@@ -165,14 +161,17 @@ class TcpShellWorker(QThread):
         """Thread-safe cancel; the sender notices within one recv timeout."""
         self._ymodem_cancel.set()
 
-    def request_stop(self) -> None:
-        self._stop_event.set()
-        self._ymodem_cancel.set()
-        self.rx_ring.wake_stop()
-        self.submit_disconnect("worker-stop")
+    def request_stop(self, reason: str = "worker-stop") -> None:
+        """冻结本会话首个停止意图；唤醒只服务于该意图的收尾。"""
+        with self._stop_lock:
+            if self._stop_reason is None:
+                self._stop_reason = reason or "worker-stop"
+            self._stop_event.set()
+            self._ymodem_cancel.set()
+            self.rx_ring.wake_stop()
 
-    def stop_and_join(self, timeout_ms: int = 5000) -> None:
-        self.request_stop()
+    def stop_and_join(self, timeout_ms: int = 5000, *, reason: str = "worker-stop") -> None:
+        self.request_stop(reason)
         if not self.wait(timeout_ms):
             raise RuntimeError("TCP Shell worker is still stopping")
 
@@ -190,11 +189,9 @@ class TcpShellWorker(QThread):
                         continue
                     if self._connect():
                         self._shell_loop()
-                elif isinstance(command, _DisconnectCommand):
-                    break
         finally:
             self._close_link()
-            self._finalize_recorder(reason="worker-stopped")
+            self._finalize_recorder(reason=self._stop_reason or "worker-stopped")
             self._set_state(TcpShellWorkerState.DISCONNECTED)
 
     def _connect(self) -> bool:
@@ -231,43 +228,37 @@ class TcpShellWorker(QThread):
         return True
 
     def _shell_loop(self) -> None:
-        close_reason = "closed"
+        close_reason: Optional[str] = None
         residual = b""
-        pump_disconnect_reason: Optional[str] = None
         while not self._stop_event.is_set():
             try:
                 data = self._recv_bytes(0.05)
             except _LinkClosed as exc:
                 close_reason = str(exc) or "link-closed"
                 break
-            abort, remaining, reason = self._feed_ring(data)
-            if abort == "disconnect":
-                residual = remaining
-                pump_disconnect_reason = reason
-                break
+            abort, remaining = self._feed_ring(data)
             if abort == "stop":
                 residual = remaining
                 break
             # abort == "clear-rx"：后缀已按清屏代际丢弃，继续常规命令处理
             exit_hint = self._handle_commands()
-            if exit_hint == "disconnect":
-                return  # 命令式断开已在 _handle_commands 内完成收尾
             if exit_hint is not None:
                 close_reason = exit_hint
                 break
         self._hand_over_residual(residual)
-        if pump_disconnect_reason is not None:
-            self._disconnect_now(pump_disconnect_reason)
-            return
+        if self._stop_reason is not None:
+            self._record_event("disconnect_requested", {"reason": self._stop_reason})
+        # 已观察到的传输故障保持其原因；主动停止使用冻结的操作意图。
+        close_reason = close_reason or self._stop_reason or "closed"
         self._close_link()
         self._finalize_recorder(reason=close_reason)
         self._emit_disconnected(close_reason)
 
     def _handle_commands(self) -> Optional[str]:
-        """处理命令队列；返回退出原因（disconnect 直接完成收尾并返回）。"""
+        """处理常规命令；停止意图由会话 owner 的统一收尾消费。"""
 
         close_hint: Optional[str] = None
-        while True:
+        while not self._stop_event.is_set():
             try:
                 command = self._commands.get_nowait()
             except queue.Empty:
@@ -283,23 +274,16 @@ class TcpShellWorker(QThread):
                     close_hint = "link-closed-during-ymodem"
             elif isinstance(command, _ClearRxCommand):
                 self._clear_rx_ring()
-            elif isinstance(command, _DisconnectCommand):
-                self._record_event("disconnect_requested", {"reason": command.reason})
-                self._commands.put(command)  # let the outer loop exit too
-                self._close_link()
-                self._finalize_recorder(reason=command.reason or "operator")
-                self._emit_disconnected(command.reason or "operator")
-                return "disconnect"
             elif isinstance(command, _ConnectCommand):
                 continue
         return close_hint
 
     # -- rx ring feeding (worker thread) ------------------------------------------
 
-    def _feed_ring(self, data: bytes) -> tuple[Optional[str], bytes, str]:
+    def _feed_ring(self, data: bytes) -> tuple[Optional[str], bytes]:
         """把已读字节入环；容量等待片段间泵命令。
 
-        返回 (中断原因, 未入环后缀, 断开原因)：stop/disconnect 需移交后缀；
+        返回 (中断原因, 未入环后缀)：stop 需移交后缀；
         clear-rx 的后缀已按清屏代际丢弃，返回空后缀。
         """
 
@@ -310,23 +294,20 @@ class TcpShellWorker(QThread):
                 self.rx_pending.emit()
             remaining = remaining[result.accepted:]
             if result.status is PushStatus.STOPPED:
-                return "stop", remaining, ""
+                return "stop", remaining
             if result.status is PushStatus.RETRY:
-                disposition, reason = self._pump_commands_in_push()
-                if disposition is _PumpDisposition.DISCONNECT:
-                    return "disconnect", remaining, reason
+                disposition = self._pump_commands_in_push()
                 if disposition is _PumpDisposition.CLEAR_RX:
                     self._clear_rx_ring()
-                    return "clear-rx", b"", ""
-        return None, b"", ""
+                    return "clear-rx", b""
+        return None, b""
 
-    def _pump_commands_in_push(self) -> tuple[Optional[_PumpDisposition], str]:
-        """入环等待片段间的命令泵：发送立即执行，YMODEM 推迟，断开/清屏中断。"""
+    def _pump_commands_in_push(self) -> Optional[_PumpDisposition]:
+        """入环等待片段间的命令泵：发送立即执行，YMODEM 推迟，清屏中断。"""
 
         stashed: list = []
         disposition: Optional[_PumpDisposition] = None
-        reason = ""
-        while disposition is None:
+        while disposition is None and not self._stop_event.is_set():
             try:
                 command = self._commands.get_nowait()
             except queue.Empty:
@@ -340,15 +321,11 @@ class TcpShellWorker(QThread):
                 stashed.append(command)  # 不在入环等待栈内执行；回队由外层调度
             elif isinstance(command, _ClearRxCommand):
                 disposition = _PumpDisposition.CLEAR_RX
-            elif isinstance(command, _DisconnectCommand):
-                self._commands.put(command)  # let the outer loop exit too
-                reason = command.reason or "operator"
-                disposition = _PumpDisposition.DISCONNECT
             elif isinstance(command, _ConnectCommand):
                 continue
         for command in stashed:
             self._commands.put(command)
-        return disposition, reason
+        return disposition
 
     def _clear_rx_ring(self) -> None:
         """清屏代际：丢弃已入环字节并推进代际；在途后缀由调用方丢弃。"""
@@ -362,15 +339,12 @@ class TcpShellWorker(QThread):
         if self.rx_ring.push_final(suffix):
             self.rx_pending.emit()
 
-    def _disconnect_now(self, reason: str) -> None:
-        self._record_event("disconnect_requested", {"reason": reason})
-        self._close_link()
-        self._finalize_recorder(reason=reason)
-        self._emit_disconnected(reason)
-
     def _run_ymodem(self, spec: YmodemFileSpec) -> None:
         recorder = self._recorder
-        self._ymodem_cancel.clear()
+        with self._stop_lock:
+            if self._stop_event.is_set():
+                return
+            self._ymodem_cancel.clear()
         self._set_state(TcpShellWorkerState.YMODEM)
         self._record_event(
             "ymodem_started",

@@ -1,6 +1,6 @@
 # M53 验收标准
 
-- 中文/英文窗口、关于页、平台显示名称和归档使用已确认名称，翻译 update/check 通过。
+- 中文/英文窗口、平台显示名称和归档使用已确认名称，翻译 update/check 通过。
 - user/ops 文件名、可执行入口、构建身份、冻结 smoke、归档验证与更新器目标合同一致；回归覆盖新文件名。
 - app/repo 信任身份、配置持久路径和设备固件认证域保持原合同。
 - v1.9.0 commit/tag 与四包 build identity 一致，源代码全量测试通过。
@@ -10,5 +10,8 @@
 - 构建、冻结启动、云端分发与 Windows 实机升级、物理设备测试分开记录；没有实机证据不声明实机通过。
 - Mac Python 3.11 发布环境中，会话对象回收后共享主线程、图标插件和窗口构造持续有效；非 owner 线程调用仍被拒绝。原崩溃的测试顺序与全量测试均通过。
 - SFTP 有界并发读写保持摘要一致、错误传播与封口顺序；上传失败时公开目录仍保持先前版本。
+- Windows pytest 的失败或原生崩溃使其 CI step 失败并阻止构建。两平台真实测试结果独立保存，翻译成功单独表示资源检查通过。
+- 测试 HOME、USERPROFILE 与 ProfileCache 按项隔离；SQLite 窗口读取在正常及异常返回时关闭连接，Shell 操作员停止的原因保持至完成回执。
+- 三主题复选框/单选框在获得及失去焦点时尺寸恒定，GNSS 独立首次展示和窄窗显示完整；更新器失败测试校验提示内容并由测试拥有原生交互和登录恢复边界。
 
 - 客户目录/app 为 SatelliteTerminalManager / SatelliteTerminalManager.app，客户归档为 satellite_terminal_manager-{platform}-{arch}-v{version}.{extension}；运维版目录/app 保留 Ops、归档保留 -ops-，客户版本栏仅显示版本。命名、冻结入口、人工交付和 UI 回归均覆盖，先记录旧实现失败再确认修复通过。

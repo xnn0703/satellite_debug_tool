@@ -1,13 +1,53 @@
 """真实归档/文件树加模拟新进程的完整安装与恢复验收。"""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from satellite_debug_tool.tests._updater_helpers import make_request
 from satellite_debug_tool.updater import main as updater_main
+from satellite_debug_tool.updater import recovery
 from satellite_debug_tool.updater.recovery import InstallJournal
 from satellite_debug_tool.updater.status import write_atomic_json
+
+
+_show_windows_failure = updater_main._show_windows_failure
+
+
+@pytest.fixture(autouse=True)
+def platform_effects(monkeypatch):
+    """事务测试观察 OS 意图，提示窗口和登录启动项使用独立的边界测试。"""
+    effects = SimpleNamespace(failures=[], registered=[], removed=[])
+    monkeypatch.setattr(updater_main, "_show_windows_failure", lambda *args: effects.failures.append(args))
+    monkeypatch.setattr(updater_main, "register_login_recovery", lambda *args: effects.registered.append(args))
+    for module in (updater_main, recovery):
+        monkeypatch.setattr(module, "remove_login_recovery", lambda path: effects.removed.append(path))
+    return effects
+
+
+def assert_failure_reported(effects, request, stage):
+    status = json.loads(request.status_path.read_text(encoding="utf-8"))
+    assert status["state"] == "failed"
+    assert status["stage"] == stage
+    assert status["detail"]
+    assert effects.failures == [(stage, status["detail"], request.log_path)]
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_failure_dialog_presents_stage_detail_and_log_on_windows(monkeypatch, tmp_path, platform):
+    import ctypes
+
+    calls = []
+    monkeypatch.setattr(updater_main, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=SimpleNamespace(
+        MessageBoxW=lambda *args: calls.append(args),
+    )), raising=False)
+    log_path = tmp_path / "updater.log"
+    _show_windows_failure("verifying", "package changed", log_path)
+    expected = [(None, f"自动更新失败\n\n阶段：verifying\n原因：package changed\n\n日志：{log_path}",
+                 "Satellite Terminal Manager Updater", 0x10)] if platform == "win32" else []
+    assert calls == expected
 
 
 class TrialProcess:
@@ -81,7 +121,7 @@ def test_trial_launch_uses_maintenance_cwd(tmp_path, monkeypatch):
     assert calls[0][1]["cwd"] == str(request.transaction_dir)
 
 
-def test_recovery_cli_releases_installation_cwd_before_rename(tmp_path, monkeypatch):
+def test_recovery_cli_releases_installation_cwd_before_rename(tmp_path, monkeypatch, platform_effects):
     from types import SimpleNamespace
     from satellite_debug_tool.tests.test_updater_applier import prepare
     from satellite_debug_tool.updater.applier import Applier
@@ -100,9 +140,27 @@ def test_recovery_cli_releases_installation_cwd_before_rename(tmp_path, monkeypa
     assert updater_main.main(["--recover", str(journal.path)]) == 0
     assert len(observed) == 2
     assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert platform_effects.failures == []
+    assert platform_effects.registered == []
+    assert platform_effects.removed == [install]
 
 
-def test_other_installed_process_prevents_configuration_snapshot(tmp_path, monkeypatch):
+def test_recovery_cli_reports_failure_once(tmp_path, monkeypatch, platform_effects):
+    detail = "persistent recovery journal cannot be read"
+
+    def fail_recovery(_path):
+        raise recovery.RecoveryError(detail)
+
+    monkeypatch.setattr(updater_main, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(updater_main, "_setup_logging", lambda *_args: None)
+    monkeypatch.setattr(updater_main, "recover_installation", fail_recovery)
+    assert updater_main.main(["--recover", str(tmp_path / "journal.json")]) == 3
+    assert platform_effects.failures == [("recovery", detail, tmp_path / "updater.log")]
+    assert platform_effects.registered == []
+    assert platform_effects.removed == []
+
+
+def test_other_installed_process_prevents_configuration_snapshot(tmp_path, monkeypatch, platform_effects):
     import psutil
     from types import SimpleNamespace
     request = make_request(tmp_path)
@@ -112,9 +170,13 @@ def test_other_installed_process_prevents_configuration_snapshot(tmp_path, monke
     assert updater_main.execute_update(request) == 3
     assert not (request.transaction_dir / "configuration-backup").exists()
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert_failure_reported(platform_effects, request, "waiting_for_app_exit")
+    assert "PID 456" in platform_effects.failures[0][1]
+    assert platform_effects.registered == []
+    assert platform_effects.removed == []
 
 
-def test_wait_timeout_keeps_installation(tmp_path, monkeypatch):
+def test_wait_timeout_keeps_installation(tmp_path, monkeypatch, platform_effects):
     request = make_request(tmp_path)
     monkeypatch.setattr(updater_main, "wait_for_pid", lambda *_args: False)
     assert updater_main.execute_update(request) == 2
@@ -122,10 +184,13 @@ def test_wait_timeout_keeps_installation(tmp_path, monkeypatch):
     assert status["state"] == "failed"
     assert status["stage"] == "waiting_for_app_exit"
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert platform_effects.failures == []
+    assert platform_effects.registered == []
+    assert platform_effects.removed == []
 
 
 @pytest.mark.parametrize("prepared", [False, True])
-def test_complete_and_prepared_tree_share_health_transaction(tmp_path, monkeypatch, prepared):
+def test_complete_and_prepared_tree_share_health_transaction(tmp_path, monkeypatch, prepared, platform_effects):
     request = make_request(tmp_path, prepared=prepared)
     trial = install_trial(monkeypatch, request)
     assert updater_main.execute_update(request, health_timeout=0.2) == 0
@@ -139,10 +204,14 @@ def test_complete_and_prepared_tree_share_health_transaction(tmp_path, monkeypat
     assert commit["pid"] == trial.pid
     assert commit["transaction_id"] == request.transaction_id
     assert not trial.terminated
+    assert platform_effects.failures == []
+    assert platform_effects.registered == [(request.updater_executable,
+                                            request.transaction_dir / "journal.json", request.install_dir)]
+    assert platform_effects.removed == [request.install_dir]
 
 
 @pytest.mark.parametrize("mode", ["exit", "timeout", "wrong_token", "wrong_pid", "wrong_version"])
-def test_spawn_and_invalid_receipts_cannot_mark_success(tmp_path, monkeypatch, mode):
+def test_spawn_and_invalid_receipts_cannot_mark_success(tmp_path, monkeypatch, mode, platform_effects):
     """旧实现 Popen 成功立即 completed；这些已启动的新进程都必须回退。"""
     request = make_request(tmp_path)
     trial = install_trial(monkeypatch, request, mode)
@@ -153,9 +222,12 @@ def test_spawn_and_invalid_receipts_cannot_mark_success(tmp_path, monkeypatch, m
     assert status["recovery"] == "rolled_back"
     assert not (request.transaction_dir / "health-commit.json").exists()
     assert trial.terminated or trial.returncode is not None
+    assert_failure_reported(platform_effects, request, "waiting_for_health")
+    assert len(platform_effects.registered) == 1
+    assert platform_effects.removed == [request.install_dir]
 
 
-def test_recovery_registration_failure_precedes_old_directory_move(tmp_path, monkeypatch):
+def test_recovery_registration_failure_precedes_old_directory_move(tmp_path, monkeypatch, platform_effects):
     request = make_request(tmp_path)
     install_trial(monkeypatch, request)
     def failure(*_args):
@@ -164,10 +236,14 @@ def test_recovery_registration_failure_precedes_old_directory_move(tmp_path, mon
     assert updater_main.execute_update(request) == 3
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
     assert not list(tmp_path.glob("install.bak.*"))
+    assert_failure_reported(platform_effects, request, "registering_recovery")
+    assert platform_effects.failures[0][1] == "login recovery registration refused"
+    assert platform_effects.registered == []
+    assert platform_effects.removed == [request.install_dir]
 
 
 @pytest.mark.parametrize("target", ["package", "manifest", "prepared_tree"])
-def test_inputs_reverified_after_download_and_handoff(tmp_path, monkeypatch, target):
+def test_inputs_reverified_after_download_and_handoff(tmp_path, monkeypatch, target, platform_effects):
     request = make_request(tmp_path, prepared=target == "prepared_tree")
     install_trial(monkeypatch, request)
     if target == "package":
@@ -179,9 +255,12 @@ def test_inputs_reverified_after_download_and_handoff(tmp_path, monkeypatch, tar
     assert updater_main.execute_update(request) == 3
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
     assert not list(tmp_path.glob("install.bak.*"))
+    assert_failure_reported(platform_effects, request, "preparing" if target == "prepared_tree" else "verifying")
+    assert platform_effects.registered == []
+    assert platform_effects.removed == []
 
 
-def test_trial_configuration_rollback_preserves_recordings(tmp_path, monkeypatch):
+def test_trial_configuration_rollback_preserves_recordings(tmp_path, monkeypatch, platform_effects):
     request = make_request(tmp_path)
     recording = request.settings_directory / "important.sdb"
     recording.write_bytes(b"recorded-data")
@@ -194,13 +273,17 @@ def test_trial_configuration_rollback_preserves_recordings(tmp_path, monkeypatch
     assert (request.settings_directory / "settings.json").read_bytes() == original
     assert not (request.settings_directory / "settings.json.bak").exists()
     assert recording.read_bytes() == b"recorded-data"
+    assert_failure_reported(platform_effects, request, "waiting_for_health")
+    assert len(platform_effects.registered) == 1
+    assert platform_effects.removed == [request.install_dir]
     journal = InstallJournal.load(request.transaction_dir / "journal.json")
     (request.settings_directory / "settings.json").write_text('{"user_changed_after_recovery":true}')
     journal.rollback()
     assert "user_changed_after_recovery" in (request.settings_directory / "settings.json").read_text()
+    assert platform_effects.removed == [request.install_dir, request.install_dir]
 
 
-def test_trial_settings_restored_when_process_identity_lookup_fails(tmp_path, monkeypatch):
+def test_trial_settings_restored_when_process_identity_lookup_fails(tmp_path, monkeypatch, platform_effects):
     import psutil
     request = make_request(tmp_path)
     settings_file = request.settings_directory / "settings.json"
@@ -213,10 +296,15 @@ def test_trial_settings_restored_when_process_identity_lookup_fails(tmp_path, mo
     assert trial.terminated
     assert settings_file.read_bytes() == original
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert_failure_reported(platform_effects, request, "waiting_for_health")
+    assert len(platform_effects.registered) == 1
+    assert platform_effects.removed == [request.install_dir]
 
 
 @pytest.mark.parametrize("binding", ["environment", "receipt", "unknown", "denied", "unresolved_exe"])
-def test_recovery_confirms_trial_exit_when_updater_dies_before_pid_journal(tmp_path, monkeypatch, binding):
+def test_recovery_confirms_trial_exit_when_updater_dies_before_pid_journal(
+    tmp_path, monkeypatch, binding, platform_effects,
+):
     import psutil
     from satellite_debug_tool.updater.health import HEALTH_ENV
     from satellite_debug_tool.updater.recovery import recover_installation, RecoveryError
@@ -267,9 +355,12 @@ def test_recovery_confirms_trial_exit_when_updater_dies_before_pid_journal(tmp_p
         assert renamed == []
         assert settings_file.read_text() == '{"schema":2}'
         assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
+    assert platform_effects.failures == []
+    assert len(platform_effects.registered) == 1
+    assert platform_effects.removed == ([request.install_dir] if binding in {"environment", "receipt"} else [])
 
 
-def test_failed_install_keeps_lock_through_rollback(tmp_path, monkeypatch):
+def test_failed_install_keeps_lock_through_rollback(tmp_path, monkeypatch, platform_effects):
     from satellite_debug_tool.updater.recovery import InstallationLock, RecoveryError
     request = make_request(tmp_path)
     install_trial(monkeypatch, request, "exit")
@@ -284,10 +375,13 @@ def test_failed_install_keeps_lock_through_rollback(tmp_path, monkeypatch):
     monkeypatch.setattr(InstallJournal, "rollback", rollback)
     assert updater_main.execute_update(request) == 3
     assert observed
+    assert_failure_reported(platform_effects, request, "waiting_for_health")
+    assert len(platform_effects.registered) == 1
+    assert platform_effects.removed == [request.install_dir]
 
 
 @pytest.mark.parametrize("alive", [True, False])
-def test_recovery_after_committed_journal_before_commit_delivery(tmp_path, monkeypatch, alive):
+def test_recovery_after_committed_journal_before_commit_delivery(tmp_path, monkeypatch, alive, platform_effects):
     import psutil
     from satellite_debug_tool.updater.recovery import recover_installation
     request = make_request(tmp_path)
@@ -303,3 +397,6 @@ def test_recovery_after_committed_journal_before_commit_delivery(tmp_path, monke
     assert journal.data["application_phase"] == ("ready" if alive else "closed")
     assert commit.exists() is alive
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
+    assert platform_effects.failures == []
+    assert len(platform_effects.registered) == 1
+    assert platform_effects.removed == [request.install_dir, request.install_dir]

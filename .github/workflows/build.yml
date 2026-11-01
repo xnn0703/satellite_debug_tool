@@ -58,10 +58,10 @@ jobs:
           cache-dependency-path: requirements/build-*.txt
       - name: Restore constrained build environment
         run: python -m pip install -r requirements/build-windows.txt
-      - name: Source regression and translations
-        run: |
-          python -m pytest satellite_debug_tool/tests -q
-          python scripts/update_translations.py check
+      - name: Source regression
+        run: python -m pytest satellite_debug_tool/tests -q -x -o faulthandler_timeout=120
+      - name: Translation catalog
+        run: python scripts/update_translations.py check
       - name: Build immutable edition
         run: python scripts/build_editions.py ${{ matrix.edition }}
       - name: Frozen software smoke
@@ -157,7 +157,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/build-*.txt
       - run: python -m pip install -r requirements/build-windows.txt
-      - run: python -m pytest satellite_debug_tool/tests -q
+      - run: python -m pytest satellite_debug_tool/tests -q -x -o faulthandler_timeout=120
+      - run: python scripts/update_translations.py check
       - run: python scripts/build_editions.py ${{ matrix.edition }}
       - name: Frozen software smoke
         env:

@@ -43,7 +43,7 @@ def test_package_freezes_final_bytes_and_refuses_rebuild(tmp_path, edition):
         assert (len(content), hashlib.sha256(content).hexdigest()) == (row["size"], row["sha256"])
     manifest = json.loads((receipt.parent / "payload-manifest.json").read_text())
     assert manifest["identity"]["platform"] == "windows"
-    assert {row["path"] for row in manifest["files"]} == {str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()}
+    assert {row["path"] for row in manifest["files"]} == {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     saved = receipt.read_bytes()
     with pytest.raises(ValueError, match="already exists"):
         package(root, receipt.parent, commit="a" * 40, version="1.8.1")

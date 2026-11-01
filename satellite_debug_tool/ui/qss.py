@@ -55,6 +55,10 @@ QToolTip {{
     padding: 4px 8px;
 }}
 
+/* 选择控件预留焦点边框，焦点切换保持同一布局尺寸。 */
+QCheckBox, QRadioButton {{
+    border: 1px solid transparent;
+}}
 QAbstractButton:focus, QAbstractItemView:focus {{
     border: 1px solid {p['focus']};
 }}

@@ -98,3 +98,38 @@ class TestMonospaceFamily:
         """无 QGuiApplication 时不应崩溃（返回占位 "monospace"）。"""
         name = S.monospace_family()
         assert name  # 至少非空；具体值取决于系统字体
+
+
+@pytest.mark.parametrize("theme", ["dark", "dark_hc", "light"])
+@pytest.mark.parametrize("control_kind", ["checkbox", "radio"])
+def test_selection_control_focus_preserves_size(qapplication_session, theme, control_kind) -> None:
+    """键盘焦点只改变选择控件边框颜色，普通态与焦点态拥有同一尺寸。"""
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QCheckBox, QRadioButton, QStyle, QStyleOptionButton
+    from satellite_debug_tool.ui.qss import build
+
+    app = qapplication_session
+    original_style = app.styleSheet()
+    widget = None
+    try:
+        app.setStyleSheet(build(theme))
+        control_type, content_type = {
+            "checkbox": (QCheckBox, QStyle.ContentsType.CT_CheckBox),
+            "radio": (QRadioButton, QStyle.ContentsType.CT_RadioButton),
+        }[control_kind]
+        widget = control_type("Focus control")
+        widget.ensurePolished()
+        option = QStyleOptionButton()
+        widget.initStyleOption(option)
+        option.state &= ~QStyle.StateFlag.State_HasFocus
+        content_size = QSize(60, 14)
+        normal = widget.style().sizeFromContents(content_type, option, content_size, widget)
+        option.state |= QStyle.StateFlag.State_HasFocus
+        focused = widget.style().sizeFromContents(content_type, option, content_size, widget)
+        assert focused == normal
+    finally:
+        if widget is not None:
+            widget.close()
+            widget.deleteLater()
+        app.setStyleSheet(original_style)
+        app.processEvents()

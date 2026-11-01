@@ -50,3 +50,24 @@
 - Windows/macOS 构建、冻结 smoke、发行候选及人工交付均消费 `package_names.py`；同步 spec/构建脚本注释、BUILDING、RELEASING、v1.9.0 安装说明和 AGENTS。内部 Edition.USER、构建身份、bundle identifier、配置路径及权限边界保持既有合同。
 - 命名、冻结入口、两版构建、人工交付和客户窗口回归在旧源码上为 `18 failed / 30 passed`（`/tmp/m53-customer-plain-name-old.log`）；失败包括客户目录、归档及版本栏断言。修复后加入相邻发行候选回归，共 `64 passed / 3.49s`（`/tmp/m53-customer-plain-name-new.log`）。
 - 翻译 update/check 通过，删除已失效的 User edition 文案，现有 1496 条。真实冻结构建、最终 SHA 四包、上传及公开下载继续由发布步骤验证，本次专项不代替这些证据。
+
+
+## 命名候选构建验证（已被后续 Windows 修复取代）
+
+- 命名候选源码为 `677d5f90bb7718245c03dd29f0fa5534c0cdb028`；客户版使用产品本名，运维版保留 Ops。前一命名候选的 Windows run `41335191501` 按用户新命名要求主动取消，旧名 Mac 客户直链已撤回，线上 ops 元数据尚未切入旧候选。
+- 发布环境 Python 3.11.15 / PySide6 6.11.0 / offscreen，全量 `2086 passed / 239.80s`；翻译 `1496` 条通过。Windows run `41336187180` 出现测试失败及原生 MessageBox 等待，主动取消并继续修复，不作为 Windows 放行证据。
+- Mac arm64 两版均完成构建身份/模块边界、ad-hoc 深度严格签名验证、归档 CRC 与 Cocoa 原生冻结启动；客户版包含四个客户页面且应用在线更新模块为空，运维版使用 online 策略。最终包与服务端校验以本轮 JSON 验证记录为准。
+- 诊断时非标准 cocoa UI 子集的 SIGABRT 已核对原生 `Python-2026-11-02-020455.ips`：`QTest::sendKeyEvent(QWindow*) → qt_assert`，测试将桌面焦点对象作为键盘目标时得到空目标。项目自动化 UI 验收保持 conftest 的 offscreen 合同；真实 Cocoa 启动由独立冻结 smoke 验证，与全局枚举/垃圾回收故障分别记录。
+
+## Windows 原生测试门禁与资源修复
+
+- 初始 Actions `41333023236` 的源码 step 表面成功，日志实际包含 pytest 失败及 `0xc0000374` 原生堆损坏，后续翻译命令返回 0 覆盖了 PowerShell step 退出码。工作流拆成独立 pytest 与翻译 step；pytest 首次失败停止并输出长等待调用栈，失败阻止构建。新门禁回归旧工作流 1 failed，修复后 1 passed。
+- Windows `Path.home()` 读取 USERPROFILE，旧测试只改 HOME，配置和 ProfileCache 跨项串扰。全局逐项 fixture 同时隔离 HOME、USERPROFILE 和导入时生成的默认缓存目录；两项相同键/型号的回归旧实现 2 failed，修复及相邻配置测试 115 passed。
+- `PlaybackSeriesProvider.load_window()` 原 `with sqlite3.connect()` 只结束事务，未关闭连接，Windows 文件句柄阻止缓存清理。改为 `contextlib.closing`；原始/峰值查询与异常物化三条路径旧实现 3 failed，新实现与候选包测试 22 passed。
+- Shell 先入队断开原因、再设置 stop Event 的双路径会让线程跳过队列而回报 `closed`。worker 统一冻结首个停止意图并唤醒，controller 单次提交，正常与满环收尾共用原因；删除断开命令和重复收尾分支。屏障回归旧实现稳定失败，新管线 11 passed，worker/controller/UI/M49/YMODEM 邻接 109 passed。读取预算、等待窗口和吞吐标准保持原合同。
+- Windows 测试的归档路径按 POSIX manifest 合同对比，文本日志按实际 UTF-8 读取；回原点稳定窗口从首个反馈已被消费的事件开始计算，避免把队列写入当作已收到反馈。GNSS 换行按真实字体 sizeHint 判定，保留控件完整显示与互不重叠条件。
+- GNSS 独立首次展示仍能重现控件被裁切：全局焦点样式添加 1px 边框，而复选框/单选框普通态没有边框，焦点进入后控件尺寸发生改变。普通态预留同宽透明边框，焦点只改颜色，保留原生 FlowLayout 与 Qt 尺寸合同。三主题两类控件旧实现 6 failed；修复后 GNSS 独立首次展示通过，样式/状态条/布局及其它 Windows 可移植性专项共 193 passed。
+- `41336187180` 取消后的栈证实主线程停在 `updater.main._show_windows_failure → MessageBoxW`，由失败事务测试触发原生交互。测试隔离提示框边界并核对提示内容；实际更新器继续向用户显示错误。此证据替代此前对 TimeRangeControl 卡顿的推测。
+- 更新器测试同时隔离 HKCU 登录恢复注册/清除边界，真实归档、文件锁、安装切换和回滚继续执行；各路径核对提示次数、阶段、详情和日志路径以及注册动作。原生 UI fail-fast guard 下旧失败场景确实进入 MessageBox，新模块 30 passed，与既有 fake-winreg API 验收合跑 46 passed。
+- 两轮旧 Mac 客户包已撤回，公开下载目录为空；旧候选仅留 incoming，正式 TUF targets 仍为空。后续四包使用统一的新源码 SHA 重新构建和校验后再公开。
+- 上述修复合并后，发布 Python 3.11.15 / PySide6 6.11.0 / offscreen 全量 `2102 passed / 278.17s`，日志 `/tmp/m53-final-windows-fixes-mac-tests.log`；1496 条翻译、compileall 与 diff 检查通过。Windows 原生结果仍由下一轮独立 step 验证。

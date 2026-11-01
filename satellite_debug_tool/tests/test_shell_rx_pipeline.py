@@ -113,6 +113,52 @@ def _plain_text(workspace) -> str:
 
 
 class TestControllerRelay:
+    def test_disconnect_reason_survives_stop_between_command_pumps(
+        self, qapplication_session, tmp_path, monkeypatch,
+    ):
+        """worker 已清空命令队列时停止，操作原因仍进入信号和唯一收尾证据。"""
+        entered = threading.Event()
+        resume = threading.Event()
+        handle_commands = TcpShellWorker._handle_commands
+        request_stop = TcpShellWorker.request_stop
+
+        def pause_after_command_pump(worker):
+            result = handle_commands(worker)
+            entered.set()
+            assert resume.wait(3), "test stop must release the worker barrier"
+            return result
+
+        def stop_then_resume(worker, *args, **kwargs):
+            request_stop(worker, *args, **kwargs)
+            resume.set()
+
+        monkeypatch.setattr(TcpShellWorker, "_handle_commands", pause_after_command_pump)
+        monkeypatch.setattr(TcpShellWorker, "request_stop", stop_then_resume)
+        controller = TcpShellController(session_root=tmp_path / "sessions")
+        received = []
+        controller.disconnected.connect(received.append)
+        server = ScriptServer()
+        try:
+            controller.connect_device(
+                {"transport": "tcp", "host": "127.0.0.1", "port": server.port}
+            )
+            assert _wait_until(qapplication_session, entered.is_set)
+            controller.disconnect_device("operator")
+            assert _wait_until(qapplication_session, lambda: bool(received))
+            assert received == ["operator"]
+            summary_path, = (tmp_path / "sessions").glob("*/summary.json")
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            assert summary["status"] == "complete"
+            events = [json.loads(line) for line in summary_path.with_name("events.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()]
+            assert [event["details"]["reason"] for event in events
+                    if event["event_type"] == "disconnect_requested"] == ["operator"]
+        finally:
+            resume.set()
+            controller.shutdown()
+            server.close()
+
     def test_natural_link_close_reaches_ui_subscribers(self, qapplication_session, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         controller = TcpShellController()

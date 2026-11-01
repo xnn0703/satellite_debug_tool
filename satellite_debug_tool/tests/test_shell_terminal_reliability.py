@@ -132,7 +132,7 @@ def test_log_and_display_share_utf8_decoding(qapplication_session, tmp_path, mon
     for chunk in [b'\xe4', b'\xb8', b'\xad', b'\x1b[3', b'1mA']:
         workspace.feed_rx(chunk)
     assert _text(workspace) == '中A'
-    assert next(directory.glob('*.log')).read_text() == '中A'
+    assert next(directory.glob('*.log')).read_text(encoding='utf-8') == '中A'
     workspace.shutdown()
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -60,3 +61,50 @@ def test_query_replaces_memory_by_window_not_recording_size() -> None:
     assert len(first.get_channel_by_id(3)) <= 256
     assert len(last.get_channel_by_id(3)) <= 256
     provider.close()
+
+
+@pytest.mark.parametrize("point_budget", [64, 1024])
+def test_window_query_closes_its_sqlite_connection(monkeypatch, point_budget: int) -> None:
+    """原始采样与峰值查询都在返回前释放数据库句柄。"""
+    with PlaybackSeriesProvider() as provider:
+        for index in range(200):
+            provider.append_report(_report(index * 10, float(index)))
+        provider.finalize()
+        connections = []
+        connect = sqlite3.connect
+
+        def tracked_connect(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+        provider.load_window(max_points_per_channel=point_budget)
+        assert len(connections) == 1
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connections[0].execute("SELECT 1")
+
+
+def test_window_query_error_closes_its_sqlite_connection(monkeypatch) -> None:
+    """窗口物化失败仍由本次查询 owner 释放句柄。"""
+    with PlaybackSeriesProvider() as provider:
+        provider.append_report(_report(0, 1.0))
+        provider.finalize()
+        connections = []
+        connect = sqlite3.connect
+
+        def tracked_connect(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        def fail_materialization(*_args):
+            raise RuntimeError("materialization failed")
+
+        monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+        monkeypatch.setattr(provider, "_append_rows", fail_materialization)
+        with pytest.raises(RuntimeError, match="materialization failed"):
+            provider.load_window()
+        assert len(connections) == 1
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connections[0].execute("SELECT 1")
