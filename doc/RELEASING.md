@@ -27,7 +27,7 @@ git diff --check
 
 推送 tag 或使用 workflow_dispatch 指定已有 tag，`.github/workflows/build.yml` 精确 checkout tag SHA。Windows Runner 使用 Python 3.11 构建 user/ops，两版均完成测试、冻结 smoke、资源/身份/归档校验后，通过受保护 `release-candidate` environment 自动上传 ECS 暂存区。
 
-检查 Actions 两版结果、smoke artifact、候选 receipt 的版本/edition/平台/架构/SHA 和摘要。普通分支/PR 只生成 artifact。工作流只上传候选，不创建 GitHub Release，不持有正式签名私钥。
+检查 Actions 两版结果、smoke artifact、候选 receipt 的版本/edition/平台/架构/SHA 和摘要。pytest 与翻译分别作为独立 step 接收退出码，完整测试失败阻止构建。普通分支/PR 只生成 artifact。工作流只上传候选，不创建 GitHub Release，不持有正式签名私钥。
 
 ## macOS 候选
 
@@ -46,7 +46,7 @@ spec 声明 macOS `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统
 
 ## 正式签名与公开下载
 
-四份候选完成归档 CRC、SHA-256 和身份核对后，发布人员使用仓库外签名材料执行 ops 晋升。`scripts/promote_release.py` 的 `fetch → prepare → commit` 分别取得候选、离线签名生成发布 bundle、提交服务器。调用前以该脚本 `--help` 确认必填参数；prepare 必须冻结 `--expected-commit`、目标系统 `--min-os`、正式通道和发布说明，首轮通过 `--initial` 建立正式基线。
+四份候选完成归档 CRC、SHA-256 和身份核对后，发布人员使用仓库外签名材料执行 ops 晋升。`scripts/promote_release.py` 的 `fetch → prepare → commit` 分别取得候选、离线签名生成发布 bundle、提交服务器。调用前以该脚本 `--help` 确认必填参数；prepare 必须冻结 `--expected-commit`、目标系统 `--min-os`、正式通道和发布说明。`--initial` 只用于服务器尚无仓库元数据的首次建站；已有签名根和空 targets 的站点使用普通 prepare，吸收服务器续签后的 timestamp/snapshot。
 
 ops 晋升 stable 时，TUF target 的 app/repo/edition/平台/架构/版本/源 SHA 必须与候选一致。先提交不可变 target 和版本元数据，最后提交 timestamp，并验证公开 HTTPS 元数据的签名、有效期与包摘要。首轮没有上一基线，不生成或宣称差量更新。
 

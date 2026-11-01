@@ -52,7 +52,7 @@ from satellite_debug_tool.ui.gnss_widget import (
     sky_geometry_valid,
     sky_point,
 )
-from PySide6.QtCore import QPointF, QRectF
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QFontMetrics
 from satellite_debug_tool.io.data_importer import DataImporter
 from satellite_debug_tool.io.data_recorder import DataRecorder
@@ -956,9 +956,29 @@ def _assert_filter_geometry(widget: GnssWidget) -> None:
             assert not checkbox.geometry().intersects(other.geometry())
 
 
-def test_gnss_header_reflows_without_clipping_under_real_qss(qapp, real_light_qss) -> None:
+def _assert_info_geometry(widget: GnssWidget) -> None:
+    for label in (widget._source_badge, widget._stats):
+        assert widget._info_row.rect().contains(label.geometry())
+        contents = label.contentsRect()
+        flags = Qt.TextFlag.TextWordWrap if label.wordWrap() else Qt.TextFlag.TextSingleLine
+        text_bounds = label.fontMetrics().boundingRect(
+            QRect(0, 0, contents.width(), 0), flags, label.text(),
+        )
+        assert text_bounds.width() <= contents.width()
+        assert text_bounds.height() <= contents.height()
+    assert not widget._source_badge.geometry().intersects(widget._stats.geometry())
+
+
+@pytest.mark.parametrize("info_font_stretch", [100, 150])
+def test_gnss_header_reflows_without_clipping_under_real_qss(
+    qapp, real_light_qss, info_font_stretch: int,
+) -> None:
     widget = GnssWidget(GnssStore())
     widget.set_theme("light", "small")
+    for label in (widget._source_badge, widget._stats):
+        font = label.font()
+        font.setStretch(info_font_stretch)
+        label.setFont(font)
     _set_long_gnss_header(widget)
     widget.show()
 
@@ -973,7 +993,7 @@ def test_gnss_header_reflows_without_clipping_under_real_qss(qapp, real_light_qs
         assert widget.width() == width
         _assert_filter_geometry(widget)
         assert not widget._filters_host.geometry().intersects(widget._info_row.geometry())
-        assert not widget._source_badge.geometry().intersects(widget._stats.geometry())
+        _assert_info_geometry(widget)
         assert widget._stats.wordWrap()
         assert widget._stats.font().pixelSize() >= 10
         row_counts[width] = len({
@@ -993,23 +1013,33 @@ def test_gnss_header_reflows_without_clipping_under_real_qss(qapp, real_light_qs
     assert widget._filters_host.height() == widget._filters_host.heightForWidth(
         widget._filters_host.width()
     )
-    assert font_sizes[1024] == 12
-    assert 10 <= font_sizes[520] <= font_sizes[800] <= font_sizes[1024]
+    assert 10 <= font_sizes[520] <= font_sizes[800] <= font_sizes[1024] <= 12
     assert widget._stats.height() > widget._stats.fontMetrics().height()
 
-    widget.resize(1024, 700)
+    # 足够宽由当前字体度量决定，恢复字号不绑定某个平台的 1024 px 字宽。
+    full_width = widget._info_layout.spacing()
+    for label in (widget._source_badge, widget._stats):
+        font = label.font()
+        font.setPixelSize(14)
+        full_width += QFontMetrics(font).horizontalAdvance(label.text())
+    margins = widget.layout().contentsMargins()
+    full_width += margins.left() + margins.right()
+    widget.resize(max(1024, full_width), 700)
     qapp.processEvents()
     assert widget._stats.font().pixelSize() == 12
+    _assert_info_geometry(widget)
     widget.set_theme("light", "medium")
     qapp.processEvents()
     assert widget._system_checks[0].font().pixelSize() == 14
     assert widget._stats.font().pixelSize() == 14
     _assert_filter_geometry(widget)
+    _assert_info_geometry(widget)
     widget.set_theme("light", "small")
     qapp.processEvents()
     assert widget._system_checks[0].font().pixelSize() == 12
     assert widget._stats.font().pixelSize() == 12
     _assert_filter_geometry(widget)
+    _assert_info_geometry(widget)
     widget.close()
 
 

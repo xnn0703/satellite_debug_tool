@@ -61,7 +61,7 @@
 
 ## Windows 原生测试门禁与资源修复
 
-- 初始 Actions `41333023236` 的源码 step 表面成功，日志实际包含 pytest 失败及 `0xc0000374` 原生堆损坏，后续翻译命令返回 0 覆盖了 PowerShell step 退出码。工作流拆成独立 pytest 与翻译 step；pytest 首次失败停止并输出长等待调用栈，失败阻止构建。新门禁回归旧工作流 1 failed，修复后 1 passed。
+- 初始 Actions `41333023236` 的源码 step 表面成功，日志实际包含 pytest 失败及 `0xc0000374` 原生堆损坏，后续翻译命令返回 0 覆盖了 PowerShell step 退出码。工作流拆成独立 pytest 与翻译 step；pytest 独立接收完整测试结果并输出长等待调用栈，失败阻止构建。新门禁回归旧工作流 1 failed，修复后 1 passed。
 - Windows `Path.home()` 读取 USERPROFILE，旧测试只改 HOME，配置和 ProfileCache 跨项串扰。全局逐项 fixture 同时隔离 HOME、USERPROFILE 和导入时生成的默认缓存目录；两项相同键/型号的回归旧实现 2 failed，修复及相邻配置测试 115 passed。
 - `PlaybackSeriesProvider.load_window()` 原 `with sqlite3.connect()` 只结束事务，未关闭连接，Windows 文件句柄阻止缓存清理。改为 `contextlib.closing`；原始/峰值查询与异常物化三条路径旧实现 3 failed，新实现与候选包测试 22 passed。
 - Shell 先入队断开原因、再设置 stop Event 的双路径会让线程跳过队列而回报 `closed`。worker 统一冻结首个停止意图并唤醒，controller 单次提交，正常与满环收尾共用原因；删除断开命令和重复收尾分支。屏障回归旧实现稳定失败，新管线 11 passed，worker/controller/UI/M49/YMODEM 邻接 109 passed。读取预算、等待窗口和吞吐标准保持原合同。
@@ -71,3 +71,6 @@
 - 更新器测试同时隔离 HKCU 登录恢复注册/清除边界，真实归档、文件锁、安装切换和回滚继续执行；各路径核对提示次数、阶段、详情和日志路径以及注册动作。原生 UI fail-fast guard 下旧失败场景确实进入 MessageBox，新模块 30 passed，与既有 fake-winreg API 验收合跑 46 passed。
 - 两轮旧 Mac 客户包已撤回，公开下载目录为空；旧候选仅留 incoming，正式 TUF targets 仍为空。后续四包使用统一的新源码 SHA 重新构建和校验后再公开。
 - 上述修复合并后，发布 Python 3.11.15 / PySide6 6.11.0 / offscreen 全量 `2102 passed / 278.17s`，日志 `/tmp/m53-final-windows-fixes-mac-tests.log`；1496 条翻译、compileall 与 diff 检查通过。Windows 原生结果仍由下一轮独立 step 验证。
+- `98fad1f` 的 Windows run `41339064257` 两版均被独立 pytest step 正确阻止（各 753 passed 后 1 failed，后续构建全部 skipped）。失败为 GNSS 测试在 1024 px 写死摘要字号 12，Windows 实际合法降档为 11；此前的宽度、完整显示和互不重叠检查均通过。按 M15 原合同，字号由实际字体与可用宽度决定。测试加入 150% 字宽稳定复现旧固定值失败，保留最小 10px、宽度增大字号单调、实际足够宽时恢复 12/14px，并加强文本实际边界完整显示检查；生产字号算法保持。
+- 下一轮 Windows 运行完整测试集以同时收集剩余故障，独立退出码及失败阻止构建规则保持。先完成 Windows 源码门禁，再启动新的 Mac 正式候选，避免构建已被替代的源码。
+- 字宽回归普通/宽字两项通过，GNSS、主题、状态条和 FlowLayout 邻接共 144 passed / 2.61s；CI 门禁专项 1 passed，diff 检查通过。
