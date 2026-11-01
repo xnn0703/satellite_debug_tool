@@ -74,3 +74,12 @@
 - `98fad1f` 的 Windows run `41339064257` 两版均被独立 pytest step 正确阻止（各 753 passed 后 1 failed，后续构建全部 skipped）。失败为 GNSS 测试在 1024 px 写死摘要字号 12，Windows 实际合法降档为 11；此前的宽度、完整显示和互不重叠检查均通过。按 M15 原合同，字号由实际字体与可用宽度决定。测试加入 150% 字宽稳定复现旧固定值失败，保留最小 10px、宽度增大字号单调、实际足够宽时恢复 12/14px，并加强文本实际边界完整显示检查；生产字号算法保持。
 - 下一轮 Windows 运行完整测试集以同时收集剩余故障，独立退出码及失败阻止构建规则保持。先完成 Windows 源码门禁，再启动新的 Mac 正式候选，避免构建已被替代的源码。
 - 字宽回归普通/宽字两项通过，GNSS、主题、状态条和 FlowLayout 邻接共 144 passed / 2.61s；CI 门禁专项 1 passed，diff 检查通过。
+
+## Windows 剩余故障的接收顺序与吞吐证据
+
+- `8334c1c` / Actions `41339575019` 在完整源码门禁中再次出现失败，修复期间主动取消；没有进入构建或上传。进度与 collect 顺序映射到持续 Shell 吞吐及跟踪仿真 STOP 用例，取消前没有最终断言汇总，不能将映射当作完整故障栈。取消时打印的原生访问异常也不作为独立自然崩溃证明。
+- 跟踪仿真将单调接收时间当作严格先后序列，同一时钟刻度内新收到的 STOP 回读会被判为旧数据。固定 StateStore 的接收时钟，原既有网关测试的状态 1→0、旧缓存 0→新同值 0 两条路径均稳定无法确认停止。StateStore 改为唯一每报告递增 revision；同值回读推进接收序列，clear/过期保留递增基线，时间字段继续表示新鲜度。STOP 冻结并比较 revision，旧时间因果 cursor 及证据键已移除。
+- 旧状态模型回归 6 failed / 13 passed，修复后的 StateStore、网关、跟踪仿真、SessionCore、LegacyV2 和状态呈现邻接 101 passed；证据 `/tmp/m53-state-revision-old-fail.log`、`/tmp/m53-state-revision-targeted.log`。两个 Tracking UI 测试的 finally 显式停止自己拥有的 timer、关闭并定向销毁窗口。
+- Shell 吞吐测试原在断言之后才关闭 workspace/controller，性能失败会遗留线程及满载文档。修复测试 owner 收尾并在原测量窗口加入有界帧级诊断，分别记录帧间隔、等待、解析及投影耗时；生产帧预算与 92,160 B/s 门槛保持。下一轮真实 Windows 数据用于定位吞吐原因，Mac 专项通过不代替 Windows 验收。
+- 测试 cleanup 消费既有异步关闭合同，先等待 `shutdown_complete` 完成分帧排空，再销毁本项窗口。原缺少 finally 的两项回归失败；异步 pending 场景也在旧直接销毁路径下两项失败。最终吞吐与 M49 收尾专项 23 passed / 22.41s，证据 `/tmp/m53-shell-async-cleanup-old.log`、`/tmp/m53-shell-async-cleanup-new.log`。发布 Python 3.11 的 StateStore/Tracking 邻接复跑 101 passed / 1.28s。
+- 本轮合并后发布环境全量 `2112 passed / 283.18s`，日志 `/tmp/m53-revision-shell-diagnostics-full.log`；1496 条翻译、compileall 与 diff 检查通过。Windows 同 SHA 验收继续执行。

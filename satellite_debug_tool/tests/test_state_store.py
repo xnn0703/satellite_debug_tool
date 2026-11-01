@@ -1,5 +1,9 @@
 """StateStore 单元测试。"""
 
+from types import SimpleNamespace
+
+import pytest
+
 import satellite_debug_tool.core.data.state_store as state_store_module
 
 from satellite_debug_tool.core.data import StateStore
@@ -96,3 +100,43 @@ class TestStateStore:
         s.clear()
 
         assert fires == ["afd01", None]
+
+
+def test_received_revision_orders_reports_at_one_clock_tick(monkeypatch) -> None:
+    """报告接收顺序独立于时间分辨率；同值回读保留变化时间且更新接收序列。"""
+    monkeypatch.setattr(state_store_module, "time", SimpleNamespace(monotonic=lambda: 10.0))
+    store = StateStore()
+    changes = []
+    store.state_changed.connect(lambda *args: changes.append(args))
+    store.update("afd01", _report(100, (0, 1), (1, 2)))
+    first = store.get("afd01", 0)
+    assert first.received_revision == store.get("afd01", 1).received_revision == 1
+    store.update("afd01", _report(200, (0, 1)))
+    repeated = store.get("afd01", 0)
+    assert repeated.received_revision == 2
+    assert store.get("afd01", 1).received_revision == 1
+    assert repeated.last_received_monotonic == repeated.last_changed_monotonic == 10.0
+    assert repeated.last_change_ms == 100
+    assert len(changes) == 2
+    store.update("afd01", _report(300, (0, 0)))
+    assert store.get("afd01", 0).received_revision == 3
+    assert len(changes) == 3
+
+
+@pytest.mark.parametrize("clear_scope", ["model", "all", "expire"])
+def test_received_revision_advances_after_clearing(clear_scope: str) -> None:
+    """清空与过期清除快照，整个Store接收序列保持递增。"""
+    store = StateStore()
+    store.update("afd01", _report(100, (0, 1)))
+    store.update("afd01c", _report(100, (0, 1)))
+    previous_revision = store.get("afd01c", 0).received_revision
+    if clear_scope == "model":
+        store.clear("afd01")
+    elif clear_scope == "all":
+        store.clear()
+    else:
+        received = store.get("afd01", 0).last_received_monotonic
+        assert store.expire_stale("afd01", now_monotonic=received + 4.0)
+    assert store.get("afd01", 0) is None
+    store.update("afd01", _report(1, (0, 0)))
+    assert store.get("afd01", 0).received_revision > previous_revision

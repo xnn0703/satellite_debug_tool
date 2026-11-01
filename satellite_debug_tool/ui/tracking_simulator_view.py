@@ -103,7 +103,7 @@ class TrackingSimulatorView(QWidget):
         self._rf_ack = False
         self._mutation_sent = False
         self._terminal_request_id = ""
-        self._stop_state_cursor = 0.0
+        self._stop_state_revision = 0
 
         self._editor = QTextEdit(json.dumps(_DEFAULT_SCENARIO, ensure_ascii=False, indent=2))
         self._status = QLabel(tr("Stopped"))
@@ -214,15 +214,15 @@ class TrackingSimulatorView(QWidget):
             return
         now = time.monotonic()
         if self._phase == "wait_stop":
-            value, cursor = self._simulation_state_evidence()
-            if cursor > self._stop_state_cursor and value == 0:
+            value, revision = self._simulation_state_evidence()
+            if revision > self._stop_state_revision and value == 0:
                 if self._operation_gateway.confirm_terminal(
                     self._lease_token,
                     request_id=self._terminal_request_id,
                     evidence_facts=(
                         ("simulator_session_id", self._session_id),
                         ("tracking_sim_active", 0),
-                        ("state_received_monotonic", cursor),
+                        ("state_received_revision", revision),
                     ),
                 ):
                     self._finish_local(
@@ -402,7 +402,7 @@ class TrackingSimulatorView(QWidget):
                 tr("Simulator STOP could not enter terminating state"),
             )
             return
-        _value, self._stop_state_cursor = self._simulation_state_evidence()
+        _value, self._stop_state_revision = self._simulation_state_evidence()
         self._terminal_request_id = request_id
         self._phase = "wait_stop"
         self._deadline = time.monotonic() + 3.0
@@ -417,20 +417,20 @@ class TrackingSimulatorView(QWidget):
         self._set_status(message)
         self._refresh_controls()
 
-    def _simulation_state_evidence(self) -> tuple[int | None, float]:
+    def _simulation_state_evidence(self) -> tuple[int | None, int]:
         hw_type = self._session.profile_store.current_hw_type()
         if not hw_type:
-            return None, 0.0
+            return None, 0
         state = self._session.profile_store.find_state_by_role(
             hw_type,
             "tracking_sim_active",
         )
         if state is None:
-            return None, 0.0
+            return None, 0
         snapshot = self._session.state_store.get(hw_type, state.state_id)
         if snapshot is None:
-            return None, 0.0
-        return int(snapshot.value), float(snapshot.last_received_monotonic)
+            return None, 0
+        return int(snapshot.value), snapshot.received_revision
 
     def _finish_unconfirmed(self, message: str) -> None:
         """Stop local simulation ownership without claiming a device result."""
@@ -445,7 +445,7 @@ class TrackingSimulatorView(QWidget):
         self._rf_request_id = None
         self._mutation_sent = False
         self._terminal_request_id = ""
-        self._stop_state_cursor = 0.0
+        self._stop_state_revision = 0
         self._set_status(message)
         self._refresh_controls()
 

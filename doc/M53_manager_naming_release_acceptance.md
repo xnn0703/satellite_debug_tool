@@ -13,5 +13,7 @@
 - Windows pytest 的失败或原生崩溃使其 CI step 失败并阻止构建。两平台真实测试结果独立保存，翻译成功单独表示资源检查通过。
 - 测试 HOME、USERPROFILE 与 ProfileCache 按项隔离；SQLite 窗口读取在正常及异常返回时关闭连接，Shell 操作员停止的原因保持至完成回执。
 - 三主题复选框/单选框在获得及失去焦点时尺寸恒定，GNSS 独立首次展示和窄窗显示完整；更新器失败测试校验提示内容并由测试拥有原生交互和登录恢复边界。
+- Windows Shell 满载持续消费通过既有 M45 性能门禁；帧耗时、实际注入/消费速率与积压保留证据。吞吐断言失败仍完成本测试窗口和线程收尾，不能靠积压停止后归零替代持续消费合格。
+- 同一单调时钟刻度内连续收到的状态报告拥有递增接收 revision；STOP 后的新零状态完成事务，发送前缓存的零状态保持未确认。clear/过期后的新报告继续属于新的接收序列。
 
 - 客户目录/app 为 SatelliteTerminalManager / SatelliteTerminalManager.app，客户归档为 satellite_terminal_manager-{platform}-{arch}-v{version}.{extension}；运维版目录/app 保留 Ops、归档保留 -ops-，客户版本栏仅显示版本。命名、冻结入口、人工交付和 UI 回归均覆盖，先记录旧实现失败再确认修复通过。

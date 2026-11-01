@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from types import SimpleNamespace
+
+import pytest
+
+import satellite_debug_tool.core.data.state_store as state_store_module
+
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
 
 from satellite_debug_tool.core.session import (
     DeviceSessionCore,
@@ -211,9 +217,13 @@ def test_customer_rf_and_maintenance_request_separate_gateways(
     qapplication_session.processEvents()
 
 
+@pytest.mark.parametrize("initial_state", [1, 0])
 def test_tracking_simulator_routes_transaction_and_frames_through_gateway(
-    qapplication_session,
+    qapplication_session, monkeypatch, initial_state: int,
 ) -> None:
+    monkeypatch.setattr(
+        state_store_module, "time", SimpleNamespace(monotonic=lambda: 1000.0),
+    )
     direct_session_sends: list[bytes] = []
     session = DeviceSessionCore()
     session.attach_transport(
@@ -233,42 +243,51 @@ def test_tracking_simulator_routes_transaction_and_frames_through_gateway(
         1,
         [StateDefEntry(9, 0, 0, "TRACKING_SIM_ACTIVE")],
     )
-    session.state_store.update("afd01", StateReport(1, [StateSample(9, 1)]))
+    session.state_store.update("afd01", StateReport(1, [StateSample(9, initial_state)]))
     factory = _GatewayFactory()
     view = TrackingSimulatorView(
         session,
         operation_gateway_factory=factory.new_operation_gateway,
     )
 
-    view.start()
-    gateway = factory.created[0]
-    assert len(gateway.acquisitions) == 1
-    assert gateway.acquisitions[0][1] == "tracking-simulator"
-    assert gateway.acquisitions[0][2] == {
-        SessionOperationClass.MUTATING,
-        SessionOperationClass.TERMINAL,
-    }
-    assert gateway.contexts[0][1] == f"tracking-start:{view._session_id}"
-    assert len(gateway.sent) == 1
-    assert gateway.sent[0][1] is SessionOperationClass.MUTATING
-    assert direct_session_sends == []
+    try:
+        view.start()
+        gateway = factory.created[0]
+        assert len(gateway.acquisitions) == 1
+        assert gateway.acquisitions[0][1] == "tracking-simulator"
+        assert gateway.acquisitions[0][2] == {
+            SessionOperationClass.MUTATING,
+            SessionOperationClass.TERMINAL,
+        }
+        assert gateway.contexts[0][1] == f"tracking-start:{view._session_id}"
+        assert len(gateway.sent) == 1
+        assert gateway.sent[0][1] is SessionOperationClass.MUTATING
+        assert direct_session_sends == []
 
-    view.stop()
-    assert len(gateway.sent) == 2
-    assert gateway.sent[-1][1] is SessionOperationClass.TERMINAL
-    assert gateway.terminations == [view._lease_token]
-    assert gateway.releases == []
-    assert gateway.terminal_confirmations == []
-    view._tick()
-    assert gateway.terminal_confirmations == []
-    session.state_store.update("afd01", StateReport(2, [StateSample(9, 0)]))
-    view._tick()
-    assert len(gateway.terminal_confirmations) == 1
-    assert gateway.terminal_confirmations[0][1].startswith("tracking-stop:")
-    assert view._phase == "stopped"
-    view._timer.stop()
-    view.deleteLater()
-    qapplication_session.processEvents()
+        view.stop()
+        assert len(gateway.sent) == 2
+        assert gateway.sent[-1][1] is SessionOperationClass.TERMINAL
+        assert gateway.terminations == [view._lease_token]
+        assert gateway.releases == []
+        assert gateway.terminal_confirmations == []
+        view._tick()
+        assert gateway.terminal_confirmations == []
+        session.state_store.update("afd01", StateReport(2, [StateSample(9, 0)]))
+        view._tick()
+        assert len(gateway.terminal_confirmations) == 1
+        assert gateway.terminal_confirmations[0][1].startswith("tracking-stop:")
+        facts = dict(gateway.terminal_confirmations[0][2])
+        assert set(facts) == {
+            "simulator_session_id", "tracking_sim_active", "state_received_revision",
+        }
+        assert facts["state_received_revision"] == session.state_store.get("afd01", 9).received_revision
+        assert view._phase == "stopped"
+    finally:
+        view._timer.stop()
+        view.close()
+        view.deleteLater()
+        QCoreApplication.sendPostedEvents(view, QEvent.Type.DeferredDelete)
+        qapplication_session.processEvents()
 
 
 def test_tracking_simulator_keeps_legacy_session_sender_without_factory(
@@ -282,16 +301,20 @@ def test_tracking_simulator_keeps_legacy_session_sender_without_factory(
     )
     view = TrackingSimulatorView(session)
 
-    view.start()
-    assert len(direct_session_sends) == 1
-    assert session.device_transaction_active
+    try:
+        view.start()
+        assert len(direct_session_sends) == 1
+        assert session.device_transaction_active
 
-    view.stop()
-    assert len(direct_session_sends) == 2
-    assert session.device_transaction_active
-    view._deadline = 0.0
-    view._tick()
-    assert not session.device_transaction_active
-    view._timer.stop()
-    view.deleteLater()
-    qapplication_session.processEvents()
+        view.stop()
+        assert len(direct_session_sends) == 2
+        assert session.device_transaction_active
+        view._deadline = 0.0
+        view._tick()
+        assert not session.device_transaction_active
+    finally:
+        view._timer.stop()
+        view.close()
+        view.deleteLater()
+        QCoreApplication.sendPostedEvents(view, QEvent.Type.DeferredDelete)
+        qapplication_session.processEvents()

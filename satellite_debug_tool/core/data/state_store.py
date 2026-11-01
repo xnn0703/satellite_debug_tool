@@ -26,6 +26,7 @@ class StateSnapshot:
     last_change_ms: int       # device timestamp (ms since boot)
     last_received_monotonic: float = field(default_factory=time.monotonic)
     last_changed_monotonic: float = field(default_factory=time.monotonic)
+    received_revision: int = 0  # Store 接收报告的递增序列，独立于时钟分辨率
 
 
 class StateStore(QObject):
@@ -40,19 +41,23 @@ class StateStore(QObject):
         super().__init__(parent)
         self._buckets: Dict[str, Dict[int, StateSnapshot]] = {}
         self._last_report_monotonic: Dict[str, float] = {}
+        self._received_revision = 0
 
     # ---- 写入 ----
 
     def update(self, hw_type: str, report: StateReport) -> None:
         """消费一条 StateReport；对真正变化的 state 发射信号。"""
+        self._received_revision += 1
+        received_revision = self._received_revision
         bucket = self._buckets.setdefault(hw_type, {})
         now_monotonic = time.monotonic()
         self._last_report_monotonic[hw_type] = now_monotonic
         for sample in report.states:
             prev = bucket.get(sample.state_id)
             if prev is not None and prev.value == sample.value:
-                # 无变化：仅刷新接收时间；变化时间和设备变化 timestamp 均保持。
+                # 同值报告更新接收事实，变化时间和设备变化 timestamp 均保持。
                 prev.last_received_monotonic = now_monotonic
+                prev.received_revision = received_revision
                 continue
             old = -1 if prev is None else prev.value
             bucket[sample.state_id] = StateSnapshot(
@@ -60,6 +65,7 @@ class StateStore(QObject):
                 last_change_ms=report.timestamp,
                 last_received_monotonic=now_monotonic,
                 last_changed_monotonic=now_monotonic,
+                received_revision=received_revision,
             )
             self.state_changed.emit(hw_type, sample.state_id, sample.value, old)
 

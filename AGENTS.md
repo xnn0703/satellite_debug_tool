@@ -94,7 +94,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/product/` — **M18+** 客户 Product Service 模型、注册策略、Store、回放/legacy 投影与整快照来源状态机；每个 `ProductValue` 携带可用性、来源、接收时间和质量
 - `core/playback/` — **M21** 后台 SDB 构建线程与磁盘型 `PlaybackSeriesProvider`，按时间窗口和像素预算查询曲线数据；每次窗口查询明确关闭自己的 SQLite 连接，正常和异常返回均释放文件句柄。
 - `core/comm/` — QThread worker：`BaseWorker`（QThread 基类）→ `SerialWorker` / `UdpWorker`
-- `core/data/` — `ChannelBuffer`、`DataStore`、`TelemetrySeriesStore`、`StateStore`、`EventLog` 与 GNSS/Orbit Store
+- `core/data/` — `ChannelBuffer`、`DataStore`、`TelemetrySeriesStore`、`StateStore`、`EventLog` 与 GNSS/Orbit Store。StateStore 每收到一份报告推进唯一 `received_revision`，同值状态也更新该序列；单调时间用于新鲜度，接收 revision 用于先后因果。跟踪仿真 STOP 仅接受发送前基线之后的新零状态回读。
 - `core/profile/` — `ProfileStore` + `ProfileCache`，设备 profile 驱动 UI；`semantics.py` 通道语义；`ins_yaw_display.py` 内部 INS 航向处理
 - `core/production/` — **M19/M21** 试产与夹具领域；`BatchCoordinator` / `FixtureSessionCoordinator` 统一状态迁移、资源租约和证据收尾，页面只发意图并呈现类型化状态
 - `core/production/configuration.py` — **M32** 生产配置 v2；产品、电源、摇摆台、MS-6222 与工位引用统一解析，正式批次冻结完整夹具 payload、revision、标定和 SHA-256；旧 `production.ms6222_port` 仅作为一次迁移输入
