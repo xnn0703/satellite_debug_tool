@@ -213,6 +213,8 @@ class CustomerDeviceDirectory(QObject):
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
+        # 目录在创建线程内运行；直接观察 Qt 线程，保持其独立生命期。
+        self._owner_thread = QThread.currentThread()
         prefix = str(owner_prefix).strip()
         if not prefix:
             raise ValueError("customer configuration owner prefix is required")
@@ -272,7 +274,7 @@ class CustomerDeviceDirectory(QObject):
         return True
 
     def _assert_owner_thread(self) -> None:
-        if QThread.currentThread() is not self.thread():
+        if QThread.currentThread() is not self._owner_thread:
             raise RuntimeError("customer device directory must run on its Qt owner thread")
 
     def _assert_open_and_mutable(self) -> None:

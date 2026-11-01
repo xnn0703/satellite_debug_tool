@@ -138,6 +138,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - UI 在 `ui/`，业务在 `core/`，持久化在 `io/`，**试产业务在 `core/production/`，客户产品服务领域在 `core/product/`**
 - 运动平台协议、运动学、UDP socket、状态机和轨迹调度只存在于 `core/motion_platform/`；试产页面、批次编排和后续场景仿真只调用其公开领域接口。MS-6222 保持独立参考源，由上层联合测试显式组合。
 - worker 线程（`BaseWorker` 子类）**严禁**直接操作 widget；必须 emit Qt 信号，主线程消费
+- `EndpointSessionRuntime` 与 `CustomerDeviceDirectory` 在构造时以 `QThread.currentThread()` 冻结线程 owner，全部变更入口消费同一归属，生命周期中保持创建线程。PySide 6.11 的 `QObject.thread()` 返回值绑定会改变共享线程 wrapper 的 Python parent，因此这两个 owner 及测试对照统一使用捕获的线程事实；对象回收与跨线程拒绝回归见 `test_session_owner_thread.py`。
 - 页面构造只建立呈现对象；协议解析、连接代际、参数/OTA 状态机、试产状态迁移和证据收尾属于 `core/`。
 - 高频页面必须实现幂等 `activate_view()` / `deactivate_view()`；隐藏时停止呈现定时器，恢复时先从 Store 即时刷新一次。
 - 新增重量级页面使用 `LazyViewHost` 首次构建并保留实例；首次构建前到达的数据必须由权威 Store 在激活时补齐。

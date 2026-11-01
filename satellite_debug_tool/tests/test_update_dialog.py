@@ -219,6 +219,7 @@ class TestUpdateDialogConstruct:
         from satellite_debug_tool.updater.checker import Asset, LatestRelease
         from satellite_debug_tool.updater.preparation import PreparedDownload
 
+        gui_thread = QThread.currentThread()
         entered, release = threading.Event(), threading.Event()
         owners = []
         def prepare(**kwargs):
@@ -238,7 +239,7 @@ class TestUpdateDialogConstruct:
         dlg._prepared_download = PreparedDownload(tmp_path / "package.7z", item, tmp_path / "tree.json", None, "automatic")
         dlg._do_launch_updater([tmp_path / "package.7z"])
         assert entered.wait(1)
-        assert owners[0] != qapp.thread()
+        assert owners[0] != gui_thread
         dlg.reject()
         assert dlg._prepare_thread is not None
         assert dlg._cancel_event.is_set()
@@ -260,6 +261,7 @@ def test_background_check_delivers_result_on_gui_thread(qapp, tmp_settings, monk
     from PySide6.QtCore import QThread
     from satellite_debug_tool.ui import update_dialog
 
+    gui_thread = QThread.currentThread()
     observed = []
 
     class Checker:
@@ -281,7 +283,7 @@ def test_background_check_delivers_result_on_gui_thread(qapp, tmp_settings, monk
         time.sleep(0.005)
     assert thread.wait(1000)
     assert [name for name, _ in observed] == ["settings", "callback"]
-    assert all(owner == qapp.thread() for _, owner in observed)
+    assert all(owner == gui_thread for _, owner in observed)
     thread.deleteLater()
 
 

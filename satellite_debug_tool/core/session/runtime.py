@@ -736,6 +736,8 @@ class EndpointSessionRuntime(QObject):
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
+        # 会话在创建线程内运行；直接观察 Qt 线程，保持其独立生命期。
+        self._owner_thread = QThread.currentThread()
         self.endpoint = normalize_endpoint(endpoint)
         self.broker = broker
         self.core = core or DeviceSessionCore(endpoint=self.endpoint, parent=self)
@@ -2008,7 +2010,7 @@ class EndpointSessionRuntime(QObject):
         return tuple(value for value in values if value[1] in {"production", "system"})
 
     def _assert_owner_thread(self) -> None:
-        if QThread.currentThread() is not self.thread():
+        if QThread.currentThread() is not self._owner_thread:
             raise RuntimeError("endpoint runtime must be mutated on its Qt owner thread")
 
     def _managed_transaction_available(self, owner: object | None) -> bool:

@@ -83,6 +83,7 @@ def fetch_candidate(sftp, remote: str, output: Path) -> Path:
                 raise ValueError("remote candidate artifact differs from receipt")
             actual, count = hashlib.sha256(), 0
             with sftp.open(remote + "/" + name, "rb") as src, (staging / name).open("xb") as dst:
+                src.prefetch(file_size=src.stat().st_size, max_concurrent_requests=32)
                 while block := src.read(min(1024**2, size - count + 1)):
                     count += len(block)
                     if count > size:

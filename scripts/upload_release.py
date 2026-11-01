@@ -58,6 +58,8 @@ def _remote_digest(sftp, path: str, *, limit: int | None = None) -> tuple[int, s
     digest = hashlib.sha256()
     size = 0
     with sftp.open(path, "rb") as stream:
+        file_size = stream.stat().st_size
+        stream.prefetch(file_size=file_size if limit is None else min(file_size, limit), max_concurrent_requests=32)
         while limit is None or size < limit:
             block = stream.read(1024 * 1024 if limit is None else min(1024 * 1024, limit - size))
             if not block:
@@ -99,6 +101,8 @@ def upload_file(sftp, local: Path, remote: str, *, size: int, sha256: str) -> st
             raise ValueError("candidate partial bytes differ from the receipt input")
     with sftp.open(partial, "r+b" if attributes is not None else "wx") as output:
         output.seek(offset)
+        # 连续发送写请求；文件关闭后逐字节回读校验，再提交名称。
+        output.set_pipelined(True)
         with local.open("rb") as source:
             source.seek(offset)
             while block := source.read(1024 * 1024):

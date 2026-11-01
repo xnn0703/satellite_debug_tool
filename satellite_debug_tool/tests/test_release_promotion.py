@@ -26,6 +26,7 @@ from satellite_debug_tool.updater.publishing import initialize_repository, promo
 class Sftp:
     def __init__(self, root):
         self.root = root
+        self.prefetches = []
         self.moves = []
         self.fail_timestamp = False
         (root / PUBLIC_ROOT.lstrip("/")).mkdir(parents=True)
@@ -41,7 +42,11 @@ class Sftp:
         self.path(value).mkdir(mode=mode)
 
     def open(self, value, mode):
-        return self.path(value).open("xb" if mode == "wx" else mode)
+        stream = self.path(value).open("xb" if mode == "wx" else mode)
+        stream.stat = lambda: os.fstat(stream.fileno())
+        stream.prefetch = lambda **options: self.prefetches.append((value, options))
+        stream.set_pipelined = lambda enabled: None
+        return stream
 
     def remove(self, value):
         self.path(value).unlink()
@@ -228,6 +233,11 @@ def test_remote_windows_candidate_can_be_fetched_then_prepared(deployment):
     sftp.path(remote).parent.mkdir(parents=True)
     candidate(sftp.path(remote))
     downloaded = fetch_candidate(sftp, remote, tmp / "downloaded")
+    rows = json.loads(downloaded.read_text())["artifacts"]
+    assert sftp.prefetches == [
+        (remote + "/" + row["name"], {"file_size": row["size"], "max_concurrent_requests": 32})
+        for row in rows
+    ]
     # 本地候选上传使用的固定 owner 文件不属于发行字节，也不会进入 publication。
     (downloaded.parent / ".upload-local-lock").touch()
     bundle = prepare_bundle(sftp, local, downloaded.parent, tmp / "bundle", keys,
@@ -247,6 +257,28 @@ def test_remote_candidate_tamper_is_rejected_before_local_commit(deployment):
     with pytest.raises(ValueError, match="differs"):
         fetch_candidate(sftp, remote, tmp / "downloaded")
     assert not (tmp / "downloaded").exists()
+
+
+def test_remote_candidate_prefetch_failure_preserves_fresh_output(deployment):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    remote = CANDIDATE_ROOT + "/release/ops"
+    sftp.path(remote).parent.mkdir(parents=True)
+    candidate(sftp.path(remote))
+    original_open = sftp.open
+
+    def failed_prefetch(**options):
+        raise ConnectionError("prefetch interrupted")
+
+    def interrupted_open(path, mode):
+        stream = original_open(path, mode)
+        stream.prefetch = failed_prefetch
+        return stream
+
+    sftp.open = interrupted_open
+    with pytest.raises(ConnectionError, match="prefetch interrupted"):
+        fetch_candidate(sftp, remote, tmp / "downloaded")
+    assert not (tmp / "downloaded").exists()
+    assert not list(tmp.glob(".candidate-fetch-*"))
 
 
 def test_publication_ledger_rejects_remote_timestamp_rollback(deployment):

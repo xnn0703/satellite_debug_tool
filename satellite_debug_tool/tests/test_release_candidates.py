@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -126,6 +127,8 @@ class LocalSftp:
     """使用本地文件操作验证纯 SFTP 流程，保留 lstat/排他 rename 语义。"""
     def __init__(self, root):
         self.root = root
+        self.prefetches = []
+        self.pipelines = []
         (root / "srv/satellite-updates/incoming").mkdir(parents=True)
 
     def path(self, value):
@@ -138,7 +141,11 @@ class LocalSftp:
         self.path(value).mkdir(mode=mode)
 
     def open(self, value, mode):
-        return self.path(value).open("xb" if mode == "wx" else mode)
+        stream = self.path(value).open("xb" if mode == "wx" else mode)
+        stream.stat = lambda: os.fstat(stream.fileno())
+        stream.prefetch = lambda **options: self.prefetches.append((value, options))
+        stream.set_pipelined = lambda enabled: self.pipelines.append((value, enabled))
+        return stream
 
     def remove(self, value):
         self.path(value).unlink()
@@ -160,6 +167,11 @@ def test_upload_resumes_verifies_and_reuses_immutable_bytes(tmp_path):
     sftp.path(remote + ".part").write_bytes(content[:123456])
     expected = {"size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
     assert upload_file(sftp, local, remote, **expected) == "resumed"
+    assert sftp.pipelines == [(remote + ".part", True)]
+    assert sftp.prefetches == [
+        (remote + ".part", {"file_size": 123456, "max_concurrent_requests": 32}),
+        (remote + ".part", {"file_size": len(content), "max_concurrent_requests": 32}),
+    ]
     assert sftp.path(remote).read_bytes() == content
     assert upload_file(sftp, local, remote, **expected) == "reused"
     sftp.path(remote).write_bytes(b"changed")
@@ -181,6 +193,58 @@ def test_wrong_partial_bytes_and_symlink_directory_are_rejected(tmp_path):
         ensure_directory(sftp, CANDIDATE_ROOT + "/alias/output")
     with pytest.raises(ValueError, match="fixed candidate root"):
         ensure_directory(sftp, "/var/www/release")
+
+
+def test_pipelined_upload_close_failure_preserves_partial(tmp_path):
+    sftp = LocalSftp(tmp_path / "remote")
+    local = tmp_path / "content.7z"
+    local.write_bytes(b"payload")
+    remote = CANDIDATE_ROOT + "/content.7z"
+    original_open = sftp.open
+
+    class FailedClose:
+        def __init__(self, stream):
+            self.stream = stream
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.stream.close()
+            raise OSError("delayed write failure")
+
+    def open_with_failed_close(path, mode):
+        stream = original_open(path, mode)
+        return FailedClose(stream) if mode == "wx" else stream
+
+    sftp.open = open_with_failed_close
+    with pytest.raises(OSError, match="delayed write failure"):
+        upload_file(sftp, local, remote, size=7, sha256=hashlib.sha256(b"payload").hexdigest())
+    assert sftp.pipelines == [(remote + ".part", True)]
+    assert sftp.prefetches == []
+    assert sftp.path(remote + ".part").exists()
+    assert not sftp.path(remote).exists()
+
+
+@pytest.mark.parametrize("written", [b"", b"xxx", b"xxxxxxx"])
+def test_pipelined_upload_verifies_written_bytes_before_rename(tmp_path, written):
+    sftp = LocalSftp(tmp_path / "remote")
+    local = tmp_path / "content.7z"
+    local.write_bytes(b"payload")
+    remote = CANDIDATE_ROOT + "/content.7z"
+    original_open = sftp.open
+
+    def corrupting_open(path, mode):
+        stream = original_open(path, mode)
+        if mode == "wx":
+            stream.write = lambda data: type(stream).write(stream, written)
+        return stream
+
+    sftp.open = corrupting_open
+    with pytest.raises(ValueError, match="SHA-256"):
+        upload_file(sftp, local, remote, size=7, sha256=hashlib.sha256(b"payload").hexdigest())
+    assert sftp.path(remote + ".part").read_bytes() == written
+    assert not sftp.path(remote).exists()
 
 
 def test_upload_receipt_commits_after_every_artifact_and_preflights_all_files(tmp_path):
@@ -227,6 +291,8 @@ def test_candidate_retry_recovers_interrupted_upload_using_same_receipt(tmp_path
             self.stream.close()
         def seek(self, value):
             self.stream.seek(value)
+        def set_pipelined(self, enabled):
+            self.stream.set_pipelined(enabled)
         def write(self, value):
             self.stream.write(value[:17])
             raise ConnectionError("connection interrupted")
