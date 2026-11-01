@@ -28,9 +28,9 @@ def candidate(tmp_path: Path, platform="mac"):
                                 version="1.9.0", extension="zip" if platform == "mac" else "7z")
     if platform == "mac":
         with zipfile.ZipFile(root / name, "w") as archive:
-            archive.writestr("SatelliteTerminalManagerUser.app/Contents/Resources/satellite_debug_tool/build_identity.json",
+            archive.writestr("SatelliteTerminalManager.app/Contents/Resources/satellite_debug_tool/build_identity.json",
                              json.dumps(identity))
-            archive.writestr("SatelliteTerminalManagerUser.app/Contents/MacOS/SatelliteTerminalManager", b"application")
+            archive.writestr("SatelliteTerminalManager.app/Contents/MacOS/SatelliteTerminalManager", b"application")
     else:
         tree = tmp_path / "payload"
         path = tree / "_internal/satellite_debug_tool/build_identity.json"
@@ -41,6 +41,8 @@ def candidate(tmp_path: Path, platform="mac"):
             for path in tree.rglob("*"):
                 if path.is_file():
                     archive.write(path, path.relative_to(tree).as_posix())
+    assert name == (f"satellite_terminal_manager-{'macos-arm64' if platform == 'mac' else 'windows-x86_64'}"
+                    f"-v1.9.0.{'zip' if platform == 'mac' else '7z'}")
     data = (root / name).read_bytes()
     receipt = {"schema": "satellite.release-candidate/v1", "identity": identity, "source_commit": COMMIT,
                "artifacts": [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}]}

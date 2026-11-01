@@ -5,8 +5,9 @@
 # 自动清 quarantine，打完即可双击运行
 #
 # 用法：  ./scripts/build_macos.sh user|ops|both（默认 ops）
-# 产物：  dist/user/SatelliteTerminalManagerUser.app、dist/ops/SatelliteTerminalManagerOps.app
-#         release/satellite_terminal_manager-{user,ops}-macos-<arch>-v<version>.zip
+# 产物：  dist/user/SatelliteTerminalManager.app、dist/ops/SatelliteTerminalManagerOps.app
+#         release/satellite_terminal_manager-macos-<arch>-v<version>.zip
+#         release/satellite_terminal_manager-ops-macos-<arch>-v<version>.zip
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

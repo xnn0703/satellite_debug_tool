@@ -37,7 +37,7 @@ def test_package_freezes_final_bytes_and_refuses_rebuild(tmp_path, edition):
     assert data["system_signature"] == "unsigned"
     assert {row["name"].endswith(".7z") for row in data["artifacts"]} == {False, True}
     assert next(row["name"] for row in data["artifacts"] if row["name"].endswith(".7z")) == (
-        f"satellite_terminal_manager-{edition}-windows-x86_64-v1.8.1.7z")
+        f"satellite_terminal_manager-{'ops-' if edition == 'ops' else ''}windows-x86_64-v1.8.1.7z")
     for row in data["artifacts"]:
         content = (receipt.parent / row["name"]).read_bytes()
         assert (len(content), hashlib.sha256(content).hexdigest()) == (row["size"], row["sha256"])

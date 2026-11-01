@@ -5,7 +5,7 @@
     pyinstaller --noconfirm satellite_debug_tool.spec
 
 产物：
-    dist/<edition>/SatelliteTerminalManagerUser|Ops/              （onedir 模式；mac 下同时产出 .app bundle）
+    dist/<edition>/SatelliteTerminalManager[Ops]/              （onedir 模式；mac 下同时产出 .app bundle）
         SatelliteTerminalManager(.exe)
         _internal/ ...
 """

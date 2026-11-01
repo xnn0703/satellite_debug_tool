@@ -5,8 +5,8 @@
 ## 版本与迁移合同
 
 - 版本唯一来源是 `satellite_debug_tool/__init__.py.__version__`；tag 必须为 `v<version>`。user/ops、Windows/macOS 四包使用同一干净源码 SHA。
-- 文件名称统一由 `satellite_debug_tool/package_names.py` 定义。Windows 主程序为 `SatelliteTerminalManager.exe`，两版目录为 `SatelliteTerminalManagerUser`、`SatelliteTerminalManagerOps`；Mac 使用对应同名 app。
-- 完整包名为 `satellite_terminal_manager-<user|ops>-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`。历史 <=1.8.1 包保持原样，首次人工安装完整 v1.9.0 后进入新站合同。
+- 文件名称统一由 `satellite_debug_tool/package_names.py` 定义。Windows 主程序为 `SatelliteTerminalManager.exe`，两版目录为 `SatelliteTerminalManager`、`SatelliteTerminalManagerOps`；Mac 使用对应同名 app。客户完整包归档使用 `satellite_terminal_manager-{platform}-{arch}-v{version}.{extension}`，运维全量包增加 `-ops-` 标识；内部 edition 继续用于构建身份校验。
+- 客户完整包名为 `satellite_terminal_manager-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`，运维全量版为 `satellite_terminal_manager-ops-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`。历史 <=1.8.1 包保持原样，首次人工安装完整 v1.9.0 后进入新站合同。
 - 内部 Python 包、app/repo 信任身份、bundle identifier、配置目录和设备固件认证域保持原合同。
 - user 使用人工完整包交付；ops 使用 TUF 签名更新。Windows 支持自动安装，Mac 校验下载后由人员退出旧程序并替换 app。首个正式可信版本没有上一基线，只发布完整包。
 

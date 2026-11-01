@@ -43,3 +43,10 @@
 - SFTP 写启用流水线；远端摘要与候选拉取按已打开文件的实际长度、32 个并发请求预取。封口仍由关闭后的完整 size/SHA-256 回读确认，任何关闭、读取异常或内容差异均阻止 rename。Paramiko 4.0.0 的流水线响应实现与文档中的关闭错误承诺有差异，因此以最终字节验证作为权威事实。
 - 上传/晋升专项 `29 passed / 0.94s`，覆盖续传、并发上界、关闭/预取异常、空文件/截断/等长篡改拒绝封口；实际速率留待正式包传输记录。
 - 初始发布提交 `d9ecd9d52fc6fc017ef980d755d0a01a92a1b5f5` 的 Actions `41333023236` 已取消，包尚未进入服务器候选区或公开目录；完成上述修复后，未公开的 v1.9.0 标签和四包统一指向新提交。
+
+## 客户版使用产品本名
+
+- 用户最新确认“客户版本不用注明 user，只全量版本名称注明”。先更新 M53 计划与验收，再修改唯一文件名合同：客户目录/app 为 `SatelliteTerminalManager` / `SatelliteTerminalManager.app`，客户归档为 `satellite_terminal_manager-{platform}-{arch}-v{version}.{extension}`；运维全量版保持目录/app `Ops` 和归档 `-ops-`。`UserWindow` 版本栏仅显示 `vX.Y.Z`，中英文产品名称沿用已确认名称。
+- Windows/macOS 构建、冻结 smoke、发行候选及人工交付均消费 `package_names.py`；同步 spec/构建脚本注释、BUILDING、RELEASING、v1.9.0 安装说明和 AGENTS。内部 Edition.USER、构建身份、bundle identifier、配置路径及权限边界保持既有合同。
+- 命名、冻结入口、两版构建、人工交付和客户窗口回归在旧源码上为 `18 failed / 30 passed`（`/tmp/m53-customer-plain-name-old.log`）；失败包括客户目录、归档及版本栏断言。修复后加入相邻发行候选回归，共 `64 passed / 3.49s`（`/tmp/m53-customer-plain-name-new.log`）。
+- 翻译 update/check 通过，删除已失效的 User edition 文案，现有 1496 条。真实冻结构建、最终 SHA 四包、上传及公开下载继续由发布步骤验证，本次专项不代替这些证据。

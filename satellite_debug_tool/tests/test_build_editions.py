@@ -12,7 +12,7 @@ from scripts import build_editions
 def test_only_ops_builds_and_embeds_application_updater(tmp_path, monkeypatch, edition):
     monkeypatch.setattr(build_editions, "ROOT", tmp_path)
     monkeypatch.setattr(build_editions.sys, "platform", "win32")
-    folder = "SatelliteTerminalManagerUser" if edition == "user" else "SatelliteTerminalManagerOps"
+    folder = "SatelliteTerminalManager" if edition == "user" else "SatelliteTerminalManagerOps"
     payload = tmp_path / "dist" / edition / folder
     docs = tmp_path / "doc"
     docs.mkdir()
@@ -36,5 +36,5 @@ def test_only_ops_builds_and_embeds_application_updater(tmp_path, monkeypatch, e
     assert (tmp_path / "release" / f"build-{edition}.json").is_file()
     metrics = json.loads((tmp_path / "release" / f"build-{edition}.json").read_text())
     assert Path(metrics["archive"]).name == (
-        f"satellite_terminal_manager-{edition}-windows-"
+        f"satellite_terminal_manager-{'ops-' if edition == 'ops' else ''}windows-"
         f"{build_editions.platform.machine().lower().replace('amd64', 'x86_64')}-v{build_editions.__version__}.zip")

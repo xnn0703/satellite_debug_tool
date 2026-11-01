@@ -11,7 +11,7 @@ from satellite_debug_tool.package_names import (
 )
 
 
-@pytest.mark.parametrize("edition,suffix", [("user", "User"), ("ops", "Ops")])
+@pytest.mark.parametrize("edition,suffix", [("user", ""), ("ops", "Ops")])
 @pytest.mark.parametrize("system,arch,expected,extension", [
     ("win", "AMD64", "windows-x86_64", "7z"),
     ("mac", "aarch64", "macos-arm64", "zip"),
@@ -22,11 +22,11 @@ def test_manager_names_preserve_trusted_identity(edition, suffix, system, arch, 
     assert edition_directory(edition) == f"SatelliteTerminalManager{suffix}"
     assert release_archive_name(edition=edition, platform=system, architecture=arch,
         version="v1.9.0", extension=extension) == (
-        f"satellite_terminal_manager-{edition}-{expected}-v1.9.0.{extension}")
+        f"satellite_terminal_manager-{'ops-' if edition == 'ops' else ''}{expected}-v1.9.0.{extension}")
     assert APP_ID == "satellite-terminal-tool"
 
 
-@pytest.mark.parametrize("edition,suffix", [("user", "User"), ("ops", "Ops")])
+@pytest.mark.parametrize("edition,suffix", [("user", ""), ("ops", "Ops")])
 @pytest.mark.parametrize("system", ["darwin", "win32"])
 def test_frozen_smoke_starts_manager_edition_executable(tmp_path, monkeypatch, edition, suffix, system):
     from scripts import check_frozen_application as smoke

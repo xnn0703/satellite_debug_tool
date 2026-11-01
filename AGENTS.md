@@ -131,7 +131,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **M46 电源面板交还与 MS-6222 对照**：客户外接电源页“退出遥控（恢复面板）”由同一 worker 完成当前操作、发送 `SYST:COMM:RLST LOC` 并关闭会话；monitor 保留面板控制意图，后续页面活动变化保持停止监测，显式“保存并连接”恢复监测。写入成功只呈现“已发送返回本地指令”，输出与设定值保持。`FixtureTelemetryBus` 同时拥有当前参考姿态快照，独立 MS 页和摇摆台入口发布 INS 样本与连接生命周期；总览在设备 3D 角度下方显示共享 MS 参考，固定显示原始 INS/真实航向（三位小数），摇摆台继续显示标定后的设备 FRD/相对航向，3 秒过期及断开时清除实时数字。原始快照仅服务实时对照，SDB 姿态记录继续使用既有类型化总线合同。见 `doc/M46_power_local_ms6222_readout_*.md`。
 
-- **M53 产品命名**：客户可见名称统一为“卫通终端管理工具 / Satellite Terminal Manager”，顶栏简称“终端管理 / Terminal Manager”；应用显示名与 macOS 包信息同步。文件名称由 `satellite_debug_tool/package_names.py` 唯一定义；内部 Python 包、app/repo 信任身份、bundle identifier 和配置目录保持原合同。报告默认公司名为空，由用户工位配置提供；已发布固件包的 AES-GCM 认证域按格式合同保留固定字节。
+- **M53 产品命名**：客户可见名称统一为“卫通终端管理工具 / Satellite Terminal Manager”，顶栏简称“终端管理 / Terminal Manager”；应用显示名与 macOS 包信息同步。客户版目录/app 使用 SatelliteTerminalManager 产品本名，完整包归档与版本栏使用产品本名和版本；全量运维版保留 Ops/ops 标识。文件名称由 `satellite_debug_tool/package_names.py` 唯一定义；内部 Python 包、app/repo 信任身份、bundle identifier 和配置目录保持原合同。报告默认公司名为空，由用户工位配置提供；已发布固件包的 AES-GCM 认证域按格式合同保留固定字节。
 - **M41 下拉框排版**：全局 QComboBox 与其弹出视图使用同一 UI 字体角色，数值输入保留等宽字体；回放/日志的 TimeRangeControl 使用标准列表委托和按内容调整宽度，语言切换由 Qt 重新计算尺寸，保持当前预设与范围。两页面将文件信息和时间范围分行，保证英文选项在页面布局中完整显示。
 
 - 所有 import 用 `satellite_debug_tool.` 前缀（绝对导入；这是为什么必须 `python3 -m ...`）
@@ -197,7 +197,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **M39 应用图标**：`ui/assets/icons/app_icon_master.png` 是已确认图稿，`scripts/generate_application_icons.py` 从母版生成 Windows 多尺寸 ICO、macOS ICNS 和实际尺寸预览。主程序/updater 的 Windows spec、macOS BUNDLE、QApplication 与顶栏共用该资源；运行时入口为 `ui/application_icon.py`。
 
 - **macOS 本地打包**：`./scripts/build_macos.sh user|ops|both`（默认 ops），准备约束依赖、检查翻译、PyInstaller 构建、验证 edition 身份并归档；ops 包含 updater，user 裁剪 updater。普通构建只写本地；`scripts/release_macos.py` 使用干净的指定 SHA 完成构建、冻结 smoke、候选校验及自动上传。
-- **Windows 一键打包**：`scripts\build_windows.bat user|ops|both`（默认 ops）；两平台均由 `scripts/build_editions.py` 调用 spec、验证模型与构建身份并生成独立 zip。Windows 安装目录分别为 `SatelliteTerminalManagerUser`、`SatelliteTerminalManagerOps`，EXE 为 `SatelliteTerminalManager.exe`；macOS 使用对应同名 app，内部主程序为 `SatelliteTerminalManager`。
+- **Windows 一键打包**：`scripts\build_windows.bat user|ops|both`（默认 ops）；两平台均由 `scripts/build_editions.py` 调用 spec、验证模型与构建身份并生成独立 zip。Windows 安装目录分别为 `SatelliteTerminalManager`、`SatelliteTerminalManagerOps`，EXE 为 `SatelliteTerminalManager.exe`；macOS 使用对应同名 app，内部主程序为 `SatelliteTerminalManager`。
 - **Windows 包合同**：ops `.7z` 归档根包含 `SatelliteTerminalManager.exe`、`updater.exe` 与 `_internal/`；user 完整包保留主程序及运行依赖、裁剪应用 updater 和在线源配置。上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷。旧版本 <=1.8.1 首次人工取得 v1.9.0 完整包迁入新站；历史包保持原样。
 - **CI**：`.github/workflows/build.yml` 用 Windows Runner 构建 user/ops。tag/dispatch 精确解析并 checkout 标签 SHA，测试与冻结 smoke 后生成不可变候选；两版成功后通过受保护的 `release-candidate` environment 上传 ECS 暂存区。普通分支/PR 只产出 artifact。工作流不创建 GitHub Release，不持有正式签名密钥。
 - **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、冻结 smoke 并上传候选；ops 客户端首轮支持可信检查和校验下载，安装由人员退出旧程序后替换应用。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
@@ -206,7 +206,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **`release.config.json`** 配 `app_id/repo_id/channel`、HTTPS metadata/target 入口和内嵌 TUF 公钥 root；未配置时明确等待部署，不回退 GitHub。私钥和上传凭据保存在仓库外。
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
 
-- **双版更新合同**：完整包名由 `package_names.py` 生成 `satellite_terminal_manager-<user|ops>-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`。ops 更新精确匹配 edition/platform/architecture/version，验证载荷身份与当前安装后处理。首份正式可信版本没有上一基线，只发布完整包。四包公开到服务器 `/downloads/v1.9.0/<完整归档文件名>`，交付服务器直链及 SHA256SUMS，不另存本机 Downloads；确认公开下载、CRC、身份和摘要后报告发布完成。
+- **双版更新合同**：完整包名由 `package_names.py` 生成 `satellite_terminal_manager-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`（客户）及 `satellite_terminal_manager-ops-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`（运维全量版）。ops 更新精确匹配 edition/platform/architecture/version，验证载荷身份与当前安装后处理。首份正式可信版本没有上一基线，只发布完整包。四包公开到服务器 `/downloads/v1.9.0/<完整归档文件名>`，交付服务器直链及 SHA256SUMS，不另存本机 Downloads；确认公开下载、CRC、身份和摘要后报告发布完成。
 - **用户包模块边界**：`scripts/edition_policy.py` 明确共享 UI 模块；其余 UI、生产执行模块和 QtWebEngine 由运维版提供，Shell UI/传输/YMODEM 两版共享，`verify_edition_package.py` 审计冻结 TOC 并验证用户包完整包含 Shell 模块。`core.production` 与 `ui` 的包导出按需加载，保留公共 API 并消除聚合 import 带来的运维依赖。
 
 ### Spec 关键钩子

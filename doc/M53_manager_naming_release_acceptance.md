@@ -10,3 +10,5 @@
 - 构建、冻结启动、云端分发与 Windows 实机升级、物理设备测试分开记录；没有实机证据不声明实机通过。
 - Mac Python 3.11 发布环境中，会话对象回收后共享主线程、图标插件和窗口构造持续有效；非 owner 线程调用仍被拒绝。原崩溃的测试顺序与全量测试均通过。
 - SFTP 有界并发读写保持摘要一致、错误传播与封口顺序；上传失败时公开目录仍保持先前版本。
+
+- 客户目录/app 为 SatelliteTerminalManager / SatelliteTerminalManager.app，客户归档为 satellite_terminal_manager-{platform}-{arch}-v{version}.{extension}；运维版目录/app 保留 Ops、归档保留 -ops-，客户版本栏仅显示版本。命名、冻结入口、人工交付和 UI 回归均覆盖，先记录旧实现失败再确认修复通过。

@@ -8,15 +8,15 @@
 |---|---|---|
 | 功能 | 总览、RF 控制、回放、加密固件升级、Shell | 全量客户、工程、试产、测试与夹具工具 |
 | 源码入口 | `python3 -m satellite_debug_tool.main_user` | `python3 -m satellite_debug_tool.main` |
-| Windows 目录 | `dist/user/SatelliteTerminalManagerUser/` | `dist/ops/SatelliteTerminalManagerOps/` |
-| macOS app | `dist/user/SatelliteTerminalManagerUser.app` | `dist/ops/SatelliteTerminalManagerOps.app` |
+| Windows 目录 | `dist/user/SatelliteTerminalManager/` | `dist/ops/SatelliteTerminalManagerOps/` |
+| macOS app | `dist/user/SatelliteTerminalManager.app` | `dist/ops/SatelliteTerminalManagerOps.app` |
 | macOS bundle identifier | `com.satellite-debug-tool.user` | `com.satellite-debug-tool.desktop` |
 | 设置与日志目录 | `~/.satellite_debug_tool/user/` | `~/.satellite_debug_tool/` |
 | 应用更新 | 人工下载完整包 | TUF 可信在线更新；Windows 自动安装、Mac 人工安装 |
 
 目录、主程序和归档名称的唯一代码合同是 `satellite_debug_tool/package_names.py`。Windows 主程序为 `SatelliteTerminalManager.exe`，macOS app 内主程序为 `Contents/MacOS/SatelliteTerminalManager`。ops 同时包含 updater，user 裁剪应用 updater 与在线源配置。两版保留完整 Shell（TCP/串口/YMODEM）。
 
-归档格式为 `satellite_terminal_manager-<edition>-<platform>-<arch>-v<version>.<extension>`，安装目录及 app 名称不含版本号。Windows 候选完整包使用 `.7z`，macOS 使用保留 app 符号链接的 `.zip`；架构为 `x86_64` 或 `arm64`。Windows 归档根直接包含主程序及 `_internal/`，ops 还包含 `updater.exe`。
+客户版归档格式为 `satellite_terminal_manager-<platform>-<arch>-v<version>.<extension>`，运维全量版为 `satellite_terminal_manager-ops-<platform>-<arch>-v<version>.<extension>`，安装目录及 app 名称不含版本号。Windows 候选完整包使用 `.7z`，macOS 使用保留 app 符号链接的 `.zip`；架构为 `x86_64` 或 `arm64`。Windows 归档根直接包含主程序及 `_internal/`，ops 还包含 `updater.exe`。
 
 内部 Python 包、app/repo 信任身份、bundle identifier、配置目录和设备固件 AES-GCM 认证域保持原合同。旧版本 <=1.8.1 首次人工取得 v1.9.0 完整包；历史归档保持原样。
 

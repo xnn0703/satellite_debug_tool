@@ -110,7 +110,8 @@ with patch('pathlib.Path.home', return_value=Path(sys.argv[1])):
     assert window._pending_update_request is None
     assert window._bg_check_thread is None
     window.retranslate_ui()
-    assert window._version_label.text().startswith('v')
+    from satellite_debug_tool import __version__
+    assert window._version_label.text() == f'v{__version__}'
     assert not any(name.startswith(('satellite_debug_tool.updater', 'satellite_debug_tool.release_config',
                                    'satellite_debug_tool.ui.update_dialog')) for name in sys.modules)
     assert window._customer._page_ids == ['overview','rf','playback','maintenance']

@@ -8174,11 +8174,6 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <translation>主题</translation>
     </message>
     <message>
-        <location filename="../../ui/user_window.py" line="97"/>
-        <source>User edition</source>
-        <translation>用户版</translation>
-    </message>
-    <message>
         <location filename="../../ui/user_window.py" line="107"/>
         <source>Finish the active device operation before closing.</source>
         <translation>请完成当前设备操作后再关闭。</translation>

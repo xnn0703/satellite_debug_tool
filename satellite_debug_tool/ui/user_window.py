@@ -94,7 +94,7 @@ class UserWindow(ApplicationWindowActions, QMainWindow):
         self._name.setText(tr("Terminal Manager"))
         self._theme_button.setText(tr("Theme"))
         self._settings_button.setText(tr("Settings"))
-        self._version_label.setText(f"v{__version__} · " + tr("User edition"))
+        self._version_label.setText(f"v{__version__}")
 
     def closeEvent(self, event):
         if not self._customer.close_shell_for_shutdown():

@@ -11,13 +11,13 @@ WINDOWS_EXECUTABLE = f"{APPLICATION_EXECUTABLE}.exe"
 
 
 def edition_directory(edition: str | Edition) -> str:
-    return f"{APPLICATION_EXECUTABLE}{'User' if Edition(edition) is Edition.USER else 'Ops'}"
+    return f"{APPLICATION_EXECUTABLE}{'Ops' if Edition(edition) is Edition.OPS else ''}"
 
 
 def release_archive_name(*, edition: str | Edition, platform: str,
                          architecture: str, version: str, extension: str) -> str:
     """构建与候选归档共用完整、可辨识的平台/架构/版本名称。"""
-    edition = Edition(edition).value
+    edition_suffix = "ops-" if Edition(edition) is Edition.OPS else ""
     system = {"win": "windows", "windows": "windows", "mac": "macos", "macos": "macos"}[platform]
     architecture = {"amd64": "x86_64", "x64": "x86_64", "aarch64": "arm64"}.get(
         architecture.lower(), architecture.lower())
@@ -25,4 +25,4 @@ def release_archive_name(*, edition: str | Edition, platform: str,
         raise ValueError("archive requires a supported architecture and format")
     version = version.removeprefix("v")
     parse_version(version, complete=True)
-    return f"satellite_terminal_manager-{edition}-{system}-{architecture}-v{version}.{extension}"
+    return f"satellite_terminal_manager-{edition_suffix}{system}-{architecture}-v{version}.{extension}"
