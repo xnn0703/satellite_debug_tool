@@ -31,6 +31,13 @@
 - 新增 `test_session_owner_thread.py` 覆盖 Runtime/CustomerDirectory 销毁及 GC 后主线程 wrapper、图标插件继续有效，并用真实另一条 Python 线程确认 owner 拒绝调用。旧实现 `2 failed / 2 passed`（`/tmp/m53-owner-thread-old.log`），修复后与原崩溃三文件合跑 `28 passed / 5.33s`（`/tmp/m53-owner-thread-new.log`）。
 - Runtime、客户目录、客户会话绑定、更新器与新回归合跑 `55 passed / 1.04s`（`/tmp/m53-owner-thread-adjacent.log`）；项目全部 Python 源码已没有 `.thread()` 调用。发布环境全量和冻结构建由发布流程继续记录。
 
+## 试产测试夹具的控件所有权修复
+
+- 发布环境全量越过原线程崩点后，在约 58% 的 `test_production_workspace.py` 夹具初始化触发新的 SIGSEGV。cocoa 与默认 offscreen 均出现 `QApplication.allWidgets → QList<QWidget*> 转 Python list → PySide::getWrapperForQObject` 的坏对象访问，属于独立的测试夹具问题。原始证据为 `/tmp/m53-mac-release-final.log`、`/tmp/m53-python311-offscreen-fixed.log` 与 `Python-2026-11-02-020321.ips`。
+- 纯 Qt 最小复现 `/tmp/m53_allwidgets_gc_repro.py`：暂停 GC 创建 100 个自循环 QWidget，每个带 QTableWidget、QDialogButtonBox 和布局，释放局部引用，将 GC 阈值设为 `(1, 1, 1)`，恢复 GC 后调用 `app.allWidgets()`。cocoa/offscreen 均 exit 139；同程序保持 GC 关闭可完成并返回 2300 个控件。诊断报告 `Python-2026-11-02-020514.ips` / `Python-2026-11-02-020536.ips` 同样包含 `getWrapperForQObject → QList<QWidget*> 转换 → allWidgets`；前序控件只由循环引用维持，返回列表包装分配触发回收，使列表后续原生指针失效。
+- 夹具改为在构造边界收集本测试新建的 MainWindow/ProductionWorkspace，明确持有到受控 close、DeferredDelete 与 GC 收尾；删除两次进程全局 `allWidgets()` 枚举及 baseline 集合。生产源码没有 `allWidgets()` 调用。本修复没有禁用 GC、延迟回收或修改业务代码。
+- 新增 `test_production_widget_ownership.py`：禁止全局枚举，确认本项实例在局部引用消失后仍由夹具持有、退出时回收，并且预存工作区继续有效。旧实现稳定因调用全局枚举失败（`/tmp/m53-production-widget-owner-old.log`）；修复后与全部工作区测试合跑 `29 passed / 3.62s`（`/tmp/m53-production-widget-owner-new.log`）。发布环境全量继续单独记录。
+
 ## 大文件上传与候选更新
 
 - SFTP 写启用流水线；远端摘要与候选拉取按已打开文件的实际长度、32 个并发请求预取。封口仍由关闭后的完整 size/SHA-256 回读确认，任何关闭、读取异常或内容差异均阻止 rename。Paramiko 4.0.0 的流水线响应实现与文档中的关闭错误承诺有差异，因此以最终字节验证作为权威事实。

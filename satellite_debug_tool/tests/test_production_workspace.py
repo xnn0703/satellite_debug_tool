@@ -23,34 +23,43 @@ def _dispose_created_production_widgets(qapplication_session):
     from satellite_debug_tool.ui.main_window import MainWindow
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
 
-    widget_types = (MainWindow, ProductionWorkspace)
-    baseline = {widget for widget in qapplication_session.allWidgets() if isinstance(widget, widget_types)}
-    try:
-        yield
-    finally:
-        created = [widget for widget in qapplication_session.allWidgets()
-                   if isinstance(widget, widget_types) and widget not in baseline]
-        created.sort(key=lambda widget: isinstance(widget, MainWindow), reverse=True)
-        for widget in created:
-            if not isValid(widget):
-                continue
-            closed = widget.close()
-            deadline = time.monotonic() + 5
-            while not closed and time.monotonic() < deadline:
-                qapplication_session.processEvents()
-                time.sleep(.001)
+    created = []
+
+    def track_constructor(widget_type, constructors):
+        initialize = widget_type.__init__
+
+        def initialize_owned(widget, *args, **kwargs):
+            initialize(widget, *args, **kwargs)
+            created.append(widget)
+
+        constructors.setattr(widget_type, "__init__", initialize_owned)
+
+    with pytest.MonkeyPatch.context() as constructors:
+        for widget_type in (MainWindow, ProductionWorkspace):
+            track_constructor(widget_type, constructors)
+        try:
+            yield
+        finally:
+            created.sort(key=lambda widget: isinstance(widget, MainWindow), reverse=True)
+            for widget in created:
+                if not isValid(widget):
+                    continue
                 closed = widget.close()
-            assert closed, "production UI ownership must settle before deleting test widgets"
-        for widget in created:
-            if isValid(widget):
-                widget.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        qapplication_session.processEvents()
-        created.clear()
-        baseline.clear()
-        gc.collect()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        qapplication_session.processEvents()
+                deadline = time.monotonic() + 5
+                while not closed and time.monotonic() < deadline:
+                    qapplication_session.processEvents()
+                    time.sleep(.001)
+                    closed = widget.close()
+                assert closed, "production UI ownership must settle before deleting test widgets"
+            for widget in created:
+                if isValid(widget):
+                    widget.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            qapplication_session.processEvents()
+            created.clear()
+            gc.collect()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            qapplication_session.processEvents()
 
 
 @pytest.fixture(scope="module")
