@@ -139,7 +139,7 @@ def test_heavy_pages_are_built_on_first_access(
     qapp.processEvents()
 
 
-def test_active_iperf_keeps_external_power_monitor_active_across_workspaces(
+def test_active_iperf_preserves_explicit_power_connection_across_workspaces(
     qapplication_session, lifecycle_settings
 ) -> None:
     from dataclasses import replace
@@ -159,6 +159,11 @@ def test_active_iperf_keeps_external_power_monitor_active_across_workspaces(
     bundle._iperf_store.set_snapshot(
         replace(bundle._iperf_store.snapshot, phase=IperfTestPhase.RUNNING)
     )
+    bundle._iperf_controller.active_changed.emit(True)
+    assert not bundle._power_monitor.active
+
+    # 网络测试活动保护显式建立的会话，活动变化本身不发起电源连接。
+    bundle._power_monitor.resume_monitoring()
     bundle._iperf_controller.active_changed.emit(True)
     assert bundle._power_monitor.active
 

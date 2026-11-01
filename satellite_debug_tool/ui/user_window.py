@@ -1,4 +1,4 @@
-"""用户产物装配：客户会话与日常页面，共用领域模型和更新事务。"""
+"""用户产物装配：客户会话与日常页面，应用使用人工完整包更新。"""
 
 from PySide6.QtCore import QSize, QTimer
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QStatusBar, QToolBar, QWidget
@@ -37,6 +37,7 @@ class UserWindow(ApplicationWindowActions, QMainWindow):
         self._customer = CustomerWorkspace(None, settings, None, device_directory=self._customer_devices,
                                          page_bundle_factory=self._customer_bundle_factory,
                                          tcp_shell_session_directory=self._endpoint_directory)
+        self._customer.shell_shutdown_ready.connect(lambda: QTimer.singleShot(0, self.close))
         self._customer.add_requested.connect(self._on_add_customer_device)
         self._customer.edit_requested.connect(self._on_edit_customer_device)
         self._customer.delete_requested.connect(self._on_delete_customer_device)
@@ -55,9 +56,6 @@ class UserWindow(ApplicationWindowActions, QMainWindow):
         self._theme_button = QPushButton()
         self._theme_button.clicked.connect(self._cycle_theme)
         layout.addWidget(self._theme_button)
-        self._update_button = QPushButton()
-        self._update_button.clicked.connect(self._on_check_update_clicked)
-        layout.addWidget(self._update_button)
         self._settings_button = QPushButton()
         self._settings_button.clicked.connect(self._on_open_settings)
         layout.addWidget(self._settings_button)
@@ -69,7 +67,6 @@ class UserWindow(ApplicationWindowActions, QMainWindow):
         self._apply_theme(settings.get("ui.theme", "dark"))
         register_translatable(self)
         self._customer.activate_view()
-        QTimer.singleShot(2000, self._kick_silent_update_check)
 
     def _on_status_message(self, text, timeout=5000):
         self.statusBar().showMessage(text, timeout)
@@ -93,14 +90,16 @@ class UserWindow(ApplicationWindowActions, QMainWindow):
         dialog.exec()
 
     def retranslate_ui(self):
-        self.setWindowTitle(tr("Satellite Terminal Tool"))
-        self._name.setText(tr("Terminal Tool"))
+        self.setWindowTitle(tr("Satellite Terminal Manager"))
+        self._name.setText(tr("Terminal Manager"))
         self._theme_button.setText(tr("Theme"))
-        self._update_button.setText(tr("Check for updates"))
         self._settings_button.setText(tr("Settings"))
         self._version_label.setText(f"v{__version__} · " + tr("User edition"))
 
     def closeEvent(self, event):
+        if not self._customer.close_shell_for_shutdown():
+            event.ignore()
+            return
         if not self._shutdown_background_update_check():
             self._reject_close(event, "background update check did not stop")
             return
@@ -110,5 +109,7 @@ class UserWindow(ApplicationWindowActions, QMainWindow):
             return
         if not self._shutdown_customer_resources(event):
             return
-        self._launch_pending_update()
+        if not self._launch_pending_update():
+            event.ignore()
+            return
         super().closeEvent(event)

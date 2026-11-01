@@ -11,6 +11,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from satellite_debug_tool.package_names import APPLICATION_EXECUTABLE, WINDOWS_EXECUTABLE, edition_directory
 
 
 def main() -> None:
@@ -21,8 +23,9 @@ def main() -> None:
     version = args.version.removeprefix("v") or re.search(
         r'__version__\s*=\s*"([^"]+)"', (ROOT / "satellite_debug_tool/__init__.py").read_text(encoding="utf-8")
     ).group(1)
-    folder = "SatelliteTerminalToolUser" if args.edition == "user" else "SatelliteDebugTool"
-    exe = ROOT / "dist" / args.edition / folder / "SatelliteDebugTool.exe"
+    folder = edition_directory(args.edition)
+    exe = (ROOT / "dist" / args.edition / f"{folder}.app" / "Contents/MacOS" / APPLICATION_EXECUTABLE
+           if sys.platform == "darwin" else ROOT / "dist" / args.edition / folder / WINDOWS_EXECUTABLE)
     result = ROOT / "release" / f"smoke-{args.edition}.json"
     result.parent.mkdir(exist_ok=True)
     env = dict(os.environ, SATELLITE_UPDATE_CHECK="0")
@@ -43,6 +46,11 @@ def main() -> None:
         raise SystemExit("Frozen smoke used a different Qt platform")
     if (proof.get("edition"), proof.get("version"), proof.get("overview_panels"), proof.get("shell_dialog")) != (args.edition, version, "PASS", "PASS"):
         raise SystemExit("Frozen smoke evidence differs from the release contract")
+    expected_policy = "manual" if args.edition == "user" else "online"
+    if proof.get("application_update_policy") != expected_policy:
+        raise SystemExit("Frozen application update policy differs from its build identity")
+    if args.edition == "user" and proof.get("application_update_modules") != []:
+        raise SystemExit("Frozen user payload imported application update modules")
 
 
 if __name__ == "__main__":

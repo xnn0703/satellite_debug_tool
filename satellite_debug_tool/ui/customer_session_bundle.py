@@ -94,7 +94,6 @@ class CustomerEndpointSessionBundle:
                 float(self._power_profile.get("voltage_set_v", 12.0)),
                 float(self._power_profile.get("current_set_a", 12.0)),
             )
-            self._power_monitor.set_active(True)
             self._iperf_store = IperfTestStore()
             self._iperf_controller = IperfTestController(
                 self._iperf_store,
@@ -276,7 +275,9 @@ class CustomerEndpointSessionBundle:
         iperf_active = bool(
             self._iperf_controller is not None and self._iperf_controller.active
         )
-        self._power_monitor.set_active(self._customer_active or iperf_active)
+        # 页面可见性只结束闲置会话；连接由用户“保存并连接”显式发起。
+        if not self._customer_active and not iperf_active:
+            self._power_monitor.set_active(False)
 
     def device_view(self) -> DeviceView:
         if not self._operations:

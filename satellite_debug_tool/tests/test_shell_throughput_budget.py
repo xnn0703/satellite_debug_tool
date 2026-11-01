@@ -304,7 +304,9 @@ class TestShutdownWithBacklog:
         payload = _LINE * (300 * 1024 // _LINE_LEN + 1)
         workspace._active_ring.push(payload[: 300 * 1024])
         start = time.perf_counter()
-        workspace.shutdown()
+        workspace.request_shutdown()
+        assert time.perf_counter() - start < 0.5
+        assert _wait_until(qapplication_session, lambda: workspace.shutdown_complete, timeout_s=10.0)
         elapsed = time.perf_counter() - start
         print(f"PERF shutdown drain 300 KiB: {elapsed:.2f} s")
         assert elapsed < 10.0

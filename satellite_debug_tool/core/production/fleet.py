@@ -11,7 +11,7 @@ import ipaddress
 import math
 from pathlib import Path
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -33,14 +33,18 @@ from satellite_debug_tool.core.product import (
 )
 from satellite_debug_tool.core.profile.cache import profile_to_dict
 from satellite_debug_tool.core.protocol import (
+    DataReport,
     FrameReceiverV2,
+    InsTraceRecord,
     RawFrame,
+    ServiceCapabilities,
     ServiceFastState,
     ServiceHardwareIdentity,
     ServiceIdentity,
     build_service_subscribe,
 )
 from satellite_debug_tool.core.session import (
+    CaptureProfileController,
     DeviceSessionCore,
     EndpointSessionDirectory,
     EndpointSessionRuntime,
@@ -79,6 +83,18 @@ class DeviceSessionState(str, Enum):
     IDENTIFIED = "identified"
     CONFLICT = "conflict"
     UNSUPPORTED = "unsupported"
+
+
+class ProductionCaptureState(str, Enum):
+    NOT_REQUIRED = "not_required"
+    WAITING_CAPABILITIES = "waiting_capabilities"
+    UNSUPPORTED = "unsupported"
+    REQUESTING = "requesting"
+    WAITING_DATA = "waiting_data"
+    READY = "ready"
+    FAILED = "failed"
+    RESTORING = "restoring"
+    RESTORED = "restored"
 
 
 FleetDatagram = EndpointDatagram
@@ -391,8 +407,17 @@ class DeviceSession(QObject):
         self._recording_final_path: Optional[Path] = None
         self._recording_complete: Optional[bool] = None
         self._runtime_record_overrides: dict[tuple[int, int, bytes], bool] = {}
+        self._capture_controller: CaptureProfileController | None = None
+        self._capture_state = ProductionCaptureState.NOT_REQUIRED
+        self._capture_confirmed = False
+        self._capture_data_observed = False
+        self._capture_frame_types: set[str] = set()
+        self._capture_error = ""
+        self._capture_attempted_scope: tuple[int, int] | None = None
+        self._capture_restore_attempted = False
         if runtime is not None:
             self._connect_runtime(runtime)
+            self._bind_capture_controller()
 
     @property
     def serial_number(self) -> str:
@@ -471,6 +496,29 @@ class DeviceSession(QObject):
     @property
     def recording_complete(self) -> Optional[bool]:
         return self._recording_complete
+
+    @property
+    def capture_state(self) -> ProductionCaptureState:
+        return self._capture_state
+
+    @property
+    def capture_error(self) -> str:
+        return self._capture_error
+
+    @property
+    def capture_ready(self) -> bool:
+        if self.attachment is None:
+            return True
+        return bool(
+            self.recording_armed
+            and self._capture_confirmed
+            and self._capture_data_observed
+            and self._capture_state is ProductionCaptureState.READY
+        )
+
+    @property
+    def capture_frame_types(self) -> tuple[str, ...]:
+        return tuple(sorted(self._capture_frame_types))
 
     def is_online(self, *, now_monotonic_ns: Optional[int] = None, timeout_s: float = 3.0) -> bool:
         if self.runtime is not None:
@@ -551,6 +599,7 @@ class DeviceSession(QObject):
                 format_version=SDB_VERSION_V3,
                 metadata={
                     "mode": "production",
+                    "capture_profile": "production_support_full_required",
                     "batch_id": str(batch_id),
                     "slot": self.slot,
                     "endpoint": f"{self.endpoint[0]}:{self.endpoint[1]}",
@@ -580,7 +629,15 @@ class DeviceSession(QObject):
         self._recording_root = root
         self._recording_final_path = None
         self._recording_complete = None
+        self._capture_confirmed = False
+        self._capture_data_observed = False
+        self._capture_frame_types.clear()
+        self._capture_error = ""
+        self._capture_attempted_scope = None
+        self._capture_state = ProductionCaptureState.WAITING_CAPABILITIES
+        self._capture_restore_attempted = False
         self.recording_changed.emit(self)
+        self._ensure_full_capture()
         return True
 
     def feed_datagram(self, datagram: FleetDatagram, *, record: bool = True) -> tuple[object, ...]:
@@ -711,6 +768,8 @@ class DeviceSession(QObject):
         self.received_bytes += len(datagram.data)
         identity_changed = False
         for item in records:
+            if isinstance(item, (DataReport, InsTraceRecord)):
+                self._mark_capture_data_observed(datagram.wall_time_ns, item)
             if (
                 isinstance(item, ServiceFastState)
                 and item.valid_mask & (1 << 11)
@@ -758,7 +817,152 @@ class DeviceSession(QObject):
                     self.hardware_identity_changed.emit(item)
         if identity_changed:
             self.updated.emit(self)
+        self._ensure_full_capture()
         return records
+
+    def _bind_capture_controller(self) -> None:
+        if self.attachment is None:
+            return
+        controller = CaptureProfileController(
+            self.core,
+            parent=self,
+            operation_gateway=self.attachment.new_operation_gateway(),
+            recorder_kind=None,
+            retain_full_capture_operation=False,
+        )
+        controller.finished.connect(self._on_capture_profile_finished)
+        self.core.generation_changed.connect(self._on_capture_generation_changed)
+        self.core.telemetry_epoch_changed.connect(self._on_capture_generation_changed)
+        self._capture_controller = controller
+
+    def _capture_scope(self) -> tuple[int, int]:
+        return int(self.core.generation), int(self.product_store.telemetry_epoch)
+
+    def _write_capture_event(self, event: str, **details) -> None:
+        recorder = self._recorder
+        if recorder is not None:
+            recorder.write_metadata_event(
+                {"type": "production_capture_profile", "event": event, **details}
+            )
+
+    def _ensure_full_capture(self) -> None:
+        if not self.recording_armed or self._capture_controller is None:
+            return
+        if self._capture_confirmed or self._capture_state in {
+            ProductionCaptureState.REQUESTING,
+            ProductionCaptureState.RESTORING,
+            ProductionCaptureState.FAILED,
+            ProductionCaptureState.UNSUPPORTED,
+        }:
+            return
+        capabilities = self.product_store.capabilities_record
+        if capabilities is None:
+            if self._capture_state is not ProductionCaptureState.WAITING_CAPABILITIES:
+                self._capture_state = ProductionCaptureState.WAITING_CAPABILITIES
+                self._capture_error = "waiting for device capture capabilities"
+                self.updated.emit(self)
+            return
+        if not isinstance(capabilities, ServiceCapabilities) or not (
+            int(capabilities.capture_profile_mask) & 0x02
+        ):
+            self._capture_state = ProductionCaptureState.UNSUPPORTED
+            self._capture_error = "device does not support full capture"
+            self._write_capture_event("unsupported")
+            self.updated.emit(self)
+            return
+        scope = self._capture_scope()
+        if self._capture_attempted_scope == scope:
+            return
+        self._capture_attempted_scope = scope
+        self._capture_state = ProductionCaptureState.REQUESTING
+        self._capture_error = ""
+        self._write_capture_event(
+            "requested", generation=scope[0], telemetry_epoch=scope[1]
+        )
+        self.updated.emit(self)
+        self._capture_controller.request(True)
+
+    @Slot(bool, bool, str)
+    def _on_capture_profile_finished(
+        self, target: bool, success: bool, reason: str
+    ) -> None:
+        if target:
+            self._capture_confirmed = bool(success)
+            if success:
+                self._capture_error = ""
+                self._capture_state = (
+                    ProductionCaptureState.READY
+                    if self._capture_data_observed
+                    else ProductionCaptureState.WAITING_DATA
+                )
+                self._write_capture_event("confirmed", reason=str(reason))
+            else:
+                self._capture_state = ProductionCaptureState.FAILED
+                self._capture_error = str(reason)
+                self._write_capture_event("failed", reason=str(reason))
+        else:
+            self._capture_confirmed = not bool(success)
+            self._capture_state = (
+                ProductionCaptureState.RESTORED
+                if success
+                else ProductionCaptureState.FAILED
+            )
+            self._capture_error = "" if success else str(reason)
+            self._write_capture_event(
+                "restored" if success else "restore_failed", reason=str(reason)
+            )
+        self.updated.emit(self)
+
+    @Slot(int, object)
+    def _on_capture_generation_changed(self, _generation: int, _endpoint) -> None:
+        if not self.recording_armed:
+            return
+        self._capture_confirmed = False
+        self._capture_data_observed = False
+        self._capture_frame_types.clear()
+        self._capture_error = ""
+        self._capture_attempted_scope = None
+        self._capture_restore_attempted = False
+        self._capture_state = ProductionCaptureState.WAITING_CAPABILITIES
+        self._write_capture_event("session_changed")
+        self.updated.emit(self)
+
+    def _mark_capture_data_observed(self, wall_time_ns: int, item: object) -> None:
+        if (
+            not self.recording_armed
+            or not self._capture_confirmed
+        ):
+            return
+        frame_type = type(item).__name__
+        if frame_type in self._capture_frame_types:
+            return
+        self._capture_frame_types.add(frame_type)
+        first_analysis_frame = not self._capture_data_observed
+        self._capture_data_observed = True
+        self._write_capture_event(
+            "data_observed",
+            frame_type=frame_type,
+            host_timestamp_ns=int(wall_time_ns),
+        )
+        if self._capture_confirmed:
+            self._capture_state = ProductionCaptureState.READY
+        if first_analysis_frame:
+            self.updated.emit(self)
+
+    def _begin_capture_restore(self) -> bool:
+        controller = self._capture_controller
+        if not self._capture_confirmed or controller is None:
+            return True
+        if controller.pending_target is False:
+            return False
+        if self._capture_restore_attempted:
+            return self._capture_state is not ProductionCaptureState.RESTORING
+        self._capture_restore_attempted = True
+        self._capture_state = ProductionCaptureState.RESTORING
+        self._write_capture_event("restore_requested")
+        self.updated.emit(self)
+        controller.request(False)
+        return controller.pending_target is not False
 
     def record_control_frame(self, frame: bytes) -> bool:
         recorder = self._recorder
@@ -851,6 +1055,16 @@ class DeviceSession(QObject):
         self.receiver = runtime.core.receiver
         self.product_store = runtime.core.product_store
         self._connect_runtime(runtime)
+        if self._capture_controller is not None:
+            self._capture_controller.deleteLater()
+        self._capture_controller = None
+        self._capture_confirmed = False
+        self._capture_data_observed = False
+        self._capture_frame_types.clear()
+        self._capture_attempted_scope = None
+        self._capture_restore_attempted = False
+        self._capture_state = ProductionCaptureState.WAITING_CAPABILITIES
+        self._bind_capture_controller()
         recorder = self._recorder
         if recorder is not None:
             recorder.write_metadata_event(
@@ -868,10 +1082,17 @@ class DeviceSession(QObject):
         self._identity_conflict = True
         self.updated.emit(self)
 
-    def finalize_recording(self) -> Optional[Path]:
+    def finalize_recording(
+        self, *, wait_for_capture_restore: bool = True
+    ) -> Optional[Path]:
         recorder = self._recorder
         if recorder is None:
             return self._recording_final_path
+        restore_ready = self._begin_capture_restore()
+        if wait_for_capture_restore and not restore_ready:
+            self._recording_complete = None
+            self.recording_changed.emit(self)
+            return None
         source = recorder.filepath
         finalized = recorder.stop()
         if not finalized:
@@ -1061,7 +1282,7 @@ class FleetController(QObject):
 
     def stop(self) -> dict[Endpoint, Optional[Path]]:
         self._admission_enabled = False
-        recordings = self.finalize_recordings()
+        recordings = self.finalize_recordings(wait_for_capture_restore=False)
         pending = tuple(
             session for session in self.sessions() if session.recording_armed
         )
@@ -1129,10 +1350,7 @@ class FleetController(QObject):
         self._recording_participant_keys = None
         success = True
         for session in self.sessions():
-            success = (
-                session.arm_recording(normalized_batch_id, self._recording_root)
-                and success
-            )
+            success = self._ensure_batch_evidence_recording(session) and success
         return success
 
     def record_fixture_attitude_sample(self, sample: object) -> bool:
@@ -1238,13 +1456,23 @@ class FleetController(QObject):
         self._batch_gateways = acquired_gateways
         return excluded_recordings
 
-    def finalize_recordings(self) -> dict[Endpoint, Optional[Path]]:
-        result = {
-            session.endpoint: session.finalize_recording()
-            for session in self.sessions()
-        }
-        if any(session.recording_armed for session in self.sessions()):
-            return result
+    def prepare_recording_stop(self) -> Callable[[], None]:
+        """主线程停止接纳；返回仅等待文件写入的后台工作，不迁移会话所有权。"""
+        recorders = tuple(session._recorder for session in self.sessions() if session._recorder is not None)
+        for recorder in recorders:
+            recorder.request_stop()
+        def finish_io() -> None:
+            for recorder in recorders:
+                if not recorder.stop():
+                    raise RuntimeError("production recording writer is still finalizing")
+        return finish_io
+
+    def finalize_recordings(
+        self, *, wait_for_capture_restore: bool = True
+    ) -> dict[Endpoint, Optional[Path]]:
+        # End the frozen test operation before restoring the device's capture
+        # profile through its regular Production gateway.  Recorder ownership
+        # remains active until profile restoration and file finalization end.
         gate_owner = self._batch_gate_owner
         pending_gateways: dict[Endpoint, RuntimeOperationGateway] = {}
         for endpoint, gateway in self._batch_gateways.items():
@@ -1252,8 +1480,16 @@ class FleetController(QObject):
                 pending_gateways[endpoint] = gateway
         self._batch_gateways = pending_gateways
         if pending_gateways:
-            return result
+            return {session.endpoint: None for session in self.sessions()}
         self._batch_gate_owner = ""
+        result = {
+            session.endpoint: session.finalize_recording(
+                wait_for_capture_restore=wait_for_capture_restore
+            )
+            for session in self.sessions()
+        }
+        if any(session.recording_armed for session in self.sessions()):
+            return result
         self._recording_batch_id = ""
         self._recording_root = None
         self._recording_participant_keys = None
@@ -1327,8 +1563,12 @@ class FleetController(QObject):
         self._retired_endpoints.pop(datagram.endpoint, None)
         session = self._sessions.get(datagram.endpoint)
         if session is not None:
-            self._ensure_batch_evidence_recording(session)
+            recording_before_feed = session.recording_armed
             session.feed_datagram(datagram)
+            if not recording_before_feed:
+                self._ensure_batch_evidence_recording(session)
+                if session.recording_armed:
+                    session._record_datagram(datagram, record=True)
             return
 
         runtime = self._session_directory.runtime(datagram.endpoint)
@@ -1695,7 +1935,7 @@ class FleetController(QObject):
         )
 
     def _ensure_batch_evidence_recording(self, session: DeviceSession) -> bool:
-        """Keep retrying the READY-batch recording prerequisite on live input."""
+        """在当前身份授权成立后建立录制；离线身份缓存只保留录制意图。"""
 
         if (
             not self._recording_batch_id
@@ -1703,6 +1943,9 @@ class FleetController(QObject):
             or self._recording_participant_keys is not None
             or session.recording_armed
         ):
+            return True
+        attachment = session.attachment
+        if attachment is not None and not attachment.runtime.capability_identity_ready(attachment.capability):
             return True
         if session.arm_recording(self._recording_batch_id, self._recording_root):
             return True
@@ -1820,6 +2063,7 @@ class FleetController(QObject):
 __all__ = [
     "DeviceSession",
     "DeviceSessionState",
+    "ProductionCaptureState",
     "Endpoint",
     "FleetConfigurationError",
     "FleetController",

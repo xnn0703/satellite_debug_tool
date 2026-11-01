@@ -63,7 +63,8 @@ class Ms6222SerialWorker(QThread):
         return self._parser.statistics
 
     def run(self) -> None:
-        self._stop_event.clear()
+        if self._stop_event.is_set():
+            return
         self._start_monotonic_ns = time.monotonic_ns()
         last_statistics_ns = self._start_monotonic_ns
         try:

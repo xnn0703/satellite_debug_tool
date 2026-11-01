@@ -24,6 +24,11 @@ def verify(root, edition, toc):
         data = json.loads(path.read_text())
         if data["edition"] != edition or not data["version"]:
             raise ValueError("build identity differs from the requested edition")
+    if edition == "user":
+        forbidden_files = [path for path in root.rglob("*")
+                           if path.name in ("updater", "updater.exe", "release.config.json")]
+        if forbidden_files:
+            raise ValueError(f"user payload includes application update files: {forbidden_files}")
     if toc:
         data = ast.literal_eval(toc.read_text())
         names = []

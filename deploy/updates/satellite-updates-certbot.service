@@ -1,0 +1,20 @@
+[Unit]
+Description=Renew the Satellite Terminal Tool HTTPS certificate
+Wants=network-online.target
+After=network-online.target nginx.service
+OnFailure=satellite-updates-failure@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/satellite-updates/certbot.env
+RuntimeDirectory=satellite-updates-certbot
+RuntimeDirectoryMode=0700
+ExecStart=/bin/sh /opt/satellite-updates/tools/deploy/updates/renew_certificate.sh
+TimeoutStartSec=20min
+UMask=0077
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=satellite-updates-certbot

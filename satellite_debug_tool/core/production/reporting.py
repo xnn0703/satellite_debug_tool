@@ -23,7 +23,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Mm, Pt, RGBColor
 
-from satellite_debug_tool import __version__
+from satellite_debug_tool import __app_name_cn__, __version__
 
 from .models import AttemptStatus, BatchStatus
 from .report_analysis import build_report_analysis, render_report_charts
@@ -37,7 +37,7 @@ _TERMINAL_ATTEMPT_STATUSES = {
     AttemptStatus.SKIPPED.value,
     AttemptStatus.ABORTED.value,
 }
-_FORMAL_VERDICTS = {"PASS", "FAIL"}
+_FORMAL_VERDICTS = {"PASS", "FAIL", "INCOMPLETE", "ABORTED"}
 _INVALID_PATH_CHARACTERS = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")
 
 
@@ -172,6 +172,7 @@ class ProductionReportService:
                 report_id=snapshot["report_id"],
             )
         verdict = str(frozen["automatic_verdict"])
+        final_verdict = str(snapshot.get("report_verdict", verdict))
         directory = self._artifact_directory(snapshot)
         directory.mkdir(parents=True, exist_ok=True)
         evidence_path, evidence_entries = self._write_evidence_zip(snapshot, directory)
@@ -204,7 +205,7 @@ class ProductionReportService:
                     serial_number,
                     version=1,
                     status="generated_v1",
-                    final_verdict=verdict,
+                    final_verdict=final_verdict,
                     document_path=str(document_path),
                     document_sha256=_sha256_file(document_path),
                     evidence_path=str(evidence_path),
@@ -217,7 +218,7 @@ class ProductionReportService:
                     serial_number,
                     version=1,
                     status="not_generated",
-                    final_verdict=verdict,
+                    final_verdict=final_verdict,
                     evidence_path=str(evidence_path),
                     evidence_sha256=_sha256_file(evidence_path),
                     manifest_path=str(manifest_path),
@@ -229,7 +230,7 @@ class ProductionReportService:
                     serial_number,
                     version=1,
                     status="generation_failed",
-                    final_verdict=verdict,
+                    final_verdict=final_verdict,
                     evidence_path=str(evidence_path),
                     evidence_sha256=_sha256_file(evidence_path),
                     error=str(exc),
@@ -242,7 +243,7 @@ class ProductionReportService:
             version=1,
             status=status,
             automatic_verdict=verdict,
-            final_verdict=verdict,
+            final_verdict=final_verdict,
             directory=directory,
             document_path=document_path,
             evidence_path=evidence_path,
@@ -375,12 +376,37 @@ class ProductionReportService:
             events,
             self.batch_output_dir,
         )
+        analyzable_samples = sum(
+            int(item.get("product_samples", 0)) + int(item.get("legacy_samples", 0))
+            for item in analysis.get("source_files", [])
+        )
+        quality_reasons: list[str] = []
+        if not sdb_files:
+            quality_reasons.append("device SDB is missing")
+        if analysis.get("source_errors"):
+            quality_reasons.extend(str(item) for item in analysis["source_errors"])
+        if analyzable_samples <= 0:
+            quality_reasons.append("SDB contains no analyzable telemetry frames")
+        data_quality = {
+            "schema": "satellite-debug-tool/production-data-quality",
+            "schema_version": 1,
+            "state": "COMPLETE" if not quality_reasons else "INCOMPLETE",
+            "sdb_file_count": len(sdb_files),
+            "analyzable_sample_count": analyzable_samples,
+            "source_errors": list(analysis.get("source_errors", [])),
+            "reasons": quality_reasons,
+        }
+        report_verdict = verdict
+        if verdict == "PASS" and quality_reasons:
+            report_verdict = "INCOMPLETE"
         local_now = datetime.now().astimezone()
         return {
             "schema": "satellite-debug-tool/device-report-snapshot",
             "schema_version": 2,
             "report_id": report_id,
             "automatic_verdict": verdict,
+            "report_verdict": report_verdict,
+            "data_quality": data_quality,
             "frozen_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "batch": batch,
             "device": device,
@@ -430,6 +456,13 @@ class ProductionReportService:
                 name = "device/evidence.sdb" if index == 1 else f"device/evidence-{index:02d}.sdb"
                 archive.write(source, name)
                 hashes[name] = _sha256_file(source)
+            fixture_root = self.batch_output_dir / "fixtures"
+            if fixture_root.is_dir():
+                for source in sorted(path for path in fixture_root.rglob("*") if path.is_file()):
+                    relative = source.relative_to(fixture_root).as_posix()
+                    name = f"fixture_sessions/{relative}"
+                    archive.write(source, name)
+                    hashes[name] = _sha256_file(source)
         temporary.replace(target)
         return target, hashes
 
@@ -481,6 +514,7 @@ class ProductionReportService:
                 }
             ),
             "analysis/analysis.json": _pretty_json(snapshot.get("analysis", {})),
+            "analysis/data_quality.json": _pretty_json(snapshot.get("data_quality", {})),
             **render_report_charts(snapshot.get("analysis", {})),
         }
 
@@ -515,7 +549,9 @@ class ProductionReportService:
             "report_id": snapshot["report_id"],
             "automatic_verdict": snapshot["automatic_verdict"],
             "final_verdict": (
-                review["final_verdict"] if review is not None else snapshot["automatic_verdict"]
+                review["final_verdict"]
+                if review is not None
+                else snapshot.get("report_verdict", snapshot["automatic_verdict"])
             ),
             "snapshot_sha256": hashlib.sha256(
                 json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -550,9 +586,7 @@ class ProductionReportService:
         document.add_page_break()
         _add_curve_analysis(document, snapshot)
         _add_results(document, snapshot)
-        document.add_page_break()
         _add_integrity(document, snapshot)
-        document.add_page_break()
         _add_review(document, snapshot, version, review)
         document.add_page_break()
         _add_appendix(document, snapshot)
@@ -572,16 +606,20 @@ def _configure_document(document: Document, branding: Mapping[str, Any]) -> None
     section.left_margin = Mm(20)
     section.right_margin = Mm(20)
     styles = document.styles
+    cjk_font = {
+        "Darwin": "Heiti SC",
+        "Windows": "Microsoft YaHei",
+    }.get(platform.system(), "Noto Sans CJK SC")
     normal = styles["Normal"]
-    normal.font.name = "Arial Unicode MS"
+    normal.font.name = cjk_font
     normal.font.size = Pt(9)
-    normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial Unicode MS")
+    normal._element.rPr.rFonts.set(qn("w:eastAsia"), cjk_font)
     for style_name, size in (("Title", 22), ("Heading 1", 16), ("Heading 2", 12)):
         style = styles[style_name]
-        style.font.name = "Arial Unicode MS"
+        style.font.name = cjk_font
         style.font.size = Pt(size)
         style.font.color.rgb = RGBColor(0, 0, 0)
-        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial Unicode MS")
+        style._element.rPr.rFonts.set(qn("w:eastAsia"), cjk_font)
     header = section.header.paragraphs[0]
     header.text = str(branding.get("header") or branding.get("company_name") or "未配置")
     header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -604,7 +642,7 @@ def _add_cover(
     device = snapshot["device"]
     configuration = snapshot.get("configuration", {})
     product = configuration.get("product_template", {})
-    verdict = review["final_verdict"] if review else snapshot["automatic_verdict"]
+    verdict = review["final_verdict"] if review else snapshot.get("report_verdict", snapshot["automatic_verdict"])
 
     report_number = document.add_paragraph()
     report_number.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -696,11 +734,12 @@ def _add_summary(document: Document, snapshot: Mapping[str, Any], review: Option
     for attempt in attempts:
         counts.setdefault(attempt["status"], 0)
         counts[attempt["status"]] += 1
-    final_verdict = review["final_verdict"] if review else snapshot["automatic_verdict"]
+    final_verdict = review["final_verdict"] if review else snapshot.get("report_verdict", snapshot["automatic_verdict"])
     _add_key_value_table(
         document,
         (
             ("自动结论", snapshot["automatic_verdict"]),
+            ("采集质量", snapshot.get("data_quality", {}).get("state", "该版本未记录")),
             ("最终结论", final_verdict),
             ("测试时段", _time_range(snapshot["batch"])),
             ("测试项总数", len(attempts)),
@@ -774,7 +813,7 @@ def _add_configuration(document: Document, snapshot: Mapping[str, Any]) -> None:
             ("测试工位", station.get("display_name") or "未配置"),
             ("工作站主机", application.get("hostname") or "未配置"),
             ("操作系统", application.get("platform") or "未配置"),
-            ("测试软件", f"satellite_debug_tool {application.get('version', '未配置')}"),
+            ("测试软件", f"{__app_name_cn__} {application.get('version', '未配置')}"),
             ("运行时", f"Python {application.get('python', '未配置')}"),
             (
                 "测试时区",
@@ -824,8 +863,15 @@ def _add_curve_analysis(document: Document, snapshot: Mapping[str, Any]) -> None
             "MS6222 同期比较数据不可用，因此本报告不作姿态精度、收敛或发散判定。"
         )
 
-    document.add_heading("四类工况分析", level=2)
-    for scenario in analysis.get("scenario_groups", []):
+    enabled_scenarios = [
+        scenario
+        for scenario in analysis.get("scenario_groups", [])
+        if scenario.get("state") != "not_enabled"
+    ]
+    document.add_heading("已执行工况分析", level=2)
+    if not enabled_scenarios:
+        document.add_paragraph("本批次没有可分析的已执行工况。")
+    for scenario in enabled_scenarios:
         document.add_heading(
             str(scenario.get("label") or scenario.get("scenario_id")),
             level=3,
@@ -962,16 +1008,8 @@ def _add_integrity(document: Document, snapshot: Mapping[str, Any]) -> None:
     attempts = snapshot["attempts"]
     events = snapshot["events"]
     incomplete = [item for item in attempts if item["status"] in {"incomplete", "aborted"}]
-    sdb_present = bool(
-        list(
-            (
-                Path(snapshot["batch"]["output_dir"])
-                / "devices"
-                / str(device["serial_number"])
-                / "evidence"
-            ).glob("*.sdb")
-        )
-    )
+    quality = snapshot.get("data_quality", {})
+    sdb_present = int(quality.get("sdb_file_count", 0)) > 0
     disconnects = sum(
         1 for event in events if "disconnect" in str(event.get("event_type", "")).lower()
     )
@@ -980,13 +1018,16 @@ def _add_integrity(document: Document, snapshot: Mapping[str, Any]) -> None:
         (
             ("身份确认", "已记录" if device.get("device_uid") or device.get("serial_number") else "缺失"),
             ("原始 SDB", "已归档" if sdb_present else "未记录"),
+            ("可分析遥测样本", quality.get("analyzable_sample_count", 0)),
             ("断线相关事件", disconnects),
             ("事件总数", len(events)),
             ("不完整测试项", len(incomplete)),
             ("时间对齐", "使用主机 UTC 与单调时钟"),
-            ("完整性结论", "完整" if sdb_present and not incomplete else "存在数据缺口"),
+            ("完整性结论", "完整" if quality.get("state") == "COMPLETE" and not incomplete else "存在数据缺口"),
         ),
     )
+    for reason in quality.get("reasons", []):
+        document.add_paragraph(f"数据质量：{reason}")
     document.add_paragraph(
         "共享夹具证据按本设备测试窗口归档；当前批次未提供的证据文件在 ZIP 中以 status=unavailable 明确标识。"
     )
@@ -1000,7 +1041,13 @@ def _add_review(
 ) -> None:
     document.add_heading("六、审核与版本记录", level=1)
     rows = [("版本", "结论", "生成/审核时间", "审核人", "原因")]
-    rows.append(("V01", snapshot["automatic_verdict"], snapshot["frozen_utc"], "自动生成", "自动测试结论"))
+    rows.append((
+        "V01",
+        snapshot.get("report_verdict", snapshot["automatic_verdict"]),
+        snapshot["frozen_utc"],
+        "自动生成",
+        "执行结论与采集质量综合结果",
+    ))
     if review is not None:
         rows.append(
             (
@@ -1058,7 +1105,7 @@ def _add_appendix(document: Document, snapshot: Mapping[str, Any]) -> None:
         f"批次共记录 {len(snapshot['events'])} 条事件，报告列出 {len(exception_events)} 条异常相关事件。"
     )
     document.add_heading("C. 证据包索引", level=2)
-    for path in (
+    evidence_paths = [
         "device/evidence.sdb",
         "device/identity.json",
         "device/parameters.json",
@@ -1080,19 +1127,17 @@ def _add_appendix(document: Document, snapshot: Mapping[str, Any]) -> None:
         "analysis/snr_timeline.png",
         "analysis/attitude_timeline.png",
         "analysis/convergence_timeline.png",
-    ):
-        paragraph = document.add_paragraph(path, style="List Bullet")
-        paragraph.paragraph_format.space_after = Pt(0)
-    scenario_paths = [
-        f"analysis/scenarios/{scenario['scenario_id']}/{{snr,attitude}}.png"
-        for scenario in snapshot.get("analysis", {}).get("scenario_groups", [])
     ]
-    if scenario_paths:
-        paragraph = document.add_paragraph(
-            "工况曲线（按可用数据生成）：" + "；".join(scenario_paths),
-            style="List Bullet",
-        )
-        paragraph.paragraph_format.space_after = Pt(0)
+    evidence_paths.extend(
+        f"analysis/scenarios/{scenario['scenario_id']}/snr.png；"
+        f"analysis/scenarios/{scenario['scenario_id']}/attitude.png"
+        for scenario in snapshot.get("analysis", {}).get("scenario_groups", [])
+    )
+    _add_table(
+        document,
+        [("序号", "归档路径")]
+        + [(str(index), path) for index, path in enumerate(evidence_paths, start=1)],
+    )
 
 
 def _set_paragraph_bottom_border(paragraph: Any) -> None:

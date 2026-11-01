@@ -45,6 +45,21 @@ class TrackingPhase(str, Enum):
     UNKNOWN = "unknown"
 
 
+_TRACKING_PHASES = {
+    0: TrackingPhase.STANDBY,
+    1: TrackingPhase.ACQUIRING,
+    2: TrackingPhase.FINE_TRACKING,
+    3: TrackingPhase.LOCKED,
+    4: TrackingPhase.REACQUIRING,
+    5: TrackingPhase.FAULT,
+}
+
+
+def tracking_phase_from_wire(value: int) -> TrackingPhase:
+    """Product Service 快速状态的单一阶段枚举映射。"""
+    return _TRACKING_PHASES.get(value, TrackingPhase.UNKNOWN)
+
+
 class NavigationState(str, Enum):
     UNAVAILABLE = "unavailable"
     INITIALIZING = "initializing"

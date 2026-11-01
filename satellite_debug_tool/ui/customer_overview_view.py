@@ -198,9 +198,15 @@ class _MetricValue(QWidget):
         self.title.setObjectName("customerMetricTitle")
         self.value = QLabel("—")
         self.value.setObjectName("customerMetricValue")
-        self.value.setWordWrap(True)
+        self.value.setWordWrap(False)
+        self.value.setMinimumWidth(0)
+        self.value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.quality = QLabel()
+        self.quality.setObjectName("customerMetricQuality")
         self._layout.addWidget(self.title)
         self._layout.addWidget(self.value)
+        self._layout.addWidget(self.quality)
+        self.quality.hide()
 
     def set_density(self, density: str) -> None:
         margins = {
@@ -223,9 +229,11 @@ class _MetricValue(QWidget):
             text = str(value.value)
         if text != "—" and self._unit:
             text = f"{text} {self._unit}"
-        if value.availability == Availability.STALE:
-            text = tr("{value} (stale)", value=text)
+        stale = value.availability == Availability.STALE
+        self.quality.setText(tr("{value} (stale)", value="").strip() if stale else "")
+        self.quality.setVisible(stale)
         self.value.setText(text)
+        self.value.setToolTip(text)
         set_semantic_property(self, "availability", value.availability.value)
 
     def retranslate_ui(self) -> None:
@@ -335,6 +343,7 @@ class CustomerOverviewView(QWidget):
         self._identity_label = QLabel(tr("No device connected"))
         self._identity_label.setObjectName("customerIdentity")
         self._identity_label.setMinimumWidth(0)
+        self._identity_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._connection_layout.addWidget(self._identity_label, 1)
         self._ip_label = QLabel(tr("Device IP"))
         self._connection_layout.addWidget(self._ip_label)
@@ -417,9 +426,10 @@ class CustomerOverviewView(QWidget):
             item = QLabel(f"{tr(title)}: —")
             item.setObjectName("customerStatusItem")
             item.setProperty("status", "neutral")
-            item.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             item.setMinimumHeight(24)
-            item.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            item.setWordWrap(False)
+            item.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             self._status_values[key] = item
             self._status_grid.addWidget(item, index // 4, index % 4)
         for column in range(4):
@@ -454,9 +464,10 @@ class CustomerOverviewView(QWidget):
         for index, (key, title, _unit) in enumerate(self._DATA_DEFS):
             item = QLabel(f"{tr(title)}: —")
             item.setObjectName("customerDataItem")
-            item.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             item.setMinimumHeight(24)
-            item.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            item.setWordWrap(False)
+            item.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             self._data_values[key] = item
             self._data_grid.addWidget(item, index // 4, index % 4)
         for column in range(4):
@@ -608,6 +619,7 @@ class CustomerOverviewView(QWidget):
             detail.setObjectName("customerComponentDetail")
             detail.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             detail.setMinimumWidth(0)
+            detail.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             detail.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             item_layout.addWidget(name)
             item_layout.addWidget(detail)
@@ -632,6 +644,7 @@ class CustomerOverviewView(QWidget):
             power_detail.setObjectName("customerComponentDetail")
             power_detail.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             power_detail.setMinimumWidth(0)
+            power_detail.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             power_detail.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             power_layout.addWidget(power_name)
             power_layout.addWidget(power_detail)
@@ -895,7 +908,9 @@ class CustomerOverviewView(QWidget):
 
     def _set_status(self, key: str, title: str, value: str, status: str = "neutral") -> None:
         label = self._status_values[key]
-        label.setText(f"{tr(title)}: {value}")
+        text = f"{tr(title)}: {value}"
+        label.setText(text)
+        label.setToolTip(text)
         set_semantic_property(label, "status", status)
 
     def refresh(self) -> None:
@@ -956,6 +971,7 @@ class CustomerOverviewView(QWidget):
             self._identity_label.setText(tr("Reconnecting to device..."))
         else:
             self._identity_label.setText(tr("No device connected"))
+        self._identity_label.setToolTip(self._identity_label.text())
 
     def _refresh_status(self, snapshot: ProductSnapshot) -> None:
         op = snapshot.operation
@@ -1266,7 +1282,9 @@ class CustomerOverviewView(QWidget):
         if value.availability == Availability.STALE:
             rendered = tr("{value} (stale)", value=rendered)
         label = self._data_values[key]
-        label.setText(f"{tr(title)}: {rendered}")
+        text = f"{tr(title)}: {rendered}"
+        label.setText(text)
+        label.setToolTip(text)
         label.setToolTip(label.text())
         set_semantic_property(label, "availability", value.availability.value)
 
@@ -1427,7 +1445,9 @@ class CustomerOverviewView(QWidget):
                 self._format_component_value(component.voltage_v, "V"),
                 self._display(component.version),
             )
-            self._component_details[key].setText(" · ".join(values))
+            text = " · ".join(values)
+            self._component_details[key].setText(text)
+            self._component_details[key].setToolTip(text)
             self._component_details[key].setToolTip(" · ".join(values))
 
     def _show_component_temperature_history(self, component_key: str) -> None:
@@ -1476,6 +1496,7 @@ class CustomerOverviewView(QWidget):
                     f"{sample.current_a:.3f} A · {sample.power_w:.2f} W"
                 )
         self._component_details["external_power"].setText(text)
+        self._component_details["external_power"].setToolTip(text)
         self._component_details["external_power"].setToolTip(text)
 
     @Slot()

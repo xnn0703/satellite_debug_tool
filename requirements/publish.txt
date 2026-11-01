@@ -1,0 +1,6 @@
+# 受保护发布机的签名与纯 SFTP 晋升工具；无需安装 Qt GUI。
+-r deploy.txt
+tuf==7.0.1
+securesystemslib==1.6.0
+urllib3==2.8.0
+certifi==2026.7.22

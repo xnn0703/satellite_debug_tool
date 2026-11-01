@@ -1,5 +1,81 @@
 {
-  "github_owner": "xnn0703",
-  "github_repo": "satellite_debug_tool",
-  "github_api": "https://api.github.com"
+  "schema": "satellite.update-config/v1",
+  "app_id": "satellite-terminal-tool",
+  "repo_id": "satellite-terminal-tool-production",
+  "channel": "stable",
+  "metadata_base_url": "https://60.205.157.141/v1/apps/satellite-terminal-tool/metadata/",
+  "target_base_url": "https://60.205.157.141/v1/apps/satellite-terminal-tool/targets/",
+  "trusted_root": {
+    "signatures": [
+      {
+        "keyid": "0b800a4831f361a5a2a7c9f853d0cd1c77bc432876e94892c50e0f668edf0e5b",
+        "sig": "76f49c90f17c3830c7876eb3a150f1117999c67d55cf27c80895ea341a9ac76a8ee2f0ebe8d4f4f6909ef9b406530d657a6df96fffff01fabee1529b8b6df105"
+      }
+    ],
+    "signed": {
+      "_type": "root",
+      "app_id": "satellite-terminal-tool",
+      "consistent_snapshot": true,
+      "expires": "2027-11-01T17:06:14Z",
+      "keys": {
+        "0b800a4831f361a5a2a7c9f853d0cd1c77bc432876e94892c50e0f668edf0e5b": {
+          "keytype": "ed25519",
+          "keyval": {
+            "public": "c93588858ea8899ecbf9a887611d173bf3bb92b8b03cbad720a714d9e6b816b7"
+          },
+          "scheme": "ed25519"
+        },
+        "5746dc5079399fd14c13973a126a1fc201b2576e709301bb5d11b22e5d3241d7": {
+          "keytype": "ed25519",
+          "keyval": {
+            "public": "8ab4e1197c3f880018b41d345daa8817dbc42c602d9bc7d992874cc9146cf73c"
+          },
+          "scheme": "ed25519"
+        },
+        "da7f909fdcee474712fa04fd7b5c180ec34e44a6f28f54b4132885352560dc83": {
+          "keytype": "ed25519",
+          "keyval": {
+            "public": "26ccf9d5c72cb15ef58623e16d61f90987eb88854db7ded77f73a9f7270f6545"
+          },
+          "scheme": "ed25519"
+        },
+        "f66d56ec9434b3e10e36a75d7b22e64cfdfff27a0fa38e2a6cee4b0321299b36": {
+          "keytype": "ed25519",
+          "keyval": {
+            "public": "1273446130a6877e3208f3773315846ef10f2694fa313adf998e99c0edbeb52b"
+          },
+          "scheme": "ed25519"
+        }
+      },
+      "repo_id": "satellite-terminal-tool-production",
+      "roles": {
+        "root": {
+          "keyids": [
+            "0b800a4831f361a5a2a7c9f853d0cd1c77bc432876e94892c50e0f668edf0e5b"
+          ],
+          "threshold": 1
+        },
+        "snapshot": {
+          "keyids": [
+            "da7f909fdcee474712fa04fd7b5c180ec34e44a6f28f54b4132885352560dc83"
+          ],
+          "threshold": 1
+        },
+        "targets": {
+          "keyids": [
+            "5746dc5079399fd14c13973a126a1fc201b2576e709301bb5d11b22e5d3241d7"
+          ],
+          "threshold": 1
+        },
+        "timestamp": {
+          "keyids": [
+            "f66d56ec9434b3e10e36a75d7b22e64cfdfff27a0fa38e2a6cee4b0321299b36"
+          ],
+          "threshold": 1
+        }
+      },
+      "spec_version": "1.0.31",
+      "version": 1
+    }
+  }
 }

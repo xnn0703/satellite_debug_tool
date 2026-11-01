@@ -1,17 +1,7 @@
-"""读取 release.config.json：updater 用来定位 GitHub Release。
-
-查找顺序（首次命中即返回）：
-  1. PyInstaller 打包后的运行时目录：`sys._MEIPASS / release.config.json`
-  2. 安装目录（与可执行文件同级）：`exe_dir / release.config.json`
-  3. 源码根（开发模式）：repo_root / release.config.json
-  4. 兜底：内置 DEFAULTS（同 release.config.json 文件内容）
-
-提供：
-- `load_release_config() -> dict`：返回完整的 GitHub Release 配置
-- `DEFAULTS`：常量，作为最后兜底
-"""
+"""包内可信更新源配置；部署信息缺失时保持明确的待配置状态。"""
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import sys
 from pathlib import Path
@@ -19,44 +9,34 @@ from typing import Optional
 
 
 DEFAULTS = {
-    "github_owner": "xnn0703",
-    "github_repo": "satellite_debug_tool",
-    "github_api": "https://api.github.com",
+    "schema": "satellite.update-config/v1",
+    "app_id": "satellite-terminal-tool",
+    "repo_id": "satellite-terminal-tool-production",
+    "channel": "stable",
+    "metadata_base_url": "",
+    "target_base_url": "",
+    "trusted_root": None,
 }
 
 
 def _candidate_paths() -> list[Path]:
-    paths: list[Path] = []
-    # PyInstaller 运行时
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        paths.append(Path(meipass) / "release.config.json")
-    # 可执行文件同级（onedir 模式时 _internal 旁边）
     if getattr(sys, "frozen", False):
-        paths.append(Path(sys.executable).parent / "release.config.json")
-    # 源码根（开发模式）：from this file 往上 2 层（satellite_debug_tool/release_config.py → repo_root）
-    paths.append(Path(__file__).resolve().parent.parent / "release.config.json")
-    return paths
+        meipass = getattr(sys, "_MEIPASS", None)
+        return [Path(meipass or Path(sys.executable).parent) / "release.config.json"]
+    return [Path(__file__).resolve().parent.parent / "release.config.json"]
 
 
 def load_release_config(override_path: Optional[Path] = None) -> dict:
-    """加载并返回完整的 release config dict。
-
-    缺字段用 DEFAULTS 兜底；JSON 解析失败也回 DEFAULTS（升级机制不应该让程序崩溃）。
-
-    Args:
-        override_path: 测试用，强制使用某个具体文件路径。
-    """
-    config = dict(DEFAULTS)
+    """加载固定包内源；畸形文件保留错误，不改用其他信任源。"""
     paths = [override_path] if override_path is not None else _candidate_paths()
     for p in paths:
         if p is None or not p.exists():
             continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                config.update({k: v for k, v in data.items() if isinstance(v, str) and v})
-            break
-        except (json.JSONDecodeError, OSError):
-            continue
-    return config
+            if not isinstance(data, dict) or data.get("schema") != DEFAULTS["schema"]:
+                raise ValueError("release configuration requires satellite.update-config/v1")
+            return data
+        except (ValueError, OSError) as exc:
+            return {**deepcopy(DEFAULTS), "configuration_error": str(exc)}
+    return deepcopy(DEFAULTS)

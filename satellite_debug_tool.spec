@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec — Satellite Terminal Tool 主程序。
+"""PyInstaller spec — Satellite Terminal Manager 主程序。
 
 构建：
     pyinstaller --noconfirm satellite_debug_tool.spec
 
 产物：
-    dist/SatelliteDebugTool/              （onedir 模式；mac 下同时产出 .app bundle）
-        SatelliteDebugTool(.exe)
+    dist/<edition>/SatelliteTerminalManagerUser|Ops/              （onedir 模式；mac 下同时产出 .app bundle）
+        SatelliteTerminalManager(.exe)
         _internal/ ...
 """
 
@@ -15,10 +15,13 @@ import re
 import sys
 import os
 import json
-from satellite_debug_tool.edition import Edition
+import platform
+import subprocess
+from satellite_debug_tool.edition import Edition, create_build_identity
+from satellite_debug_tool.package_names import APPLICATION_EXECUTABLE, edition_directory
 
 block_cipher = None
-APP_NAME = "SatelliteDebugTool"
+APP_NAME = APPLICATION_EXECUTABLE
 ROOT = Path(SPECPATH)
 sys.path.insert(0, str(ROOT))
 from scripts.edition_policy import operations_modules
@@ -26,8 +29,8 @@ ICON_DIR = ROOT / "satellite_debug_tool" / "ui" / "assets" / "icons"
 EDITION = Edition(os.environ.get("SATELLITE_BUILD_EDITION", "ops"))
 USER = EDITION is Edition.USER
 ENTRY = str(ROOT / "satellite_debug_tool" / ("main_user.py" if USER else "main.py"))
-BUNDLE_NAME = "SatelliteTerminalToolUser" if USER else APP_NAME
-COLLECT_NAME = "SatelliteTerminalToolUser" if USER and sys.platform == "win32" else APP_NAME
+BUNDLE_NAME = edition_directory(EDITION)
+COLLECT_NAME = edition_directory(EDITION)
 OPERATIONS_MODULES = (
     "satellite_debug_tool.main", "satellite_debug_tool.ui.main_window",
     "satellite_debug_tool.ui.production_workspace", "satellite_debug_tool.ui.fixture_debug_workspace",
@@ -108,8 +111,12 @@ extra_hidden = collect_submodules(
 identity_dir = ROOT / "build" / "identity" / EDITION.value
 identity_dir.mkdir(parents=True, exist_ok=True)
 identity_path = identity_dir / "build_identity.json"
-identity_path.write_text(json.dumps({"edition": EDITION.value, "version": APP_VERSION,
-                                    "platform": "mac" if sys.platform == "darwin" else "win"}), encoding="utf-8")
+source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+if os.environ.get("SATELLITE_BUILD_COMMIT", source_commit) != source_commit:
+    raise ValueError("build source differs from the requested commit")
+identity_path.write_text(json.dumps(create_build_identity(
+    edition=EDITION, version=APP_VERSION, platform="mac" if sys.platform == "darwin" else "win",
+    architecture=platform.machine(), build_id=source_commit)), encoding="utf-8")
 app_datas = [
     (str(identity_path), "satellite_debug_tool"),
     (
@@ -129,6 +136,8 @@ if USER:
     app_datas = [entry for entry in app_datas if entry[1] != "satellite_debug_tool/ui/assets"]
     app_datas.extend((str(ROOT / "satellite_debug_tool/ui/assets" / name),
                       "satellite_debug_tool/ui/assets/" + name) for name in ("icons", "models", "fonts"))
+else:
+    app_datas.append((str(ROOT / "release.config.json"), "."))
 if sys.platform == "darwin":
     app_datas.extend([
         (
@@ -170,10 +179,6 @@ a = Analysis(
         + docx_datas
         + cryptography_datas
         + app_datas
-        + [
-            # M11：升级器需要知道去哪个仓库拉版本
-            (str(ROOT / "release.config.json"), "."),
-        ]
     ),
     hiddenimports=(
         pyside6_hidden
@@ -245,13 +250,13 @@ if sys.platform == "darwin":
         bundle_identifier="com.satellite-debug-tool.user" if USER else "com.satellite-debug-tool.desktop",
         info_plist={
             "CFBundleName": APP_NAME,
-            "CFBundleDisplayName": "Satellite Terminal Tool",
+            "CFBundleDisplayName": "Satellite Terminal Manager",
             "CFBundleDevelopmentRegion": "en",
             "CFBundleLocalizations": ["en", "zh_CN"],
             "CFBundleShortVersionString": APP_VERSION,
             "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "11.0",
+            "LSMinimumSystemVersion": "14.0",
             # 允许应用读写用户目录下的 ~/.satellite_debug_tool/
             "NSDesktopFolderUsageDescription": "Save recordings and profile cache.",
             "NSDocumentsFolderUsageDescription": "Save recordings and profile cache.",

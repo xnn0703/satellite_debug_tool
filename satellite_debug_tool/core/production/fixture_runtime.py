@@ -49,13 +49,16 @@ class FixtureRuntime(QObject):
         self.calibration_store = calibration_store or FixtureCalibrationStore()
         self.telemetry = FixtureTelemetryBus(self)
         self._facts = {
+            "power": FixtureRuntimeFact("power", FixtureRuntimeState.NEEDS_BINDING),
             "motion": FixtureRuntimeFact("motion", FixtureRuntimeState.NEEDS_BINDING),
             "reference": FixtureRuntimeFact("reference", FixtureRuntimeState.NEEDS_BINDING),
+            "vehicle": FixtureRuntimeFact("vehicle", FixtureRuntimeState.NEEDS_BINDING),
         }
         self._motion_profile_id = ""
         self._reference_profile_id = ""
 
     def bind_configuration(self, configuration: object) -> None:
+        power = getattr(configuration, "power_profile", None)
         motion = getattr(configuration, "motion_profile", None)
         reference = getattr(configuration, "reference_profile", None)
         if motion is None or reference is None:
@@ -63,6 +66,15 @@ class FixtureRuntime(QObject):
             return
         self._motion_profile_id = str(motion.profile_id)
         self._reference_profile_id = str(reference.profile_id)
+        if power is None:
+            self.set_state("power", FixtureRuntimeState.NEEDS_BINDING, "")
+        else:
+            self.set_state(
+                "power",
+                FixtureRuntimeState.CONFIGURED,
+                f"{power.model} @ {power.host}:{power.port} | "
+                f"{power.profile_id} (R{power.revision})",
+            )
         self.set_state(
             "motion",
             FixtureRuntimeState.CONFIGURED,
@@ -74,12 +86,17 @@ class FixtureRuntime(QObject):
             FixtureRuntimeState.CONFIGURED,
             f"{reference.serial_port} @ {reference.baud_rate}",
         )
+        self.set_state(
+            "vehicle",
+            FixtureRuntimeState.CONFIGURED,
+            "Operator confirmation required before vehicle motion",
+        )
 
     def clear_bindings(self) -> None:
         self._motion_profile_id = ""
         self._reference_profile_id = ""
-        self.set_state("motion", FixtureRuntimeState.NEEDS_BINDING, "")
-        self.set_state("reference", FixtureRuntimeState.NEEDS_BINDING, "")
+        for fixture in self._facts:
+            self.set_state(fixture, FixtureRuntimeState.NEEDS_BINDING, "")
 
     def set_state(
         self,

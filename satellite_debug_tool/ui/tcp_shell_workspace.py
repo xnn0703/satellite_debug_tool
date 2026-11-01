@@ -8,7 +8,7 @@ from pathlib import Path
 import time
 from typing import Optional
 
-from PySide6.QtCore import QCoreApplication, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPalette, QGuiApplication, QKeySequence, QTextCharFormat, QTextCursor, QTextDocument, QTextFormat
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -56,7 +56,6 @@ _FRAME_BYTE_BUDGET = 16 * 1024
 _DRAIN_SEGMENT_BYTES = 4096
 _PARSE_SOFT_BUDGET_S = 0.008
 _BACKLOG_VISIBLE_BYTES = 64 * 1024
-_SHUTDOWN_DRAIN_TIMEOUT_S = 10.0
 # 文档块上限跟随 TerminalScreen.max_rows（投影每次同步设置）。
 
 # 每行行首的接收时刻时间戳（WindTerm 风格）：灰色、固定宽度，覆盖/清行/退格
@@ -305,6 +304,9 @@ class TerminalEdit(QTextEdit):
 class TcpShellWorkspace(QWidget):
     """Terminal, YMODEM sender and session evidence for one raw TCP shell."""
 
+    shutdown_finished = Signal()
+    shutdown_failed = Signal(str)
+
     def __init__(
         self,
         settings: Settings,
@@ -334,7 +336,9 @@ class TcpShellWorkspace(QWidget):
         self._active_ring = RxRing()
         self._rx_epoch = self._active_ring.epoch
         self._final_drain_pending = False
-        self._shutdown_draining = False
+        self._shutdown_pending = False
+        self._shutdown_complete = False
+        self._transport_shutdown_complete = False
         self._frame_timer = QTimer(self)
         self._frame_timer.setSingleShot(True)
         self._frame_timer.setInterval(_FRAME_INTERVAL_MS)
@@ -544,6 +548,7 @@ class TcpShellWorkspace(QWidget):
     def _bind_controller(self) -> None:
         self._controller.connected.connect(self._on_connected)
         self._controller.connect_failed.connect(self._on_connect_failed)
+        self._controller.shutdown_finished.connect(self._on_shutdown_transport_finished)
         self._controller.disconnected.connect(self._on_disconnected)
         self._controller.state_changed.connect(self._on_state_changed)
         self._controller.rx_pending.connect(self._on_rx_pending)
@@ -582,25 +587,36 @@ class TcpShellWorkspace(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
-        return answer is QMessageBox.StandardButton.Yes
+        return answer == QMessageBox.StandardButton.Yes
 
-    def shutdown(self) -> None:
-        # M45 关停顺序：controller 先收尾（worker join，已读残余已入环），
-        # 终排空按帧泵事件完成（禁止单回调清空），文本日志最后关闭。
-        self._controller.shutdown()
-        self._shutdown_draining = True
+    @property
+    def shutdown_complete(self) -> bool:
+        return self._shutdown_complete
+
+    def request_shutdown(self) -> None:
+        if self._shutdown_complete:
+            return
+        if self._shutdown_pending:
+            return
+        self._shutdown_pending = True
+        self._transport_shutdown_complete = False
+        self._connect_button.setEnabled(False)
+        self._start_button.setEnabled(False)
+        self._controller.request_shutdown()
+
+    @Slot()
+    def _on_shutdown_transport_finished(self) -> None:
+        self._transport_shutdown_complete = True
         self._final_drain_pending = True
-        deadline = time.monotonic() + _SHUTDOWN_DRAIN_TIMEOUT_S
-        while time.monotonic() < deadline:
-            if self._active_ring.backlog_bytes == 0 and not self._final_drain_pending:
-                break
-            self._flush_frame()
-            QCoreApplication.processEvents()
-        self._frame_timer.stop()
-        self._shutdown_draining = False
-        writer, self._log_writer = self._log_writer, None
-        if writer is not None:
-            writer.close()
+        if self._active_ring.backlog_bytes == 0:
+            self._complete_final_drain()
+        elif not self._frame_timer.isActive():
+            self._frame_timer.start()
+
+    def shutdown(self) -> bool:
+        """请求同一关闭事务；调用方依据完成信号或返回值完成退出。"""
+        self.request_shutdown()
+        return self._shutdown_complete
 
     def retranslate_ui(self) -> None:
         self._target_box.setTitle(tr("Shell target"))
@@ -780,7 +796,7 @@ class TcpShellWorkspace(QWidget):
         self._sync_controls()
 
     def _on_disconnected(self, reason: str) -> None:
-        # worker 已退出且残余已入环：终排空按帧完成，最后一帧执行 decoder.finish。
+        # link 已断开且残余已入环；线程结束由 shutdown_finished 独立确认。
         self._final_drain_pending = True
         if not self._frame_timer.isActive():
             self._frame_timer.start()
@@ -894,7 +910,7 @@ class TcpShellWorkspace(QWidget):
         if self._final_drain_pending and ring.backlog_bytes == 0:
             self._complete_final_drain()
             return
-        if ring.backlog_bytes and not self._shutdown_draining and not self._frame_timer.isActive():
+        if ring.backlog_bytes and not self._frame_timer.isActive():
             self._frame_timer.start()
 
     def _ingest_segment(self, data: bytes, log_buffer: list[str]) -> TerminalUpdate:
@@ -927,6 +943,20 @@ class TcpShellWorkspace(QWidget):
         self._final_drain_pending = False
         self._active_ring = RxRing()
         self._rx_epoch = self._active_ring.epoch
+        if self._shutdown_pending and self._transport_shutdown_complete:
+            self._frame_timer.stop()
+            writer = self._log_writer
+            if writer is not None:
+                try:
+                    writer.close()
+                except (OSError, RuntimeError) as exc:
+                    self._shutdown_pending = False
+                    self.shutdown_failed.emit(str(exc))
+                    return
+                self._log_writer = None
+            self._shutdown_pending = False
+            self._shutdown_complete = True
+            self.shutdown_finished.emit()
 
     def _refresh_backlog_indicator(self, backlog: int) -> None:
         if backlog > _BACKLOG_VISIBLE_BYTES:
@@ -1185,6 +1215,10 @@ class TcpShellWorkspace(QWidget):
         )
         self._cancel_button.setEnabled(transferring)
         self._browse_button.setEnabled(not transferring)
+        if self._shutdown_pending:
+            for button in (self._connect_button, self._disconnect_button, self._start_button):
+                button.setEnabled(False)
+            self._terminal.set_input_enabled(False)
         self._refresh_state_label()
 
 

@@ -20,14 +20,16 @@ class TestReleaseConfigLoader:
         from satellite_debug_tool.release_config import load_release_config
         p = tmp_path / "release.config.json"
         p.write_text(json.dumps({
-            "github_owner": "myorg",
-            "github_repo": "myrepo",
+            "schema": "satellite.update-config/v1",
+            "app_id": "test-app",
+            "repo_id": "test-repo",
+            "metadata_base_url": "https://60.205.157.141/metadata/",
         }), encoding="utf-8")
         cfg = load_release_config(override_path=p)
-        assert cfg["github_owner"] == "myorg"
-        assert cfg["github_repo"] == "myrepo"
-        # 没覆盖的字段用 DEFAULTS
-        assert cfg["github_api"] == "https://api.github.com"
+        assert cfg["app_id"] == "test-app"
+        assert cfg["repo_id"] == "test-repo"
+        assert cfg["metadata_base_url"] == "https://60.205.157.141/metadata/"
+        assert "github_api" not in cfg
 
     def test_malformed_json_falls_back(self, tmp_path):
         """坏 JSON 不应崩溃，应回退 DEFAULTS。"""
@@ -35,7 +37,9 @@ class TestReleaseConfigLoader:
         p = tmp_path / "release.config.json"
         p.write_text("{not valid json", encoding="utf-8")
         cfg = load_release_config(override_path=p)
-        assert cfg == DEFAULTS
+        assert cfg["configuration_error"]
+        assert cfg["trusted_root"] is None
+        assert cfg["metadata_base_url"] == ""
 
     def test_repo_root_file_exists(self):
         """开发模式下 repo 根的 release.config.json 应该真实存在。"""
@@ -47,9 +51,17 @@ class TestReleaseConfigLoader:
         """无 override 时应能命中 repo 根的 release.config.json。"""
         from satellite_debug_tool.release_config import load_release_config
         cfg = load_release_config()
-        for key in ("github_owner", "github_repo", "github_api"):
+        for key in ("schema", "app_id", "repo_id", "channel"):
             assert key in cfg
             assert cfg[key]   # 非空
+        from tuf.api.metadata import Metadata
+        from urllib.parse import urlsplit
+        assert urlsplit(cfg["metadata_base_url"]).scheme == "https"
+        assert urlsplit(cfg["target_base_url"]).scheme == "https"
+        root = Metadata.from_dict(cfg["trusted_root"])
+        assert root.signed.unrecognized_fields["app_id"] == cfg["app_id"]
+        assert root.signed.unrecognized_fields["repo_id"] == cfg["repo_id"]
+        root.signed.verify_delegate("root", root.signed_bytes, root.signatures)
 
 
 class TestSettingsUpdateSchema:

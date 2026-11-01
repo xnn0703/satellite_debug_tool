@@ -1161,6 +1161,13 @@ class EndpointSessionRuntime(QObject):
             raise RuntimeLeaseError("operation gateway requires an active capability")
         return RuntimeOperationGateway(self, capability)
 
+    def capability_identity_ready(self, capability: EndpointSendCapability) -> bool:
+        """当前 capability 已由本次存在代际的身份回报授权。"""
+        self._assert_owner_thread()
+        state = self._valid_capability_state(capability)
+        scope = self._identity_authorization_scope
+        return bool(state is not None and scope is not None and state.promoted_scope == scope)
+
     def acquire_recorder(
         self,
         capability: EndpointSendCapability,
@@ -1198,10 +1205,8 @@ class EndpointSessionRuntime(QObject):
             ):
                 return None
         elif normalized_kind is SessionRecorderKind.PRODUCTION_EVIDENCE:
-            scope = self._identity_authorization_scope
             if (
-                scope is None
-                or state.promoted_scope != scope
+                not self.capability_identity_ready(capability)
                 or (
                     gate.state is not RuntimeOperationGateState.IDLE
                     and not (

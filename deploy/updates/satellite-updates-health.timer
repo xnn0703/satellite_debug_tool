@@ -1,0 +1,12 @@
+[Unit]
+Description=Inspect Satellite Terminal Tool expiry every six hours
+OnFailure=satellite-updates-failure@%n.service
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:45:00 UTC
+Persistent=yes
+AccuracySec=1min
+Unit=satellite-updates-health.service
+
+[Install]
+WantedBy=timers.target

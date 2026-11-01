@@ -16,6 +16,7 @@ release/
 
 # 虚拟环境
 .venv/
+.venv-deploy/
 venv/
 env/
 

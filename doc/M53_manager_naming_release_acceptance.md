@@ -1,0 +1,10 @@
+# M53 验收标准
+
+- 中文/英文窗口、关于页、平台显示名称和归档使用已确认名称，翻译 update/check 通过。
+- user/ops 文件名、可执行入口、构建身份、冻结 smoke、归档验证与更新器目标合同一致；回归覆盖新文件名。
+- app/repo 信任身份、配置持久路径和设备固件认证域保持原合同。
+- v1.9.0 commit/tag 与四包 build identity 一致，源代码全量测试通过。
+- Windows Actions 两版构建/冻结 smoke/自动上传成功，Mac 两版代码签名校验、冻结 smoke/上传成功。
+- 完整归档逐包身份/CRC/SHA-256 通过，user 包无应用 updater；ops 公开 HTTPS 元数据和包经过签名/摘要验证。
+- 客户完整包可从服务器 HTTPS 直链直接取得，提供版本、edition、系统/架构与 SHA-256；不增加 Downloads 副本。
+- 构建、冻结启动、云端分发与 Windows 实机升级、物理设备测试分开记录；没有实机证据不声明实机通过。

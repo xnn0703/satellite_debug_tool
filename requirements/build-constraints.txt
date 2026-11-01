@@ -1,0 +1,16 @@
+# 当前 macOS .venv 已安装的直接依赖；Windows wheel/桌面验收独立记录。
+PySide6==6.11.0
+pyserial==3.5
+pyqtgraph==0.14.0
+numpy==2.4.4
+PyOpenGL==3.1.10
+python-docx==1.2.0
+py7zr==1.1.0
+psutil==7.2.2
+certifi==2026.7.22
+cryptography==50.0.0
+tuf==7.0.1
+securesystemslib==1.6.0
+urllib3==2.8.0
+PyInstaller==6.19.0
+pytest==9.0.3

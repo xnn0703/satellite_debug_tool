@@ -1,217 +1,223 @@
-"""Downloader — 发布资产下载 + 重试 + 断点续传 + 进度回调。
-
-公共 API：
-    Downloader(timeout=30, max_retries=3, chunk_size=65536, progress_interval=262144)
-        .download_all(assets, dest_dir, on_progress=None, cancel_event=None) -> List[Path]
-
-设计要点：
-- 顺序下载（不并行）：兼容单个 7z 和旧版分卷，弱网行为稳定
-- 单文件失败：指数退避 1s / 2s / 4s 重试 3 次（max_retries 可配）
-- 断点续传：dest 已存在且部分内容时发 Range header，服务器 206 接续，
-  服务器 200 视为不支持 Range 重头下载
-- Content-Length 校验：响应头有 length 时与实际写入字节比，不一致视为失败重试
-- 进度回调：每累计 progress_interval 字节调一次，避免 GUI 信号过密
-- 取消：threading.Event；read 循环每 chunk 检查
-"""
+"""可信目标下载；断点绑定摘要，最终校验后原子交付。"""
 from __future__ import annotations
 
-import time
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
+import hashlib
+import json
+import os
 from pathlib import Path
+import re
 from threading import Event
+import time
 from typing import Callable, List, Optional
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from satellite_debug_tool.updater.checker import Asset
 from satellite_debug_tool.updater.errors import UpdaterError
-from satellite_debug_tool.updater.network import build_https_opener
+from satellite_debug_tool.updater.network import HttpsEndpointError, build_https_opener
 
 
 class DownloadError(UpdaterError):
-    """下载失败（重试耗尽 / 校验失败 / 用户取消的统一包装）。"""
+    """可信目标下载失败。"""
 
 
 class DownloadCancelled(DownloadError):
-    """用户主动取消下载。"""
-
     def __init__(self) -> None:
         super().__init__("download_cancelled")
 
 
-ProgressCallback = Callable[[int, int], None]   # (bytes_done_total, bytes_total)
+ProgressCallback = Callable[[int, int], None]
 
 
-@dataclass
-class _AssetResult:
-    asset: Asset
-    path: Path
-    bytes_written: int
+def _cancel(event: Event | None) -> None:
+    if event is not None and event.is_set():
+        raise DownloadCancelled()
+
+
+def _hash(path: Path, event: Event | None) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while True:
+            _cancel(event)
+            block = stream.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
 
 
 class Downloader:
-    def __init__(
-        self,
-        timeout: float = 30.0,
-        max_retries: int = 3,
-        chunk_size: int = 65536,
-        progress_interval: int = 262144,
-    ):
-        self._timeout = timeout
+    def __init__(self, timeout: float = 8.0, max_retries: int = 3,
+                 chunk_size: int = 65536, progress_interval: int = 262144):
+        self._timeout = float(timeout)
         self._max_retries = max(1, int(max_retries))
         self._chunk_size = max(4096, int(chunk_size))
         self._progress_interval = max(self._chunk_size, int(progress_interval))
 
-    def download_all(
-        self,
-        assets: List[Asset],
-        dest_dir: Path,
-        on_progress: Optional[ProgressCallback] = None,
-        cancel_event: Optional[Event] = None,
-        opener: Optional[urllib.request.OpenerDirector] = None,
-    ) -> List[Path]:
-        """顺序下载所有 assets 到 dest_dir，返回 (按顺序的)本地路径列表。
-
-        Args:
-            assets: 待下载资产列表（顺序即后续合并顺序）
-            dest_dir: 目标目录（必须已存在）
-            on_progress: 进度回调，参数 (bytes_done_total, bytes_total)
-            cancel_event: 用户取消事件（set 后立即中止并抛 DownloadCancelled）
-            opener: 测试用 mock urllib OpenerDirector
-        """
+    def download_all(self, assets: List[Asset], dest_dir: Path,
+                     on_progress: Optional[ProgressCallback] = None,
+                     cancel_event: Optional[Event] = None,
+                     opener: Optional[urllib.request.OpenerDirector] = None) -> List[Path]:
         if not assets:
             raise DownloadError("download_no_assets")
-        if not dest_dir.exists() or not dest_dir.is_dir():
-            raise DownloadError(
-                "download_destination_missing",
-                path=str(dest_dir),
-            )
-
-        total_bytes = sum(a.size for a in assets if a.size > 0)
-        done_bytes = 0
-        results: List[Path] = []
-        active_opener = opener or build_https_opener()
-
+        dest_dir = Path(dest_dir)
+        if not dest_dir.is_dir() or dest_dir.is_symlink():
+            raise DownloadError("download_destination_missing", path=str(dest_dir))
+        names = set()
         for asset in assets:
-            if cancel_event is not None and cancel_event.is_set():
-                raise DownloadCancelled()
-            r = self._download_one(
-                asset=asset,
-                dest=dest_dir / asset.name,
-                done_offset=done_bytes,
-                total_bytes=total_bytes,
-                on_progress=on_progress,
-                cancel_event=cancel_event,
-                opener=active_opener,
-            )
-            results.append(r.path)
-            done_bytes += r.bytes_written
+            name = asset.name
+            if (not name or name in {".", ".."} or "/" in name or "\\" in name or ":" in name
+                    or any(ord(c) < 32 for c in name) or name.casefold() in names):
+                raise DownloadError("download_asset_invalid", "invalid or repeated filename")
+            names.add(name.casefold())
+            if (type(asset.size) is not int or asset.size < 0
+                    or not re.fullmatch(r"[0-9a-f]{64}", getattr(asset, "sha256", ""))):
+                raise DownloadError("download_asset_invalid", "trusted length and SHA-256 are required")
+            if urllib.parse.urlsplit(asset.url).scheme != "https":
+                raise DownloadError("download_asset_invalid", "HTTPS target is required")
+        total = sum(a.size for a in assets)
+        done = 0
+        paths = []
+        for asset in assets:
+            _cancel(cancel_event)
+            dest = dest_dir / asset.name
+            self._download_one(asset, dest, done, total, on_progress, cancel_event, opener or build_https_opener())
+            done += asset.size
+            paths.append(dest)
+        return paths
 
-        return results
-
-    # ---- 内部 ----
-
-    def _download_one(
-        self,
-        asset: Asset,
-        dest: Path,
-        done_offset: int,
-        total_bytes: int,
-        on_progress: Optional[ProgressCallback],
-        cancel_event: Optional[Event],
-        opener: urllib.request.OpenerDirector,
-    ) -> _AssetResult:
-        last_exc: Optional[Exception] = None
-        for attempt in range(self._max_retries):
-            if cancel_event is not None and cancel_event.is_set():
-                raise DownloadCancelled()
+    def _download_one(self, asset, dest, done, total, progress, event, opener):
+        partial = dest.with_name(dest.name + ".part")
+        record = dest.with_name(dest.name + ".part.json")
+        if any(p.is_symlink() for p in (dest, partial, record)):
+            raise DownloadError("download_asset_invalid", "download paths require regular files")
+        if dest.is_file() and dest.stat().st_size == asset.size and _hash(dest, event) == asset.sha256:
+            if progress:
+                progress(done + asset.size, total)
+            return
+        dest.unlink(missing_ok=True)
+        identity = {"target_path": getattr(asset, "target_path", ""), "size": asset.size, "sha256": asset.sha256}
+        state = {}
+        if record.is_file() and record.stat().st_size <= 16384:
             try:
-                written = self._fetch_to_file(
-                    asset, dest,
-                    done_offset=done_offset,
-                    total_bytes=total_bytes,
-                    on_progress=on_progress,
-                    cancel_event=cancel_event,
-                    opener=opener,
-                )
-                # Content-Length 校验
-                if asset.size > 0 and dest.stat().st_size != asset.size:
-                    raise DownloadError(
-                        "download_size_mismatch",
-                        asset=asset.name,
-                        expected=asset.size,
-                        actual=dest.stat().st_size,
-                    )
-                return _AssetResult(asset=asset, path=dest, bytes_written=written)
+                state = json.loads(record.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                state = {}
+        if not isinstance(state, dict) or state.get("identity") != identity:
+            partial.unlink(missing_ok=True)
+            state = {"identity": identity}
+        if partial.exists() and partial.stat().st_size > asset.size:
+            partial.unlink()
+        self._save_state(record, state)
+        for attempt in range(self._max_retries):
+            _cancel(event)
+            try:
+                # 完整断点先校验，避免 bytes=<完整长度>- 引起 416。
+                if partial.is_file() and partial.stat().st_size == asset.size:
+                    self._finish(asset, partial, dest, record, event)
+                else:
+                    self._fetch(asset, partial, record, state, done, total, progress, event, opener)
+                    self._finish(asset, partial, dest, record, event)
+                if progress:
+                    progress(done + asset.size, total)
+                return
             except DownloadCancelled:
                 raise
-            except (DownloadError, urllib.error.URLError, OSError, TimeoutError) as e:
-                last_exc = e
-                # 指数退避（除最后一次）
-                if attempt < self._max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-        raise DownloadError(
-            "download_retries_exhausted",
-            str(last_exc or ""),
-            asset=asset.name,
-            attempts=self._max_retries,
-        ) from last_exc
-
-    def _fetch_to_file(
-        self,
-        asset: Asset,
-        dest: Path,
-        done_offset: int,
-        total_bytes: int,
-        on_progress: Optional[ProgressCallback],
-        cancel_event: Optional[Event],
-        opener: urllib.request.OpenerDirector,
-    ) -> int:
-        """一次 HTTP GET + 流式写文件，返回写入字节数（不含已存在部分）。"""
-        # 断点续传：dest 已存在 → 发 Range header
-        existing = dest.stat().st_size if dest.exists() else 0
-        headers = {"User-Agent": "satellite_debug_tool-updater"}
-        if existing > 0:
-            headers["Range"] = f"bytes={existing}-"
-
-        req = urllib.request.Request(asset.url, headers=headers)
-        resp = opener.open(req, timeout=self._timeout)
-
-        with resp:
-            status = getattr(resp, "status", None) or resp.getcode()
-            # 206 = Partial Content（接受 Range）；200 = 全量（服务器不支持 Range）
-            if existing > 0 and status == 200:
-                # 服务器不支持 Range → 重写整个文件
-                existing = 0
-                mode = "wb"
-            elif status in (200, 206):
-                mode = "ab" if existing > 0 else "wb"
-            else:
-                raise DownloadError(
-                    "download_http_error",
-                    asset=asset.name,
-                    status=status,
-                )
-
-            written_this_call = 0
-            bytes_since_last_progress = 0
-            with open(dest, mode) as f:
-                while True:
-                    if cancel_event is not None and cancel_event.is_set():
+            except HttpsEndpointError as exc:
+                partial.unlink(missing_ok=True)
+                record.unlink(missing_ok=True)
+                raise DownloadError("download_response_invalid", str(exc.reason)) from exc
+            except DownloadError as exc:
+                if exc.code in {"download_hash_mismatch", "download_range_invalid", "download_response_invalid"}:
+                    partial.unlink(missing_ok=True)
+                    record.unlink(missing_ok=True)
+                    raise
+                last_error = exc
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                last_error = exc
+            if attempt + 1 < self._max_retries:
+                if event is not None:
+                    if event.wait(2**attempt):
                         raise DownloadCancelled()
-                    chunk = resp.read(self._chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    written_this_call += len(chunk)
-                    bytes_since_last_progress += len(chunk)
-                    if on_progress and bytes_since_last_progress >= self._progress_interval:
-                        bytes_done_total = done_offset + existing + written_this_call
-                        on_progress(bytes_done_total, total_bytes)
-                        bytes_since_last_progress = 0
+                else:
+                    time.sleep(2**attempt)
+        raise DownloadError("download_retries_exhausted", str(last_error),
+                            asset=asset.name, attempts=self._max_retries) from last_error
 
-            # 收尾：最后一次进度
-            if on_progress:
-                on_progress(done_offset + existing + written_this_call, total_bytes)
-            return existing + written_this_call
+    @staticmethod
+    def _save_state(record: Path, state: dict) -> None:
+        temporary = record.with_suffix(record.suffix + ".tmp")
+        if temporary.is_symlink():
+            raise DownloadError("download_asset_invalid", "resume metadata requires a regular file")
+        temporary.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(temporary, record)
+
+    @staticmethod
+    def _finish(asset, partial, dest, record, event):
+        actual = partial.stat().st_size
+        if actual != asset.size:
+            raise DownloadError("download_size_mismatch", asset=asset.name, expected=asset.size, actual=actual)
+        if _hash(partial, event) != asset.sha256:
+            raise DownloadError("download_hash_mismatch", "downloaded bytes differ from the trusted target", asset=asset.name)
+        os.replace(partial, dest)
+        record.unlink(missing_ok=True)
+
+    def _fetch(self, asset, partial, record, state, done, total, progress, event, opener):
+        existing = partial.stat().st_size if partial.exists() else 0
+        headers = {"User-Agent": "satellite-terminal-updater", "Accept-Encoding": "identity"}
+        if existing:
+            headers["Range"] = f"bytes={existing}-"
+            etag = state.get("etag")
+            if isinstance(etag, str) and etag.startswith('"') and etag.endswith('"'):
+                headers["If-Range"] = etag
+        request = urllib.request.Request(asset.url, headers=headers)
+        with opener.open(request, timeout=self._timeout) as response:
+            response_url = response.geturl() if hasattr(response, "geturl") else asset.url
+            if urllib.parse.urlsplit(response_url).scheme != "https":
+                raise DownloadError("download_response_invalid", "redirect requires HTTPS")
+            status = response.status
+            response_headers = response.headers
+            if response_headers.get("Content-Encoding", "identity") not in {"identity", ""}:
+                raise DownloadError("download_response_invalid", "encoded target response")
+            if status == 200:
+                existing = 0
+                expected_response = asset.size
+            elif status == 206:
+                match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response_headers.get("Content-Range", ""))
+                if match is None:
+                    raise DownloadError("download_range_invalid", "Content-Range is required")
+                start, end, length = map(int, match.groups())
+                if start != existing or length != asset.size or not start <= end < length:
+                    raise DownloadError("download_range_invalid", "Content-Range differs from the target and resume point")
+                expected_response = end - start + 1
+            else:
+                raise DownloadError("download_http_error", asset=asset.name, status=status)
+            declared = response_headers.get("Content-Length")
+            if declared is not None and (not declared.isdecimal() or int(declared) != expected_response):
+                raise DownloadError("download_response_invalid", "Content-Length differs from the trusted range")
+            etag = response_headers.get("ETag")
+            state.pop("etag", None)
+            if isinstance(etag, str) and etag.startswith('"') and etag.endswith('"'):
+                state["etag"] = etag
+            self._save_state(record, state)
+            received = 0
+            pending = 0
+            with partial.open("ab" if existing else "wb") as stream:
+                while True:
+                    _cancel(event)
+                    block = response.read(min(self._chunk_size, expected_response - received + 1))
+                    if not block:
+                        break
+                    received += len(block)
+                    if received > expected_response:
+                        raise DownloadError("download_response_invalid", "target response exceeds trusted length")
+                    stream.write(block)
+                    pending += len(block)
+                    if progress and pending >= self._progress_interval:
+                        progress(done + existing + received, total)
+                        pending = 0
+            if progress:
+                progress(done + existing + received, total)
+            if received != expected_response:
+                raise DownloadError("download_size_mismatch", asset=asset.name, expected=expected_response, actual=received)

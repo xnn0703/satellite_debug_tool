@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satellite_debug_tool"
-description = "卫星通信终端工具 (Satellite Terminal Tool)"
-requires-python = ">=3.9"
+description = "卫通终端管理工具 (Satellite Terminal Manager)"
+requires-python = ">=3.10"
 dynamic = ["version"]
 dependencies = [
     "PySide6>=6.5",
@@ -15,6 +15,9 @@ dependencies = [
     "PyOpenGL>=3.1",
     "py7zr>=0.20",
     "psutil>=5.9",
+    "tuf==7.0.1",
+    "securesystemslib==1.6.0",
+    "urllib3==2.8.0",
 ]
 
 [tool.setuptools]

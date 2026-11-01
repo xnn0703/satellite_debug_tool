@@ -1,207 +1,176 @@
-name: Build & Release
+name: Build and stage release candidates
 
-# 触发：
-#   - 推 v* tag → 完整 GitHub Release（prepare → Windows build → upload）
-#   - 手动 dispatch → 同上（input 自定 tag）
-#   - 推到 master/main → 仅构建并上传 GH artifact（不发版）
 on:
   push:
-    tags:
-      - 'v*'
-    branches:
-      - master
-      - main
+    tags: ['v*']
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.1.0)'
+        description: Existing version tag to build
         required: true
-        default: 'v0.0.1-rc1'
+        type: string
 
-# 给所有 job 默认权限：contents: write 是创建 / 上传 GitHub Release 所需
+# 普通构建不持有上传、签名或 GitHub Release 写权限。
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-
-  # ============================================================
-  # 1. prepare-release  仅 tag/dispatch 时跑：解析发布标签
-  # ============================================================
   prepare-release:
-    runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
+      commit: ${{ steps.resolve.outputs.commit }}
     steps:
-      - name: Resolve tag
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Resolve immutable source SHA and source version
         id: resolve
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "Resolved tag: ${TAG}"
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: python scripts/resolve_release.py
 
-  # ============================================================
-  # 2a. build-windows
-  # ============================================================
-  build-windows:
+  build-windows-release:
+    needs: prepare-release
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         edition: [user, ops]
-    runs-on: windows-latest
-    needs: prepare-release
-    # 推 master/main 时 prepare-release 跳过，所以 needs 为 null → 这里也跳过
-    if: always() && needs.prepare-release.result == 'success'
+    env:
+      SATELLITE_BUILD_COMMIT: ${{ needs.prepare-release.outputs.commit }}
+      SATELLITE_UPDATE_CHECK: '0'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+        with:
+          ref: ${{ needs.prepare-release.outputs.commit }}
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install deps
+          cache: pip
+          cache-dependency-path: requirements/build-*.txt
+      - name: Restore constrained build environment
+        run: python -m pip install -r requirements/build-windows.txt
+      - name: Source regression and translations
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r satellite_debug_tool/requirements.txt
-
-      - name: Build (main + updater)
-        shell: cmd
-        run: scripts\build_windows.bat ${{ matrix.edition }}
-
-      - name: Smoke-test the frozen edition
-        timeout-minutes: 3
+          python -m pytest satellite_debug_tool/tests -q
+          python scripts/update_translations.py check
+      - name: Build immutable edition
+        run: python scripts/build_editions.py ${{ matrix.edition }}
+      - name: Frozen software smoke
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/check_frozen_application.py --edition ${{ matrix.edition }} --version "${{ needs.prepare-release.outputs.tag }}"
-
-      - name: Upload frozen smoke evidence
+      # Authenticode 如配置，应在此步骤之前完成，然后冻结最终文件树。
+      # unsigned 候选如实记录；TUF 正式签名由独立晋升流程负责。
+      - name: Package final payload and exact build environment
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.prepare-release.outputs.tag }}
+          EDITION: ${{ matrix.edition }}
+        run: |
+          $folder = python -c "from satellite_debug_tool.package_names import edition_directory; import os; print(edition_directory(os.environ['EDITION']))"
+          python scripts/release_artifacts.py --payload "dist/$env:EDITION/$folder" --output "release/candidate-$env:EDITION" --source-commit $env:SATELLITE_BUILD_COMMIT --version $env:RELEASE_VERSION --signature unsigned
+      - name: Preserve frozen evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-${{ matrix.edition }}
+          name: release-smoke-${{ matrix.edition }}
           path: release/smoke-*
           if-no-files-found: warn
-          retention-days: 14
-
-      - name: Layout release dir
-        shell: pwsh
-        run: |
-          $tag = "${{ needs.prepare-release.outputs.tag }}"
-          $name = if ("${{ matrix.edition }}" -eq "user") { "satellite_terminal_tool-user-windows-${tag}" } else { "satellite_debug_tool-win-${tag}" }
-          echo "RELEASE_NAME=${name}" >> $env:GITHUB_ENV
-
-      - name: Create 7z archive
-        shell: pwsh
-        run: |
-          $name = $env:RELEASE_NAME
-          $archive = Join-Path "${{ github.workspace }}" "release/${name}.7z"
-          $folder = if ("${{ matrix.edition }}" -eq "user") { "SatelliteTerminalToolUser" } else { "SatelliteDebugTool" }
-          Push-Location "dist/${{ matrix.edition }}/${folder}"
-          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 -mf=off -mmt=on `
-            $archive "*" | Out-Null
-          $archiveExitCode = $LASTEXITCODE
-          Pop-Location
-          if ($archiveExitCode -ne 0) {
-            throw "7-Zip failed with exit code $archiveExitCode"
-          }
-          Get-Item $archive
-
-      - name: Validate updater payload layout
-        shell: pwsh
-        run: |
-          $name = $env:RELEASE_NAME
-          python scripts/verify_update_archive.py "release/${name}.7z" --edition "${{ matrix.edition }}" --version "${{ needs.prepare-release.outputs.tag }}"
-
-      - name: Upload validated edition archive
+      - name: Preserve validated candidate bytes
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.edition }}
-          path: release/*.7z
+          name: release-candidate-${{ matrix.edition }}
+          path: release/candidate-${{ matrix.edition }}/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
 
-  publish-windows:
+  upload-candidates:
+    needs: [prepare-release, build-windows-release]
     runs-on: ubuntu-latest
-    needs: [prepare-release, build-windows]
-    if: always() && needs.prepare-release.result == 'success' && needs.build-windows.result == 'success'
+    # 仓库管理员为此 environment 配置审批和受保护 tag。
+    environment: release-candidate
+    concurrency:
+      group: release-candidate-${{ needs.prepare-release.outputs.commit }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.commit }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-*
-          merge-multiple: true
-          path: release
-      - name: Prepare validated release draft
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare-release.outputs.tag }}
-          name: Release ${{ needs.prepare-release.outputs.tag }}
-          draft: true
-          prerelease: false
-          make_latest: true
-          fail_on_unmatched_files: true
-          body_path: doc/${{ needs.prepare-release.outputs.tag }}_release_notes.md
-          files: |
-            release/satellite_terminal_tool-user-windows-${{ needs.prepare-release.outputs.tag }}.7z
-            release/satellite_debug_tool-win-${{ needs.prepare-release.outputs.tag }}.7z
+          pattern: release-candidate-*
+          path: release/candidates
+      - run: python -m pip install -r requirements/deploy.txt
+      - name: Upload candidates outside the public web root
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.prepare-release.outputs.commit }}
+          UPLOAD_KEY: ${{ secrets.RELEASE_UPLOAD_SSH_KEY }}
+          UPLOAD_KNOWN_HOSTS: ${{ secrets.RELEASE_UPLOAD_KNOWN_HOSTS }}
+          UPLOAD_CONFIG: ${{ vars.RELEASE_UPLOAD_CONFIG }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, subprocess, sys, tempfile
+          with tempfile.TemporaryDirectory(prefix='satellite-upload-') as directory:
+              root = pathlib.Path(directory)
+              for name, key in [('key', 'UPLOAD_KEY'), ('known_hosts', 'UPLOAD_KNOWN_HOSTS'), ('config.json', 'UPLOAD_CONFIG')]:
+                  value = os.environ[key]
+                  if not value.strip():
+                      raise SystemExit('release upload configuration is incomplete')
+                  path = root / name
+                  path.write_text(value, encoding='utf-8')
+                  path.chmod(0o600)
+              receipts = sorted(pathlib.Path('release/candidates').glob('*/receipt.json'))
+              if len(receipts) != 2:
+                  raise SystemExit('both edition receipts are required')
+              for receipt in receipts:
+                  subprocess.run([sys.executable, 'scripts/upload_release.py', '--config', str(root/'config.json'),
+                      '--receipt', str(receipt), '--release-id', os.environ['RELEASE_ID'],
+                      '--known-hosts', str(root/'known_hosts'), '--identity-file', str(root/'key')], check=True)
+          PY
 
-  # build-macos 已移除：mac 在线打包遇到 PyInstaller .app symlink 复杂性
-  # （Python.framework / Qt frameworks 1500+ symlinks + 7z 不稳定），改本地脚本：
-  #     ./scripts/build_macos.sh both
-  # 本地脚本会自动 venv + 装依赖 + ditto 打包，产物 release/SatelliteDebugTool-<user|ops>-macOS-<arch>.zip
-  # mac 用户拿到 zip 解压双击即可；mac 平台不走自动升级链路（updater 仍嵌入但触发频率为零）。
-
-  # ============================================================
-  # 3. ci-only-build  (master/main 推送 → 仅本地构建验证 + 上传 GH artifact)
-  # ============================================================
   ci-only-build:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v'))
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         edition: [user, ops]
-    name: CI build (no release, win only)
-    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
-    runs-on: windows-latest
+    env:
+      SATELLITE_UPDATE_CHECK: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r satellite_debug_tool/requirements.txt
-      - name: Build
-        shell: cmd
-        run: scripts\build_windows.bat ${{ matrix.edition }}
-      - name: Smoke-test the frozen edition
-        timeout-minutes: 3
+          cache: pip
+          cache-dependency-path: requirements/build-*.txt
+      - run: python -m pip install -r requirements/build-windows.txt
+      - run: python -m pytest satellite_debug_tool/tests -q
+      - run: python scripts/build_editions.py ${{ matrix.edition }}
+      - name: Frozen software smoke
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/check_frozen_application.py --edition ${{ matrix.edition }}
-      - name: Upload CI smoke evidence
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: ci-smoke-${{ matrix.edition }}
           path: release/smoke-*
           if-no-files-found: warn
-          retention-days: 14
-      - name: Upload CI artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: SatelliteDebugTool-${{ matrix.edition }}-Windows-ci
+          name: ci-${{ matrix.edition }}
           path: release/*.zip
-          retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error

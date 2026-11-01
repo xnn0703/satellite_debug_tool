@@ -330,7 +330,7 @@ def test_valid_process_recording_is_embedded_in_docx_and_evidence(tmp_path: Path
         assert len(document.inline_shapes) >= 3
         assert "三、过程曲线与阶段分析" in _document_text(artifact.document_path)
         assert "静态工况" in _document_text(artifact.document_path)
-        assert "车载动态工况" in _document_text(artifact.document_path)
+        assert "车载动态工况" not in _document_text(artifact.document_path)
         with zipfile.ZipFile(artifact.evidence_path) as archive:
             names = set(archive.namelist())
             assert "analysis/analysis.json" in names
@@ -385,6 +385,7 @@ def test_pass_generates_v1_self_contained_zip_and_valid_manifest(tmp_path: Path)
         assert "AFD01C 卫星通信相控阵终端" in text
         assert "编写" in text and "审核" in text and "批准" in text
         assert "测试环境" in text
+        assert "测试软件\n卫通终端管理工具 " in text
         assert "生产测试实验室" in text
         assert "环境温度" in text and "23.5 °C" in text
         assert "相对湿度" in text and "48 %RH" in text
@@ -392,6 +393,42 @@ def test_pass_generates_v1_self_contained_zip_and_valid_manifest(tmp_path: Path)
         assert "一、测试摘要" in text
         assert "技术附录" in text
         assert serial in text
+    finally:
+        store.close()
+
+
+def test_invalid_sdb_is_reported_as_incomplete_quality_and_all_fixture_files_are_archived(
+    tmp_path: Path,
+) -> None:
+    store, output, serial = _terminal_batch(tmp_path, (AttemptStatus.PASS,))
+    fixture_a = output / "fixtures" / "session-a"
+    fixture_b = output / "fixtures" / "session-b"
+    fixture_a.mkdir(parents=True)
+    fixture_b.mkdir(parents=True)
+    (fixture_a / "platform_feedback.jsonl").write_text('{"a":1}\n', encoding="utf-8")
+    (fixture_b / "platform_feedback.jsonl").write_text('{"b":2}\n', encoding="utf-8")
+    (fixture_a / "manifest.json").write_text('{"session":"a"}\n', encoding="utf-8")
+    (fixture_b / "manifest.json").write_text('{"session":"b"}\n', encoding="utf-8")
+    try:
+        service = ProductionReportService(
+            store,
+            batch_output_dir=output,
+            report_root=tmp_path / "reports",
+        )
+        artifact = service.archive_device("BATCH-01", serial)
+        frozen = store.get_report_snapshot("BATCH-01", serial)["snapshot_json"]
+
+        assert frozen["automatic_verdict"] == "PASS"
+        assert frozen["report_verdict"] == "INCOMPLETE"
+        assert frozen["data_quality"]["state"] == "INCOMPLETE"
+        assert frozen["data_quality"]["analyzable_sample_count"] == 0
+        with zipfile.ZipFile(artifact.evidence_path) as archive:
+            assert {
+                "fixture_sessions/session-a/platform_feedback.jsonl",
+                "fixture_sessions/session-b/platform_feedback.jsonl",
+                "fixture_sessions/session-a/manifest.json",
+                "fixture_sessions/session-b/manifest.json",
+            } <= set(archive.namelist())
     finally:
         store.close()
 
@@ -432,7 +469,7 @@ def test_fail_v1_can_create_one_audited_v2_without_overwriting_v1(tmp_path: Path
         store.close()
 
 
-def test_incomplete_only_archives_evidence_and_cannot_be_reviewed(tmp_path: Path) -> None:
+def test_incomplete_generates_readable_v1_and_cannot_be_approved(tmp_path: Path) -> None:
     store, output, serial = _terminal_batch(tmp_path, (AttemptStatus.INCOMPLETE,))
     try:
         service = ProductionReportService(
@@ -441,11 +478,11 @@ def test_incomplete_only_archives_evidence_and_cannot_be_reviewed(tmp_path: Path
             report_root=tmp_path / "reports",
         )
         artifact = service.archive_device("BATCH-01", serial)
-        assert artifact.status == "not_generated"
-        assert artifact.document_path is None
+        assert artifact.status == "generated_v1"
+        assert artifact.document_path is not None and artifact.document_path.is_file()
         assert artifact.evidence_path.is_file()
         assert artifact.manifest_path.is_file()
-        assert not tuple(artifact.directory.glob("*.docx"))
+        assert "INCOMPLETE" in _document_text(artifact.document_path)
         with pytest.raises(ResultStoreError, match="cannot be approved"):
             store.create_report_review(
                 "BATCH-01",

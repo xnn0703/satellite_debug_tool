@@ -89,6 +89,7 @@ class Settings:
             "production_report_dir": "",  # 每台设备正式报告与证据归档根目录
         },
         "production": {
+            "storage_mode": "",
             "last_operator": "",
             "last_recipe": "",
             "discovery_cidr": "192.168.1.0/24",

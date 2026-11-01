@@ -3,13 +3,54 @@
 from __future__ import annotations
 
 import json
+import gc
 import math
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 from satellite_debug_tool.tests.test_production_recipe import valid_recipe
+
+
+@pytest.fixture(autouse=True)
+def _dispose_created_production_widgets(qapplication_session):
+    """在主线程收尾本项工作区，避免后台 worker 触发循环 GC 销毁 Qt 控件。"""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from shiboken6 import isValid
+
+    from satellite_debug_tool.ui.main_window import MainWindow
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    widget_types = (MainWindow, ProductionWorkspace)
+    baseline = {widget for widget in qapplication_session.allWidgets() if isinstance(widget, widget_types)}
+    try:
+        yield
+    finally:
+        created = [widget for widget in qapplication_session.allWidgets()
+                   if isinstance(widget, widget_types) and widget not in baseline]
+        created.sort(key=lambda widget: isinstance(widget, MainWindow), reverse=True)
+        for widget in created:
+            if not isValid(widget):
+                continue
+            closed = widget.close()
+            deadline = time.monotonic() + 5
+            while not closed and time.monotonic() < deadline:
+                qapplication_session.processEvents()
+                time.sleep(.001)
+                closed = widget.close()
+            assert closed, "production UI ownership must settle before deleting test widgets"
+        for widget in created:
+            if isValid(widget):
+                widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        qapplication_session.processEvents()
+        created.clear()
+        baseline.clear()
+        gc.collect()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        qapplication_session.processEvents()
 
 
 @pytest.fixture(scope="module")
@@ -37,9 +78,11 @@ def _write_recipe(
     *,
     duration_s: int = 3600,
     product: str = "afd01",
+    target_device_count: int = 1,
 ) -> Path:
     payload = valid_recipe(duration_s=duration_s)
     payload["product"] = product
+    payload["target_device_count"] = target_device_count
     if product == "afd01c":
         payload["recipe_id"] = "AFD01C-PILOT-R1"
     path.write_text(
@@ -47,6 +90,21 @@ def _write_recipe(
         encoding="utf-8",
     )
     return path
+
+
+def _mark_analysis_capture_ready(workspace) -> None:
+    """Unrelated UI tests enter after M50's independently-tested capture gate."""
+
+    from satellite_debug_tool.core.production.fleet import ProductionCaptureState
+
+    for session in workspace._fleet.sessions():
+        if not session.recording_armed:
+            continue
+        session._capture_confirmed = True
+        session._capture_data_observed = True
+        session._capture_state = ProductionCaptureState.READY
+        session._capture_error = ""
+    workspace._update_start_gate()
 
 
 def test_workspace_describes_formal_preflight_contract(qapp, settings) -> None:
@@ -189,6 +247,7 @@ def test_identified_session_is_registered_and_recording_armed(
     from satellite_debug_tool.tests.test_production_fleet import _identity
 
     workspace = ProductionWorkspace(settings)
+    workspace.activate_view()
     assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
     workspace._batch_id_edit.setText("PILOT-FLEET")
     workspace._operator_edit.setText("operator-a")
@@ -209,7 +268,7 @@ def test_identified_session_is_registered_and_recording_armed(
     assert devices[0]["serial_number"] == "AFD01-UI-001"
     assert workspace._snr_panels[1].serial_number == "AFD01-UI-001"
     assert workspace._fleet.sessions()[0].recording_armed
-    assert tr("Evidence recording active") in (
+    assert tr("Preparing full analysis capture") in (
         workspace._snr_panels[1]._connection_label.full_text
     )
     workspace.close()
@@ -249,6 +308,7 @@ def test_afd01_variant_recipe_registers_matching_device(
         )
     )
     qapp.processEvents()
+    _mark_analysis_capture_ready(workspace)
 
     devices = workspace.result_store.list_devices(f"PILOT-{product.upper()}")
     assert [(item["serial_number"], item["hardware_type"]) for item in devices] == [
@@ -348,6 +408,7 @@ def test_supported_afd01c_without_sn_is_not_reported_as_unsupported(
     from satellite_debug_tool.tests.test_production_fleet import _identity
 
     workspace = ProductionWorkspace(settings)
+    workspace.activate_view()
     workspace._fleet._on_datagram(
         FleetDatagram(
             endpoint=("127.0.0.1", 4004),
@@ -458,6 +519,7 @@ def test_late_device_recording_failure_retries_before_batch_start(
     )
     workspace._fleet._on_datagram(second)
     qapp.processEvents()
+    _mark_analysis_capture_ready(workspace)
 
     assert attempts == 2
     assert session.recording_armed
@@ -553,6 +615,7 @@ def test_one_online_device_can_start_and_late_device_does_not_join(
         )
     )
     qapp.processEvents()
+    _mark_analysis_capture_ready(workspace)
 
     assert workspace._start_button.isEnabled()
     batch = workspace.start_batch()
@@ -560,7 +623,9 @@ def test_one_online_device_can_start_and_late_device_does_not_join(
     assert workspace._participant_serials == ("AFD01-ONLY",)
     assert workspace._abort_button.isEnabled()
     attempts = workspace.result_store.list_attempts("PILOT-ONE-DUT")
-    expected_attempts = sum(workspace._workflow_default_states.values())
+    from satellite_debug_tool.core.production.presentation import enabled_production_tests
+
+    expected_attempts = len(enabled_production_tests(workspace.recipe))
     assert len(attempts) == expected_attempts
     assert {attempt["serial_number"] for attempt in attempts} == {"AFD01-ONLY"}
 
@@ -581,6 +646,14 @@ def test_one_online_device_can_start_and_late_device_does_not_join(
     assert "AFD01-LATE" in workspace._ignored_after_start
 
     workspace.abort_batch()
+    deadline = time.monotonic() + 5
+    while (workspace._abort_coordinator.active or
+           (workspace._abort_archive is not None and workspace._abort_archive.isRunning())) and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(.002)
+    assert not workspace._abort_coordinator.active
+    assert workspace._abort_archive is None or not workspace._abort_archive.isRunning()
+    assert workspace.shutdown()
     workspace.close()
 
 
@@ -626,6 +699,7 @@ def test_unconfigured_external_ins_is_skipped_without_blocking_single_device_sta
             )
         )
     qapp.processEvents()
+    _mark_analysis_capture_ready(workspace)
 
     assert workspace._start_button.isEnabled()
     workspace.start_batch()
@@ -665,8 +739,10 @@ def test_workflow_separates_scenarios_from_navigation_summaries(
     settings,
     tmp_path: Path,
 ) -> None:
+    from satellite_debug_tool.core.production import AttemptStatus
     from satellite_debug_tool.i18n import tr
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+    from satellite_debug_tool.tests.test_production_run_coordinator import _running_store
 
     payload = valid_recipe()
     payload["tests"]["gnss"] = {"enabled": True}
@@ -678,38 +754,41 @@ def test_workflow_separates_scenarios_from_navigation_summaries(
     workspace = ProductionWorkspace(settings)
     assert workspace.load_recipe_file(recipe_path)
 
-    assert tuple(workspace._test_rows) == (
+    assert workspace._progress_panel.node_ids == (
         "firmware_verification",
         "parameter_verification",
         "static_acquisition",
         "locked_rocking",
-        "power_on_rocking",
-        "locked_drive",
-        "power_on_drive",
         "gnss",
         "imu_static",
         "external_ins",
         "whole_navigation",
     )
-    external_row = workspace._test_rows["external_ins"]
-    whole_row = workspace._test_rows["whole_navigation"]
-    assert workspace._workflow_table.item(external_row, 1).text() == tr(
+    external_node = workspace._progress_panel._nodes["external_ins"]
+    whole_node = workspace._progress_panel._nodes["whole_navigation"]
+    assert external_node.title_label.text() == tr(
         "External INS performance summary"
     )
-    assert workspace._workflow_table.item(external_row, 3).text() == tr("Pending")
-    assert workspace._workflow_table.item(external_row, 4).text() == tr(
-        "Shared windows"
-    )
-    assert workspace._workflow_table.item(whole_row, 3).text() == tr("Pending")
+    assert external_node.state_label.text() == tr("Pending")
+    assert whole_node.state_label.text() == tr("Pending")
 
-    workspace.update_test_status(
-        "external_ins",
-        status="pass",
-        result="Bynav",
-    )
+    # 结果以真实逐设备 attempt 为来源，重翻译只改变呈现。
+    store = _running_store(tmp_path, workspace._progress_panel.node_ids)
+    workspace._batch_coordinator._store = store
+    workspace._batch_coordinator._batch = store.get_batch("BATCH-AUTO")
+    for attempt in store.list_attempts("BATCH-AUTO"):
+        if attempt["test_id"] != "external_ins":
+            continue
+        for status in (AttemptStatus.WAITING_PREREQUISITE, AttemptStatus.ARMED,
+                       AttemptStatus.RUNNING, AttemptStatus.ANALYZING):
+            store.transition_attempt(attempt["attempt_id"], status)
+        store.transition_attempt(attempt["attempt_id"], AttemptStatus.PASS, result={"reason": "Bynav"})
+    workspace._render_steps()
     workspace.retranslate_ui()
-    assert workspace._workflow_table.item(external_row, 3).text() == "pass"
-    assert workspace._workflow_table.item(external_row, 5).text() == "Bynav"
+    assert external_node.state_label.text() == tr("Pass")
+    assert external_node.presentation.status is AttemptStatus.PASS
+    assert "Bynav" in external_node.toolTip()
+    assert whole_node.presentation.status is AttemptStatus.PENDING
     workspace.close()
 
 
@@ -721,22 +800,21 @@ def test_recipe_disables_missing_metric_views(qapp, settings, tmp_path: Path) ->
     assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
 
     for test_id in ("gnss", "imu_static", "external_ins"):
-        row = workspace._test_rows[test_id]
-        assert workspace._workflow_table.item(row, 3).text() == tr(
-            "Not applicable"
-        )
-        assert workspace._workflow_table.item(row, 5).text() == tr(
-            "Disabled by recipe"
-        )
-    whole_row = workspace._test_rows["whole_navigation"]
-    assert workspace._workflow_table.item(whole_row, 3).text() == tr("Pending")
+        assert test_id not in workspace._progress_panel.node_ids
+    assert workspace._progress_panel.node_ids == (
+        "firmware_verification", "parameter_verification", "static_acquisition",
+        "locked_rocking", "whole_navigation",
+    )
+    assert workspace._progress_panel._nodes["whole_navigation"].state_label.text() == tr("Pending")
     workspace.close()
 
 
-def test_slot_test_and_fixture_updates_are_bounded(qapp, settings) -> None:
+def test_slot_and_fixture_updates_keep_typed_runtime_evidence(qapp, settings, tmp_path: Path) -> None:
+    from satellite_debug_tool.core.production import FixtureRuntimeState
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
 
     workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
     workspace.update_device_slot(
         1,
         serial_number="AFD01-001",
@@ -746,28 +824,32 @@ def test_slot_test_and_fixture_updates_are_bounded(qapp, settings) -> None:
     )
     assert workspace._snr_panels[1].serial_number == "AFD01-001"
     assert "192.168.1.12:4004" in workspace._snr_panels[1]._connection_label.full_text
-    workspace.update_test_status(
-        "firmware_verification", status="pass", result="0.0.130 beta"
-    )
-    assert workspace._workflow_table.item(0, 3).text() == "pass"
     workspace.update_fixture_state(
-        "motion", state="command sent", evidence="COMMAND_SENT"
+        "motion", state=FixtureRuntimeState.CONNECTING, evidence="COMMAND_SENT"
     )
-    assert workspace._fixture_table.item(1, 2).text() == "COMMAND_SENT"
+    motion = next(fixture for fixture in workspace._fixture_strip.fixtures if fixture.fixture_id == "motion")
+    assert motion.evidence == "COMMAND_SENT"
+    assert motion.level == "pending"
+    workspace.update_fixture_state("motion", state=FixtureRuntimeState.READY, evidence="POSE_VERIFIED")
+    motion = next(fixture for fixture in workspace._fixture_strip.fixtures if fixture.fixture_id == "motion")
+    assert motion.level == "good"
+    assert motion.evidence == "POSE_VERIFIED"
+    vehicle = next(fixture for fixture in workspace._fixture_strip.fixtures if fixture.fixture_id == "vehicle")
+    assert vehicle.level == "irrelevant"
 
     with pytest.raises(ValueError, match="slot"):
         workspace.update_device_slot(5)
-    with pytest.raises(ValueError, match="unknown production test"):
-        workspace.update_test_status("unknown", status="pending")
     workspace.close()
 
 
-def test_four_snr_panels_share_ranges_and_render_data_gaps(qapp, settings) -> None:
+def test_four_snr_panels_share_ranges_and_render_data_gaps(qapp, settings, tmp_path: Path) -> None:
     from satellite_debug_tool.core.production import FleetDatagram
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
     from satellite_debug_tool.tests.test_production_fleet import _fast_snr, _identity
 
     workspace = ProductionWorkspace(settings)
+    workspace.activate_view()
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json", target_device_count=4))
     origin_ns = 10_000_000_000
     workspace._snr_origin_monotonic_ns = origin_ns
     for slot, snr_db in ((1, 12.5), (2, 24.0)):
@@ -799,42 +881,131 @@ def test_four_snr_panels_share_ranges_and_render_data_gaps(qapp, settings) -> No
         now_monotonic_ns=origin_ns + 2_000_000_000
     )
 
-    assert len(workspace._snr_panels) == 4
+    assert workspace._visible_chart_slots == (1, 2, None, None)
+    assert workspace._devices_layout.count() == 4
+    assert len(workspace._snr_panels) == 2
     first_x, first_y = workspace._snr_panels[1].curve_data
     assert first_x.tolist() == pytest.approx([0.05, 0.1, 1.05, 2.0])
     assert math.isnan(float(first_y[2]))
     assert workspace._snr_panels[1].current_snr_db == pytest.approx(12.5)
     assert workspace._snr_panels[2].current_snr_db == pytest.approx(24.0)
-    ranges = [panel._plot.viewRange() for panel in workspace._snr_panels.values()]
+    ranges = [workspace._devices_layout.itemAt(index).widget()._plot.viewRange()
+              for index in range(workspace._devices_layout.count())]
     assert all(item[0] == pytest.approx(ranges[0][0]) for item in ranges)
     assert all(item[1] == pytest.approx(ranges[0][1]) for item in ranges)
     assert ranges[0][1] == pytest.approx([0.0, 25.0])
     workspace.close()
 
 
-def test_production_layout_uses_compact_workflow_columns_on_small_screens(
+def test_production_layout_places_progress_and_fixtures_above_single_curve(
     qapp,
     settings,
+    tmp_path: Path,
 ) -> None:
-    from PySide6.QtCore import Qt
-
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
 
     workspace = ProductionWorkspace(settings)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
     workspace.show()
     workspace.resize(1024, 600)
     qapp.processEvents()
-    assert workspace._main_splitter.orientation() == Qt.Orientation.Horizontal
-    assert workspace._content_splitter.orientation() == Qt.Orientation.Vertical
-    assert workspace._workflow_table.isColumnHidden(0)
-    assert workspace._workflow_table.isColumnHidden(2)
-    assert workspace._workflow_table.isColumnHidden(4)
+    assert workspace._visible_chart_slots == (None,)
+    assert workspace._devices_layout.count() == 1
+    assert len(workspace._pending_snr_panels) == 1
+    assert workspace._progress_panel.geometry().bottom() < workspace._fixture_strip.geometry().top()
+    assert workspace._fixture_strip.geometry().bottom() < workspace._charts_scroll.geometry().top()
+    assert workspace._event_log.isHidden()
+    assert workspace._abort_button.isVisible()
+    assert "locked_drive" not in workspace._progress_panel.node_ids
+    assert "gnss" not in workspace._progress_panel.node_ids
 
     workspace.resize(1600, 900)
     qapp.processEvents()
-    assert not workspace._workflow_table.isColumnHidden(0)
-    assert not workspace._workflow_table.isColumnHidden(2)
-    assert not workspace._workflow_table.isColumnHidden(4)
+    assert workspace._devices_layout.count() == 1
+    assert workspace._progress_panel.geometry().bottom() < workspace._charts_scroll.geometry().top()
+    workspace._events_button.click()
+    assert workspace._event_log.isVisible()
+    workspace.close()
+
+
+def test_only_participant_in_historical_slot_four_owns_the_single_curve(qapp, settings, tmp_path: Path) -> None:
+    import time
+
+    from satellite_debug_tool.core.production import FleetDatagram
+    from satellite_debug_tool.tests.test_production_fleet import _identity
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    workspace = ProductionWorkspace(settings)
+    workspace.activate_view()
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
+    workspace._batch_id_edit.setText("PILOT-SLOT-FOUR")
+    workspace._operator_edit.setText("operator-a")
+    workspace._output_edit.setText(str(tmp_path / "output"))
+    workspace.create_batch()
+    for slot in range(1, 5):
+        is_participant = slot == 4
+        workspace._fleet._on_datagram(FleetDatagram(
+            endpoint=(f"127.0.0.{slot}", 4004),
+            data=_identity(f"AFD01-FOUR-{slot}", model="AFD01" if is_participant else "AFD01C",
+                           service_protocol=2 if is_participant else 8),
+            wall_time_ns=time.time_ns(),
+            monotonic_ns=time.monotonic_ns() - (0 if is_participant else 10_000_000_000),
+        ))
+    qapp.processEvents()
+    _mark_analysis_capture_ready(workspace)
+    assert all(not session.is_online() for session in workspace._fleet.sessions()[:3])
+    assert workspace._visible_chart_slots == (4,)
+    assert workspace._devices_layout.count() == 1
+    assert workspace._devices_layout.itemAt(0).widget() is workspace._snr_panels[4]
+    assert workspace._snr_panels[4].serial_number == "AFD01-FOUR-4"
+    workspace.start_batch()
+    assert workspace._participant_serials == ("AFD01-FOUR-4",)
+    assert workspace._visible_chart_slots == (4,)
+    assert workspace._devices_layout.count() == 1
+    assert [device["serial_number"] for device in workspace.result_store.list_devices("PILOT-SLOT-FOUR")] == [
+        "AFD01-FOUR-4"
+    ]
+    assert all(slot not in workspace._snr_panels or workspace._snr_panels[slot].isHidden()
+               for slot in (1, 2, 3))
+    workspace.close()
+
+
+def test_changing_device_quantity_reflows_existing_endpoint_panels(qapp, settings, tmp_path: Path) -> None:
+    import time
+
+    from satellite_debug_tool.core.production import FleetDatagram
+    from satellite_debug_tool.tests.test_production_fleet import _identity
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    workspace = ProductionWorkspace(settings)
+    workspace.activate_view()
+    workspace.resize(1600, 900)
+    assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json", target_device_count=4))
+    workspace.show()
+    for slot in range(1, 5):
+        workspace._fleet._on_datagram(FleetDatagram(
+            endpoint=(f"127.0.0.{slot}", 4004), data=_identity(f"AFD01-REFLOW-{slot}"),
+            wall_time_ns=time.time_ns(), monotonic_ns=time.monotonic_ns(),
+        ))
+    qapp.processEvents()
+    panels = dict(workspace._snr_panels)
+    assert workspace._visible_chart_slots == (1, 2, 3, 4)
+    for count in (1, 3, 2):
+        assert workspace.load_recipe_file(_write_recipe(tmp_path / f"recipe-{count}.json", target_device_count=count))
+        qapp.processEvents()
+        assert workspace._visible_chart_slots == tuple(range(1, count + 1))
+        assert workspace._devices_layout.count() == count
+        for slot, panel in panels.items():
+            assert workspace._snr_panels[slot] is panel
+            assert panel.isHidden() == (slot > count)
+        if count == 3:
+            assert workspace._devices_layout.getItemPosition(2) == (1, 0, 1, 2)
+    assert workspace._devices_layout.getItemPosition(1) == (0, 1, 1, 1)
+    workspace.resize(900, 800)
+    qapp.processEvents()
+    assert workspace._devices_layout.getItemPosition(1) == (1, 0, 1, 1)
+    assert workspace._snr_panels[2] is panels[2]
+    assert workspace._snr_panels[2].serial_number == "AFD01-REFLOW-2"
     workspace.close()
 
 

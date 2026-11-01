@@ -11,3 +11,6 @@ py7zr>=0.20    # 7z 分卷解压（updater）
 psutil>=5.9    # updater 等主进程退出
 certifi>=2024.2  # updater HTTPS CA bundle（跨平台）
 cryptography>=42.0  # 客户 OTA AES-256-GCM 固件包认证解密
+tuf==7.0.1    # M52 静态发行仓库可信元数据；要求 Python 3.10+
+securesystemslib==1.6.0  # 与已验证 TUF 发布工具固定配套
+urllib3==2.8.0  # TUF 依赖，固定到验证环境

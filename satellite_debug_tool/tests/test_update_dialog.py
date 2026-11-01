@@ -109,10 +109,12 @@ class TestUpdateDialogConstruct:
         tmp_path,
         monkeypatch,
     ):
-        from satellite_debug_tool.updater.checker import LatestRelease
+        from satellite_debug_tool.updater.checker import LatestRelease, Asset
+        from satellite_debug_tool.updater.preparation import PreparedDownload
+        import hashlib
         from satellite_debug_tool.ui import update_dialog
 
-        install = tmp_path / "SatelliteDebugTool"
+        install = tmp_path / "SatelliteTerminalManagerOps"
         install.mkdir()
         updater = install / "updater.exe"
         updater.write_bytes(b"PE-updater")
@@ -120,6 +122,12 @@ class TestUpdateDialogConstruct:
         volume.write_bytes(b"archive")
         transaction = tmp_path / "updates" / "v2.0.0"
         transaction.mkdir(parents=True)
+        manifest = tmp_path / "tree.json"
+        manifest.write_bytes(b'{"schema":"test-manifest"}')
+        package_asset = Asset("release.7z", "https://example.invalid/release.7z", volume.stat().st_size,
+                              hashlib.sha256(volume.read_bytes()).hexdigest())
+        tree_asset = Asset("tree.json", "https://example.invalid/tree.json", manifest.stat().st_size,
+                           hashlib.sha256(manifest.read_bytes()).hexdigest())
 
         dlg = update_dialog.UpdateDialog(tmp_settings, auto_start=False)
         dlg._download_dir = transaction
@@ -127,22 +135,154 @@ class TestUpdateDialogConstruct:
             tag_name="v2.0.0",
             body="",
             html_url="https://example.invalid/release",
-            assets=[],
+            assets=[package_asset], tree_manifest=tree_asset, installation_mode="automatic",
         )
+        dlg._prepared_download = PreparedDownload(volume, package_asset, manifest, None, "automatic")
         monkeypatch.setattr(update_dialog, "_detect_install_dir", lambda: install)
         monkeypatch.setattr(update_dialog, "_detect_updater_exe", lambda: updater)
 
         dlg._do_launch_updater([volume])
+
+        import time
+        deadline = time.monotonic() + 3
+        while dlg._prepare_thread is not None and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.005)
+        assert dlg._prepare_thread is None
 
         request = dlg.launch_request
         assert request is not None
         assert request.install_dir == install.resolve()
         assert request.volumes == (volume.resolve(),)
         assert request.status_path.is_file()
+        assert request.package_sha256 == package_asset.sha256
+        assert request.updater_executable != updater
+        dlg.deleteLater()
+
+    def test_close_keeps_worker_owner_until_actual_thread_exit(self, qapp, tmp_settings, monkeypatch):
+        import threading
+        import time
+        from satellite_debug_tool.ui import update_dialog
+
+        entered, release = threading.Event(), threading.Event()
+
+        class BlockingChecker:
+            def __init__(self, *args, **kwargs):
+                self.cancelled = False
+
+            def fetch_latest(self):
+                entered.set()
+                release.wait(3)
+                raise update_dialog.UpdateCheckError("check_cancelled", "cancelled")
+
+            def cancel(self):
+                self.cancelled = True
+
+        monkeypatch.setattr(update_dialog, "ReleaseChecker", BlockingChecker)
+        dlg = update_dialog.UpdateDialog(tmp_settings, auto_start=False)
+        dlg.start_check()
+        assert entered.wait(1)
+        thread = dlg._check_thread
+        checker = dlg._check_source
+        dlg.reject()
+        assert thread.isRunning()
+        assert dlg._check_thread is thread
+        assert checker.cancelled
+        release.set()
+        deadline = time.monotonic() + 3
+        while dlg._check_thread is not None and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.005)
+        assert dlg._check_thread is None
+        assert dlg._close_result is None
+        dlg.deleteLater()
+
+    def test_manual_download_waits_for_manual_installation(self, qapp, tmp_settings, tmp_path):
+        from satellite_debug_tool.ui import update_dialog
+        from satellite_debug_tool.updater.checker import Asset
+        from satellite_debug_tool.updater.preparation import PreparedDownload
+
+        dlg = update_dialog.UpdateDialog(tmp_settings, auto_start=False)
+        dlg._on_dl_finished(PreparedDownload(tmp_path / "application.zip", Asset("application.zip", "https://example.invalid/app.zip")))
+        assert dlg._stack.currentIndex() == update_dialog._PAGE_READY
+        assert dlg._btn_install.isHidden()
+        assert dlg.launch_request is None
+        dlg.deleteLater()
+
+    def test_install_preparation_keeps_gui_responsive_and_cancels_before_handoff(
+        self, qapp, tmp_settings, tmp_path, monkeypatch,
+    ):
+        import threading
+        import time
+        from PySide6.QtCore import QThread
+        from satellite_debug_tool.ui import update_dialog
+        from satellite_debug_tool.updater.checker import Asset, LatestRelease
+        from satellite_debug_tool.updater.preparation import PreparedDownload
+
+        entered, release = threading.Event(), threading.Event()
+        owners = []
+        def prepare(**kwargs):
+            owners.append(QThread.currentThread())
+            entered.set()
+            release.wait(3)
+            assert kwargs["cancel_event"].is_set()
+            raise update_dialog.DownloadCancelled()
+
+        monkeypatch.setattr(update_dialog, "prepare_update_launch_request", prepare)
+        monkeypatch.setattr(update_dialog, "_detect_install_dir", lambda: tmp_path / "app")
+        monkeypatch.setattr(update_dialog, "_detect_updater_exe", lambda: tmp_path / "app/updater.exe")
+        item = Asset("package.7z", "https://example.invalid/package.7z", 1, "0" * 64)
+        dlg = update_dialog.UpdateDialog(tmp_settings, auto_start=False)
+        dlg._download_dir = tmp_path
+        dlg._latest = LatestRelease("2.0.0", assets=[item], tree_manifest=item, installation_mode="automatic")
+        dlg._prepared_download = PreparedDownload(tmp_path / "package.7z", item, tmp_path / "tree.json", None, "automatic")
+        dlg._do_launch_updater([tmp_path / "package.7z"])
+        assert entered.wait(1)
+        assert owners[0] != qapp.thread()
+        dlg.reject()
+        assert dlg._prepare_thread is not None
+        assert dlg._cancel_event.is_set()
+        release.set()
+        deadline = time.monotonic() + 3
+        while dlg._prepare_thread is not None and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.005)
+        assert dlg._prepare_thread is None
+        assert dlg.launch_request is None
         dlg.deleteLater()
 
 
 # ============================ SettingsDialog 更新设置往返 ============================
+
+
+def test_background_check_delivers_result_on_gui_thread(qapp, tmp_settings, monkeypatch):
+    import time
+    from PySide6.QtCore import QThread
+    from satellite_debug_tool.ui import update_dialog
+
+    observed = []
+
+    class Checker:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def fetch_latest(self):
+            return update_dialog.LatestRelease(tag_name="v999.0.0")
+
+    monkeypatch.setenv("SATELLITE_UPDATE_CHECK", "1")
+    monkeypatch.setattr(update_dialog, "ReleaseChecker", Checker)
+    monkeypatch.setattr(tmp_settings, "persist_preferences", lambda: observed.append(("settings", QThread.currentThread())))
+    thread = update_dialog.silent_background_check(
+        tmp_settings, on_new_version=lambda latest: observed.append(("callback", QThread.currentThread())),
+    )
+    deadline = time.monotonic() + 3
+    while (thread.isRunning() or len(observed) < 2) and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+    assert thread.wait(1000)
+    assert [name for name, _ in observed] == ["settings", "callback"]
+    assert all(owner == qapp.thread() for _, owner in observed)
+    thread.deleteLater()
 
 
 class TestSettingsDialogUpdateSection:

@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew the Satellite Terminal Tool certificate every 12 hours
+OnFailure=satellite-updates-failure@%n.service
+
+[Timer]
+OnCalendar=*-*-* 00,12:30:00 UTC
+RandomizedDelaySec=5min
+Persistent=yes
+Unit=satellite-updates-certbot.service
+
+[Install]
+WantedBy=timers.target

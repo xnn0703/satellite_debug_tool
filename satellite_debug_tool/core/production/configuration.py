@@ -106,6 +106,11 @@ class ProductTestTemplate:
     expected: dict[str, Any]
     tests: dict[str, Any]
     duration_policy: dict[str, Any]
+    source: str = "custom"
+    electrical_variant: str = ""
+    test_plan_id: str = ""
+    source_template_id: str = ""
+    source_revision: int | None = None
 
     def validate(self) -> None:
         _stable_id(self.template_id, "template_id")
@@ -137,6 +142,10 @@ class ProductTestTemplate:
             raise ProductionConfigurationError(
                 "convergence_is_outside_observation must be true"
             )
+        if self.source not in {"builtin", "custom", "imported", "legacy"}:
+            raise ProductionConfigurationError("source is not supported")
+        if self.source_revision is not None:
+            _positive_revision(self.source_revision)
 
     def to_payload(self) -> dict[str, Any]:
         self.validate()
@@ -152,6 +161,11 @@ class ProductTestTemplate:
             "duration_policy": _copy_mapping(
                 self.duration_policy, "duration_policy"
             ),
+            "source": self.source,
+            "electrical_variant": self.electrical_variant,
+            "test_plan_id": self.test_plan_id,
+            "source_template_id": self.source_template_id,
+            "source_revision": self.source_revision,
         }
 
     @property
@@ -176,9 +190,80 @@ class ProductTestTemplate:
             duration_policy=_copy_mapping(
                 payload.get("duration_policy"), "duration_policy"
             ),
+            source=str(payload.get("source", "legacy") or "legacy"),
+            electrical_variant=str(payload.get("electrical_variant", "") or ""),
+            test_plan_id=str(payload.get("test_plan_id", "") or ""),
+            source_template_id=str(payload.get("source_template_id", "") or ""),
+            source_revision=(
+                None
+                if payload.get("source_revision") is None
+                else _positive_revision(payload.get("source_revision"))
+            ),
         )
         value.validate()
         return value
+
+    @property
+    def is_builtin(self) -> bool:
+        return self.source == "builtin"
+
+    def custom_copy(self, *, template_id: str, display_name: str) -> "ProductTestTemplate":
+        """Create an independent editable copy without dropping hidden recipe fields."""
+
+        return ProductTestTemplate(
+            template_id=_stable_id(template_id, "template_id"),
+            revision=1,
+            display_name=_required_text(display_name, "display_name"),
+            product=self.product,
+            supply_voltage_v=self.supply_voltage_v,
+            per_device_current_a=self.per_device_current_a,
+            expected=_copy_mapping(self.expected, "expected"),
+            tests=_copy_mapping(self.tests, "tests"),
+            duration_policy=_copy_mapping(self.duration_policy, "duration_policy"),
+            source="custom",
+            electrical_variant=self.electrical_variant,
+            test_plan_id=self.test_plan_id,
+            source_template_id=self.template_id,
+            source_revision=self.revision,
+        )
+
+
+def builtin_product_templates() -> tuple[ProductTestTemplate, ...]:
+    """Return the immutable M51 electrical catalog.
+
+    The catalog owns electrical facts only. Test durations remain explicit in the
+    referenced plan payload and can be copied into a customer-specific template.
+    """
+
+    items: list[ProductTestTemplate] = []
+    for product in ("afd01b2", "afd01c", "afd01d"):
+        for voltage, current in ((12.0, 9.0), (24.0, 5.0)):
+            variant = f"{int(voltage)}v"
+            items.append(ProductTestTemplate(
+                template_id=f"builtin-{product}-{variant}",
+                revision=1,
+                display_name=f"{product.upper()} · {int(voltage)} V / {int(current)} A",
+                product=product,
+                supply_voltage_v=voltage,
+                per_device_current_a=current,
+                expected={
+                    "main_firmware": {"match": "optional", "value": ""},
+                    "parameters": {},
+                },
+                tests={
+                    "static_acquisition": {"enabled": True, "duration_s": 1800},
+                    "locked_rocking": {"enabled": True, "duration_s": 1800},
+                },
+                duration_policy={
+                    "minimum_effective_observation_s": 1800,
+                    "convergence_is_outside_observation": True,
+                    "report_first_last_window_s": 300,
+                },
+                source="builtin",
+                electrical_variant=variant,
+                test_plan_id="standard-snr-r1",
+            ))
+    return tuple(items)
 
 
 @dataclass(frozen=True)
@@ -593,6 +678,19 @@ class ProductionConfigurationStore:
         products, powers, _references, stations = self._parse_catalog(payload)
         return products, powers, stations
 
+    def load_effective_product_templates(self) -> tuple[ProductTestTemplate, ...]:
+        """Return immutable built-ins followed by user-owned templates."""
+
+        products, _powers, _stations = self.load_catalog()
+        reserved = {item.template_id for item in builtin_product_templates()}
+        conflicts = sorted(item.template_id for item in products if item.template_id in reserved)
+        if conflicts:
+            raise ProductionConfigurationError(
+                "custom product template uses reserved built-in ID: " + ", ".join(conflicts)
+            )
+        # Existing user catalog remains the default selection after migration.
+        return products + builtin_product_templates()
+
     def load_full_catalog(self) -> tuple[
         tuple[ProductTestTemplate, ...],
         tuple[PowerSupplyProfile, ...],
@@ -649,7 +747,8 @@ class ProductionConfigurationStore:
             raise ProductionConfigurationError("device_count must be an integer")
         if not (1 <= device_count <= 4):
             raise ProductionConfigurationError("device_count must be within 1..4")
-        products, powers, stations = self.load_catalog()
+        products = self.load_effective_product_templates()
+        _saved_products, powers, stations = self.load_catalog()
         _products, _powers, references, _stations = self.load_full_catalog()
         product = next((item for item in products if item.template_id == template_id), None)
         station = next(

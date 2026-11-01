@@ -79,7 +79,7 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
 
     def __init__(self, settings: Settings | None = None):
         super().__init__()
-        self.setWindowTitle(tr("Satellite Terminal Tool"))
+        self.setWindowTitle(tr("Satellite Terminal Manager"))
         self.resize(1280, 800)
         self.setMinimumWidth(1024)
         self.setMinimumHeight(600)
@@ -209,6 +209,7 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
             fixture_runtime=self._fixture_runtime,
             tcp_shell_session_directory=self._endpoint_directory,
         )
+        self._customer.shell_shutdown_ready.connect(lambda: QTimer.singleShot(0, self.close))
         self._customer.add_requested.connect(self._on_add_customer_device)
         self._customer.edit_requested.connect(self._on_edit_customer_device)
         self._customer.delete_requested.connect(self._on_delete_customer_device)
@@ -341,7 +342,7 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
         self._brand_mark.setObjectName("brandMark")
         self._brand_mark.setFixedSize(26, 26)
         self._brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._brand_text = QLabel(tr("Terminal Tool"))
+        self._brand_text = QLabel(tr("Terminal Manager"))
         self._brand_text.setObjectName("brandText")
         row.addWidget(self._brand_mark)
         row.addWidget(self._brand_text)
@@ -588,9 +589,9 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
         ):
             QMessageBox.warning(
                 self,
-                tr("Production batch test"),
+                tr("Automated testing"),
                 tr(
-                    "Stop customer network tests and confirm all customer power outputs OFF before opening Production."
+                    "Stop customer network tests and confirm all customer power outputs OFF before opening Automated testing."
                 ),
             )
             return
@@ -601,9 +602,9 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
             return
         answer = QMessageBox.question(
             self,
-            tr("Production batch test"),
+            tr("Automated testing"),
             tr(
-                "Open the production batch workspace? Fixture actions require the "
+                "Open the automated testing workspace? Fixture actions require the "
                 "selected station profile and live preflight confirmation."
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -804,8 +805,8 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
         self._version_label.setText(f"v{__version__} · " + tr("Operations edition"))
         # Transient messages arrive already formatted. Clearing one on a locale
         # change avoids leaving stale-language text without rebuilding any view.
-        self.setWindowTitle(tr("Satellite Terminal Tool"))
-        self._brand_text.setText(tr("Terminal Tool"))
+        self.setWindowTitle(tr("Satellite Terminal Manager"))
+        self._brand_text.setText(tr("Terminal Manager"))
         self._engineering_fixture_button.setText(tr("Motion platform..."))
         self._engineering_tcp_shell_button.setText(tr("Shell..."))
         sb = self.statusBar()
@@ -889,6 +890,9 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
 
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._customer.close_shell_for_shutdown():
+            event.ignore()
+            return
         if self._production is not None and not self._production.confirm_shutdown():
             self._reject_close(event, "production shutdown was not confirmed")
             return
@@ -979,5 +983,7 @@ class MainWindow(ApplicationWindowActions, QMainWindow):
         self._production_host.shutdown()
         if not self._shutdown_customer_resources(event):
             return
-        self._launch_pending_update()
+        if not self._launch_pending_update():
+            event.ignore()
+            return
         super().closeEvent(event)

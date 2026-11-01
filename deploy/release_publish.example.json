@@ -1,0 +1,7 @@
+{
+  "host": "REPLACE_WITH_VERIFIED_IP_OR_HOST",
+  "port": 22,
+  "username": "release_publish",
+  "public_root": "/srv/satellite-updates/public/v1/apps",
+  "state_root": "/srv/satellite-updates/receipts"
+}

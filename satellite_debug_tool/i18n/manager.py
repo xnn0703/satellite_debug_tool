@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from satellite_debug_tool import __app_name_cn__, __app_name_en__
 from satellite_debug_tool.core.config import Settings
 
 
@@ -181,6 +182,9 @@ class TranslationManager(QObject):
             self._install_chinese_translators()
 
         self._effective_locale = effective
+        self._app.setApplicationDisplayName(
+            __app_name_cn__ if effective == LANGUAGE_ZH_CN else __app_name_en__
+        )
         if emit:
             # Re-emit deliberately: callers use this to refresh a UI after
             # changing from auto to an explicit preference with the same locale.

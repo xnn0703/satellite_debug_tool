@@ -1,347 +1,190 @@
-"""updater.applier 单测：合并 / 校验 / 解压 / swap / rollback。
-
-为避免依赖外部归档：每个测试都用 py7zr 在 tmp 里现造一个小 7z。
-"""
-from __future__ import annotations
-
+"""同盘准备、可信目录树及可恢复 rename 的故障回归。"""
 from pathlib import Path
 import time
 
 import pytest
 
-from satellite_debug_tool.updater.applier import (
-    Applier,
-    ApplyError,
-    ApplyResult,
-    PayloadContract,
-)
+from satellite_debug_tool.tests._updater_helpers import archive_payload, make_payload
+from satellite_debug_tool.updater.applier import Applier, ApplyError, PayloadContract
+from satellite_debug_tool.updater.recovery import InstallJournal, recover_installation
+
+CONTRACT = PayloadContract("SatelliteTerminalManager.exe", "updater.exe", edition="ops", target_version="1.9.1")
 
 
-WINDOWS_CONTRACT = PayloadContract(
-    executable_name="SatelliteDebugTool.exe",
-    updater_name="updater.exe",
-)
+def prepare(tmp_path):
+    install = tmp_path / "installed"
+    make_payload(install, "1.9.0")
+    source = tmp_path / "download" / "payload"
+    manifest = make_payload(source)
+    token = "a" * 32
+    stage = Applier().prepare_payload(install, source, token, tree_manifest=manifest, contract=CONTRACT)
+    maintenance = tmp_path / "maintenance"
+    maintenance.mkdir()
+    updater = maintenance / "updater.exe"
+    updater.write_bytes(b"independent-updater")
+    journal = InstallJournal.create(maintenance / "journal.json", transaction_id=token,
+        install_dir=install, staging_dir=stage, updater_executable=updater, target_version="1.9.1")
+    journal.save("recovery_ready")
+    return install, source, stage, journal
 
 
-# ---- 辅助：现造 7z 用作测试输入 ----
-
-def _make_7z_with_app(tmp_path: Path, app_name: str = "SatelliteDebugTool.app",
-                     contents: dict = None) -> Path:
-    """在 tmp_path 下造一个 {app_name}/... 目录结构，打包成 7z。
-
-    contents = {'rel/path.txt': b'...', ...}
-    返回 7z 文件路径。
-    """
-    py7zr = pytest.importorskip("py7zr")
-    src_root = tmp_path / "_src"
-    app_root = src_root / app_name
-    app_root.mkdir(parents=True)
-    if not contents:
-        contents = {"hello.txt": b"hello", "Contents/Info.plist": b"<plist/>"}
-    contents = dict(contents)
-    contents.setdefault("SatelliteDebugTool.exe", b"PE-new")
-    contents.setdefault("updater.exe", b"PE-updater")
-    contents.setdefault("_internal/runtime.bin", b"runtime")
-    for rel, data in contents.items():
-        f = app_root / rel
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_bytes(data)
-    archive = tmp_path / "test.7z"
-    with py7zr.SevenZipFile(str(archive), mode="w") as z:
-        z.writeall(str(src_root), arcname=".")
-    return archive
+def test_real_archive_and_unique_payload(tmp_path):
+    tree = tmp_path / "source" / "nested" / "payload"
+    make_payload(tree)
+    archive = archive_payload(tmp_path / "source", tmp_path / "release.7z")
+    staged = Applier().extract_to(archive, tmp_path / "extracted")
+    assert Applier().resolve_payload_root(staged, CONTRACT) == staged / "nested" / "payload"
 
 
-def _split_file(src: Path, dest_dir: Path, base_name: str, vol_size: int = 1024) -> list[Path]:
-    """把 src 按 vol_size 拆成 base_name.7z.001/.002/..."""
-    data = src.read_bytes()
-    parts = []
-    idx = 1
-    for i in range(0, len(data), vol_size):
-        p = dest_dir / f"{base_name}.7z.{idx:03d}"
-        p.write_bytes(data[i:i + vol_size])
-        parts.append(p)
-        idx += 1
-    return parts
+@pytest.mark.parametrize("content,code", [(b"bad", "apply_invalid_archive"), (None, "apply_archive_missing")])
+def test_invalid_archive(tmp_path, content, code):
+    archive = tmp_path / "release.7z"
+    if content is not None:
+        archive.write_bytes(content)
+    with pytest.raises(ApplyError) as exc:
+        Applier().extract_to(archive, tmp_path / "extracted")
+    assert exc.value.code == code
 
 
-# ============================ merge_volumes ============================
-
-class TestMergeVolumes:
-    def test_single_archive_is_copied_unchanged(self, tmp_path):
-        archive = tmp_path / "x.7z"
-        archive.write_bytes(b"\x37\x7a\xbc\xaf\x27\x1cPAYLOAD")
-        out = tmp_path / "prepared.7z"
-        Applier().merge_volumes([archive], out)
-        assert out.read_bytes() == archive.read_bytes()
-
-    def test_merge_concatenates_in_order(self, tmp_path):
-        a = tmp_path / "x.7z.001"; a.write_bytes(b"AAAA")
-        b = tmp_path / "x.7z.002"; b.write_bytes(b"BBBB")
-        c = tmp_path / "x.7z.003"; c.write_bytes(b"CC")
-        out = tmp_path / "merged.7z"
-        ap = Applier()
-        ap.merge_volumes([a, b, c], out)
-        assert out.read_bytes() == b"AAAABBBBCC"
-
-    def test_missing_volume_raises(self, tmp_path):
-        a = tmp_path / "x.7z.001"; a.write_bytes(b"A")
-        ghost = tmp_path / "x.7z.002"   # 不存在
-        out = tmp_path / "merged.7z"
-        with pytest.raises(ApplyError) as exc:
-            Applier().merge_volumes([a, ghost], out)
-        assert exc.value.code == "apply_volume_missing"
-        assert exc.value.context["path"] == str(ghost)
-
-    def test_empty_list_raises(self, tmp_path):
-        with pytest.raises(ApplyError):
-            Applier().merge_volumes([], tmp_path / "out.7z")
-
-    def test_progress_called(self, tmp_path):
-        a = tmp_path / "x.7z.001"; a.write_bytes(b"A" * 5000)
-        b = tmp_path / "x.7z.002"; b.write_bytes(b"B" * 5000)
-        out = tmp_path / "merged.7z"
-        captured = []
-        ap = Applier(on_progress=lambda stage, pct: captured.append((stage, pct)))
-        ap.merge_volumes([a, b], out, chunk_size=512)
-        # 核心层使用稳定 stage id，显示文本由 UI 翻译。
-        stages = [s for s, _ in captured]
-        assert "merge" in stages
-        assert captured[-1][1] == 1.0
+def test_extraction_budget_rejected_before_writing_payload(tmp_path):
+    root = tmp_path / "source"
+    make_payload(root)
+    archive = archive_payload(root, tmp_path / "release.7z")
+    with pytest.raises(ApplyError, match="budget"):
+        Applier().extract_to(archive, tmp_path / "extracted", max_expanded_bytes=1)
+    assert not (tmp_path / "extracted").exists()
 
 
-# ============================ verify_7z_magic ============================
-
-class TestVerifyMagic:
-    def test_real_7z_magic_passes(self, tmp_path):
-        f = tmp_path / "x.7z"
-        f.write_bytes(b"\x37\x7a\xbc\xaf\x27\x1c" + b"...rest...")
-        assert Applier.verify_7z_magic(f) is True
-
-    def test_random_bytes_fails(self, tmp_path):
-        f = tmp_path / "x.7z"
-        f.write_bytes(b"NOTSEVENZ")
-        assert Applier.verify_7z_magic(f) is False
-
-    def test_missing_file_fails(self, tmp_path):
-        assert Applier.verify_7z_magic(tmp_path / "ghost") is False
-
-
-# ============================ extract_to ============================
-
-class TestExtract:
-    def test_real_7z_extracts(self, tmp_path):
-        arc = _make_7z_with_app(tmp_path, app_name="MyApp",
-                                contents={"a.txt": b"abc", "sub/b.bin": b"\x00\x01"})
-        staging = tmp_path / "_stage"
-        Applier().extract_to(arc, staging)
-        assert (staging / "MyApp" / "a.txt").read_bytes() == b"abc"
-        assert (staging / "MyApp" / "sub" / "b.bin").read_bytes() == b"\x00\x01"
-
-    def test_bad_magic_raises(self, tmp_path):
-        bad = tmp_path / "fake.7z"
-        bad.write_bytes(b"BADDATA")
-        with pytest.raises(ApplyError) as exc:
-            Applier().extract_to(bad, tmp_path / "_stage")
-        assert exc.value.code == "apply_invalid_archive"
-        assert exc.value.context["path"] == str(bad)
-
-    def test_missing_archive_raises(self, tmp_path):
-        with pytest.raises(ApplyError):
-            Applier().extract_to(tmp_path / "nope.7z", tmp_path / "_stage")
-
-    def test_extract_reports_elapsed_heartbeat(
-        self,
-        tmp_path,
-        monkeypatch,
-    ):
-        py7zr = pytest.importorskip("py7zr")
-        archive = _make_7z_with_app(tmp_path, app_name="MyApp")
-        original_extractall = py7zr.SevenZipFile.extractall
-
-        def slow_extractall(seven_zip, *args, **kwargs):
-            time.sleep(0.04)
-            return original_extractall(seven_zip, *args, **kwargs)
-
-        monkeypatch.setattr(py7zr.SevenZipFile, "extractall", slow_extractall)
-        captured = []
-        Applier(
-            on_progress=lambda stage, value: captured.append((stage, value)),
-            heartbeat_interval=0.01,
-        ).extract_to(archive, tmp_path / "_stage")
-
-        heartbeats = [value for stage, value in captured if stage == "extracting"]
-        assert heartbeats
-        assert all(value > 0 for value in heartbeats)
+@pytest.mark.parametrize("member", ["../outside", "/absolute", "C:/outside", "CON", "dir/file."])
+def test_archive_paths_rejected_before_extract(tmp_path, monkeypatch, member):
+    import py7zr
+    from types import SimpleNamespace
+    archive = tmp_path / "release.7z"
+    archive.write_bytes(b"\x37\x7a\xbc\xaf\x27\x1c")
+    class FakeArchive:
+        def __init__(self, *_args, **_kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def list(self):
+            return [SimpleNamespace(filename=member, is_directory=False, is_file=True,
+                                    is_symlink=False, uncompressed=1)]
+        def extractall(self, **_kwargs):
+            pytest.fail("unsafe archive reached extraction")
+    monkeypatch.setattr(py7zr, "SevenZipFile", FakeArchive)
+    with pytest.raises(ApplyError):
+        Applier().extract_to(archive, tmp_path / "extracted")
+    assert not (tmp_path / "outside").exists()
 
 
-# ============================ swap_install_dir ============================
-
-class TestSwap:
-    def _prepare(self, tmp_path):
-        """造一个假"已安装"app + extract 后的源 app。"""
-        installed = tmp_path / "MyApp"
-        installed.mkdir()
-        (installed / "old.txt").write_text("old")
-        ext_root = tmp_path / "_ext"
-        ext_app = ext_root / "MyApp"
-        ext_app.mkdir(parents=True)
-        (ext_app / "new.txt").write_text("new")
-        return installed, ext_app
-
-    def test_swap_success_creates_backup_and_replaces(self, tmp_path):
-        installed, payload_root = self._prepare(tmp_path)
-        result = Applier().swap_install_dir(installed, payload_root)
-        assert isinstance(result, ApplyResult)
-        # 替换后的 install_dir 含 new.txt 不含 old.txt
-        assert (installed / "new.txt").exists()
-        assert not (installed / "old.txt").exists()
-        # backup 含 old.txt
-        assert result.backup_dir.exists()
-        assert (result.backup_dir / "old.txt").exists()
-
-    def test_swap_when_install_dir_missing(self, tmp_path):
-        """首次安装：install_dir 不存在，直接搬。"""
-        ext_root = tmp_path / "_ext"
-        ext_app = ext_root / "MyApp"
-        ext_app.mkdir(parents=True)
-        (ext_app / "fresh.txt").write_text("fresh")
-        installed = tmp_path / "MyApp"   # 不存在
-        result = Applier().swap_install_dir(installed, ext_app)
-        assert installed.exists()
-        assert (installed / "fresh.txt").exists()
-        # backup 也不应存在（因为没有旧版可备份）
-        assert not result.backup_dir.exists()
-
-    def test_swap_ext_root_is_app_itself(self, tmp_path):
-        """ext_root 直接是 MyApp/ 而不是含 MyApp/ 的 wrapper。"""
-        installed = tmp_path / "MyApp"
-        installed.mkdir()
-        (installed / "old.txt").write_text("old")
-        ext_root = tmp_path / "MyApp"   # 注意：这里 ext_root == installed
-        # 测试场景：构造一个隔离的源 dir 但其名字也叫 MyApp
-        ext_root = tmp_path / "_src" / "MyApp"
-        ext_root.mkdir(parents=True)
-        (ext_root / "new.txt").write_text("new")
-        result = Applier().swap_install_dir(installed, ext_root)
-        assert (installed / "new.txt").exists()
-
-    def test_swap_missing_ext_source_raises(self, tmp_path):
-        installed = tmp_path / "MyApp"
-        installed.mkdir()
-        ext_root = tmp_path / "_ext"
-        ext_root.mkdir()
-        # ext_root 里没有 MyApp 子目录，自身也无内容
-        # source = ext_root.exists() 但 ext_root 是空目录也算"存在"
-        # 改造测试：让 ext_root 自身根本不存在
-        bad_ext = tmp_path / "ghost"
-        with pytest.raises(ApplyError) as exc:
-            Applier().swap_install_dir(installed, bad_ext)
-        assert exc.value.code == "apply_source_missing"
-        assert exc.value.context["path"] == str(bad_ext)
+def test_heartbeat_during_slow_extraction(tmp_path, monkeypatch):
+    import py7zr
+    root = tmp_path / "source"
+    make_payload(root)
+    archive = archive_payload(root, tmp_path / "release.7z")
+    extract = py7zr.SevenZipFile.extractall
+    def slow(self, *args, **kwargs):
+        time.sleep(0.04)
+        return extract(self, *args, **kwargs)
+    monkeypatch.setattr(py7zr.SevenZipFile, "extractall", slow)
+    reported = []
+    Applier(lambda stage, value: reported.append((stage, value)),
+            heartbeat_interval=0.01).extract_to(archive, tmp_path / "extracted")
+    assert any(stage == "extracting" and value > 0 for stage, value in reported)
 
 
-# ============================ 一站式 apply ============================
+def test_ambiguous_payload_rejected(tmp_path):
+    make_payload(tmp_path / "first")
+    make_payload(tmp_path / "second")
+    with pytest.raises(ApplyError) as exc:
+        Applier().resolve_payload_root(tmp_path, CONTRACT)
+    assert exc.value.code == "apply_payload_ambiguous"
 
-class TestApplyFlow:
-    def test_full_flow(self, tmp_path):
-        """合并 + 解压 + swap 一站式：模拟真实升级流程。"""
-        # 1. 造一个含 MyApp/ 的 7z
-        arc = _make_7z_with_app(tmp_path, app_name="MyApp",
-                                contents={"v.txt": b"NEW VERSION"})
-        # 2. 把 7z 拆成分卷
-        vols = _split_file(arc, tmp_path, "split", vol_size=64)
-        assert len(vols) >= 2
-        # 3. 准备一个旧 install dir
-        installed = tmp_path / "MyApp"
-        installed.mkdir()
-        (installed / "v.txt").write_text("OLD VERSION")
-        # 4. 一站式 apply
-        workdir = tmp_path / "_work"
-        result = Applier().apply(
-            vols,
-            installed,
-            workdir,
-            payload_contract=WINDOWS_CONTRACT,
-        )
-        # 5. 验证
-        assert (installed / "v.txt").read_bytes() == b"NEW VERSION"
-        assert result.backup_dir.exists()
-        assert (result.backup_dir / "v.txt").read_text() == "OLD VERSION"
 
-    def test_real_ci_wrapper_resolves_payload_before_swap(self, tmp_path):
-        py7zr = pytest.importorskip("py7zr")
-        source = tmp_path / "source" / "release" / "satellite_debug_tool-win-v1.4.0"
-        (source / "_internal").mkdir(parents=True)
-        (source / "SatelliteDebugTool.exe").write_bytes(b"PE-new")
-        (source / "updater.exe").write_bytes(b"PE-updater")
-        (source / "_internal" / "runtime.bin").write_bytes(b"runtime")
-        archive = tmp_path / "release.7z"
-        with py7zr.SevenZipFile(archive, mode="w") as seven_zip:
-            seven_zip.writeall(tmp_path / "source", arcname=".")
-        installed = tmp_path / "SatelliteDebugTool"
-        installed.mkdir()
-        (installed / "SatelliteDebugTool.exe").write_bytes(b"PE-old")
+def test_partial_cross_volume_copy_preserves_original(tmp_path, monkeypatch):
+    """旧版先移动旧目录再 shutil.move，部分复制留下 install 后无法回退。"""
+    import shutil
+    install = tmp_path / "installed"
+    make_payload(install, "1.9.0")
+    source = tmp_path / "download" / "payload"
+    manifest = make_payload(source)
+    def partial_copy(_source, destination):
+        destination.mkdir()
+        (destination / "SatelliteTerminalManager.exe").write_bytes(b"partial")
+        raise OSError("disk full during cross-volume copy")
+    monkeypatch.setattr(shutil, "copytree", partial_copy)
+    with pytest.raises(ApplyError, match="disk full"):
+        Applier().prepare_payload(install, source, "b" * 32, tree_manifest=manifest, contract=CONTRACT)
+    assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert not list(tmp_path.glob("installed.bak.*"))
+    assert not list(tmp_path.glob(".installed.staging.*"))
 
-        Applier().apply(
-            [archive],
-            installed,
-            tmp_path / "work",
-            payload_contract=WINDOWS_CONTRACT,
-        )
 
-        assert (installed / "SatelliteDebugTool.exe").read_bytes() == b"PE-new"
-        assert not (installed / "release").exists()
+def test_verified_staging_is_beside_installation(tmp_path):
+    install, source, staging, journal = prepare(tmp_path)
+    assert staging.parent == install.parent
+    assert staging.stat().st_dev == install.stat().st_dev
+    result = Applier().install_prepared(journal)
+    assert result.backup_dir.is_dir()
+    assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
+    assert (result.backup_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert source.is_dir()
 
-    def test_missing_payload_is_rejected_before_installed_files_move(self, tmp_path):
-        py7zr = pytest.importorskip("py7zr")
-        source = tmp_path / "source"
-        source.mkdir()
-        (source / "readme.txt").write_text("not an app")
-        archive = tmp_path / "invalid.7z"
-        with py7zr.SevenZipFile(archive, mode="w") as seven_zip:
-            seven_zip.writeall(source, arcname=".")
-        installed = tmp_path / "SatelliteDebugTool"
-        installed.mkdir()
-        original = installed / "SatelliteDebugTool.exe"
-        original.write_bytes(b"PE-old")
 
-        with pytest.raises(ApplyError) as exc:
-            Applier().apply(
-                [archive],
-                installed,
-                tmp_path / "work",
-                payload_contract=WINDOWS_CONTRACT,
-            )
+def test_new_directory_rename_failure_restores_original(tmp_path, monkeypatch):
+    install, _, staging, journal = prepare(tmp_path)
+    rename = Path.rename
+    def fail_new(self, target):
+        if self == staging:
+            raise OSError("rename refused")
+        return rename(self, target)
+    monkeypatch.setattr(Path, "rename", fail_new)
+    with pytest.raises(ApplyError) as exc:
+        Applier().install_prepared(journal)
+    assert exc.value.code == "apply_swap_failed_restored"
+    assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert journal.data["state"] == "rolled_back"
 
-        assert exc.value.code == "apply_payload_missing"
-        assert original.read_bytes() == b"PE-old"
-        assert not list(tmp_path.glob("SatelliteDebugTool.bak.*"))
 
-    def test_multiple_payloads_are_rejected_before_installed_files_move(self, tmp_path):
-        py7zr = pytest.importorskip("py7zr")
-        source = tmp_path / "source"
-        for name in ("first", "second"):
-            payload = source / name
-            (payload / "_internal").mkdir(parents=True)
-            (payload / "SatelliteDebugTool.exe").write_bytes(b"PE-new")
-            (payload / "updater.exe").write_bytes(b"PE-updater")
-            (payload / "_internal" / "runtime.bin").write_bytes(b"runtime")
-        archive = tmp_path / "ambiguous.7z"
-        with py7zr.SevenZipFile(archive, mode="w") as seven_zip:
-            seven_zip.writeall(source, arcname=".")
-        installed = tmp_path / "SatelliteDebugTool"
-        installed.mkdir()
-        original = installed / "SatelliteDebugTool.exe"
-        original.write_bytes(b"PE-old")
+@pytest.mark.parametrize("cut_state", ["old_backed_up", "switched"])
+def test_power_loss_between_renames_recovers_from_persistent_journal(tmp_path, monkeypatch, cut_state):
+    install, _, _, journal = prepare(tmp_path)
+    save = journal.save
+    class PowerLoss(BaseException): pass
+    def power_loss(state, **facts):
+        if state == cut_state:
+            raise PowerLoss()
+        save(state, **facts)
+    monkeypatch.setattr(journal, "save", power_loss)
+    with pytest.raises(PowerLoss):
+        Applier().install_prepared(journal)
+    if cut_state == "old_backed_up":
+        assert not install.exists()
+    assert recover_installation(journal.path) == "rolled_back"
+    assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert recover_installation(journal.path) == "rolled_back"
 
-        with pytest.raises(ApplyError) as exc:
-            Applier().apply(
-                [archive],
-                installed,
-                tmp_path / "work",
-                payload_contract=WINDOWS_CONTRACT,
-            )
 
-        assert exc.value.code == "apply_payload_ambiguous"
-        assert original.read_bytes() == b"PE-old"
+def test_swap_requires_registered_recovery_state(tmp_path):
+    install, _, _, journal = prepare(tmp_path)
+    journal.save("prepared")
+    with pytest.raises(ApplyError, match="recovery"):
+        Applier().install_prepared(journal)
+    assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+
+
+def test_manifest_identity_and_packaged_identity_must_agree(tmp_path):
+    import json
+    from satellite_debug_tool.updater.payload import build_manifest
+    install = tmp_path / "installed"
+    make_payload(install, "1.9.0")
+    source = tmp_path / "payload"
+    manifest = make_payload(source)
+    identity_path = source / "_internal/satellite_debug_tool/build_identity.json"
+    identity = json.loads(identity_path.read_text())
+    identity["architecture"] = "arm64"
+    identity_path.write_text(json.dumps(identity))
+    # 完整树摘要全部正确，但发行元数据与内嵌身份冲突，仍需拒绝。
+    tree = build_manifest(source, manifest["identity"])
+    with pytest.raises(ApplyError, match="architecture"):
+        Applier().prepare_payload(install, source, "a" * 32, tree_manifest=tree, contract=CONTRACT)
+    assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"

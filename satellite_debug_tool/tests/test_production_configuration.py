@@ -21,6 +21,7 @@ from satellite_debug_tool.core.production import (
     ProductionRecipe,
     StationProfile,
     fixture_model_preset,
+    builtin_product_templates,
 )
 
 
@@ -46,6 +47,24 @@ def _product(*, revision: int = 1) -> ProductTestTemplate:
             "report_first_last_window_s": 300,
         },
     )
+
+
+def test_m51_builtin_electrical_catalog_and_custom_copy_preserve_hidden_fields() -> None:
+    catalog = builtin_product_templates()
+
+    assert [(item.product, item.supply_voltage_v, item.per_device_current_a) for item in catalog] == [
+        (product, voltage, current)
+        for product in ("afd01b2", "afd01c", "afd01d")
+        for voltage, current in ((12.0, 9.0), (24.0, 5.0))
+    ]
+    source = catalog[0]
+    copied = source.custom_copy(template_id="customer-48v", display_name="客户 48 V")
+    assert copied.source == "custom"
+    assert copied.source_template_id == source.template_id
+    assert copied.source_revision == source.revision
+    assert copied.tests == source.tests
+    assert copied.expected == source.expected
+    assert copied.tests is not source.tests
 
 
 def _power(*, revision: int = 1, rated_current_a: float = 27.0) -> PowerSupplyProfile:

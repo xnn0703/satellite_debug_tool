@@ -1,0 +1,4 @@
+-c build-constraints.txt
+-r ../satellite_debug_tool/requirements.txt
+PyInstaller==6.19.0
+pytest==9.0.3

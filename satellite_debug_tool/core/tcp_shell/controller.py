@@ -21,7 +21,7 @@ from pathlib import Path
 import re
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot
 
 from satellite_debug_tool.core.protocol.frame_v2 import MetaInfo
 from satellite_debug_tool.core.session.runtime import RuntimeOperationGateState
@@ -74,6 +74,7 @@ def ymodem_route_hint(filename: str) -> str:
 class TcpShellController(QObject):
     """Own the single TCP shell session and its YMODEM admission lease."""
 
+    shutdown_finished = Signal()
     connected = Signal(str)
     connect_failed = Signal(str)
     disconnected = Signal(str)
@@ -104,6 +105,7 @@ class TcpShellController(QObject):
         self._readback_active = False
         self._readback_runtime = None
         self._session_generation = 0
+        self._shutdown_requested = False
 
     @property
     def worker(self) -> Optional[TcpShellWorker]:
@@ -141,6 +143,8 @@ class TcpShellController(QObject):
         directory hit, TCP target only); serial targets and hand-typed TCP
         addresses stay unmanaged.
         """
+        if self._shutdown_requested:
+            raise RuntimeError("TCP Shell shutdown is active")
         self.disconnect_device("reconnect")
         self._session_generation += 1
         worker = TcpShellWorker(
@@ -155,7 +159,6 @@ class TcpShellController(QObject):
         return True
 
     def disconnect_device(self, reason: str = "operator") -> None:
-        self._release_lease()
         worker = self._worker
         if worker is not None:
             worker.submit_disconnect(reason)  # 断开原因进入会话证据与 UI 通知
@@ -163,6 +166,7 @@ class TcpShellController(QObject):
             self._unbind_worker(worker)
         self._worker = None
         self._endpoint = None
+        self._release_lease()
 
     def send_text(self, text: str) -> bool:
         return self.send_raw(text.encode("utf-8") + b"\r")
@@ -182,6 +186,35 @@ class TcpShellController(QObject):
         worker = self._worker
         if worker is not None:
             worker.submit_clear_rx()
+
+    def request_shutdown(self) -> None:
+        """保留会话 owner，等待 worker 实际结束后再发布关闭完成。"""
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
+        worker = self._worker
+        if worker is None:
+            self._finish_shutdown()
+            return
+        worker.finished.connect(self._finish_shutdown)
+        worker.request_stop()
+        if not worker.isRunning():
+            self._finish_shutdown()
+
+    @Slot()
+    def _finish_shutdown(self) -> None:
+        if not self._shutdown_requested:
+            return
+        worker = self._worker
+        if worker is not None:
+            self._unbind_worker(worker)
+            worker.deleteLater()
+        self._worker = None
+        self._endpoint = None
+        self._release_lease()
+        self._readback_active = False
+        self._shutdown_requested = False
+        self.shutdown_finished.emit()
 
     def shutdown(self) -> None:
         self.disconnect_device("shutdown")

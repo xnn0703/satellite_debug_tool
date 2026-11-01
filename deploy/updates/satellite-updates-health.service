@@ -1,0 +1,22 @@
+[Unit]
+Description=Inspect local Satellite Terminal Tool metadata and certificate expiry
+After=local-fs.target
+OnFailure=satellite-updates-failure@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/satellite-updates/certbot.env
+ExecStart=/opt/satellite-updates/venv/bin/python /opt/satellite-updates/tools/deploy/updates/health_check.py --repository /srv/satellite-updates/public/v1/apps/satellite-terminal-tool --certificate /etc/letsencrypt/live/${CERTBOT_CERT_NAME}/cert.pem
+TimeoutStartSec=60
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=satellite-updates-health

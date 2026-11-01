@@ -236,7 +236,7 @@ class DataRecorder:
             self._pending_gap += 1
             return False
 
-    def stop(self) -> bool:
+    def request_stop(self) -> bool:
         if (
             not self._is_recording
             and self._thread is None
@@ -266,6 +266,11 @@ class DataRecorder:
                 except queue.Full:
                     self._write_failed = True
                     return False
+        return True
+
+    def stop(self) -> bool:
+        if not self.request_stop():
+            return False
         if self._thread is not None:
             self._thread.join(timeout=_STOP_TIMEOUT_SEC)
             if self._thread.is_alive():

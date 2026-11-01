@@ -5,8 +5,8 @@
 # 自动清 quarantine，打完即可双击运行
 #
 # 用法：  ./scripts/build_macos.sh user|ops|both（默认 ops）
-# 产物：  dist/user/SatelliteTerminalToolUser.app、dist/ops/SatelliteDebugTool.app
-#         release/SatelliteDebugTool-{user,ops}-macOS-<arch>.zip
+# 产物：  dist/user/SatelliteTerminalManagerUser.app、dist/ops/SatelliteTerminalManagerOps.app
+#         release/satellite_terminal_manager-{user,ops}-macos-<arch>-v<version>.zip
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,10 +31,8 @@ PY="$VENV/bin/python"
 PIP="$VENV/bin/pip"
 
 # ---- 自动装依赖 ----
-echo "[build_macos] 升级 pip + 装依赖（首次可能要 1-2 分钟）..."
-$PIP install --quiet --upgrade pip
-$PIP install --quiet -r "$HERE/satellite_debug_tool/requirements.txt"
-$PIP install --quiet pyinstaller
+echo "[build_macos] 按构建约束安装依赖（首次可能要 1-2 分钟）..."
+$PIP install --quiet -r "$HERE/requirements/build-macos.txt"
 
 # Two immutable product editions; separate work/output directories.
 "$PY" "$HERE/scripts/build_editions.py" "${1:-ops}"

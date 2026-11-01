@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from satellite_debug_tool.core.production import SnrSample
-from satellite_debug_tool.i18n import tr
+from satellite_debug_tool.i18n import tr, tr_source
 from satellite_debug_tool.ui import styles as S
 
 
@@ -69,8 +69,8 @@ class ProductionSnrPanel(QFrame):
         self._color = str(color)
         self._serial_number = ""
         self._endpoint = "-"
-        self._connection = tr("Offline")
-        self._recording = tr("Batch not created")
+        self._connection = tr_source("Offline")
+        self._recording = tr_source("Batch not created")
         self._current_test = "-"
         self._result = "-"
         self._current_snr_db: Optional[float] = None
@@ -251,8 +251,8 @@ class ProductionSnrPanel(QFrame):
             tr(
                 "{endpoint} | {connection} | {recording}",
                 endpoint=self._endpoint,
-                connection=self._connection,
-                recording=self._recording,
+                connection=tr(self._connection),
+                recording=tr(self._recording),
             )
         )
         self._test_label.set_full_text(

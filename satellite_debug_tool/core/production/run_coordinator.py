@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Optional, Sequence
+import math
+import time
+from typing import Callable, Mapping, Optional, Sequence
 
 from PySide6.QtCore import QObject, Signal
 
@@ -34,6 +36,20 @@ class ProductionStepRequest:
 class DeviceStepResult:
     passed: bool
     result: Mapping[str, object]
+    incomplete: bool = False
+
+
+@dataclass(frozen=True)
+class ProductionProgress:
+    test_id: str
+    state: ProductionRunState
+    phase: AttemptPhase
+    ordinal: int
+    total: int
+    elapsed_s: float
+    effective_s: Mapping[str, float]
+    remaining_s: Optional[float]
+    reason: str
 
 
 class ProductionRunCoordinator(QObject):
@@ -46,6 +62,7 @@ class ProductionRunCoordinator(QObject):
 
     step_requested = Signal(object)
     state_changed = Signal(object)
+    progress_changed = Signal(object)
 
     FIRST_FLOW_TEST_IDS = (
         "firmware_verification",
@@ -62,6 +79,8 @@ class ProductionRunCoordinator(QObject):
         *,
         test_ids: Sequence[str] = FIRST_FLOW_TEST_IDS,
         parent: Optional[QObject] = None,
+        clock: Callable[[], float] = time.monotonic,
+        observation_s: Optional[float] = None,
     ) -> None:
         super().__init__(parent)
         self._store = store
@@ -76,6 +95,60 @@ class ProductionRunCoordinator(QObject):
         self._state = ProductionRunState.IDLE
         self._step_index = -1
         self._participants: tuple[str, ...] = ()
+        self._clock = clock
+        if observation_s is not None and (not math.isfinite(observation_s) or observation_s <= 0):
+            raise ValueError("observation duration must be finite and positive")
+        self._observation_s = observation_s
+        self._step_started_at = self._clock()
+        self._step_finished_at: Optional[float] = None
+        self._phase = AttemptPhase.PREPARING
+        self._reason = ""
+        self._effective: dict[str, float] = {}
+        self._observation_started_at: Optional[float] = None
+        self._last_observation_at: Optional[float] = None
+        self._previous_valid: frozenset[str] = frozenset()
+
+    @property
+    def progress(self) -> ProductionProgress:
+        now = self._clock() if self._step_finished_at is None else self._step_finished_at
+        timed = self.current_test_id in {"static_acquisition", "locked_rocking", "power_on_rocking"}
+        remaining = None
+        if timed and self._observation_s is not None:
+            elapsed = 0.0 if self._observation_started_at is None else now - self._observation_started_at
+            remaining = max(0.0, self._observation_s - elapsed)
+        return ProductionProgress(
+            self.current_test_id, self._state, self._phase,
+            self._step_index + 1, len(self._test_ids),
+            max(0.0, now - self._step_started_at),
+            dict(self._effective), remaining, self._reason,
+        )
+
+    def explain_wait(self, reason: str) -> None:
+        self._reason = str(reason)
+        self.progress_changed.emit(self.progress)
+
+    def observe(self, valid_serials: Sequence[str], *, acquired_serials: Sequence[str], maximum_gap_s: float) -> bool:
+        """固定工况窗口持续计时；独立保留每台设备的正 SNR 证据时长。"""
+        self._require_state(ProductionRunState.RUNNING)
+        if self._observation_s is None:
+            raise RuntimeError("observation duration requires a recipe")
+        if not math.isfinite(maximum_gap_s) or maximum_gap_s <= 0:
+            raise ValueError("observation gap must be finite and positive")
+        current = frozenset(valid_serials)
+        acquired = frozenset(acquired_serials)
+        if not acquired.issubset(self._participants) or not current.issubset(acquired):
+            raise ValueError("observation requires known acquired participants")
+        now = self._clock()
+        elapsed = 0.0 if self._last_observation_at is None else now - self._last_observation_at
+        if 0 <= elapsed <= maximum_gap_s:
+            for serial in current & self._previous_valid:
+                self._effective[serial] = min(self._observation_s, self._effective[serial] + elapsed)
+        self._last_observation_at = now
+        self._previous_valid = current
+        self._phase = (AttemptPhase.EFFECTIVE_OBSERVATION
+                       if acquired == frozenset(self._participants) else AttemptPhase.CONVERGING)
+        self.progress_changed.emit(self.progress)
+        return self.progress.remaining_s == 0
 
     @property
     def state(self) -> ProductionRunState:
@@ -116,6 +189,8 @@ class ProductionRunCoordinator(QObject):
 
     def confirm_started(self, *, evidence: Mapping[str, object]) -> None:
         self._require_state(ProductionRunState.ARMED)
+        self._phase = AttemptPhase.CONVERGING
+        self._observation_started_at = self._clock()
         self._transition_current_attempts(
             AttemptStatus.RUNNING,
             phase=AttemptPhase.CONVERGING,
@@ -131,6 +206,7 @@ class ProductionRunCoordinator(QObject):
         if set(results) != set(self._participants):
             raise ValueError("step results must contain every frozen participant exactly once")
         attempts = self._current_attempts(AttemptStatus.RUNNING)
+        self._phase = AttemptPhase.FINISHING
         for serial in self._participants:
             attempt = attempts[serial]
             self._store.transition_attempt(
@@ -141,10 +217,13 @@ class ProductionRunCoordinator(QObject):
             outcome = results[serial]
             payload = dict(attempt.get("result_json") or {})
             payload.update(outcome.result)
-            payload.setdefault("verdict", "pass" if outcome.passed else "fail")
+            payload["effective_observation_s"] = self._effective[serial]
+            payload["step_elapsed_s"] = self.progress.elapsed_s
+            verdict = "incomplete" if outcome.incomplete else "pass" if outcome.passed else "fail"
+            payload.setdefault("verdict", verdict)
             self._store.transition_attempt(
                 int(attempt["attempt_id"]),
-                AttemptStatus.PASS if outcome.passed else AttemptStatus.FAIL,
+                AttemptStatus.INCOMPLETE if outcome.incomplete else AttemptStatus.PASS if outcome.passed else AttemptStatus.FAIL,
                 result=payload,
             )
         if self._step_index + 1 >= len(self._test_ids):
@@ -198,6 +277,14 @@ class ProductionRunCoordinator(QObject):
 
     def _request_next_step(self) -> ProductionStepRequest:
         self._step_index += 1
+        self._step_started_at = self._clock()
+        self._step_finished_at = None
+        self._phase = AttemptPhase.PREPARING
+        self._reason = ""
+        self._effective = {serial: 0.0 for serial in self._participants}
+        self._observation_started_at = None
+        self._last_observation_at = None
+        self._previous_valid = frozenset()
         test_id = self.current_test_id
         attempts = self._attempts_for_test(test_id)
         for serial in self._participants:
@@ -263,7 +350,10 @@ class ProductionRunCoordinator(QObject):
 
     def _set_state(self, state: ProductionRunState) -> None:
         self._state = state
+        if state in {ProductionRunState.COMPLETE, ProductionRunState.INCOMPLETE, ProductionRunState.ABORTED}:
+            self._step_finished_at = self._clock()
         self.state_changed.emit(state)
+        self.progress_changed.emit(self.progress)
 
 
 __all__ = [

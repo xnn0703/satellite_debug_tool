@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly Satellite Terminal Tool snapshot renewal
+OnFailure=satellite-updates-failure@%n.service
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 UTC
+Persistent=yes
+AccuracySec=1min
+Unit=satellite-updates-snapshot.service
+
+[Install]
+WantedBy=timers.target

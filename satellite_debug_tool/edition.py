@@ -5,12 +5,20 @@ from __future__ import annotations
 from enum import Enum
 import json
 from pathlib import Path
+import re
 import sys
+
+APP_ID = "satellite-terminal-tool"
 
 
 class Edition(str, Enum):
     USER = "user"
     OPS = "ops"
+
+
+class ApplicationUpdatePolicy(str, Enum):
+    MANUAL = "manual"
+    ONLINE = "online"
 
 
 def build_edition() -> Edition:
@@ -20,13 +28,42 @@ def build_edition() -> Edition:
     return Edition.OPS
 
 
-def edition_of(settings) -> Edition:
+def edition_of(settings=None) -> Edition:
+    if getattr(sys, "frozen", False):
+        return build_edition()
     return Edition(getattr(settings, "edition", build_edition()))
+
+
+def application_update_policy(settings=None) -> ApplicationUpdatePolicy:
+    """应用更新能力属于构建身份；源码入口显式提供相同 edition。"""
+    return (ApplicationUpdatePolicy.ONLINE if edition_of(settings) is Edition.OPS
+            else ApplicationUpdatePolicy.MANUAL)
+
+
+def application_online_update_enabled(settings=None) -> bool:
+    return application_update_policy(settings) is ApplicationUpdatePolicy.ONLINE
+
+
+def create_build_identity(*, edition: Edition, version: str, platform: str,
+                          architecture: str, build_id: str) -> dict[str, str]:
+    """构建与发布共用一个身份；源码 SHA 与架构均明确记录。"""
+    architecture = {"amd64": "x86_64", "x64": "x86_64", "aarch64": "arm64"}.get(
+        architecture.lower(), architecture.lower())
+    if architecture not in ("x86_64", "arm64"):
+        raise ValueError("build architecture requires x86_64 or arm64")
+    if platform not in ("win", "mac"):
+        raise ValueError("build platform requires win or mac")
+    if re.fullmatch(r"[0-9a-f]{40}", build_id) is None:
+        raise ValueError("build identity requires the exact source commit")
+    if not version:
+        raise ValueError("build identity requires a version")
+    return {"app_id": APP_ID, "edition": Edition(edition).value, "version": version,
+            "platform": platform, "architecture": architecture, "build_id": build_id}
 
 
 def validate_payload_identity(root: Path, edition: Edition, version: str = "") -> None:
     """在替换旧安装前验证唯一载荷中的构建身份。"""
-    from satellite_debug_tool.updater.checker import compare_versions
+    from satellite_debug_tool.versioning import compare_versions
 
     path = root / "_internal" / "satellite_debug_tool" / "build_identity.json"
     if not path.exists():

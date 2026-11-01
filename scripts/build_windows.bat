@@ -1,8 +1,8 @@
 @echo off
 REM One-click build for Windows. Auto-installs pyinstaller if missing.
-REM Prereq: Python 3.9+ installed; current dir is project root (with .venv or system python).
+REM Prereq: Python 3.11 build baseline; current dir is project root (with .venv or system python).
 REM Usage: build_windows.bat user^|ops^|both (default ops)
-REM Output: release\SatelliteDebugTool-EDITION-Windows-ARCH.zip
+REM Output: release\satellite_terminal_manager-EDITION-windows-ARCH-vVERSION.zip
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0.."
@@ -19,19 +19,8 @@ if "%PY%"=="" set "PY=python"
 echo [build_windows] Using Python: %PY%
 "%PY%" --version || goto :err
 
-REM ---- ensure pyinstaller ----
-"%PY%" -c "import PyInstaller" 2>nul
-if errorlevel 1 (
-    echo [build_windows] Installing pyinstaller...
-    "%PY%" -m pip install pyinstaller || goto :err
-)
-
-REM ---- ensure runtime deps ----
-"%PY%" -c "import PySide6, pyqtgraph, serial, numpy, py7zr, psutil, OpenGL" 2>nul
-if errorlevel 1 (
-    echo [build_windows] Installing runtime deps...
-    "%PY%" -m pip install -r satellite_debug_tool\requirements.txt || goto :err
-)
+REM ---- restore the constrained build environment ----
+"%PY%" -m pip install -r requirements\build-windows.txt || goto :err
 
 REM ---- validate translation catalogs and compiled QM ----
 echo [build_windows] Validating TS/QM translation resources...

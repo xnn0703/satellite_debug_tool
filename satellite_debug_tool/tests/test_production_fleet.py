@@ -752,3 +752,61 @@ def test_participant_freeze_requires_created_evidence_recording() -> None:
         controller.freeze_batch_participants(("uid:001",))
 
     controller.stop()
+
+
+def test_cached_offline_device_defers_batch_recording_until_fresh_identity(tmp_path):
+    controller = _controller()
+    endpoint = ('192.168.1.12', 4004)
+    controller._on_datagram(_datagram(endpoint, _identity('OFFLINE-CREATE'), 1))
+    session = controller.sessions()[0]
+    session.runtime.refresh_presence(now_monotonic=20.0)
+    assert session.runtime.identity_authorization_scope is None
+    try:
+        assert controller.arm_batch_recording('OFFLINE-BATCH', tmp_path / 'batch')
+        assert not session.recording_armed
+        # 上电后的普通遥测不能替代当前代际身份授权。
+        controller._on_datagram(_datagram(endpoint, _fast_snr(2, 12.0), 20_000_000_000))
+        assert not session.recording_armed
+        frame = _identity('OFFLINE-CREATE', timestamp=3)
+        controller._on_datagram(_datagram(endpoint, frame, 20_000_000_001))
+        assert session.recording_armed
+        assert session._recorder_lease is not None
+        paths = controller.finalize_recordings()
+        assert paths[endpoint].read_bytes().count(frame) == 1
+    finally:
+        controller.stop()
+
+
+def test_live_authorized_device_recording_failure_remains_a_failure(tmp_path, monkeypatch):
+    controller = _controller()
+    endpoint = ('192.168.1.12', 4004)
+    controller._on_datagram(_datagram(endpoint, _identity('LIVE-IO-FAIL'), 1))
+    session = controller.sessions()[0]
+    assert session.runtime.capability_identity_ready(session.attachment.capability)
+    monkeypatch.setattr(session, 'arm_recording', lambda *args: False)
+    errors = []
+    controller.error.connect(errors.append)
+    try:
+        assert not controller.arm_batch_recording('IO-FAIL', tmp_path)
+        assert errors and 'cannot create evidence' in errors[-1]
+    finally:
+        controller.stop()
+
+
+def test_cached_device_first_identity_is_recorded_when_shared_runtime_parses_first(tmp_path):
+    controller = _controller()
+    endpoint = ('192.168.1.12', 4004)
+    controller._on_datagram(_datagram(endpoint, _identity('SHARED-RESUME'), 1))
+    session = controller.sessions()[0]
+    session.runtime.refresh_presence(now_monotonic=20.0)
+    assert controller.arm_batch_recording('SHARED-BATCH', tmp_path / 'batch')
+    frame = _identity('SHARED-RESUME', timestamp=2)
+    datagram = _datagram(endpoint, frame, 20_000_000_000)
+    try:
+        session.runtime.feed_datagram(datagram)  # Customer/shared Runtime 先消费同一报文。
+        controller._on_datagram(datagram)
+        assert session.recording_armed
+        paths = controller.finalize_recordings()
+        assert paths[endpoint].read_bytes().count(frame) == 1
+    finally:
+        controller.stop()

@@ -1,350 +1,273 @@
-"""updater 独立可执行入口（M11 P6）。
+"""独立 Windows updater：可信输入、同盘准备、可恢复切换及新版健康握手。"""
 
-由主程序触发：主程序下载完发布资产后，调 `subprocess.Popen` 把本可执行启动起来，
-然后退出自己。本可执行：
-  1. 等主进程退出（psutil.wait_for_pid，无则盲等 3s）
-  2. self-relocate 到 OS 临时目录（避免被替换流程删掉自身）
-  3. 调 Applier.apply() 完成 merge + extract + swap
-  4. 启动新版主程序（mac: `open <install>.app`；win: 直接 spawn 新 exe）
-  5. 退出自身
-
-命令行：
-    updater --pid <PID> --install-dir <PATH> --volumes <PATH1> <PATH2> ...
-            --workdir <PATH> [--restart-cmd <CMD>] [--log <PATH>]
-
-退出码：
-    0  成功
-    1  通用失败
-    2  超时（主进程一直没退出）
-    3  替换失败（已尝试 rollback）
-"""
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
-import shutil
+from pathlib import Path
+import secrets
 import subprocess
 import sys
-import tempfile
 import time
-from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from satellite_debug_tool.updater.status import write_update_status
-
-
-# ---------- 日志 ----------
-
-def _setup_logging(log_path: Optional[Path] = None) -> None:
-    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stderr)]
-    if log_path:
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
-        except OSError:
-            pass
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [updater] %(message)s",
-        handlers=handlers,
-    )
+from satellite_debug_tool.package_names import WINDOWS_EXECUTABLE
+from satellite_debug_tool.updater.applier import Applier, PayloadContract
+from satellite_debug_tool.updater.handoff import UpdateLaunchRequest, load_update_launch_request, sha256_file
+from satellite_debug_tool.updater.health import HEALTH_ENV, HEALTH_SCHEMA, StartupHealthContext, validate_health_message
+from satellite_debug_tool.updater.recovery import (
+    InstallJournal, InstallationLock, RecoveryError, recover_installation,
+    register_login_recovery, remove_login_recovery, require_recovered_installation,
+)
+from satellite_debug_tool.updater.status import write_atomic_json, write_update_status
 
 
 log = logging.getLogger("updater")
 
 
-def _publish_status(path: Path, state: str, **details) -> None:
-    try:
-        write_update_status(path, state, **details)
-    except OSError as exc:
-        log.error("Could not persist updater state %s: %s", state, exc)
+def _setup_logging(log_path: Optional[Path] = None) -> None:
+    handlers = [logging.StreamHandler(sys.stderr)]
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [updater] %(message)s",
+                        handlers=handlers)
 
 
 def _show_windows_failure(stage: str, detail: str, log_path: Path) -> None:
-    if not sys.platform.startswith("win"):
+    if sys.platform != "win32":
         return
     try:
         import ctypes
-
-        ctypes.windll.user32.MessageBoxW(
-            None,
-            f"自动更新失败\n\n失败阶段：{stage}\n原因：{detail}\n\n日志：{log_path}",
-            "SatelliteDebugTool Updater",
-            0x10,
-        )
+        ctypes.windll.user32.MessageBoxW(None,
+            f"自动更新失败\n\n阶段：{stage}\n原因：{detail}\n\n日志：{log_path}",
+            "Satellite Terminal Manager Updater", 0x10)
     except Exception:
-        pass
+        log.exception("Could not display update failure dialog")
 
-
-# ---------- 等主进程退出 ----------
 
 def wait_for_pid(pid: int, timeout: float = 30.0) -> bool:
-    """等 pid 对应的进程退出。psutil 优先；不可用时回退 OS 探测；都不行就盲等 3s。"""
+    """进程退出是明确证据；缺少 psutil 时显式失败，不用盲等推断。"""
+    import psutil
     try:
-        import psutil
-    except ImportError:
-        log.warning("psutil is not installed; waiting 3 seconds")
-        time.sleep(3.0)
-        return True
-
-    try:
-        p = psutil.Process(pid)
+        process = psutil.Process(pid)
     except psutil.NoSuchProcess:
-        log.info("PID %s no longer exists", pid)
         return True
-
-    log.info("Waiting for PID %s to exit (timeout=%ss)", pid, timeout)
     try:
-        p.wait(timeout=timeout)
-        log.info("PID %s exited", pid)
+        process.wait(timeout=timeout)
         return True
     except psutil.TimeoutExpired:
-        log.error("Timed out waiting for PID %s", pid)
         return False
 
 
-# ---------- self-relocate ----------
+def require_installation_idle(install_dir: Path) -> None:
+    """同目录的其他主程序或运行库子进程仍存活时，保留原安装和配置。"""
+    import psutil
+    installation = Path(install_dir).resolve()
+    for process in psutil.process_iter(attrs=["pid", "exe"]):
+        executable = process.info.get("exe")
+        if executable and installation in Path(executable).resolve().parents:
+            raise RecoveryError(f"another installed application process is still running: PID {process.info['pid']}")
 
-def _is_running_from_install_dir(install_dir: Path) -> bool:
-    """当前 updater 可执行是否就在 install_dir 内？是 → 需要 self-relocate。"""
+
+def _start_trial(request: UpdateLaunchRequest, context: StartupHealthContext):
+    executable = request.install_dir / WINDOWS_EXECUTABLE
+    if not executable.is_file():
+        raise RecoveryError("installed executable is missing")
+    health_request = context.directory / "health-request.json"
+    write_atomic_json(health_request, {
+        "schema": HEALTH_SCHEMA, "transaction_id": context.transaction_id,
+        "target_version": context.target_version, "token": context.token,
+        "timeout_s": context.timeout_s,
+    })
+    environment = dict(os.environ)
+    environment[HEALTH_ENV] = str(health_request)
+    options = {"close_fds": True, "env": environment, "cwd": str(request.transaction_dir)}
+    if sys.platform == "win32":
+        options["creationflags"] = 0x00000008
+    else:
+        options["start_new_session"] = True
+    return subprocess.Popen([str(executable)], **options)
+
+
+def _wait_for_health(process, context: StartupHealthContext, timeout: float) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RecoveryError("new application exited before health confirmation")
+        try:
+            message = json.loads(context.receipt_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            time.sleep(0.05)
+            continue
+        if not validate_health_message(message, context, pid=process.pid, state="ready"):
+            raise RecoveryError("new application health receipt identity differs from the transaction")
+        return message
+    raise RecoveryError("new application health receipt timed out")
+
+
+def _verify_inputs(request: UpdateLaunchRequest) -> dict:
+    from satellite_debug_tool.updater.payload import read_manifest
+    if sha256_file(request.volumes[0]) != request.package_sha256:
+        raise RecoveryError("downloaded package changed after verification")
+    if sha256_file(request.tree_manifest) != request.tree_manifest_sha256:
+        raise RecoveryError("target file manifest changed after verification")
+    manifest = read_manifest(request.tree_manifest)
+    identity = manifest["identity"]
+    if (identity["edition"] != "ops" or identity["platform"] != "windows"
+            or str(identity["version"]).lstrip("v") != request.target_version.lstrip("v")):
+        raise RecoveryError("target tree identity differs from the installation request")
+    installed = json.loads((request.install_dir / "_internal/satellite_debug_tool/build_identity.json").read_text(encoding="utf-8"))
+    for field in ("app_id", "edition", "architecture"):
+        if installed.get(field) != identity[field]:
+            raise RecoveryError(f"installed {field} differs from the trusted target")
+    if {"win": "windows"}.get(installed.get("platform"), installed.get("platform")) != identity["platform"]:
+        raise RecoveryError("installed platform differs from the trusted target")
+    return manifest
+
+
+def execute_update(request: UpdateLaunchRequest, *, wait_timeout: float = 30.0,
+                   health_timeout: float = 30.0) -> int:
+    """可测事务入口；CLI 另外限定正式 Windows 自动安装合同。"""
+    journal = None
+    trial = None
+    phase = "waiting_for_app_exit"
+    lock = InstallationLock(request.install_dir)
+    acquired = False
     try:
-        my_path = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
-        install_resolved = install_dir.resolve()
-        return install_resolved in my_path.parents or my_path == install_resolved
-    except OSError:
-        return False
+        lock.__enter__()
+        acquired = True
+        require_recovered_installation(request.install_dir)
+        if getattr(sys, "frozen", False) and Path(sys.executable).resolve() != request.updater_executable:
+            raise RecoveryError("updater must run from its persistent transaction copy")
+        write_update_status(request.status_path, phase, transaction_id=request.transaction_id,
+                            target_version=request.target_version, install_dir=str(request.install_dir))
+        if not wait_for_pid(request.main_pid, wait_timeout):
+            write_update_status(request.status_path, "failed", stage=phase,
+                                detail="main application is still running")
+            return 2
+        require_installation_idle(request.install_dir)
+        phase = "verifying"
+        manifest = _verify_inputs(request)
+        request.work_dir.mkdir(parents=True, exist_ok=False)
 
+        def progress(stage: str, value: float) -> None:
+            log.info("%s %.3f", stage, value)
 
-def self_relocate_and_relaunch(install_dir: Path, argv: List[str]) -> None:
-    """把 updater 复制到 OS 临时目录并重新启动。
-
-    updater 位于 install_dir 内且为冻结程序时执行搬迁并启动临时副本。
-    """
-    if not _is_running_from_install_dir(install_dir):
-        return
-    if not getattr(sys, "frozen", False):
-        # 开发模式跑 python -m，不需要 relocate
-        return
-
-    src_exe = Path(sys.executable).resolve()
-    src_dir = src_exe.parent
-    tmp_root = Path(tempfile.mkdtemp(prefix="satellite_updater_"))
-    runtime_dir = src_dir / "_internal"
-    if runtime_dir.is_dir():
-        # 兼容旧 onedir updater。
-        dst_dir = tmp_root / src_dir.name
-        log.info("self-relocate onedir: %s -> %s", src_dir, dst_dir)
-        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
-        dst_exe = dst_dir / src_exe.name
-    else:
-        # 当前发行使用 onefile，避免把 Python 运行目录嵌入主 .app。
-        dst_exe = tmp_root / src_exe.name
-        log.info("self-relocate onefile: %s -> %s", src_exe, dst_exe)
-        shutil.copy2(src_exe, dst_exe)
-
-    # 临时副本以明确的 relocated 状态启动。
-    new_argv = [str(dst_exe)] + argv + ["--relocated"]
-    log.info(f"relaunch: {new_argv}")
-    if sys.platform.startswith("win"):
-        # Relocated updater owns a visible progress console.
-        subprocess.Popen(new_argv, creationflags=0x00000010, close_fds=True)
-    else:
-        subprocess.Popen(new_argv, start_new_session=True, close_fds=True)
-    sys.exit(0)
-
-
-# ---------- 启动新版主程序 ----------
-
-def restart_app(install_dir: Path, restart_cmd: Optional[str] = None) -> Path:
-    """升级完成后启动新版主程序。"""
-    if restart_cmd:
-        log.info("Using user-specified restart command: %s", restart_cmd)
-        subprocess.Popen(restart_cmd, shell=True, close_fds=True)
-        return install_dir
-
-    if sys.platform.startswith("darwin") and install_dir.suffix == ".app":
-        log.info(f"open .app: {install_dir}")
-        subprocess.Popen(["open", str(install_dir)], close_fds=True)
-        return install_dir
-
-    # Windows / Linux：找 install_dir 下的同名可执行（onedir 模式约定）
-    name = install_dir.name
-    candidates = [
-        install_dir / f"{name}.exe",
-        install_dir / name,
-        install_dir / "SatelliteDebugTool.exe",
-        install_dir / "SatelliteDebugTool",
-    ]
-    for c in candidates:
-        if c.exists():
-            log.info("Launching: %s", c)
-            if sys.platform.startswith("win"):
-                subprocess.Popen([str(c)], creationflags=0x00000008, close_fds=True)
-            else:
-                subprocess.Popen([str(c)], start_new_session=True, close_fds=True)
-            return c
-    raise OSError(f"No launchable executable found in install_dir={install_dir}")
-
-
-# ---------- CLI ----------
-
-def main(argv: Optional[List[str]] = None) -> int:
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    parser = argparse.ArgumentParser(description="satellite_debug_tool updater")
-    parser.add_argument("--pid", type=int, required=True,
-                        help="PID of the main application to wait for")
-    parser.add_argument("--install-dir", type=Path, required=True,
-                        help="Target install directory (macOS .app or Windows onedir)")
-    parser.add_argument("--volumes", type=Path, nargs="+", required=True,
-                        help="Ordered list of 7z volume files")
-    parser.add_argument("--workdir", type=Path, required=True,
-                        help="Temporary work directory for merge and extraction")
-    parser.add_argument("--restart-cmd", type=str, default=None,
-                        help="Restart command after update (defaults to the platform install target)")
-    parser.add_argument("--log", type=Path, default=None,
-                        help="Log file path")
-    parser.add_argument("--status", type=Path, required=True,
-                        help="Persistent update transaction status path")
-    parser.add_argument("--target-version", type=str, required=True,
-                        help="Release version being installed")
-    parser.add_argument("--wait-timeout", type=float, default=30.0,
-                        help="Seconds to wait for the main process to exit")
-    parser.add_argument("--relocated", action="store_true",
-                        help="Internal: updater is running from its relocated runtime")
-    parser.add_argument("--edition", choices=("user", "ops"), default="ops")
-    args = parser.parse_args(arguments)
-
-    _setup_logging(args.log)
-
-    # install_dir 中的冻结 updater 先搬迁到临时运行目录。
-    if not args.relocated:
-        self_relocate_and_relaunch(args.install_dir, arguments)
-
-    # 等主进程退出
-    _publish_status(
-        args.status,
-        "waiting_for_app_exit",
-        target_version=args.target_version,
-        install_dir=str(args.install_dir),
-        log_path=str(args.log or ""),
-    )
-    if not wait_for_pid(args.pid, args.wait_timeout):
-        detail = "Main process did not exit before the timeout; update aborted"
-        log.error(detail)
-        _publish_status(args.status, "failed", stage="waiting_for_app_exit", detail=detail)
-        _show_windows_failure(
-            "waiting_for_app_exit",
-            detail,
-            args.log or args.status.parent / "updater.log",
-        )
-        return 2
-
-    # 应用更新
-    from satellite_debug_tool.updater.applier import (
-        Applier,
-        ApplyError,
-        PayloadContract,
-    )
-
-    stage_states = {
-        "merge": "merging",
-        "extract": "extracting",
-        "extracting": "extracting",
-        "validate": "validating_payload",
-        "swap": "swapping",
-    }
-    current_state = ""
-
-    def on_progress(stage: str, value: float) -> None:
-        nonlocal current_state
-        state = stage_states[stage]
-        if stage == "extracting":
-            log.info("extracting elapsed %.1fs", value)
+        applier = Applier(on_progress=progress)
+        contract = PayloadContract(WINDOWS_EXECUTABLE, "updater.exe",
+                                   edition="ops", target_version=request.target_version)
+        phase = "preparing"
+        if request.prepared_payload is None:
+            extracted = applier.extract_to(request.volumes[0], request.work_dir / "extracted",
+                max_expanded_bytes=sum(int(item["size"]) for item in manifest["files"]))
+            payload = applier.resolve_payload_root(extracted, contract)
         else:
-            log.info("%s %.1f%%", stage, value * 100.0)
-        if state != current_state:
-            current_state = state
-            _publish_status(
-                args.status,
-                state,
-                target_version=args.target_version,
-                install_dir=str(args.install_dir),
-            )
-
-    try:
-        applier = Applier(on_progress=on_progress)
-        contract = PayloadContract(
-            executable_name="SatelliteDebugTool.exe",
-            updater_name="updater.exe",
-            edition=args.edition,
-            target_version=args.target_version,
-        )
-        result = applier.apply(
-            args.volumes,
-            args.install_dir,
-            args.workdir,
-            payload_contract=contract,
-        )
-        log.info("Update completed; previous version backup: %s", result.backup_dir)
-    except ApplyError as e:
-        log.error("Update failed: %s", e)
-        _publish_status(
-            args.status,
-            "failed",
-            stage=current_state or "applying",
-            error_code=e.code,
-            detail=str(e),
-        )
-        _show_windows_failure(
-            current_state or "applying",
-            str(e),
-            args.log or args.status.parent / "updater.log",
-        )
+            payload = request.prepared_payload
+        staging = applier.prepare_payload(request.install_dir, payload, request.transaction_id,
+                                          tree_manifest=manifest, contract=contract)
+        journal = InstallJournal.create(request.transaction_dir / "journal.json",
+            transaction_id=request.transaction_id, install_dir=request.install_dir,
+            staging_dir=staging, updater_executable=request.updater_executable,
+            target_version=request.target_version)
+        journal.capture_settings(request.settings_directory)
+        phase = "registering_recovery"
+        register_login_recovery(request.updater_executable, journal.path, request.install_dir)
+        journal.save("recovery_ready")
+        phase = "swapping"
+        result = applier.install_prepared(journal)
+        phase = "waiting_for_health"
+        context = StartupHealthContext(request.transaction_dir, request.transaction_id,
+            request.target_version, secrets.token_hex(32), request.settings_directory,
+            health_timeout + 10.0)
+        journal.save("trial_start_intent", configuration_trial_started=True)
+        trial = _start_trial(request, context)
+        import psutil
+        created = psutil.Process(trial.pid).create_time()
+        journal.save("trial_started", trial_pid=trial.pid, trial_created=created)
+        write_update_status(request.status_path, phase, transaction_id=request.transaction_id,
+                            target_version=request.target_version, backup_dir=str(result.backup_dir))
+        _wait_for_health(trial, context, health_timeout)
+        # journal 是提交事实；其持久化先于允许主程序操作设备。
+        journal.save("committed")
+        commit = context.message("committed")
+        commit["pid"] = trial.pid
+        write_atomic_json(context.commit_path, commit)
+        write_update_status(request.status_path, "completed", transaction_id=request.transaction_id,
+                            target_version=request.target_version, install_dir=str(result.install_dir),
+                            backup_dir=str(result.backup_dir), application_pid=trial.pid)
+        try:
+            remove_login_recovery(request.install_dir)
+        except OSError:
+            log.exception("Completed installation retained its login cleanup entry")
+        return 0
+    except Exception as exc:
+        log.exception("Update failed during %s", phase)
+        recovery = "installation_preserved"
+        trial_stopped = True
+        if trial is not None and (journal is None or journal.data["state"] != "committed"):
+            try:
+                if trial.poll() is None:
+                    trial.terminate()
+                    try:
+                        trial.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        trial.kill()
+                        trial.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired) as stop_error:
+                trial_stopped = False
+                recovery = "recovery_required"
+                exc = RecoveryError(f"{exc}; trial process stop: {stop_error}")
+        if journal is not None and trial_stopped:
+            try:
+                recovery = journal.rollback()
+            except Exception as recovery_error:
+                recovery = "recovery_required"
+                log.exception("Update recovery requires the persistent entry")
+                exc = RecoveryError(f"{exc}; recovery: {recovery_error}")
+        write_update_status(request.status_path, "failed", stage=phase, detail=str(exc),
+                            recovery=recovery, transaction_id=request.transaction_id,
+                            journal=str(journal.path) if journal is not None else "")
+        _show_windows_failure(phase, str(exc), request.log_path)
         return 3
+    finally:
+        if acquired:
+            lock.__exit__(None, None, None)
 
-    # 启动新版
-    _publish_status(
-        args.status,
-        "restarting",
-        target_version=args.target_version,
-        install_dir=str(args.install_dir),
-        backup_dir=str(result.backup_dir),
-    )
-    try:
-        launched = restart_app(args.install_dir, args.restart_cmd)
-    except OSError as exc:
-        log.error("Updated files are installed but restart failed: %s", exc)
-        _publish_status(
-            args.status,
-            "failed",
-            stage="restarting",
-            detail=str(exc),
-            backup_dir=str(result.backup_dir),
-        )
-        _show_windows_failure(
-            "restarting",
-            str(exc),
-            args.log or args.status.parent / "updater.log",
-        )
-        return 1
 
-    _publish_status(
-        args.status,
-        "completed",
-        target_version=args.target_version,
-        install_dir=str(args.install_dir),
-        backup_dir=str(result.backup_dir),
-        launched=str(launched),
-    )
-
-    # 清理 workdir（保留 backup_dir 让用户验证）
-    try:
-        shutil.rmtree(args.workdir, ignore_errors=True)
-    except OSError:
-        pass
-
-    return 0
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Satellite Terminal Manager Updater")
+    intent = parser.add_mutually_exclusive_group(required=True)
+    intent.add_argument("--request", type=Path, help="Frozen verified installation request")
+    intent.add_argument("--recover", type=Path, help="Persistent interrupted-install journal")
+    parser.add_argument("--wait-timeout", type=float, default=30.0)
+    parser.add_argument("--health-timeout", type=float, default=30.0)
+    args = parser.parse_args(argv)
+    if sys.platform != "win32":
+        raise SystemExit("automatic application installation currently supports Windows ops")
+    if args.recover:
+        args.recover = args.recover.resolve()
+        # 登录恢复和手动恢复都先释放继承的安装目录占用，再允许 rename。
+        os.chdir(args.recover.parent)
+        _setup_logging(args.recover.parent / "updater.log")
+        try:
+            result = recover_installation(args.recover)
+            journal = InstallJournal.load(args.recover)
+            write_update_status(args.recover.parent / "update-status.json", result,
+                                application_phase=journal.data.get("application_phase", "closed"),
+                                transaction_id=journal.data["transaction_id"])
+            return 0
+        except Exception as exc:
+            log.exception("Recovery failed")
+            _show_windows_failure("recovery", str(exc), args.recover.parent / "updater.log")
+            return 3
+    request = load_update_launch_request(args.request)
+    os.chdir(request.transaction_dir)
+    _setup_logging(request.log_path)
+    return execute_update(request, wait_timeout=max(0.1, args.wait_timeout),
+                          health_timeout=max(0.1, args.health_timeout))
 
 
 if __name__ == "__main__":

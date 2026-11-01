@@ -1,187 +1,63 @@
-# 发版 SOP
+# 卫通终端管理工具发行 SOP
 
-> 适用：satellite_debug_tool v1.0+
-> 发布目标：GitHub（2026-10-26 用户确认）。源码、标签与 Release 均使用 `github` 远端。
-> 关联：[../BUILDING.md](../BUILDING.md) / [M11_plan.md](M11_plan.md)
+适用 M52/M53 发行链路。本轮规划 v1.9.0；本文件描述操作流程，不表示本轮已经发布成功。源码与 tag 使用 GitHub `github` 远端，Windows 使用 GitHub Actions，Mac 使用本地 Python 3.11，完整包和 ops 可信更新由阿里云 ECS HTTPS 服务分发。
 
-## 一图流
+## 版本与迁移合同
 
-```
-改版本号 → commit → 打 tag → push GitHub tag
-                            ↓
-                GitHub Actions 触发 build.yml
-                            ↓
-   prepare-release (解析 tag)
-              ↓
-   build-windows (user/ops → 两个 7z → 验证 artifact)
-              ↓
-   publish-windows (两版成功后创建草稿，核对资产后发布)
-              ↓
-   完成 ✅  https://github.com/xnn0703/satellite_debug_tool/releases
-                              ↓
-   （可选）本机出 mac 包  ./scripts/build_macos.sh both
-                              ↓
-   release/SatelliteDebugTool-<user|ops>-macOS-<arch>.zip → 自行分发
-```
+- 版本唯一来源是 `satellite_debug_tool/__init__.py.__version__`；tag 必须为 `v<version>`。user/ops、Windows/macOS 四包使用同一干净源码 SHA。
+- 文件名称统一由 `satellite_debug_tool/package_names.py` 定义。Windows 主程序为 `SatelliteTerminalManager.exe`，两版目录为 `SatelliteTerminalManagerUser`、`SatelliteTerminalManagerOps`；Mac 使用对应同名 app。
+- 完整包名为 `satellite_terminal_manager-<user|ops>-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`。历史 <=1.8.1 包保持原样，首次人工安装完整 v1.9.0 后进入新站合同。
+- 内部 Python 包、app/repo 信任身份、bundle identifier、配置目录和设备固件认证域保持原合同。
+- user 使用人工完整包交付；ops 使用 TUF 签名更新。Windows 支持自动安装，Mac 校验下载后由人员退出旧程序并替换 app。首个正式可信版本没有上一基线，只发布完整包。
 
-**注**：mac 不走 CI（PyInstaller .app 与 7z symlink 兼容性问题难修），
-本地脚本一键打包，产物 zip 分发给 mac 用户即可。
-mac 平台不走自动升级链路（updater 仍嵌入，但 GitHub Release 暂不提供 mac asset）。
+## 准备与提交
 
-> **更新源迁移提示**：`v1.0.1` 及更早版本只查询 Gitee。首次迁移到 `v1.1.0`
-> 需要手动下载 GitHub Release；从 `v1.1.0` 起，后续版本可继续通过应用内更新获取。
-
-## 前置检查（每次发版前）
-
-- [ ] 全套 pytest 通过：`PYTHONPATH=. python3 -m pytest satellite_debug_tool/tests -q`
-- [ ] 两版本地启动与退出：`python3 -m satellite_debug_tool.main_user`、`python3 -m satellite_debug_tool.main`
-- [ ] 本地能打包：`./scripts/build_macos.sh both`（mac）或 `scripts\build_windows.bat both`（win）
-- [ ] `doc/v<version>_release_notes.md` 已写新版本变更；发布 job 直接读取该文件作为 Release 正文
-- [ ] GitHub Actions 的 `contents: write` 权限可用
-
-## 标准发版流程
-
-### 1. 决定版本号
-
-遵循 [SemVer](https://semver.org/lang/zh-CN/)：
-
-| 改动类型 | 版本号变化 | 例子 |
-|---------|----------|------|
-| 不兼容 API 修改 / 大功能 | MAJOR | 1.x.x → 2.0.0 |
-| 兼容功能新增 | MINOR | 1.0.x → 1.1.0 |
-| 兼容问题修复 | PATCH | 1.0.0 → 1.0.1 |
-| 预发版本 | -beta.N / -rc.N | 1.1.0-rc.1 |
-
-### 2. 改版本号
-
-**单一来源**：`satellite_debug_tool/__init__.py.__version__`
+先完成 plan/验收文档、开发记录、发布说明和本轮差异审计。全量 pytest、翻译 check、两版源码启动与退出通过后，按用户授权提交本轮功能和版本变更；仅暂存已审计范围。
 
 ```bash
-vim satellite_debug_tool/__init__.py
-# 改 __version__ = "1.1.0"
+PYTHONPATH=. .venv/bin/python -m pytest satellite_debug_tool/tests -q
+.venv/bin/python scripts/update_translations.py check
+git status --short
+git diff --check
 ```
 
-mac .app `Info.plist` 的 CFBundleVersion 会由 spec 自动读这个值，**无需重复修改**。
+确认单一版本源、发布说明及干净 commit 后创建并推送对应 tag，例如本轮 `v1.9.0`。已公开的版本和标签保持不可变，修复使用新版本。
 
-### 3. commit + tag + push
+## Windows 候选
+
+推送 tag 或使用 workflow_dispatch 指定已有 tag，`.github/workflows/build.yml` 精确 checkout tag SHA。Windows Runner 使用 Python 3.11 构建 user/ops，两版均完成测试、冻结 smoke、资源/身份/归档校验后，通过受保护 `release-candidate` environment 自动上传 ECS 暂存区。
+
+检查 Actions 两版结果、smoke artifact、候选 receipt 的版本/edition/平台/架构/SHA 和摘要。普通分支/PR 只生成 artifact。工作流只上传候选，不创建 GitHub Release，不持有正式签名私钥。
+
+## macOS 候选
+
+在本机干净源码、Python 3.11 环境运行正式发行入口。以下占位路径指向仓库外部署配置、known_hosts 与上传身份，不将私钥写入仓库：
 
 ```bash
-git add satellite_debug_tool/__init__.py
-git commit -m "chore: bump version to 1.1.0"
-git push github master
-
-# tag 名必须 = v + __version__
-git tag v1.1.0
-git push github v1.1.0    # 触发 GitHub Release
+.venv/bin/python scripts/release_macos.py \
+  --source-commit <完整源码SHA> --version 1.9.0 --edition both \
+  --release-id <本次唯一发行ID> --config <部署配置JSON> \
+  --known-hosts <known_hosts文件> --identity-file <上传身份私钥>
 ```
 
-### 4. 监控 CI
+脚本执行构建、签名验证、冻结 smoke、候选校验及自动上传；同一 SHA 的已完成候选可根据 receipt 复用。普通 `./scripts/build_macos.sh both` 仅用于本地构建，不替代候选上传流程。
 
-打开 https://github.com/xnn0703/satellite_debug_tool/actions 看进度：
-- prepare-release（30s）
-- build-windows（user/ops 两项构建及身份检查）
-- publish-windows（两版成功后共同生成草稿，验收后发布）
+spec 声明 macOS `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。ad-hoc 签名校验与原生系统兼容性分别记录，不声明已通过 Apple 公证。
 
-中间任一失败 → 依据失败证据修复。仅尚未公开的发行标签按下节重建；已发布版本使用新的修复版本号。
+## 正式签名与公开下载
 
-### 5. 验收
+四份候选完成归档 CRC、SHA-256 和身份核对后，发布人员使用仓库外签名材料执行 ops 晋升。`scripts/promote_release.py` 的 `fetch → prepare → commit` 分别取得候选、离线签名生成发布 bundle、提交服务器。调用前以该脚本 `--help` 确认必填参数；prepare 必须冻结 `--expected-commit`、目标系统 `--min-os`、正式通道和发布说明，首轮通过 `--initial` 建立正式基线。
 
-- [ ] GitHub Release 同时包含用户版 `satellite_terminal_tool-user-windows-v<version>.7z` 与运维版 `satellite_debug_tool-win-v<version>.7z`
-- [ ] 两包构建身份均匹配 tag，用户包包含完整 Shell，旧全量更新器只匹配 ops 资产
-- [ ] Windows user/ops 冻结离屏启动烟测及其 smoke artifact 均通过，版本/总览/Shell/退出一致
-- [ ] 下载并解压 `.7z` 后目录结构完整
-- [ ] 老版本启动后 24h 内或手动点 🔄 检查更新 → 弹"发现新版"对话框
-- [ ] 两版分别完成同版更新 → 下载 → 重启 → 回读 edition 与版本；交叉包在替换前被拒绝
+ops 晋升 stable 时，TUF target 的 app/repo/edition/平台/架构/版本/源 SHA 必须与候选一致。先提交不可变 target 和版本元数据，最后提交 timestamp，并验证公开 HTTPS 元数据的签名、有效期与包摘要。首轮没有上一基线，不生成或宣称差量更新。
 
-## tag 删除 / 重发流程
+user 完整包公开到服务器下载目录，保留候选身份与摘要，不加入 ops 更新渠道。四份完整包均提供 `/downloads/v1.9.0/<完整归档文件名>` 直链，附 SHA256SUMS 和验证记录；交付采用服务器链接，不把包另存至本机 Downloads。提供直链前实际检查 HTTPS 下载、归档 CRC、包内身份和 SHA-256。
 
-CI 失败且版本尚未公开时重发（已发布标签保持不可变）：
+## 交付证据
 
-```bash
-# 删本地 tag
-git tag -d v1.1.0
+发行记录逐包保存：版本、edition、系统/架构、文件名、大小、SHA-256、源码 SHA、候选 receipt、CI/本机构建与冻结 smoke 结果。四包与 tag SHA 一致、公开下载及 ops 元数据验证完成后，才报告本轮发布完成并提供直链。
 
-# 删远程 tag
-git push github :refs/tags/v1.1.0
+user 包应裁剪应用 updater 和在线源；ops 更新应验证载荷、当前安装与健康回执。Windows 实机升级、原生显卡渲染、设备固件 OTA、RF 与夹具动作独立验收；构建和冻结 smoke 成功不能代替这些结论。
 
-# 修问题后重新 tag + push
-git tag v1.1.0
-git push github v1.1.0
-```
+候选上传失败依据 receipt、上传日志及远端状态调查；晋升失败依据发布 bundle、服务器发布锁和 journal 调查。正式签名与上传身份分开管理，恢复发布锁前先确认旧发布进程已经停止。
 
-## 预发版本（rc / beta）
-
-```bash
-git tag v1.1.0-rc.1
-git push github v1.1.0-rc.1
-```
-
-升级机制中 pre-release 视为旧版（compare_versions：`v1.1.0-rc.1 < v1.1.0`），
-正式版发布后用户能自动升上来。
-
-如果只想给少数人测，可以**不 push tag**，改用 workflow_dispatch 在 Actions 页手动触发，
-填 `v1.1.0-rc.1` 作为 tag。
-
-## 紧急修复（hotfix）
-
-```bash
-# 1. 从上次 tag check out 一个 hotfix 分支
-git checkout -b codex/hotfix-1.0.1 v1.0.0
-
-# 2. 改 bug + bump 版本号
-vim satellite_debug_tool/...
-vim satellite_debug_tool/__init__.py  # → "1.0.1"
-
-# 3. commit + tag + push
-git commit -am "fix: 紧急修复 XXX"
-git push github codex/hotfix-1.0.1
-git tag v1.0.1
-git push github v1.0.1
-
-# 4. CI 自动发版
-
-# 5. master merge hotfix
-git checkout master
-git merge --no-ff codex/hotfix-1.0.1
-git push github master
-```
-
-## 常见问题
-
-**Q: tag 推上去 CI 没触发？**
-A: 检查 `.github/workflows/build.yml` `on.push.tags` 是否包含 `v*`。tag 名必须 `v` 开头。
-
-**Q: GitHub Release 上传失败 "Resource not accessible by integration"？**
-A: 检查 workflow 顶层是否保留 `permissions: contents: write`，并确认仓库 Actions 权限允许写入。
-
-**Q: PyInstaller 打包后启动崩 "ImportError"？**
-A: 通常是依赖没在 `satellite_debug_tool.spec` `hiddenimports` 里。
-本地 `pyinstaller --noconfirm satellite_debug_tool.spec && ./dist/SatelliteDebugTool/SatelliteDebugTool`
-复现，按错误信息加 hidden import。
-
-**Q: `.7z` 下载后无法解压？**
-A: 检查 spec 里 `-mf=off` 没有被去掉（关闭 BCJ2 滤器，保 py7zr / The Unarchiver 兼容）。
-
-**Q: 自动更新包应使用什么目录结构？**
-A: Windows Release 的 `.7z` 必须直接以本版目录内容作为归档根：用户版 `dist/user/SatelliteTerminalToolUser/`，运维版 `dist/ops/SatelliteDebugTool/`，
-即根部同时包含 `SatelliteDebugTool.exe`、`updater.exe` 和 `_internal/`。这保证仍使用旧 updater
-的已安装版本也能安装修复版。CI 上传前必须运行 `scripts/verify_update_archive.py <archive> --edition <user|ops> --version <tag>`；新版 updater
-也会递归识别历史版本的单层或多层 wrapper，但新的发布包不得再增加 wrapper。
-
-**Q: 升级失败后老版本启动后报错？**
-A: Windows 升级器把旧目录改成 `SatelliteDebugTool.bak.<时间戳>`，替换失败会自动尝试回滚；
-若需要人工恢复，先退出相关进程，再把备份目录改回原安装目录名。
-固定诊断文件为 `~/.satellite_debug_tool/updates/<tag>/updater.log` 和同目录的
-`update-status.json`。状态中的 `stage` 是失败阶段，`detail` 是直接原因。
-
-## 双版本首次发布边界（M42）
-
-- 两版共用唯一源码版本号；本地验证包不等于已发布版本。首次正式双版发布应使用新的版本 tag，保留历史 v1.7.0 资产。
-- 旧全量版属于 ops，继续读取原设置目录；用户版读取 `~/.satellite_debug_tool/user/`，首次使用空设备目录。Windows 安装目录和 macOS app identity 按 BUILDING.md 区分。
-- 旧更新器平台正则只命中保留旧命名的 ops 包。用户版采用 `-user-windows-` 独立名称。新更新器验证 edition/platform/version，历史 ops 目标 `<=1.7.0` 才允许缺少身份 marker。
-- Windows CI 使用冻结程序离屏启动验证装配、资源与受控退出；目标 Windows 显卡的 3D 渲染、旧版安装升级以及真实设备操作保留独立现场验收。交叉包拒绝由身份合同回归覆盖。
-- 用户版更新状态路径为 `~/.satellite_debug_tool/user/updates/<tag>/`；ops 沿用上文路径。macOS 仍手动分发，不进入当前 Windows updater 安装链路。
-
-## 草稿发布门禁
-
-Windows 两版校验通过后先建立 Release 草稿。核对本地全量/两版 macOS 结果、Windows 离屏启动、资产身份与下载载荷后，通过 `gh release edit v<version> --draft=false --latest` 完成发布。CI 离屏检查验证装配、资源和受控退出；目标机 OpenGL 渲染、旧 Windows 安装原地升级及物理设备动作继续独立验收。
+构建及模块裁剪细节见 [构建指南](../BUILDING.md)，本轮范围与验收见 [M53 计划](M53_manager_naming_release_plan.md) 和 [验收标准](M53_manager_naming_release_acceptance.md)。

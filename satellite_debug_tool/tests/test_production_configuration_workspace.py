@@ -135,6 +135,21 @@ def _confirm_fixture_preflight(workspace) -> None:
     )
 
 
+def _mark_analysis_capture_ready(workspace) -> None:
+    """数量门禁用例越过由 M50 独立覆盖的完整采集门禁。"""
+
+    from satellite_debug_tool.core.production.fleet import ProductionCaptureState
+
+    for session in workspace._fleet.sessions():
+        if not session.recording_armed:
+            continue
+        session._capture_confirmed = True
+        session._capture_data_observed = True
+        session._capture_state = ProductionCaptureState.READY
+        session._capture_error = ""
+    workspace._update_start_gate()
+
+
 def test_product_template_picker_lists_registered_production_products(
     qapplication_session, tmp_path: Path
 ) -> None:
@@ -235,15 +250,18 @@ def test_afd01c_times_two_requires_exactly_two_ready_devices(
         qapplication_session.processEvents()
 
     add(1)
-    assert not workspace._start_button.isEnabled()
-    assert "2" in workspace._start_button.toolTip()
-    add(2)
+    _mark_analysis_capture_ready(workspace)
+    # 准备电源允许设备离线；参与者冻结继续严格执行数量准入。
     assert workspace._start_button.isEnabled()
+    assert workspace._evaluate_start_gate()[1]
+    add(2)
+    _mark_analysis_capture_ready(workspace)
+    assert workspace._start_button.isEnabled()
+    assert not workspace._evaluate_start_gate()[1]
     add(3)
-    assert not workspace._start_button.isEnabled()
-    assert "currently ready: 3" in workspace._start_button.toolTip() or "当前就绪：3" in (
-        workspace._start_button.toolTip()
-    )
+    _mark_analysis_capture_ready(workspace)
+    assert workspace._start_button.isEnabled()
+    assert workspace._evaluate_start_gate()[1]
     workspace.close()
     workspace.deleteLater()
     qapplication_session.processEvents()
@@ -488,6 +506,7 @@ def test_visual_batch_start_uses_selected_power_profile_and_exact_participants(
             )
         )
     qapplication_session.processEvents()
+    _mark_analysis_capture_ready(workspace)
     assert workspace._start_button.isEnabled()
 
     workspace._on_start_batch()
@@ -511,6 +530,8 @@ def test_visual_batch_start_uses_selected_power_profile_and_exact_participants(
         qapplication_session.processEvents()
         time.sleep(0.005)
     assert workspace.batch["status"] == BatchStatus.ABORTED.value
+    if workspace._abort_archive is not None:
+        assert workspace._abort_archive.wait(5000)
     summary = json.loads(
         (workspace.batch_output_dir / "power_supply_summary.json").read_text(
             encoding="utf-8"
@@ -520,4 +541,104 @@ def test_visual_batch_start_uses_selected_power_profile_and_exact_participants(
     assert not transport.script
     workspace.close()
     workspace.deleteLater()
+    qapplication_session.processEvents()
+
+
+def test_power_preparation_starts_with_offline_devices_and_ready_batch_can_abort(
+    qapplication_session, tmp_path, monkeypatch,
+):
+    from PySide6.QtCore import QObject, Signal
+    from satellite_debug_tool.ui import production_workspace as module
+
+    class PowerWorker(QObject):
+        power_ready = Signal(object, object, object, str)
+        power_failed = Signal(str, object, str)
+        power_stopped = Signal(object, object, str)
+        output_changed = Signal(bool, object, object, str)
+        finished = Signal()
+        action_id = 'TEST-PWR'
+
+        def __init__(self, config, *, parent=None, **kwargs):
+            super().__init__(parent)
+            self.started = False
+            self.off_requested = False
+
+        def start(self):
+            self.started = True
+
+        def request_verified_off(self):
+            self.off_requested = True
+
+        def isRunning(self):
+            return False
+
+        def wait(self, timeout):
+            return True
+
+    monkeypatch.setattr(module, 'ProductionPowerWorker', PowerWorker)
+    workspace = module.ProductionWorkspace(
+        _settings(tmp_path, monkeypatch),
+        configuration_store=_catalog(tmp_path / 'catalog.json'),
+    )
+    workspace._batch_id_edit.setText('OFFLINE-POWER')
+    workspace._operator_edit.setText('operator')
+    workspace._output_edit.setText(str(tmp_path / 'output'))
+    workspace.create_batch()
+    _confirm_fixture_preflight(workspace)
+    assert workspace._evaluate_start_gate()[1]
+    workspace._begin_powered_batch_start()
+    worker = workspace._production_power_worker
+    assert worker.started
+    workspace._preparation.confirm_power()
+    assert workspace.batch['status'] == 'ready'
+    assert '准入' in workspace._execution_summary.text() or 'admission' in workspace._execution_summary.text()
+    workspace.abort_batch()
+    assert worker.off_requested
+    assert workspace.batch['status'] == 'ready'
+    worker.power_stopped.emit(None, (), worker.action_id)
+    worker.finished.emit()
+    deadline = time.monotonic() + 3
+    while workspace.batch['status'] != 'aborted' and time.monotonic() < deadline:
+        qapplication_session.processEvents()
+        time.sleep(.005)
+    assert workspace.batch['status'] == 'aborted'
+    deadline = time.monotonic() + 3
+    while workspace._abort_archive.isRunning() and time.monotonic() < deadline:
+        qapplication_session.processEvents()
+        time.sleep(.005)
+    workspace.close()
+    workspace.deleteLater()
+    from PySide6.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qapplication_session.processEvents()
+
+
+def test_batch_creation_accepts_cached_device_with_power_off(qapplication_session, tmp_path, monkeypatch):
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+    workspace = ProductionWorkspace(
+        _settings(tmp_path, monkeypatch), configuration_store=_catalog(tmp_path / 'catalog.json'),
+    )
+    workspace._fleet._on_datagram(FleetDatagram(
+        endpoint=('127.0.0.1', 4004),
+        data=_identity('OFFLINE-AFD01C', model='AFD01C', service_protocol=8),
+        wall_time_ns=time.time_ns(), monotonic_ns=time.monotonic_ns(),
+    ))
+    session = workspace._fleet.sessions()[0]
+    session.runtime.refresh_presence(now_monotonic=time.monotonic() + 10)
+    assert session.runtime.identity_authorization_scope is None
+    workspace._batch_id_edit.setText('CREATE-WHILE-OFF')
+    workspace._operator_edit.setText('operator')
+    workspace._output_edit.setText(str(tmp_path / 'output'))
+    workspace._on_create_batch()
+    assert workspace.batch['status'] == 'ready'
+    assert not workspace._evaluate_start_gate(require_devices=False)[1]
+    assert workspace._start_button.isEnabled()  # 工位 CONFIGURED 即可进入自动准备。
+    assert not session.recording_armed
+    assert (workspace.batch_output_dir / 'batch.sqlite3').is_file()
+    assert (workspace.batch_output_dir / 'recipe.json').is_file()
+    assert not (workspace.batch_output_dir / '_staging').exists()
+    workspace.close()
+    workspace.deleteLater()
+    from PySide6.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     qapplication_session.processEvents()

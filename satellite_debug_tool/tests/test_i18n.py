@@ -163,24 +163,38 @@ def test_english_numerus_fallback_and_chinese_catalog(i18n_context):
     assert trn("%n event(s)", 2) == "2 个事件"
 
 
-def test_neutral_product_name_survives_runtime_language_switch(i18n_context, qapp):
-    """客户交付回归：窗口和顶栏在中英文切换后保持中性产品名称。"""
+@pytest.mark.parametrize("edition", ("ops", "user"))
+def test_manager_product_name_survives_runtime_language_switch(i18n_context, qapp, edition):
+    """M53 回归：双版窗口、顶栏和平台显示名使用已确认的管理工具名称。"""
     from satellite_debug_tool import __app_name_cn__, __app_name_en__
     from satellite_debug_tool.i18n import LANGUAGE_EN_US, LANGUAGE_ZH_CN
+    from satellite_debug_tool.core.config import Settings
+    from satellite_debug_tool.edition import Edition
     from satellite_debug_tool.ui.main_window import MainWindow
+    from satellite_debug_tool.ui.user_window import UserWindow
 
     settings, manager = i18n_context
-    window = MainWindow(settings=settings)
+    if edition == "user":
+        settings = Settings(edition=Edition.USER)
+        manager.attach_settings(settings)
+        window = UserWindow(settings=settings)
+    else:
+        window = MainWindow(settings=settings)
+    assert (__app_name_cn__, __app_name_en__) == ("卫通终端管理工具", "Satellite Terminal Manager")
+    application_identity = qapp.applicationName()
     try:
         for locale, title, short_name in (
-            (LANGUAGE_EN_US, __app_name_en__, "Terminal Tool"),
-            (LANGUAGE_ZH_CN, __app_name_cn__, "终端工具"),
-            (LANGUAGE_EN_US, __app_name_en__, "Terminal Tool"),
+            (LANGUAGE_EN_US, __app_name_en__, "Terminal Manager"),
+            (LANGUAGE_ZH_CN, __app_name_cn__, "终端管理"),
+            (LANGUAGE_EN_US, __app_name_en__, "Terminal Manager"),
         ):
             manager.set_preference(locale)
             qapp.processEvents()
             assert window.windowTitle() == title
-            assert window._brand_text.text() == short_name
+            assert qapp.applicationDisplayName() == title
+            assert qapp.applicationName() == application_identity
+            brand = window._name if edition == "user" else window._brand_text
+            assert brand.text() == short_name
     finally:
         window.close()
         qapp.processEvents()

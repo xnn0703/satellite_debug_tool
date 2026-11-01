@@ -165,12 +165,16 @@ class TcpShellWorker(QThread):
         """Thread-safe cancel; the sender notices within one recv timeout."""
         self._ymodem_cancel.set()
 
-    def stop_and_join(self, timeout_ms: int = 5000) -> None:
+    def request_stop(self) -> None:
         self._stop_event.set()
         self._ymodem_cancel.set()
         self.rx_ring.wake_stop()
         self.submit_disconnect("worker-stop")
-        self.wait(timeout_ms)
+
+    def stop_and_join(self, timeout_ms: int = 5000) -> None:
+        self.request_stop()
+        if not self.wait(timeout_ms):
+            raise RuntimeError("TCP Shell worker is still stopping")
 
     # -- worker-thread loop ----------------------------------------------------
 

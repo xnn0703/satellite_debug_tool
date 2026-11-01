@@ -1,10 +1,10 @@
-"""updater — 自动升级模块（M11）。
+"""updater — ops 可信应用更新模块（M52）。
 
 公共 API：
     - compare_versions(a, b) -> int
     - ReleaseChecker / LatestRelease / Asset
-    - Downloader (P4)
-    - Applier (P5)
+    - Downloader：可信摘要、范围验证及断点续传
+    - Applier：同盘准备与可恢复切换
 """
 
 from satellite_debug_tool.updater.checker import (

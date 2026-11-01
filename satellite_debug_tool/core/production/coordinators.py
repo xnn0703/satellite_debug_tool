@@ -86,6 +86,26 @@ class BatchCoordinator(QObject):
             return
         self._release_lease()
 
+    def reset_terminal_batch(self) -> None:
+        """Release the terminal batch so one workspace can own the next batch."""
+
+        if self._batch is None:
+            return
+        if self._batch.get("status") not in {
+            BatchStatus.COMPLETED.value,
+            BatchStatus.INCOMPLETE.value,
+            BatchStatus.ABORTED.value,
+        }:
+            raise ResultStoreError("only a terminal batch can be reset")
+        if self.lease_active:
+            raise ResultStoreError("batch fixture lease is still active")
+        store = self._store
+        self._store = None
+        self._batch = None
+        self._output_dir = None
+        if store is not None:
+            store.close()
+
     def create(
         self,
         *,
@@ -155,7 +175,9 @@ class BatchCoordinator(QObject):
         return dict(updated)
 
     def abort(self) -> dict:
-        store, batch = self._require_batch(BatchStatus.RUNNING)
+        store, batch = self._require_batch()
+        if batch["status"] not in {BatchStatus.READY.value, BatchStatus.RUNNING.value}:
+            raise ResultStoreError("abort requires a ready or running batch")
         for attempt in store.list_attempts(batch["batch_id"]):
             if attempt["status"] in {
                 AttemptStatus.PENDING.value,
@@ -264,11 +286,11 @@ class BatchCoordinator(QObject):
 
     def _require_batch(
         self,
-        status: BatchStatus,
+        status: Optional[BatchStatus] = None,
     ) -> tuple[ProductionResultStore, dict]:
         if self._store is None or self._batch is None:
             raise ResultStoreError("no batch is ready")
-        if self._batch.get("status") != status.value:
+        if status is not None and self._batch.get("status") != status.value:
             raise ResultStoreError(
                 f"batch must be {status.value}"
             )

@@ -92,6 +92,7 @@ class _PendingCustomerPage(QWidget):
 class CustomerWorkspace(QWidget):
     """Stable navigation over endpoint-fixed Customer session bundles."""
 
+    shell_shutdown_ready = Signal()
     status_message = Signal(str, int)
     endpoint_status_message = Signal(object, str, int)
     add_requested = Signal()
@@ -151,6 +152,7 @@ class CustomerWorkspace(QWidget):
         self._page_views: list[QWidget] = []
         self._view_active = False
         self._shutdown_done = False
+        self._shell_shutdown_pending = False
         self._build_ui()
         if self._multi_device_enabled:
             registry = self._bundle_registry
@@ -507,15 +509,16 @@ class CustomerWorkspace(QWidget):
         dialog = self._fixture_dialog
         if dialog is None:
             dialog = CustomerFixtureDialog(self._settings, self._fixture_runtime, self)
-            dialog.finished.connect(self._clear_fixture_dialog)
+            dialog.finished.connect(lambda result, item=dialog: self._clear_fixture_dialog(item, result))
             self._fixture_dialog = dialog
         dialog.workspace.set_theme(self._theme, self._scale)
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
 
-    def _clear_fixture_dialog(self, _result: int) -> None:
-        self._fixture_dialog = None
+    def _clear_fixture_dialog(self, dialog, _result: int) -> None:
+        if self._fixture_dialog is dialog:
+            self._fixture_dialog = None
 
     def _add_tcp_shell_button(self, layout: QVBoxLayout) -> None:
         self._tcp_shell_button = QPushButton(tr("Shell..."))
@@ -533,7 +536,8 @@ class CustomerWorkspace(QWidget):
                 session_directory=self._tcp_shell_session_directory,
                 parent=self,
             )
-            dialog.finished.connect(self._clear_tcp_shell_dialog)
+            dialog.finished.connect(lambda result, item=dialog: self._clear_tcp_shell_dialog(item, result))
+            dialog.close_failed.connect(lambda reason, item=dialog: self._shell_close_failed(item, reason))
             self._tcp_shell_dialog = dialog
         dialog.workspace.set_theme(self._theme, self._scale)
         dialog.show()
@@ -541,8 +545,30 @@ class CustomerWorkspace(QWidget):
         dialog.activateWindow()
         return dialog
 
-    def _clear_tcp_shell_dialog(self, _result: int) -> None:
+    def _shell_close_failed(self, dialog, reason: str) -> None:
+        if self._tcp_shell_dialog is dialog:
+            self._shell_shutdown_pending = False
+            self.status_message.emit(tr("Shell shutdown failed: {reason}", reason=reason), 8000)
+
+    def close_shell_for_shutdown(self) -> bool:
+        dialog = self._tcp_shell_dialog
+        if dialog is None:
+            return True
+        accepted = dialog.close()
+        # 即使传输已停，弹窗也可能等待排队的 close 事件完成。
+        if accepted or self._tcp_shell_dialog is None:
+            self._shell_shutdown_pending = False
+            return True
+        self._shell_shutdown_pending = dialog.close_requested
+        return False
+
+    def _clear_tcp_shell_dialog(self, dialog, _result: int) -> None:
+        if self._tcp_shell_dialog is not dialog:
+            return
         self._tcp_shell_dialog = None
+        if self._shell_shutdown_pending:
+            self._shell_shutdown_pending = False
+            self.shell_shutdown_ready.emit()
 
     def _connect_directory_signal(self, name: str, slot) -> None:
         signal = getattr(self._device_directory, name, None)
@@ -720,13 +746,8 @@ class CustomerWorkspace(QWidget):
             dialog.workspace.shutdown()
             dialog.close()
             self._fixture_dialog = None
-        tcp_dialog = self._tcp_shell_dialog
-        if tcp_dialog is not None:
-            if not tcp_dialog.workspace.confirm_shutdown():
-                return False
-            tcp_dialog.workspace.shutdown()
-            tcp_dialog.close()
-            self._tcp_shell_dialog = None
+        if not self.close_shell_for_shutdown():
+            return False
         if not self._multi_device_enabled:
             self.deactivate_view()
             for host in (

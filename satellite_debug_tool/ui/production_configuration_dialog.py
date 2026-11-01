@@ -35,6 +35,7 @@ from satellite_debug_tool.core.production import (
     PowerDebugOperation,
     PowerIdentity,
     ProductTestTemplate,
+    builtin_product_templates,
     ProductionConfigurationError,
     ProductionConfigurationStore,
     ReferenceSensorProfile,
@@ -239,15 +240,18 @@ class ProductionConfigurationDialog(QDialog):
         new_button = QPushButton(tr("New"))
         self._translated_buttons.append((new_button, "New"))
         new_button.clicked.connect(self._new_product)
-        save_button = QPushButton(tr("Save"))
-        self._translated_buttons.append((save_button, "Save"))
-        save_button.clicked.connect(self._save_product)
-        delete_button = QPushButton(tr("Delete"))
-        self._translated_buttons.append((delete_button, "Delete"))
-        delete_button.clicked.connect(self._delete_product)
+        copy_button = QPushButton(tr("Copy as custom"))
+        copy_button.clicked.connect(self._copy_product)
+        self._product_save_button = QPushButton(tr("Save"))
+        self._translated_buttons.append((self._product_save_button, "Save"))
+        self._product_save_button.clicked.connect(self._save_product)
+        self._product_delete_button = QPushButton(tr("Delete"))
+        self._translated_buttons.append((self._product_delete_button, "Delete"))
+        self._product_delete_button.clicked.connect(self._delete_product)
         actions.addWidget(new_button)
-        actions.addWidget(save_button)
-        actions.addWidget(delete_button)
+        actions.addWidget(copy_button)
+        actions.addWidget(self._product_save_button)
+        actions.addWidget(self._product_delete_button)
         actions.addStretch(1)
         root.addLayout(actions)
         return page
@@ -531,7 +535,7 @@ class ProductionConfigurationDialog(QDialog):
         except ProductionConfigurationError as exc:
             QMessageBox.critical(self, tr("Production configurations"), str(exc))
             return
-        self._products = list(products)
+        self._products = list(builtin_product_templates()) + list(products)
         self._powers = list(powers)
         self._references = list(references)
         self._stations = list(stations)
@@ -585,7 +589,7 @@ class ProductionConfigurationDialog(QDialog):
     def _persist(self) -> bool:
         try:
             self._store.save_catalog(
-                self._products,
+                [item for item in self._products if not item.is_builtin],
                 self._powers,
                 self._stations,
                 self._references,
@@ -615,6 +619,21 @@ class ProductionConfigurationDialog(QDialog):
         self._duration.setValue(int(item.duration_policy["minimum_effective_observation_s"]))
         for test_id, checkbox in self._test_checks.items():
             checkbox.setChecked(bool(item.tests.get(test_id, {}).get("enabled", False)))
+        editable = not item.is_builtin
+        for widget in (
+            self._product_id,
+            self._product_revision,
+            self._product_name,
+            self._product_type,
+            self._product_voltage,
+            self._product_current,
+            self._firmware_value,
+            self._duration,
+            *self._test_checks.values(),
+        ):
+            widget.setEnabled(editable)
+        self._product_save_button.setEnabled(editable)
+        self._product_delete_button.setEnabled(editable)
 
     def _new_product(self) -> None:
         self._product_select.setCurrentIndex(-1)
@@ -626,9 +645,70 @@ class ProductionConfigurationDialog(QDialog):
         self._product_current.setValue(1.0)
         self._firmware_value.clear()
         self._duration.setValue(3600)
+        for widget in (
+            self._product_id,
+            self._product_revision,
+            self._product_name,
+            self._product_type,
+            self._product_voltage,
+            self._product_current,
+            self._firmware_value,
+            self._duration,
+            *self._test_checks.values(),
+        ):
+            widget.setEnabled(True)
+        self._product_save_button.setEnabled(True)
+        self._product_delete_button.setEnabled(False)
+
+    def _copy_product(self) -> None:
+        source = next(
+            (value for value in self._products if value.template_id == self._product_select.currentData()),
+            None,
+        )
+        if source is None:
+            return
+        suffix = 1
+        while any(item.template_id == f"{source.template_id}-custom-{suffix}" for item in self._products):
+            suffix += 1
+        copied = source.custom_copy(
+            template_id=f"{source.template_id}-custom-{suffix}",
+            display_name=tr("{name} custom", name=source.display_name),
+        )
+        self._products.append(copied)
+        self._refresh_selectors()
+        index = self._product_select.findData(copied.template_id)
+        self._product_select.setCurrentIndex(index)
 
     def _save_product(self) -> None:
         firmware = self._firmware_value.text().strip()
+        existing = next(
+            (value for value in self._products if value.template_id == self._product_select.currentData()),
+            None,
+        )
+        if existing is not None and existing.is_builtin:
+            raise ProductionConfigurationError("built-in product templates are read-only")
+        expected = {} if existing is None else dict(existing.expected)
+        main_firmware = dict(expected.get("main_firmware", {}))
+        main_firmware.update({"match": "exact" if firmware else "optional", "value": firmware})
+        expected["main_firmware"] = main_firmware
+        expected.setdefault("parameters", {})
+        tests = {} if existing is None else {
+            test_id: dict(value) if isinstance(value, dict) else value
+            for test_id, value in existing.tests.items()
+        }
+        for test_id, checkbox in self._test_checks.items():
+            current = tests.get(test_id, {})
+            current = dict(current) if isinstance(current, dict) else {}
+            current["enabled"] = checkbox.isChecked()
+            if checkbox.isChecked() and test_id not in {"firmware_verification", "parameter_verification"}:
+                current["duration_s"] = self._duration.value()
+            tests[test_id] = current
+        duration_policy = {} if existing is None else dict(existing.duration_policy)
+        duration_policy.update({
+            "minimum_effective_observation_s": self._duration.value(),
+            "convergence_is_outside_observation": True,
+            "report_first_last_window_s": min(300, self._duration.value()),
+        })
         item = ProductTestTemplate(
             template_id=self._product_id.text().strip(),
             revision=self._product_revision.value(),
@@ -636,22 +716,14 @@ class ProductionConfigurationDialog(QDialog):
             product=str(self._product_type.currentData()),
             supply_voltage_v=self._product_voltage.value(),
             per_device_current_a=self._product_current.value(),
-            expected={
-                "main_firmware": {
-                    "match": "exact" if firmware else "optional",
-                    "value": firmware,
-                },
-                "parameters": {},
-            },
-            tests={
-                test_id: {"enabled": checkbox.isChecked()}
-                for test_id, checkbox in self._test_checks.items()
-            },
-            duration_policy={
-                "minimum_effective_observation_s": self._duration.value(),
-                "convergence_is_outside_observation": True,
-                "report_first_last_window_s": min(300, self._duration.value()),
-            },
+            expected=expected,
+            tests=tests,
+            duration_policy=duration_policy,
+            source="custom" if existing is None else existing.source,
+            electrical_variant="" if existing is None else existing.electrical_variant,
+            test_plan_id="" if existing is None else existing.test_plan_id,
+            source_template_id="" if existing is None else existing.source_template_id,
+            source_revision=None if existing is None else existing.source_revision,
         )
         self._replace(self._products, item, "template_id")
 

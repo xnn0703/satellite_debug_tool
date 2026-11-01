@@ -10,9 +10,11 @@ customer_device_dialog customer_device_list customer_endpoint_pages customer_mai
 customer_ota_adapter customer_overview_view customer_playback_view customer_rf_control_view
 customer_session_bundle customer_tcp_shell_dialog customer_workspace tcp_shell_workspace device_model_resources flow_layout gnss_widget
 grouped_chart_widget icons lazy_view_host live_view orbit_widget ota_status_text qss
-semantic_style settings_dialog stl_loader styles time_range_control update_dialog user_window
+semantic_style settings_dialog stl_loader styles time_range_control user_window
 view_lifecycle
 """.split())
+
+APPLICATION_UPDATE_MODULES = ("satellite_debug_tool.updater", "satellite_debug_tool.release_config", "tuf", "securesystemslib")
 
 
 USER_SHELL_MODULES = frozenset({
@@ -35,4 +37,5 @@ def operations_modules(root: Path) -> tuple[str, ...]:
     names.extend("satellite_debug_tool.core.production." + path.stem
                  for path in (root / "satellite_debug_tool/core/production").glob("*.py")
                  if path.stem not in ("__init__", "fixture_telemetry"))
+    names.extend(APPLICATION_UPDATE_MODULES)
     return tuple(sorted(names))

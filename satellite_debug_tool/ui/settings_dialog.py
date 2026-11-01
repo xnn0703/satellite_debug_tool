@@ -33,6 +33,7 @@ _SETTINGS_SCOPES = frozenset(
 
 from satellite_debug_tool.core.config import Settings, SettingsSaveError
 from satellite_debug_tool.core.profile import ProfileStore
+from satellite_debug_tool.edition import application_online_update_enabled
 from satellite_debug_tool.i18n import (
     LANGUAGE_AUTO,
     LANGUAGE_EN_US,
@@ -289,19 +290,22 @@ class SettingsDialog(QDialog):
         )
         outer.addWidget(self._production_section)
 
-        # M11：更新设置 section
+        # 应用更新能力固定归属构建身份；旧偏好只在 ops 中呈现。
+        self._update_section = QWidget()
+        update_layout = QVBoxLayout(self._update_section)
+        update_layout.setContentsMargins(0, 0, 0, 0)
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setFrameShadow(QFrame.Sunken)
-        outer.addWidget(sep)
-        outer.addWidget(QLabel(tr("Automatic updates")))
+        update_layout.addWidget(sep)
+        update_layout.addWidget(QLabel(tr("Automatic updates")))
 
         self._cb_auto_check = QCheckBox(tr("Check for updates at startup"))
         self._cb_auto_check.setChecked(bool(self._settings.get("update.auto_check", True)))
         self._cb_auto_check.setToolTip(
             tr("When disabled, updates are checked only when requested manually")
         )
-        outer.addWidget(self._cb_auto_check)
+        update_layout.addWidget(self._cb_auto_check)
 
         interval_row = QHBoxLayout()
         interval_row.addWidget(QLabel(tr("Check interval (hours):")))
@@ -313,7 +317,7 @@ class SettingsDialog(QDialog):
         )
         interval_row.addWidget(self._spin_interval)
         interval_row.addStretch(1)
-        outer.addLayout(interval_row)
+        update_layout.addLayout(interval_row)
 
         skip_row = QHBoxLayout()
         self._lbl_skipped = QLabel()
@@ -330,7 +334,9 @@ class SettingsDialog(QDialog):
         self._btn_reset_skip.setEnabled(bool(self._settings.get("update.skip_version", "")))
         self._btn_reset_skip.clicked.connect(self._on_reset_skip_version)
         skip_row.addWidget(self._btn_reset_skip)
-        outer.addLayout(skip_row)
+        update_layout.addLayout(skip_row)
+        self._update_section.setVisible(application_online_update_enabled(self._settings))
+        outer.addWidget(self._update_section)
 
         outer.addStretch()
 
@@ -430,8 +436,9 @@ class SettingsDialog(QDialog):
         language = str(self._language_combo.currentData() or LANGUAGE_AUTO)
         self._settings.set("ui.language", language)
         # M11：更新设置
-        self._settings.set("update.auto_check", bool(self._cb_auto_check.isChecked()))
-        self._settings.set("update.check_interval_hours", int(self._spin_interval.value()))
+        if application_online_update_enabled(self._settings):
+            self._settings.set("update.auto_check", bool(self._cb_auto_check.isChecked()))
+            self._settings.set("update.check_interval_hours", int(self._spin_interval.value()))
         self._refresh_device_udp_port_editability()
         if not self._recovery_active and self._device_udp_port.isEnabled():
             self._settings.set(
@@ -454,6 +461,8 @@ class SettingsDialog(QDialog):
         super().done(result)
 
     def _on_reset_skip_version(self) -> None:
+        if not application_online_update_enabled(self._settings):
+            return
         self._settings.set("update.skip_version", "")
         self._settings.persist_preferences()
         self._render_skipped_version()

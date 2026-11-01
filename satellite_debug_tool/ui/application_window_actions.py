@@ -3,9 +3,7 @@ from PySide6.QtWidgets import QDialog, QMessageBox
 from satellite_debug_tool import __version__
 from satellite_debug_tool.core.customer import CustomerDeviceDirectoryError
 from satellite_debug_tool.ui.customer_device_dialog import CustomerDeviceDialog
-from satellite_debug_tool.ui.update_dialog import UpdateDialog, silent_background_check
-from satellite_debug_tool.updater.status import write_update_status
-from satellite_debug_tool.updater.handoff import launch_updater
+from satellite_debug_tool.edition import application_online_update_enabled
 from satellite_debug_tool.i18n import tr
 
 class ApplicationWindowActions:
@@ -66,6 +64,10 @@ class ApplicationWindowActions:
 
     def _on_check_update_clicked(self):
         """点击 🔄 检查更新：手动触发，弹 UpdateDialog 立即开始检查。"""
+        if not application_online_update_enabled(self._settings):
+            return
+        from satellite_debug_tool.ui.update_dialog import UpdateDialog
+
         dlg = UpdateDialog(self._settings, parent=self, auto_start=True)
         dlg.exec()
         request = dlg.launch_request
@@ -76,7 +78,9 @@ class ApplicationWindowActions:
     def _reject_close(self, event, reason: str) -> None:
         request = self._pending_update_request
         self._pending_update_request = None
-        if request is not None:
+        if request is not None and application_online_update_enabled(self._settings):
+            from satellite_debug_tool.updater.status import write_update_status
+
             try:
                 write_update_status(
                     request.status_path,
@@ -92,6 +96,10 @@ class ApplicationWindowActions:
 
     def _kick_silent_update_check(self):
         """启动后 2s 调用：根据 settings.update.auto_check 决定是否后台静默检查。"""
+        if not application_online_update_enabled(self._settings):
+            return
+        from satellite_debug_tool.ui.update_dialog import silent_background_check
+
         self._bg_check_thread = silent_background_check(
             self._settings,
             parent=self,
@@ -107,6 +115,9 @@ class ApplicationWindowActions:
         if not thread.isRunning():
             self._bg_check_thread = None
             return True
+        checker = getattr(thread, "update_checker", None)
+        if checker is not None:
+            checker.cancel()
         thread.requestInterruption()
         thread.quit()
         if not thread.wait(max(0, int(timeout_ms))):
@@ -116,6 +127,8 @@ class ApplicationWindowActions:
 
     def _on_silent_check_found_new(self, latest):
         """后台检查发现新版：状态栏提示，用户点击 / 工具栏按钮可展开 UpdateDialog。"""
+        if not application_online_update_enabled(self._settings):
+            return
         msg = tr(
             "New version {latest} is available (current: v{current}). "
             "Use Check for updates to install it.",
@@ -152,13 +165,16 @@ class ApplicationWindowActions:
             return False
         return True
 
-    def _launch_pending_update(self):
+    def _launch_pending_update(self) -> bool:
         request = self._pending_update_request
         self._pending_update_request = None
-        if request is not None:
+        if request is not None and application_online_update_enabled(self._settings):
+            from satellite_debug_tool.updater.handoff import launch_updater
+            from satellite_debug_tool.updater.status import write_update_status
+
             try:
                 launch_updater(request)
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 try:
                     write_update_status(
                         request.status_path,
@@ -179,3 +195,5 @@ class ApplicationWindowActions:
                         log=request.log_path,
                     ),
                 )
+                return False
+        return True

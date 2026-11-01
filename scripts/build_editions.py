@@ -13,6 +13,9 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from satellite_debug_tool import __version__
+from satellite_debug_tool.package_names import edition_directory, release_archive_name
 
 
 def run(*arguments, env=None):
@@ -26,13 +29,14 @@ def build(edition: str) -> None:
     work = ROOT / "build" / edition
     run(sys.executable, "-m", "PyInstaller", "--noconfirm", "--distpath", str(output),
         "--workpath", str(work), "satellite_debug_tool.spec", env=env)
-    run(sys.executable, "-m", "PyInstaller", "--noconfirm", "--distpath", str(output),
-        "--workpath", str(work / "updater"), "updater.spec", env=env)
     mac = sys.platform == "darwin"
-    app_name = "SatelliteTerminalToolUser" if edition == "user" else "SatelliteDebugTool"
-    payload = output / (f"{app_name}.app" if mac else ("SatelliteTerminalToolUser" if edition == "user" else "SatelliteDebugTool"))
+    app_name = edition_directory(edition)
+    payload = output / (f"{app_name}.app" if mac else app_name)
     updater = "updater" if mac else "updater.exe"
-    shutil.copy2(output / updater, payload / "Contents/MacOS/updater" if mac else payload / updater)
+    if edition == "ops":
+        run(sys.executable, "-m", "PyInstaller", "--noconfirm", "--distpath", str(output),
+            "--workpath", str(work / "updater"), "updater.spec", env=env)
+        shutil.copy2(output / updater, payload / "Contents/MacOS/updater" if mac else payload / updater)
     run(sys.executable, "scripts/verify_model_assets.py", str(payload))
     run(sys.executable, "scripts/verify_edition_package.py", str(payload), "--edition", edition,
         "--toc", str(work / "satellite_debug_tool" / "Analysis-00.toc"))
@@ -46,7 +50,8 @@ def build(edition: str) -> None:
             shutil.copy2(ROOT / "doc" / name, payload / name)
     release = ROOT / "release"
     release.mkdir(exist_ok=True)
-    archive = release / f"SatelliteDebugTool-{edition}-{'macOS' if mac else 'Windows'}-{platform.machine()}.zip"
+    archive = release / release_archive_name(edition=edition, platform="mac" if mac else "win",
+        architecture=platform.machine(), version=__version__, extension="zip")
     archive.unlink(missing_ok=True)
     if mac:
         run("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(payload), str(archive))

@@ -38,7 +38,7 @@ python3 scripts/update_translations.py check
 ## 构建版本与工作区
 
 - **用户版 `main_user.py` / `UserWindow`**：固定总览、RF 控制、客户回放、独立加密固件升级四页；使用客户固定 endpoint 会话。总览的 SNR 五分钟曲线和三模块温度属于始终装配的公共面板；侧栏保留按需创建的 Shell（TCP、串口及 YMODEM）；电源、iperf、夹具、安装标定及工程/试产页面由运维版提供。用户版入口拒绝运维命令行，构建产物裁剪运维专属模块。
-- **运维版 `main.py` / `MainWindow`**：现有全量功能；源码 `python -m satellite_debug_tool.main` 默认启动运维版。两版共用领域模型、会话、录制、OTA 状态机及更新事务；构建身份来自打包的 `build_identity.json`。
+- **运维版 `main.py` / `MainWindow`**：现有全量功能；源码 `python -m satellite_debug_tool.main` 默认启动运维版。两版共用领域模型、会话、录制和设备 OTA 状态机；应用在线更新由 ops 提供，user 固定人工完整包交付。构建身份来自打包的 `build_identity.json`。
 - 用户设置/日志/更新事务位于 `~/.satellite_debug_tool/user/`；运维版保留原根目录。已有模型覆盖和 profile 缓存继续按原路径复用。
 
 ### 运维版工作区（顶层 `MainWindow`）
@@ -49,7 +49,7 @@ python3 scripts/update_translations.py check
 |------|--------|------|------|
 | 0 | **Customer Workspace**（默认） | 直接进 | 面向已注册产品（AFD01 / AFD01A / AFD01B2 / AFD01C / AFD01D / ESA01）：左侧最多 4 台显式 UDP 设备，Overview / RF control / Network test / Playback / Maintenance。每个 endpoint 使用固定会话页面 bundle；Network test 是全局页面。 |
 | 1 | **Engineering Tabs**（Live / Playback / Log / Device） | `Ctrl+Shift+E` 首次确认后本会话解锁 | 内部诊断、协议解码、设备参数读写、OTA。 |
-| 2 | **Production Workspace**（批量试产） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | 批次测试 / 摇摆台测试 / MS-6222 测试 / 电源测试四页面；已有单设备 DOCX、证据 ZIP 和 V2 审核，完整自动测试编排仍在后续里程碑。 |
+| 2 | **Production Workspace**（自动化测试） | `Ctrl+Shift+P` 首次确认解锁；或启动加 `--production` | 自动化批次 / 摇摆台 / MS-6222 / 电源四页面；M47–M51 已接通开始准备、固定窗口台架执行、完整采集、收尾与逐设备 DOCX/证据 ZIP/V2 审核。真实设备及夹具现场验收独立记录。 |
 
 - Customer 与 Production 共用一个进程级 `UdpEndpointBroker` 和一个 `EndpointSessionDirectory`；同一 endpoint 只有一个 Runtime/Core。工程工作区显式选择“共享客户 UDP”时观察当前客户 endpoint，选择“工程串口”时使用独立串口 Core。
 - 默认启动只构建客户总览和 `LiveView` 会话壳；工程 Live 呈现、工程其他 Tab、客户其他页面和试产工作区均在首次访问时构建并复用。
@@ -114,14 +114,24 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `i18n/` — `TranslationManager` + TS/QM 翻译资源（`translations/satellite_debug_tool_zh_CN.{ts,qm}`）
 - `io/` — `DataRecorder`、流式 `DataImporter` 与唯一 `sdb_schema.py`；大型 SDB 在原文件旁生成可重建的稀疏 `.sdbi` 索引
 - `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）、`build_encrypted_firmware_package.py`（客户 OTA 加密固件打包工具）
-- `updater/` — 自动升级模块：`ReleaseChecker / Downloader / Applier`；`UpdateDialog` 只冻结安装请求，`MainWindow.closeEvent()` 完成受控收尾后才启动单文件 updater；updater 递归验证唯一载荷根并持久化阶段状态
+- `updater/` — **M52** ops 应用更新：TUF 仓库验证元数据，Downloader 校验摘要及续传范围，payload/preparation 提供上一正式基线的文件级增量与完整包回退。UpdateDialog 下载后等待安装意图，MainWindow 完成资源收尾后启动安装目录外的持久 updater。Applier 只在同盘 staging 校验后 rename；recovery 独占 journal/安装锁/Windows 登录恢复，health 验证新进程初始化回执。user 构建裁剪这条应用更新路径，设备固件 OTA 保留。
 - `platform/macos/{en,zh_CN}.lproj/InfoPlist.strings` — macOS `CFBundleLocalizations` 用的本地化 InfoPlist 字符串
 
 ### 关键约定
 
+- **M51 型号预置、保存与报告**：`core/production/configuration.py:builtin_product_templates()` 提供 AFD01B2/C/D 各 12 V / 9 A、24 V / 5 A 六项只读预置；内置项通过“复制为定制”编辑，配置修改保留完整 payload 和未知字段。`core/production/storage.py:resolve_production_storage()` 独占路径解析：默认 `follow_recording` 保存到 `paths.recording_dir/自动化测试/YYYY-MM-DD`，已有显式自定义目录迁入 `custom_root`；批次创建后冻结绝对输出目录。准备页“开始测试”完成创建与启动，正常终态自动收尾并生成报告，“下一批次”清理终态。PASS/FAIL/INCOMPLETE/ABORTED 均可生成 V01，报告结论与执行结论分别保存；`reporting.py` 以实际 SDB、解析错误及可分析遥测帧数形成 `analysis/data_quality.json`，执行 PASS 在这些证据缺失时形成报告 INCOMPLETE；批次写入 `batch_summary.json`，证据收集全部夹具 session。数据质量 COMPLETE 只表示这些已实现检查通过，设备性能、INS 精度、真实供电及物理验收仍需独立证据。见 `doc/M51_automation_presets_workflow_reports_*.md`。
+
+- **M50 自动化完整采集**：`core/production/fleet.py` 复用 `CaptureProfileController`，通过设备能力、精确 `SET_CAPTURE_PROFILE=support_full` 响应及实际分析帧共同确认采集 READY；单纯提高 Product 快状态订阅频率或创建 SDB 文件不能证明完整采集。生产 recorder 保持唯一 owner，连接/遥测代际变化重新建立准入。正常收尾先通过同一生产会话恢复 `customer_live`，确认恢复结果后再结束录制和断电；连接故障保留明确证据。见 `doc/M50_automation_full_capture_*.md`。
+
+- **M49 客户生命周期**：客户外接电源只由显式“保存并连接”恢复监测，构造或页面可见性不启动连接；隐藏结束闲置监测，网络测试仅保护已显式建立的会话。Shell 弹窗拥有单次关闭确认意图，等待 worker finished、分帧排空和日志收尾后再完成关闭；主窗口先完成 Shell 收尾，再结束设备录制。弹窗延迟 finished 只处理自身实例，页面隐藏/弹窗焦点变化不停止 Runtime recorder。passive/support_full 录制连续性有软件回归，现场偶发录制停止尚无稳定复现，保留该证据边界。见 `doc/M49_customer_lifecycle_*.md`。
+
+- **M48 批次布局**：曲线按目标数量及冻结真实参与槽位呈现，独立等待卡不绑定设备；冻结后刷新设置目录保持已创建批次的配方和夹具事实。`core/production/presentation.py` 统一启用节点、夹具相关性和槽位投影；进度/夹具组件只消费执行快照、ResultStore 与 FixtureRuntime，工况时间保持 M47 唯一 owner。横向节点、大号倒计时和红/绿/灰夹具条位于曲线上方；配置详情和事件可折叠，窄窗内容/曲线滚动且底部操作固定。配色沿用用户页共享主题。见 `doc/M48_production_layout_*.md`。
+
+- **M47 批次执行与进度**：正式启动通过 `ProductionStartPreparation` 先完成电源准备再等待数量/身份准入；按钮与公开入口共用启动链路。`ProductionExecution` / `ProductionRunCoordinator` 驱动首轮台架步骤，`ProductionExecutionHardware` 复用运动组件和唯一电源 worker。2026-10-30 用户确认 SNR 判据：配方时长为固定工况窗口，初始搜星包含在窗口内，初次搜星以设备有效快照 `tracking_phase=LOCKED`、`locked=True` 且 `SNR>0` 确认完成，之后任一零值/负值永久判该设备失败；缺口保持窗口继续并产生 INCOMPLETE。界面消费同一进度快照，隐藏后领域执行持续。车辆/导航汇总缺少各自启动证据或性能判据时明确 INCOMPLETE，SNR 不替代导航性能结论。见 `doc/M47_production_execution_progress_*.md`。 MS 精度策略按用户最新确认（2026-10-30）：当前静置/摇摆 SNR 工况只要求 MS 新鲜有效姿态数据，三轴标准差仅记录和提示；超限不阻止启动、动态上电或运行，不修改工位门限。精度不足参考样本保留质量无效标记，不生成精度合格结论。 共享供电接线已确认：摇摆中上电通过显式 PowerOnRockingPhase 管理 MS 随 DUT 断电，关闭阶段只以平台反馈决定恢复供电；开启回读后重建参考采集并等待本次新帧，旧帧不准入，正常观察仍检查参考数据连接/新鲜度。
+
 - **M46 电源面板交还与 MS-6222 对照**：客户外接电源页“退出遥控（恢复面板）”由同一 worker 完成当前操作、发送 `SYST:COMM:RLST LOC` 并关闭会话；monitor 保留面板控制意图，后续页面活动变化保持停止监测，显式“保存并连接”恢复监测。写入成功只呈现“已发送返回本地指令”，输出与设定值保持。`FixtureTelemetryBus` 同时拥有当前参考姿态快照，独立 MS 页和摇摆台入口发布 INS 样本与连接生命周期；总览在设备 3D 角度下方显示共享 MS 参考，固定显示原始 INS/真实航向（三位小数），摇摆台继续显示标定后的设备 FRD/相对航向，3 秒过期及断开时清除实时数字。原始快照仅服务实时对照，SDB 姿态记录继续使用既有类型化总线合同。见 `doc/M46_power_local_ms6222_readout_*.md`。
 
-- **M40 中性产品命名**：客户可见名称统一为“卫星通信终端工具 / Satellite Terminal Tool”，顶栏简称“终端工具 / Terminal Tool”；应用元数据与 macOS 包信息使用中性标识。报告默认公司名为空，由用户工位配置提供；已发布固件包的 AES-GCM 认证域按格式合同保留固定字节。
+- **M53 产品命名**：客户可见名称统一为“卫通终端管理工具 / Satellite Terminal Manager”，顶栏简称“终端管理 / Terminal Manager”；应用显示名与 macOS 包信息同步。文件名称由 `satellite_debug_tool/package_names.py` 唯一定义；内部 Python 包、app/repo 信任身份、bundle identifier 和配置目录保持原合同。报告默认公司名为空，由用户工位配置提供；已发布固件包的 AES-GCM 认证域按格式合同保留固定字节。
 - **M41 下拉框排版**：全局 QComboBox 与其弹出视图使用同一 UI 字体角色，数值输入保留等宽字体；回放/日志的 TimeRangeControl 使用标准列表委托和按内容调整宽度，语言切换由 Qt 重新计算尺寸，保持当前预设与范围。两页面将文件信息和时间范围分行，保证英文选项在页面布局中完整显示。
 
 - 所有 import 用 `satellite_debug_tool.` 前缀（绝对导入；这是为什么必须 `python3 -m ...`）
@@ -143,7 +153,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **AFD01 新型号身份**——AFD01A 沿用原 AFD01 的产品使用方式与 3D 几何；`afd01` / `afd01a` / `afd01b2` / `afd01c` / `afd01d` 各自独立注册，按 Debug hw_type、Product Identity 与 service protocol 精确准入，recipe 和加密 OTA 包不互作别名。A/B2/C/D 仅接受 protocol 8；B2 未提供独立 STL 时使用占位模型，C/D 共用外观几何但分别打包为 `afd01c.stl` / `afd01d.stl`，CAD 轴按 `+Z=机头、+X=左翼、+Y=天顶` 映射到 FLU。
 - **电源与网络测试按客户设备固定绑定**——`customer.devices[]` 使用稳定 `device_id` 保存各自电源和 iperf profile；编辑 endpoint 不改变归属。外接电源弹窗配置 IP/设定值并执行闭环控制，端口固定 2268；SDB 的 `external_power_sample/v1` 只写入对应设备并携带 `device_id`/endpoint。
 - **摇摆台对外统一设备 FRD**——夹具界面、轨迹、自动资格测试和报告使用 Roll+ 右翼下沉、Pitch+ 机头上抬、Yaw+ 向右/俯视顺时针；灵境 A6 型号在运动组件边界固定转换为供应商控制符号 `(-1,+1,-1)`，型号档案只读。平台静止与 MS-6222 标定后姿态精度是两个独立结论。
-- **正式工位夹具绑定**——电源 TCP、摇摆台控制/反馈 UDP 和 MS-6222 COM 均来自所选工位依赖档案；型号预置拥有几何、运行包线和 FRD 符号，现场档案拥有实际端点。正式批次启动要求摇摆台反馈与 MS-6222 有效帧均进入 `READY`，`CONFIGURED` 不表示已连接。
+- **正式工位夹具绑定**——电源 TCP、摇摆台控制/反馈 UDP 和 MS-6222 COM 均来自所选工位依赖档案；型号预置拥有几何、运行包线和 FRD 符号，现场档案拥有实际端点。正式台架工况开始观察前，由批次 owner 自动连接所选摇摆台与 MS-6222，并取得平台反馈/回中及有效参考帧；`CONFIGURED` 表示档案绑定，可进入自动启动准备，`READY` 才表示已取得运行证据。
 - **夹具姿态按设备录制并相关回放**——活动 SDB v3 以 `fixture_attitude_sample/v1` metadata 保存共享夹具事实；回放只在同一设备启动代际的有效主机接收时间/设备 uptime 锚点内插值。设备姿态、平台目标和 MS 相对 FRD 在同一姿态区域按颜色与线型区分；无效或缺口用 NaN 断开，未对齐样本不进入曲线。
 - **客户网络测试是设备级状态**——每个 endpoint bundle 拥有固定 `IperfTestController/Store`，切换页面不重绑、不停止后台测试；不同设备只在本地 IPv4和服务端端口不冲突时并行，应用退出前逐个完成进程和证据收尾。
 - 全局设置弹窗按 Customer / Engineering / Production scope 呈现；客户和工程 scope 不显示试产配置与试产报告，Production scope 保留这些业务设置。
@@ -164,8 +174,8 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 | `production_configuration.json` | 产品测试模板、电源档案和工作站配置的单一原子目录；批次只保存所选稳定 ID |
 | `profiles/{hw_type}.json` | ProfileCache 缓存的设备 profile |
 | `tiles/{region}/{z}/{x}/{y}.png` | M8 OSM 离线 tile（按区域分组） |
-| `updates/<tag>/updater.log`、`update-status.json` | 自动升级持久日志与原子事务状态；临时解压目录独立清理 |
-| `production_batches/<batch_id>/` | M19-A 批次原始数据库、SDB、配方和夹具证据 |
+| `updates/<tag>/download-*/`、`updates/transactions/<uuid>/` | 已验证下载与持久安装事务分开；journal、独立 updater、配置备份和健康回执属于事务目录 |
+| 批次冻结输出目录/`<batch_id>/` | M51 批次数据库、逐设备 SDB、配方、夹具证据与批次汇总；根目录由 `resolve_production_storage()` 解析，默认跟随录制目录/`自动化测试/日期`，可显式自定义 |
 | 设置的报告根目录/`日期/型号/SN/批次/` | 单设备 V1/V2 DOCX、`evidence.zip` 与 SHA-256 `manifest.json` |
 | `fixture_profiles/` | 带 revision 与 SHA-256 的工作站夹具档案 |
 | `fixture_calibrations/` | MS-6222 坐标标定结果 |
@@ -177,23 +187,25 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 ## 构建与发版
 
-- **发布目标（2026-10-26 用户确认）**：源码、发行标签及 Release 使用 GitHub；使用 `github` 远端执行发布。
+- **发布目标（2026-10-26 用户确认）**：源码和发行标签使用 GitHub `github` 远端；M52/M53 完整包和 ops 可信更新通过阿里云 ECS HTTPS 服务分发。
 
 - **开发验证方式（2026-10-23 用户确认）**：每轮修复默认验证源码并提供运行命令；用户完成功能验证、明确要求打包后，再执行本地打包或主动触发发行构建。
 
+- **M52 分发策略（2026-11-02 用户确认）**：Windows 保留 GitHub Actions 构建，Mac 本地发行命令构建，两端验证后自动上传阿里云 ECS 候选。user 通过公开完整包直链人工交付，不进入更新渠道；ops 使用可信在线更新，首轮 Windows 自动安装、Mac 校验下载后人工安装。首轮使用 ECS 公网 IP 的 HTTPS 入口，域名/OSS/CDN/内网 Runner 后续按需部署；上传候选与签名晋升分开。源码最低 Python 3.10（TUF 7），发行工具链固定 Python 3.11。计划、验收、实现与现场记录见 `doc/M52_*`。
+
 - **M39 应用图标**：`ui/assets/icons/app_icon_master.png` 是已确认图稿，`scripts/generate_application_icons.py` 从母版生成 Windows 多尺寸 ICO、macOS ICNS 和实际尺寸预览。主程序/updater 的 Windows spec、macOS BUNDLE、QApplication 与顶栏共用该资源；运行时入口为 `ui/application_icon.py`。
 
-- **macOS 本地打包**：`./scripts/build_macos.sh user|ops|both`（默认 ops）（自动 venv + 装依赖 + 跑 `update_translations.py check` + PyInstaller 主程序+updater + 嵌入 `.app/Contents/MacOS/updater` + `codesign --force --deep --sign -` ad-hoc 签名 + `xattr -cr` 清 quarantine + `ditto -c -k` 出 zip）
-- **Windows 一键打包**：`scripts\build_windows.bat user|ops|both`（默认 ops）；两平台均由 `scripts/build_editions.py` 调用 spec、验证模型与构建身份、嵌入 updater 并生成独立 zip。用户 Windows 安装目录为 `SatelliteTerminalToolUser`，EXE 保留 `SatelliteDebugTool.exe`。
-- **Windows 自动更新包合同**：GitHub Release `.7z` 的归档根直接包含 `SatelliteDebugTool.exe`、`updater.exe` 与 `_internal/`，兼容旧 updater 安装修复版；上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷
-- **CI**：`.github/workflows/build.yml` 只跑 Windows（`prepare-release` + `build-windows`，user/ops 矩阵完成冻结离屏启动/总览/Shell/退出烟测，再生成并验证单文件 7z，两份构建成功后由唯一 publish job 创建草稿，核对资产后发布；推 master/main 触发双版本 `ci-only-build` 上传 artifact 不发版）
-- **mac 不走 CI**：PyInstaller .app 含 1500+ symlinks + 7z 兼容性问题，强制本地脚本。updater 二进制仍嵌入但 mac 平台不发版，触发频率为零
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.8.1`）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
-- **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；mac 本地手动 `./scripts/build_macos.sh both`
-- **`release.config.json`** 配 GitHub owner/repo/api；updater 用 `release_config.py` 读取
+- **macOS 本地打包**：`./scripts/build_macos.sh user|ops|both`（默认 ops），准备约束依赖、检查翻译、PyInstaller 构建、验证 edition 身份并归档；ops 包含 updater，user 裁剪 updater。普通构建只写本地；`scripts/release_macos.py` 使用干净的指定 SHA 完成构建、冻结 smoke、候选校验及自动上传。
+- **Windows 一键打包**：`scripts\build_windows.bat user|ops|both`（默认 ops）；两平台均由 `scripts/build_editions.py` 调用 spec、验证模型与构建身份并生成独立 zip。Windows 安装目录分别为 `SatelliteTerminalManagerUser`、`SatelliteTerminalManagerOps`，EXE 为 `SatelliteTerminalManager.exe`；macOS 使用对应同名 app，内部主程序为 `SatelliteTerminalManager`。
+- **Windows 包合同**：ops `.7z` 归档根包含 `SatelliteTerminalManager.exe`、`updater.exe` 与 `_internal/`；user 完整包保留主程序及运行依赖、裁剪应用 updater 和在线源配置。上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷。旧版本 <=1.8.1 首次人工取得 v1.9.0 完整包迁入新站；历史包保持原样。
+- **CI**：`.github/workflows/build.yml` 用 Windows Runner 构建 user/ops。tag/dispatch 精确解析并 checkout 标签 SHA，测试与冻结 smoke 后生成不可变候选；两版成功后通过受保护的 `release-candidate` environment 上传 ECS 暂存区。普通分支/PR 只产出 artifact。工作流不创建 GitHub Release，不持有正式签名密钥。
+- **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、冻结 smoke 并上传候选；ops 客户端首轮支持可信检查和校验下载，安装由人员退出旧程序后替换应用。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（本轮规划 `1.9.0`，发布状态以 M53 验证记录为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；Mac 本地使用 Python 3.11 调用 `scripts/release_macos.py` 构建并上传候选；四包校验后 ops 签名晋升 stable，user 公开完整包
+- **`release.config.json`** 配 `app_id/repo_id/channel`、HTTPS metadata/target 入口和内嵌 TUF 公钥 root；未配置时明确等待部署，不回退 GitHub。私钥和上传凭据保存在仓库外。
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
 
-- **双版更新合同**：用户包名 `satellite_terminal_tool-user-windows-vX.Y.Z.7z`，运维包名保留 `satellite_debug_tool-win-vX.Y.Z.7z`。更新选择匹配 edition/platform/version，安装前验证载荷身份与当前安装；仅截至 1.7.0 的历史全量 ops 包可采用旧无身份清单合同。macOS 继续通过独立签名 app 手动分发。
+- **双版更新合同**：完整包名由 `package_names.py` 生成 `satellite_terminal_manager-<user|ops>-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`。ops 更新精确匹配 edition/platform/architecture/version，验证载荷身份与当前安装后处理。首份正式可信版本没有上一基线，只发布完整包。四包公开到服务器 `/downloads/v1.9.0/<完整归档文件名>`，交付服务器直链及 SHA256SUMS，不另存本机 Downloads；确认公开下载、CRC、身份和摘要后报告发布完成。
 - **用户包模块边界**：`scripts/edition_policy.py` 明确共享 UI 模块；其余 UI、生产执行模块和 QtWebEngine 由运维版提供，Shell UI/传输/YMODEM 两版共享，`verify_edition_package.py` 审计冻结 TOC 并验证用户包完整包含 Shell 模块。`core.production` 与 `ui` 的包导出按需加载，保留公共 API 并消除聚合 import 带来的运维依赖。
 
 ### Spec 关键钩子
@@ -218,6 +230,13 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M41_combobox_text_layout_*.md` — 时间范围下拉框裁切根因、字体/列表委托/内容尺寸修复、回归与原生视觉证据
 - `doc/M42_user_operations_editions_*.md` — 用户版/运维版功能矩阵、装配与打包、独立配置与更新合同；用户已确认保留用户版独立固件升级，已完成实现与 macOS 双版构建验证，Windows 冻结与真机验收待执行
 - `doc/M43_shell_terminal_reliability_*.md` — Shell 单次流解码、终端状态模型与 ASCII 命令输入校验；现场输入法及设备交互待验证。
+- `doc/M47_production_execution_progress_*.md` — 自动化开始准备、固定工况窗口、SNR 判据与执行进度。
+- `doc/M48_production_layout_*.md` — 准备/运行布局、冻结槽位与统一进度呈现。
+- `doc/M49_customer_lifecycle_*.md` — 客户显式电源连接、录制连续性证据与 Shell/应用退出收尾。
+- `doc/M50_automation_full_capture_*.md` — 自动化 support_full 协商、实际分析帧准入与恢复后收尾。
+- `doc/M51_automation_presets_workflow_reports_*.md` — 六项型号供电预置、默认录制目录、开始/下一批次流程和报告质量边界。
+- `doc/M52_*` — 双平台候选构建、ECS 上传、TUF 可信更新与签名晋升。
+- `doc/M53_manager_naming_release_*.md` — Manager 命名与 v1.9.0 四包发行计划、验收及本轮记录。
 - `doc/M45_shell_terminal_throughput_*.md` — Shell 有界消费与按帧投影计划、验收与开发记录；含三轮评审合同修订与两次 P0 投影升级的实测依据（头删 O(文档) 归因、maximumBlockCount 接管、16 KiB 帧预算）。
 - `doc/M44_snr_time_axis_recovery_*.md` — 客户 SNR/温度历史的同连接采集代际恢复、u32/乱序准入、事务授权与回放断点证据。
 - `doc/upper_pc_function_definition_vnext.md` — M7–M16 历史功能定义与路线基线，不代表当前架构

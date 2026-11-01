@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Satellite Terminal Tool timestamp renewal
+OnFailure=satellite-updates-failure@%n.service
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=yes
+AccuracySec=1min
+Unit=satellite-updates-timestamp.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,140 @@
+{
+  "schema": "satellite.m52-deployment-evidence/v1",
+  "checked_at_utc": "2026-11-01T17:21:02.226044+00:00",
+  "instance_id": "i-2zec7150rri51esjj28f",
+  "region": "cn-beijing",
+  "host": "60.205.157.141",
+  "health": {
+    "status": 200,
+    "body": "satellite-update-service ready"
+  },
+  "trusted_metadata": {
+    "root": {
+      "version": 1,
+      "expires": "2027-11-01T17:06:14Z"
+    },
+    "targets": {
+      "version": 1,
+      "expires": "2027-01-30T17:06:14Z"
+    },
+    "snapshot": {
+      "version": 2,
+      "expires": "2026-12-01T17:13:09Z"
+    },
+    "timestamp": {
+      "version": 3,
+      "expires": "2026-11-08T17:13:09Z"
+    }
+  },
+  "trusted_application_target_count": 0,
+  "release_config_sha256": "80296b22797c602778eb67cd2ccbca5d745b946804a5bf1f1915c4efd5165367",
+  "transfer_probe": {
+    "upload_readback": "PASS",
+    "upload_public_write_rejected": "PASS",
+    "https_range": "PASS",
+    "client_resume_sha256": "PASS",
+    "concurrent_clients": 3,
+    "bytes_each": 1048576,
+    "concurrent_elapsed_s": 7.5,
+    "probe_url": "https://60.205.157.141/v1/apps/satellite-terminal-tool/targets/diagnostics/fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83.probe.bin",
+    "probe_sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+  },
+  "server": {
+    "nginx.service": {
+      "Result": "success",
+      "ExecMainStatus": "0",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "satellite-updates-timestamp.service": {
+      "Result": "success",
+      "ExecMainStatus": "0",
+      "ActiveState": "inactive",
+      "SubState": "dead"
+    },
+    "satellite-updates-snapshot.service": {
+      "Result": "success",
+      "ExecMainStatus": "0",
+      "ActiveState": "inactive",
+      "SubState": "dead"
+    },
+    "satellite-updates-certbot.service": {
+      "Result": "success",
+      "ExecMainStatus": "0",
+      "ActiveState": "inactive",
+      "SubState": "dead"
+    },
+    "satellite-updates-health.service": {
+      "Result": "success",
+      "ExecMainStatus": "0",
+      "ActiveState": "inactive",
+      "SubState": "dead"
+    },
+    "satellite-update-certificate-dryrun.service": {
+      "Result": "success",
+      "ExecMainStatus": "0",
+      "ActiveState": "inactive",
+      "SubState": "dead"
+    },
+    "timers": {
+      "timestamp": "enabled",
+      "snapshot": "enabled",
+      "certbot": "enabled",
+      "health": "enabled"
+    },
+    "iperf_listen_ports": [
+      5201,
+      5202,
+      5203,
+      5204,
+      5205,
+      5206,
+      5207,
+      5208,
+      5209,
+      5210,
+      5211,
+      5212,
+      5213,
+      5214,
+      5215,
+      5216
+    ],
+    "online_keys": [
+      {
+        "role": "snapshot",
+        "mode": "0o600"
+      },
+      {
+        "role": "timestamp",
+        "mode": "0o600"
+      }
+    ],
+    "certificate": [
+      "notBefore=Nov  1 16:10:05 2026 GMT",
+      "notAfter=Nov  8 08:10:04 2026 GMT",
+      "issuer=C = US, O = Let's Encrypt, CN = YE2",
+      "X509v3 Subject Alternative Name: critical",
+      "    IP Address:60.205.157.141"
+    ],
+    "nginx_config_exit": 0
+  },
+  "software_tests": {
+    "full_suite": {
+      "passed": 2039,
+      "elapsed_s": 235.92
+    },
+    "deployed_config_update_suite": {
+      "passed": 253,
+      "elapsed_s": 10.16
+    },
+    "counts_overlap": true
+  },
+  "limits": [
+    "No application package published",
+    "No frozen package or GitHub Actions run in this task",
+    "Windows physical installation and restart recovery await acceptance",
+    "Transfer probe is 1 MiB per client, not package throughput or sustained capacity",
+    "Offline signing-key backup and restore drill await execution"
+  ]
+}

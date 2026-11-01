@@ -1,28 +1,18 @@
-"""UpdateDialog — 检查/下载/应用升级的三阶段 GUI（M11 P7）。
-
-页面（QStackedWidget）：
-  CHECKING  ：正在查 GitHub Release API
-  UP_TO_DATE：已是最新版
-  NEW_FOUND ：发现新版（含 release notes + 立即更新 / 跳过 / 稍后）
-  DOWNLOADING：下载中（进度条 + 取消按钮）
-  LAUNCHING ：准备启动 updater 并退出主程序
-  ERROR     ：失败页（含错误信息 + 重试 / 关闭）
-
-线程：
-  CheckWorker  → 后台 fetch_latest（QObject 配 QThread）
-  DownloadWorker → 后台 download_all + 进度信号
-"""
+"""运维版可信发行检查、下载与安装交接；网络和文件准备由后台线程执行。"""
 from __future__ import annotations
-from satellite_debug_tool.edition import edition_of
+from satellite_debug_tool.edition import application_online_update_enabled, edition_of
 
 import logging
 import os
 import sys
+import time
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QObject, QThread, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QThread, Qt, QTimer, Signal, Slot, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -37,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from satellite_debug_tool import __version__ as CURRENT_VERSION
 from satellite_debug_tool.core.config import Settings
-from satellite_debug_tool.i18n import register_translatable, set_translatable_text, tr
+from satellite_debug_tool.i18n import register_translatable, set_translatable_text, tr, tr_source
 from satellite_debug_tool.release_config import load_release_config
 from satellite_debug_tool.updater.checker import (
     LatestRelease,
@@ -56,9 +46,20 @@ from satellite_debug_tool.updater.handoff import (
     UpdateLaunchRequest,
     prepare_update_launch_request,
 )
+from satellite_debug_tool.updater.preparation import PreparedDownload, prepare_download
 
 
 log = logging.getLogger(__name__)
+
+_PREPARATION_STATUS = {
+    tr_source("Downloading the trusted file manifest..."),
+    tr_source("Checking the installed files for an incremental update..."),
+    tr_source("The installed baseline differs; downloading the complete package..."),
+    tr_source("Downloading the incremental package..."),
+    tr_source("Reconstructing and verifying the complete new application..."),
+    tr_source("Incremental preparation failed; downloading the complete package..."),
+    tr_source("Downloading the complete package..."),
+}
 
 
 # ============================ Worker（在 QThread 里跑） ============================
@@ -72,6 +73,7 @@ class _CheckWorker(QObject):
         super().__init__()
         self._checker = checker
 
+    @Slot()
     def run(self) -> None:
         try:
             result = self._checker.fetch_latest()
@@ -83,35 +85,58 @@ class _CheckWorker(QObject):
 
 
 class _DownloadWorker(QObject):
-    progress = Signal(int, int)        # (bytes_done, bytes_total)
-    finished = Signal(list)            # List[Path]
+    progress = Signal(object, object)  # Python 整数避免大文件进度溢出 Qt int32
+    finished = Signal(object)          # PreparedDownload
+    status = Signal(str)
     failed = Signal(object)
     cancelled = Signal()
 
-    def __init__(self, downloader: Downloader, assets: list, dest_dir: Path):
+    def __init__(self, latest: LatestRelease, dest_dir: Path, install_dir: Optional[Path]):
         super().__init__()
-        self._downloader = downloader
-        self._assets = assets
+        self._latest = latest
         self._dest = dest_dir
+        self._install_dir = install_dir
         self._cancel = None             # 由 dialog 注入 threading.Event
 
     def attach_cancel_event(self, ev) -> None:
         self._cancel = ev
 
+    @Slot()
     def run(self) -> None:
         try:
-            paths = self._downloader.download_all(
-                self._assets, self._dest,
+            prepared = prepare_download(
+                self._latest, self._dest, install_dir=self._install_dir,
                 on_progress=lambda d, t: self.progress.emit(d, t),
+                on_status=self.status.emit,
                 cancel_event=self._cancel,
             )
-            self.finished.emit(paths)
+            self.finished.emit(prepared)
         except DownloadCancelled:
             self.cancelled.emit()
         except DownloadError as e:
             self.failed.emit(e)
         except Exception as e:
             self.failed.emit(UpdaterError("unexpected_error", str(e)))
+
+
+class _PrepareInstallWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, arguments: dict, cancel_event):
+        super().__init__()
+        self._arguments = arguments
+        self._cancel = cancel_event
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.finished.emit(prepare_update_launch_request(**self._arguments, cancel_event=self._cancel))
+        except DownloadCancelled:
+            self.cancelled.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 # ============================ 主对话框 ============================
@@ -124,12 +149,21 @@ _PAGE_NEW_FOUND = 2
 _PAGE_DOWNLOADING = 3
 _PAGE_LAUNCHING = 4
 _PAGE_ERROR = 5
+_PAGE_READY = 6
 
 
 def _updater_error_text(error: UpdaterError) -> str:
     code = error.code
     context = error.context
     detail = error.detail
+    if code == "check_source_unconfigured":
+        return tr("The application update service is awaiting configuration.")
+    if code == "check_trust_error":
+        return tr("The release could not be verified: {detail}", detail=detail)
+    if code == "download_hash_mismatch":
+        return tr("The downloaded file differs from the verified release. The installed application is unchanged.")
+    if code in {"download_range_invalid", "download_response_invalid"}:
+        return tr("The download server returned inconsistent file data: {detail}", detail=detail)
     if code == "check_http_error":
         return tr(
             "Release server returned HTTP {status}: {detail}",
@@ -202,12 +236,19 @@ class UpdateDialog(QDialog):
         self._latest: Optional[LatestRelease] = None
         self._download_dir: Optional[Path] = None
         self._launch_request: Optional[UpdateLaunchRequest] = None
+        self._prepared_download: Optional[PreparedDownload] = None
+        self._close_result: Optional[int] = None
+        self._check_source: Optional[ReleaseChecker] = None
+        self._download_build = ""
+        self._progress_sample = None
 
         # 线程对象（每次操作 new 一次）
         self._check_thread: Optional[QThread] = None
         self._check_worker: Optional[_CheckWorker] = None
         self._download_thread: Optional[QThread] = None
         self._download_worker: Optional[_DownloadWorker] = None
+        self._prepare_thread: Optional[QThread] = None
+        self._prepare_worker: Optional[_PrepareInstallWorker] = None
         self._cancel_event = None
         self._last_error_operation = ""
         self._last_error: Optional[UpdaterError] = None
@@ -312,7 +353,7 @@ class UpdateDialog(QDialog):
         page_launch = QWidget()
         l4 = QVBoxLayout(page_launch)
         l4.addStretch(1)
-        lbl4 = QLabel(tr("Starting the updater; the application will exit..."))
+        lbl4 = QLabel(tr("Preparing the verified installation request..."))
         lbl4.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl4.setStyleSheet("font-size: 14px;")
         l4.addWidget(lbl4)
@@ -349,26 +390,50 @@ class UpdateDialog(QDialog):
         l5.addLayout(btn_row5)
         self._stack.addWidget(page_err)
 
+        page_ready = QWidget()
+        ready_layout = QVBoxLayout(page_ready)
+        self._lbl_ready = QLabel()
+        self._lbl_ready.setWordWrap(True)
+        ready_layout.addWidget(self._lbl_ready)
+        ready_layout.addStretch(1)
+        self._btn_install = QPushButton(tr("Install and restart"))
+        self._btn_install.clicked.connect(self._install_prepared_download)
+        self._btn_open_download = QPushButton(tr("Open download folder"))
+        self._btn_open_download.clicked.connect(self._open_download_folder)
+        later = QPushButton(tr("Later"))
+        later.clicked.connect(self.reject)
+        for button in (self._btn_install, self._btn_open_download, later):
+            ready_layout.addWidget(button)
+        self._stack.addWidget(page_ready)
+
         self._stack.setCurrentIndex(_PAGE_CHECKING)
 
     # ---------- 流程 ----------
 
     def start_check(self) -> None:
         """开始检查更新；可重复调用（重试 / 手动按钮）。"""
-        self._cleanup_check_thread()
+        if not application_online_update_enabled(self._settings):
+            self._show_error("This edition uses manual application installation.")
+            return
+        if self._check_thread is not None or self._download_thread is not None or self._prepare_thread is not None:
+            return
         self._stack.setCurrentIndex(_PAGE_CHECKING)
         cfg = self._release_cfg
         checker = ReleaseChecker(
-            owner=cfg["github_owner"],
-            repo=cfg["github_repo"],
-            api_base=cfg["github_api"],
+            cfg, edition=edition_of(self._settings),
+            cache_dir=Path(self._settings.config_directory) / "updates/trust",
         )
+        self._check_source = checker
         self._check_thread = QThread(self)
         self._check_worker = _CheckWorker(checker)
         self._check_worker.moveToThread(self._check_thread)
         self._check_thread.started.connect(self._check_worker.run)
         self._check_worker.finished.connect(self._on_check_done)
         self._check_worker.failed.connect(self._on_check_failed)
+        self._check_worker.finished.connect(self._check_thread.quit, Qt.ConnectionType.DirectConnection)
+        self._check_worker.failed.connect(self._check_thread.quit, Qt.ConnectionType.DirectConnection)
+        self._check_thread.finished.connect(self._check_worker.deleteLater)
+        self._check_thread.finished.connect(self._check_thread_finished)
         self._check_thread.start()
 
         # 记录检查时间
@@ -379,7 +444,8 @@ class UpdateDialog(QDialog):
         self._settings.persist_preferences()
 
     def _on_check_done(self, latest: LatestRelease) -> None:
-        self._cleanup_check_thread()
+        if self._close_result is not None:
+            return
         self._latest = latest
 
         cmp = compare_versions(CURRENT_VERSION, latest.tag_name)
@@ -411,8 +477,8 @@ class UpdateDialog(QDialog):
         self._stack.setCurrentIndex(_PAGE_NEW_FOUND)
 
     def _on_check_failed(self, error: UpdaterError) -> None:
-        self._cleanup_check_thread()
-        self._show_updater_error("check", error)
+        if self._close_result is None:
+            self._show_updater_error("check", error)
 
     def _on_skip_version(self) -> None:
         if self._latest is None:
@@ -425,7 +491,9 @@ class UpdateDialog(QDialog):
     # ---------- 下载 ----------
 
     def _on_start_download(self) -> None:
-        if self._latest is None:
+        if (self._latest is None or not application_online_update_enabled(self._settings)
+                or self._check_thread is not None or self._download_thread is not None
+                or self._prepare_thread is not None):
             return
         assets = self._latest.assets_for_platform(current_platform(), edition=edition_of(self._settings))
         if not assets:
@@ -434,11 +502,18 @@ class UpdateDialog(QDialog):
 
         # 下载目录：~/.satellite_debug_tool/updates/<tag>/
         from pathlib import Path as _P
-        base = _P(self._settings.config_directory) / "updates" / self._latest.tag_name
+        build = self._latest.identity.get("build_id", self._latest.tag_name)
+        if self._download_dir is None or self._download_build != build:
+            base = _P(self._settings.config_directory) / "updates" / self._latest.tag_name / ("download-" + uuid4().hex)
+        else:
+            base = self._download_dir
         base.mkdir(parents=True, exist_ok=True)
         self._download_dir = base
+        self._download_build = build
+        self._progress_sample = None
 
         self._dl_progress.setValue(0)
+        self._btn_dl_cancel.setEnabled(True)
         total_mb = sum(a.size for a in assets) / 1024 / 1024
         self._lbl_dl_bytes.setText(f"0.00 / {total_mb:.2f} MB")
         set_translatable_text(
@@ -450,9 +525,8 @@ class UpdateDialog(QDialog):
 
         from threading import Event
         self._cancel_event = Event()
-        downloader = Downloader()
         self._download_thread = QThread(self)
-        self._download_worker = _DownloadWorker(downloader, assets, base)
+        self._download_worker = _DownloadWorker(self._latest, base, _detect_install_dir())
         self._download_worker.attach_cancel_event(self._cancel_event)
         self._download_worker.moveToThread(self._download_thread)
         self._download_thread.started.connect(self._download_worker.run)
@@ -460,26 +534,72 @@ class UpdateDialog(QDialog):
         self._download_worker.finished.connect(self._on_dl_finished)
         self._download_worker.failed.connect(self._on_dl_failed)
         self._download_worker.cancelled.connect(self._on_dl_cancelled)
+        self._download_worker.status.connect(self._on_dl_status)
+        for signal in (self._download_worker.finished, self._download_worker.failed, self._download_worker.cancelled):
+            signal.connect(self._download_thread.quit, Qt.ConnectionType.DirectConnection)
+        self._download_thread.finished.connect(self._download_worker.deleteLater)
+        self._download_thread.finished.connect(self._download_thread_finished)
         self._download_thread.start()
 
     def _on_dl_progress(self, done: int, total: int) -> None:
         if total > 0:
+            self._dl_progress.setRange(0, 100)
             self._dl_progress.setValue(int(done * 100 / total))
             mb = 1024 * 1024
-            self._lbl_dl_bytes.setText(f"{done/mb:.2f} / {total/mb:.2f} MB")
+            now = time.monotonic()
+            if self._progress_sample is None or self._progress_sample[2] != total or done < self._progress_sample[3]:
+                self._progress_sample = (now, done, total, done)
+            started, initial, _, _ = self._progress_sample
+            self._progress_sample = (started, initial, total, done)
+            elapsed = now - started
+            speed = (done - initial) / elapsed if elapsed > 0.1 else 0.0
+            if speed > 0:
+                remaining = max(0, int((total - done) / speed))
+                eta = f"{remaining // 3600:02d}:{remaining % 3600 // 60:02d}:{remaining % 60:02d}"
+                self._lbl_dl_bytes.setText(tr("{done} / {total} MB · {speed} KB/s · Remaining {remaining}",
+                    done=f"{done/mb:.2f}", total=f"{total/mb:.2f}", speed=f"{speed/1024:.1f}", remaining=eta))
+            else:
+                self._lbl_dl_bytes.setText(f"{done/mb:.2f} / {total/mb:.2f} MB")
         else:
             self._dl_progress.setRange(0, 0)   # 不确定进度
 
-    def _on_dl_finished(self, paths: List[Path]) -> None:
-        self._cleanup_download_thread()
-        self._launch_updater(paths)
+    @Slot(str)
+    def _on_dl_status(self, source: str) -> None:
+        if source in _PREPARATION_STATUS:
+            set_translatable_text(source, self._lbl_dl_title)
+
+    @Slot(object)
+    def _on_dl_finished(self, prepared: PreparedDownload) -> None:
+        if self._close_result is not None:
+            return
+        self._prepared_download = prepared
+        automatic = prepared.installation_mode == "automatic" and _detect_install_dir() is not None
+        self._btn_install.setVisible(automatic)
+        self._btn_open_download.setVisible(True)
+        set_translatable_text(
+            tr_source("The update has been verified. Install when your current work is ready to close.")
+            if automatic else tr_source("The complete package has been verified. Quit the application, then replace the application with this package."),
+            self._lbl_ready,
+        )
+        self._stack.setCurrentIndex(_PAGE_READY)
+
+    @Slot()
+    def _install_prepared_download(self) -> None:
+        if self._prepared_download is not None and self._download_thread is None:
+            self._launch_updater([self._prepared_download.package])
+
+    @Slot()
+    def _open_download_folder(self) -> None:
+        if self._prepared_download is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._prepared_download.package.parent)))
 
     def _on_dl_failed(self, error: UpdaterError) -> None:
-        self._cleanup_download_thread()
-        self._show_updater_error("download", error)
+        if self._close_result is None:
+            self._show_updater_error("download", error)
 
     def _on_dl_cancelled(self) -> None:
-        self._cleanup_download_thread()
+        if self._close_result is not None:
+            return
         # 回退到"新版可用"页让用户选择
         if self._latest is not None:
             self._stack.setCurrentIndex(_PAGE_NEW_FOUND)
@@ -495,11 +615,16 @@ class UpdateDialog(QDialog):
     # ---------- 启动 updater ----------
 
     def _launch_updater(self, volumes: List[Path]) -> None:
-        """启动 updater 子进程，主程序退出。"""
+        """准备交接；主窗口负责资源收尾及启动 updater。"""
         self._stack.setCurrentIndex(_PAGE_LAUNCHING)
-        QTimer.singleShot(100, lambda: self._do_launch_updater(volumes))
+        self._do_launch_updater(volumes)
 
     def _do_launch_updater(self, volumes: List[Path]) -> None:
+        if self._prepare_thread is not None or self._close_result is not None:
+            return
+        if not application_online_update_enabled(self._settings):
+            self._show_error("This edition uses manual application installation.")
+            return
         # 这里只冻结更新交接请求；应用关闭与 updater 启动由 MainWindow 持有。
         install_dir = _detect_install_dir()
         updater_exe = _detect_updater_exe()
@@ -514,27 +639,61 @@ class UpdateDialog(QDialog):
             return
 
         try:
-            transaction_dir = self._download_dir
-            if transaction_dir is None:
+            if self._download_dir is None:
                 raise ValueError("update download directory is unavailable")
+            transaction_dir = Path(self._settings.config_directory) / "updates" / "transactions"
             target_version = "" if self._latest is None else self._latest.tag_name
-            self._launch_request = prepare_update_launch_request(
+            prepared = self._prepared_download
+            if (prepared is None or prepared.installation_mode != "automatic" or prepared.tree_manifest is None
+                    or self._latest is None or self._latest.tree_manifest is None):
+                raise ValueError("a verified automatic installation payload is required")
+            arguments = dict(
                 target_version=target_version,
                 edition=edition_of(self._settings),
                 install_dir=install_dir,
                 updater_executable=updater_exe,
                 volumes=volumes,
                 transaction_dir=transaction_dir,
+                package_sha256=prepared.asset.sha256,
+                tree_manifest=prepared.tree_manifest,
+                tree_manifest_sha256=self._latest.tree_manifest.sha256,
+                prepared_payload=prepared.prepared_payload,
+                settings_directory=Path(self._settings.config_directory),
             )
         except (OSError, ValueError) as exc:
             self._show_error("Failed to prepare updater: {detail}", detail=exc)
             return
 
+        from threading import Event
+        self._cancel_event = Event()
+        self._prepare_thread = QThread(self)
+        self._prepare_worker = _PrepareInstallWorker(arguments, self._cancel_event)
+        self._prepare_worker.moveToThread(self._prepare_thread)
+        self._prepare_thread.started.connect(self._prepare_worker.run)
+        self._prepare_worker.finished.connect(self._on_install_prepared)
+        self._prepare_worker.failed.connect(self._on_install_prepare_failed)
+        self._prepare_worker.cancelled.connect(self._on_dl_cancelled)
+        for signal in (self._prepare_worker.finished, self._prepare_worker.failed, self._prepare_worker.cancelled):
+            signal.connect(self._prepare_thread.quit, Qt.ConnectionType.DirectConnection)
+        self._prepare_thread.finished.connect(self._prepare_worker.deleteLater)
+        self._prepare_thread.finished.connect(self._prepare_thread_finished)
+        self._prepare_thread.start()
+
+    @Slot(object)
+    def _on_install_prepared(self, request: UpdateLaunchRequest) -> None:
+        if self._close_result is not None:
+            return
+        self._launch_request = request
         set_translatable_text(
             "✅ Update is ready; closing the application safely...",
             self._lbl_launch_detail,
         )
-        QTimer.singleShot(100, self.accept)
+        self.accept()
+
+    @Slot(str)
+    def _on_install_prepare_failed(self, detail: str) -> None:
+        if self._close_result is None:
+            self._show_error("Failed to prepare updater: {detail}", detail=detail)
 
     @property
     def launch_request(self) -> Optional[UpdateLaunchRequest]:
@@ -571,6 +730,8 @@ class UpdateDialog(QDialog):
         self._stack.setCurrentIndex(_PAGE_ERROR)
 
     def retranslate_ui(self) -> None:
+        self._btn_install.setText(tr("Install and restart"))
+        self._btn_open_download.setText(tr("Open download folder"))
         set_translatable_text(
             "Current version: v{version}",
             self._header,
@@ -579,24 +740,58 @@ class UpdateDialog(QDialog):
         if self._last_error is not None:
             self._show_updater_error(self._last_error_operation, self._last_error)
 
-    def _cleanup_check_thread(self) -> None:
-        if self._check_thread is not None:
-            self._check_thread.quit()
-            self._check_thread.wait(2000)
+    @Slot()
+    def _check_thread_finished(self) -> None:
+        thread = self._check_thread
         self._check_thread = None
         self._check_worker = None
+        self._check_source = None
+        if thread is not None:
+            thread.deleteLater()
+        self._finish_pending_close()
 
-    def _cleanup_download_thread(self) -> None:
-        if self._download_thread is not None:
-            self._download_thread.quit()
-            self._download_thread.wait(2000)
+    @Slot()
+    def _download_thread_finished(self) -> None:
+        thread = self._download_thread
         self._download_thread = None
         self._download_worker = None
+        if thread is not None:
+            thread.deleteLater()
+        self._finish_pending_close()
+
+    @Slot()
+    def _prepare_thread_finished(self) -> None:
+        thread = self._prepare_thread
+        self._prepare_thread = None
+        self._prepare_worker = None
+        if thread is not None:
+            thread.deleteLater()
+        self._finish_pending_close()
+
+    def _finish_pending_close(self) -> None:
+        if (self._close_result is not None and self._check_thread is None
+                and self._download_thread is None and self._prepare_thread is None):
+            result = self._close_result
+            self._close_result = None
+            super().done(result)
+
+    def done(self, result: int) -> None:
+        if self._check_thread is not None or self._download_thread is not None or self._prepare_thread is not None:
+            self._close_result = result
+            if self._check_source is not None:
+                self._check_source.cancel()
+            if self._cancel_event is not None:
+                self._cancel_event.set()
+            set_translatable_text("Cancelling...", self._lbl_dl_title)
+            return
+        super().done(result)
 
     def closeEvent(self, event) -> None:   # noqa: N802 (Qt API)
-        self._cleanup_check_thread()
-        self._cleanup_download_thread()
-        super().closeEvent(event)
+        if self._check_thread is not None or self._download_thread is not None or self._prepare_thread is not None:
+            event.ignore()
+            self.done(QDialog.DialogCode.Rejected)
+        else:
+            super().closeEvent(event)
 
 
 # ============================ 路径探测辅助 ============================
@@ -610,7 +805,7 @@ def _detect_install_dir() -> Optional[Path]:
     if not getattr(sys, "frozen", False):
         return None
     exe = Path(sys.executable).resolve()
-    # mac .app：从 .../MyApp.app/Contents/MacOS/SatelliteDebugTool 找回 .app
+    # mac .app：从 .../MyApp.app/Contents/MacOS/SatelliteTerminalManager 找回 .app
     for parent in [exe.parent, *exe.parents]:
         if parent.suffix == ".app":
             return parent
@@ -627,7 +822,7 @@ def _detect_updater_exe() -> Optional[Path]:
     install = _detect_install_dir()
     if install is None:
         return None
-    # mac：.../SatelliteDebugTool.app/Contents/MacOS/updater
+    # mac：.../SatelliteTerminalManagerOps.app/Contents/MacOS/updater
     if install.suffix == ".app":
         macos_dir = install / "Contents" / "MacOS"
         candidate = macos_dir / "updater"
@@ -644,11 +839,40 @@ def _detect_updater_exe() -> Optional[Path]:
 # ============================ 后台静默检查 ============================
 
 
+class _BackgroundCheckReceiver(QObject):
+    """主线程拥有设置持久化和新版提示；worker 只产生检查结果。"""
+
+    def __init__(self, settings: Settings, callback, parent: QObject):
+        super().__init__(parent)
+        self._settings = settings
+        self._callback = callback
+
+    @Slot(object)
+    def received(self, latest: LatestRelease) -> None:
+        self._settings.set("update.last_check_iso", datetime.now(timezone.utc).isoformat())
+        self._settings.persist_preferences()
+        skip = self._settings.get("update.skip_version", "")
+        if skip and skip == latest.tag_name:
+            log.info("Version %s was skipped by the user", skip)
+            return
+        if compare_versions(CURRENT_VERSION, latest.tag_name) >= 0:
+            log.info("The installed version is current")
+            return
+        if self._callback is not None:
+            self._callback(latest)
+
+    @Slot(object)
+    def failed(self, error: UpdaterError) -> None:
+        log.info("Silent background update check failed: %s", error)
+
+
 def should_check_in_background(settings: Settings) -> bool:
     """根据 settings.update 配置判断是否该启动后台静默检查。
 
     `SATELLITE_UPDATE_CHECK=0` 让测试 / CI 使用明确的关闭状态。
     """
+    if not application_online_update_enabled(settings):
+        return False
     environment_state = os.environ.get("SATELLITE_UPDATE_CHECK", "1").strip().lower()
     if environment_state in {"0", "false", "off", "no"}:
         return False
@@ -683,39 +907,23 @@ def silent_background_check(
 
     cfg = load_release_config()
     checker = ReleaseChecker(
-        owner=cfg["github_owner"],
-        repo=cfg["github_repo"],
-        api_base=cfg["github_api"],
+        cfg, edition=edition_of(settings),
+        cache_dir=Path(settings.config_directory) / "updates/trust",
         timeout=8.0,
     )
     thread = QThread(parent)
     worker = _CheckWorker(checker)
     worker.moveToThread(thread)
+    thread.update_checker = checker
+    thread.update_worker = worker
     thread.started.connect(worker.run)
 
-    def _on_done(latest: LatestRelease) -> None:
-        settings.set(
-            "update.last_check_iso",
-            datetime.now(timezone.utc).isoformat(),
-        )
-        settings.persist_preferences()
-        skip = settings.get("update.skip_version", "")
-        if skip and skip == latest.tag_name:
-            log.info("Version %s was skipped by the user", skip)
-            return
-        if compare_versions(CURRENT_VERSION, latest.tag_name) >= 0:
-            log.info("The installed version is current")
-            return
-        if on_new_version is not None:
-            on_new_version(latest)
-
-    def _on_failed(error: UpdaterError) -> None:
-        log.info("Silent background update check failed: %s", error)
-
-    worker.finished.connect(_on_done)
-    worker.failed.connect(_on_failed)
-    worker.finished.connect(thread.quit)
-    worker.failed.connect(thread.quit)
+    receiver = _BackgroundCheckReceiver(settings, on_new_version, thread)
+    thread.update_receiver = receiver
+    worker.finished.connect(receiver.received)
+    worker.failed.connect(receiver.failed)
+    worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+    worker.failed.connect(thread.quit, Qt.ConnectionType.DirectConnection)
     thread.finished.connect(worker.deleteLater)
     thread.start()
     return thread

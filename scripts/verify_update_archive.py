@@ -1,4 +1,4 @@
-"""Verify that a release 7z contains exactly one Windows updater payload."""
+"""验证唯一 Windows 完整包：user 人工交付，ops 包含独立 updater。"""
 
 from __future__ import annotations
 
@@ -8,15 +8,17 @@ import sys
 
 import py7zr
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from satellite_debug_tool.package_names import WINDOWS_EXECUTABLE
 
-def find_payload_roots(names: list[str]) -> tuple[PurePosixPath, ...]:
+def find_payload_roots(names: list[str], *, edition: str = "ops") -> tuple[PurePosixPath, ...]:
     normalized = {PurePosixPath(name.replace("\\", "/")) for name in names}
     candidates: list[PurePosixPath] = []
     for entry in normalized:
-        if entry.name != "SatelliteDebugTool.exe":
+        if entry.name != WINDOWS_EXECUTABLE:
             continue
         root = entry.parent
-        if root / "updater.exe" not in normalized:
+        if edition == "ops" and root / "updater.exe" not in normalized:
             continue
         runtime = root / "_internal"
         if not any(path == runtime or runtime in path.parents for path in normalized):
@@ -30,12 +32,20 @@ def verify_archive(path: Path, *, edition: str | None = None, version: str = "")
     if not archive.is_file():
         raise ValueError(f"archive does not exist: {archive}")
     with py7zr.SevenZipFile(archive, mode="r") as seven_zip:
-        roots = find_payload_roots(seven_zip.getnames())
+        names = seven_zip.getnames()
+        for name in names:
+            entry = PurePosixPath(name.replace("\\", "/"))
+            if entry.is_absolute() or ".." in entry.parts or any(":" in part for part in entry.parts):
+                raise ValueError("archive contains an unsafe path")
+        if edition == "user" and any(PurePosixPath(name.replace("\\", "/")).name
+                                     in ("updater.exe", "updater", "release.config.json") for name in names):
+            raise ValueError("user archive includes application update files")
+        roots = find_payload_roots(names, edition=edition or "ops")
     if not roots:
-        raise ValueError("archive has no complete SatelliteDebugTool payload")
+        raise ValueError("archive has no complete SatelliteTerminalManager payload")
     if len(roots) != 1:
         raise ValueError(
-            "archive has multiple SatelliteDebugTool payloads: "
+            "archive has multiple SatelliteTerminalManager payloads: "
             + ", ".join(str(root) for root in roots)
         )
     if edition is not None:

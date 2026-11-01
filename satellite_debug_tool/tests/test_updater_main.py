@@ -1,209 +1,305 @@
-"""updater.main 单测：CLI 解析 + restart_app 平台分支 + 端到端 main()。
-
-不真正 spawn 进程；用 monkeypatch 拦截 subprocess.Popen 和 wait_for_pid。
-"""
-from __future__ import annotations
-
+"""真实归档/文件树加模拟新进程的完整安装与恢复验收。"""
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-
-# 让 main 模块 import 起来不依赖 PySide6
-@pytest.fixture(scope="module")
-def updater_main():
-    from satellite_debug_tool.updater import main as m
-    return m
+from satellite_debug_tool.tests._updater_helpers import make_request
+from satellite_debug_tool.updater import main as updater_main
+from satellite_debug_tool.updater.recovery import InstallJournal
+from satellite_debug_tool.updater.status import write_atomic_json
 
 
-class TestCLIParsing:
-    def test_help_exits_zero(self, updater_main):
-        with pytest.raises(SystemExit) as exc:
-            updater_main.main(["--help"])
-        assert exc.value.code == 0
+class TrialProcess:
+    pid = 987654
+    returncode = None
+    def __init__(self, executable):
+        self.executable = executable
+        self.terminated = False
+    def poll(self): return self.returncode
+    def create_time(self): return 100.0
+    def exe(self): return str(self.executable)
+    def is_running(self): return self.returncode is None
+    def status(self): return "running"
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -1
+    def kill(self): self.terminate()
+    def wait(self, timeout=5): return self.returncode
 
 
-class TestWaitForPid:
-    def test_returns_true_when_pid_missing(self, updater_main):
-        # 用一个肯定不存在的 PID（pid 上限通常 2^22）
-        assert updater_main.wait_for_pid(2**30, timeout=0.5) is True
+def install_trial(monkeypatch, request, mode="ready", on_start=None):
+    import psutil
+    trial = TrialProcess(request.install_dir / "SatelliteTerminalManager.exe")
+    monkeypatch.setattr(updater_main, "wait_for_pid", lambda *_args: True)
+    monkeypatch.setattr(psutil, "Process", lambda _pid: trial)
+    monkeypatch.setattr(psutil, "process_iter", lambda **_kwargs: [])
+    def start(_request, context):
+        write_atomic_json(context.directory / "health-request.json", {
+            "schema": "satellite.update-health/v1", "transaction_id": context.transaction_id,
+            "target_version": context.target_version, "token": context.token,
+        })
+        if on_start is not None:
+            on_start()
+        if mode == "exit":
+            trial.returncode = 1
+        elif mode != "timeout":
+            message = context.message("ready")
+            message["pid"] = trial.pid
+            if mode == "wrong_token":
+                message["token"] = "different"
+            if mode == "wrong_version":
+                message["target_version"] = "0.0.1"
+            if mode == "wrong_pid":
+                message["pid"] += 1
+            write_atomic_json(context.receipt_path, message)
+        return trial
+    monkeypatch.setattr(updater_main, "_start_trial", start)
+    return trial
 
 
-class TestSelfRelocate:
-    def test_onefile_copies_only_executable(
-        self,
-        updater_main,
-        tmp_path,
-        monkeypatch,
-    ):
-        install = tmp_path / "Install"
-        install.mkdir()
-        source = install / "updater"
-        source.write_bytes(b"onefile-updater")
-        relocated_root = tmp_path / "relocated"
-        relocated_root.mkdir()
-        launched = []
-
-        monkeypatch.setattr(sys, "frozen", True, raising=False)
-        monkeypatch.setattr(sys, "executable", str(source))
-        monkeypatch.setattr(
-            updater_main.tempfile,
-            "mkdtemp",
-            lambda **_kwargs: str(relocated_root),
-        )
-        monkeypatch.setattr(
-            updater_main.subprocess,
-            "Popen",
-            lambda *args, **kwargs: launched.append((args, kwargs)) or object(),
-        )
-
-        with pytest.raises(SystemExit) as exc:
-            updater_main.self_relocate_and_relaunch(
-                install,
-                ["--pid", "42"],
-            )
-
-        target = relocated_root / "updater"
-        assert exc.value.code == 0
-        assert target.read_bytes() == b"onefile-updater"
-        assert launched[0][0][0] == [
-            str(target),
-            "--pid",
-            "42",
-            "--relocated",
-        ]
-        assert not (relocated_root / install.name).exists()
+def test_help_exits_zero():
+    with pytest.raises(SystemExit) as exc:
+        updater_main.main(["--help"])
+    assert exc.value.code == 0
 
 
-class TestRestartApp:
-    def test_mac_app_uses_open(self, updater_main, tmp_path, monkeypatch):
-        captured = []
-        monkeypatch.setattr(sys, "platform", "darwin")
-        monkeypatch.setattr(
-            "subprocess.Popen",
-            lambda *args, **kw: captured.append((args, kw)) or object(),
-        )
-        app = tmp_path / "MyApp.app"
-        app.mkdir()
-        updater_main.restart_app(app)
-        # 第一次调用的 args[0] 应为 ["open", str(app)]
-        assert captured
-        call_args = captured[0][0][0]
-        assert call_args[0] == "open"
-        assert call_args[1] == str(app)
-
-    def test_win_finds_exe(self, updater_main, tmp_path, monkeypatch):
-        captured = []
-        monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.setattr(
-            "subprocess.Popen",
-            lambda *args, **kw: captured.append((args, kw)) or object(),
-        )
-        install = tmp_path / "MyApp"
-        install.mkdir()
-        (install / "MyApp.exe").write_bytes(b"PE-stub")
-        updater_main.restart_app(install)
-        assert captured
-        # 启动的 path 应该是 install/MyApp.exe
-        call_args = captured[0][0][0]
-        assert call_args == [str(install / "MyApp.exe")]
-
-    def test_explicit_restart_cmd_overrides(self, updater_main, tmp_path, monkeypatch):
-        captured = []
-        monkeypatch.setattr(
-            "subprocess.Popen",
-            lambda *args, **kw: captured.append((args, kw)) or object(),
-        )
-        updater_main.restart_app(tmp_path / "ignored", restart_cmd="echo hi")
-        assert captured[0][0][0] == "echo hi"
-        assert captured[0][1].get("shell") is True
-
-    def test_no_executable_found_is_restart_failure(self, updater_main, tmp_path, monkeypatch):
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(
-            "subprocess.Popen",
-            lambda *args, **kw: pytest.fail("不应启动任何进程"),
-        )
-        empty = tmp_path / "Empty"
-        empty.mkdir()
-        with pytest.raises(OSError, match="No launchable executable"):
-            updater_main.restart_app(empty)
+def test_wait_pid_requires_real_exit():
+    assert updater_main.wait_for_pid(2**30, timeout=0.1)
 
 
-class TestEndToEndMain:
-    def test_wait_timeout_persists_failed_stage(
-        self,
-        updater_main,
-        tmp_path,
-        monkeypatch,
-    ):
-        install = tmp_path / "SatelliteDebugTool"
-        install.mkdir()
-        volume = tmp_path / "release.7z"
-        volume.write_bytes(b"unused")
-        status = tmp_path / "update-status.json"
-        log = tmp_path / "updater.log"
-        monkeypatch.setattr(updater_main, "wait_for_pid", lambda *a, **kw: False)
-        monkeypatch.setattr(
-            updater_main,
-            "self_relocate_and_relaunch",
-            lambda *a, **kw: None,
-        )
+def test_trial_launch_uses_maintenance_cwd(tmp_path, monkeypatch):
+    from satellite_debug_tool.updater.health import StartupHealthContext
+    request = make_request(tmp_path)
+    monkeypatch.chdir(request.install_dir)
+    context = StartupHealthContext(request.transaction_dir, request.transaction_id,
+                                   request.target_version, "b" * 64, request.settings_directory, 10)
+    calls = []
+    monkeypatch.setattr(updater_main.subprocess, "Popen", lambda command, **options: calls.append((command, options)))
+    updater_main._start_trial(request, context)
+    assert calls[0][0] == [str(request.install_dir / "SatelliteTerminalManager.exe")]
+    assert calls[0][1]["cwd"] == str(request.transaction_dir)
 
-        rc = updater_main.main([
-            "--pid", "99999",
-            "--install-dir", str(install),
-            "--workdir", str(tmp_path / "work"),
-            "--log", str(log),
-            "--status", str(status),
-            "--target-version", "v-test",
-            "--volumes", str(volume),
-        ])
 
-        assert rc == 2
-        payload = json.loads(status.read_text(encoding="utf-8"))
-        assert payload["state"] == "failed"
-        assert payload["stage"] == "waiting_for_app_exit"
+def test_recovery_cli_releases_installation_cwd_before_rename(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from satellite_debug_tool.tests.test_updater_applier import prepare
+    from satellite_debug_tool.updater.applier import Applier
+    install, _, _, journal = prepare(tmp_path)
+    Applier().install_prepared(journal)
+    monkeypatch.chdir(install)
+    monkeypatch.setattr(updater_main, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(updater_main, "_setup_logging", lambda *_args: None)
+    rename = Path.rename
+    observed = []
+    def checked_rename(path, destination):
+        observed.append(Path.cwd())
+        assert Path.cwd() == journal.path.parent
+        return rename(path, destination)
+    monkeypatch.setattr(Path, "rename", checked_rename)
+    assert updater_main.main(["--recover", str(journal.path)]) == 0
+    assert len(observed) == 2
+    assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
 
-    def test_main_success_path(self, updater_main, tmp_path, monkeypatch):
-        """端到端：构造 7z 分卷 + 假 install_dir → main() 返回 0。"""
-        py7zr = pytest.importorskip("py7zr")
-        from satellite_debug_tool.tests.test_updater_applier import (
-            _make_7z_with_app, _split_file,
-        )
 
-        # 1. 准备分卷
-        arc = _make_7z_with_app(tmp_path, app_name="MyApp",
-                                contents={"v.txt": b"NEW"})
-        vols = _split_file(arc, tmp_path, "split", vol_size=64)
+def test_other_installed_process_prevents_configuration_snapshot(tmp_path, monkeypatch):
+    import psutil
+    from types import SimpleNamespace
+    request = make_request(tmp_path)
+    install_trial(monkeypatch, request)
+    monkeypatch.setattr(psutil, "process_iter", lambda **_kwargs: [SimpleNamespace(
+        info={"pid": 456, "exe": str(request.install_dir / "SatelliteTerminalManager.exe")})])
+    assert updater_main.execute_update(request) == 3
+    assert not (request.transaction_dir / "configuration-backup").exists()
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
 
-        # 2. 准备假 install_dir
-        installed = tmp_path / "MyApp"
-        installed.mkdir()
-        (installed / "v.txt").write_text("OLD")
 
-        # 3. 拦截 wait_for_pid 和 restart_app，不真等不真启
-        monkeypatch.setattr(updater_main, "wait_for_pid", lambda *a, **kw: True)
-        monkeypatch.setattr(updater_main, "restart_app", lambda *a, **kw: installed / "SatelliteDebugTool.exe")
-        monkeypatch.setattr(updater_main, "self_relocate_and_relaunch", lambda *a, **kw: None)
+def test_wait_timeout_keeps_installation(tmp_path, monkeypatch):
+    request = make_request(tmp_path)
+    monkeypatch.setattr(updater_main, "wait_for_pid", lambda *_args: False)
+    assert updater_main.execute_update(request) == 2
+    status = json.loads(request.status_path.read_text())
+    assert status["state"] == "failed"
+    assert status["stage"] == "waiting_for_app_exit"
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
 
-        workdir = tmp_path / "_work"
-        status = tmp_path / "update-status.json"
-        rc = updater_main.main([
-            "--pid", "99999",
-            "--install-dir", str(installed),
-            "--workdir", str(workdir),
-            "--status", str(status),
-            "--target-version", "v-test",
-            "--volumes", *(str(v) for v in vols),
-        ])
-        assert rc == 0
-        # 验证 install_dir 被替换
-        assert (installed / "v.txt").read_bytes() == b"NEW"
-        # backup 存在
-        backups = list(tmp_path.glob("MyApp.bak.*"))
-        assert len(backups) == 1
-        assert (backups[0] / "v.txt").read_text() == "OLD"
-        assert '"state": "completed"' in status.read_text(encoding="utf-8")
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_complete_and_prepared_tree_share_health_transaction(tmp_path, monkeypatch, prepared):
+    request = make_request(tmp_path, prepared=prepared)
+    trial = install_trial(monkeypatch, request)
+    assert updater_main.execute_update(request, health_timeout=0.2) == 0
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
+    journal = InstallJournal.load(request.transaction_dir / "journal.json")
+    assert journal.data["state"] == "committed"
+    assert (journal.backup_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    status = json.loads(request.status_path.read_text())
+    commit = json.loads((request.transaction_dir / "health-commit.json").read_text())
+    assert status["state"] == "completed"
+    assert commit["pid"] == trial.pid
+    assert commit["transaction_id"] == request.transaction_id
+    assert not trial.terminated
+
+
+@pytest.mark.parametrize("mode", ["exit", "timeout", "wrong_token", "wrong_pid", "wrong_version"])
+def test_spawn_and_invalid_receipts_cannot_mark_success(tmp_path, monkeypatch, mode):
+    """旧实现 Popen 成功立即 completed；这些已启动的新进程都必须回退。"""
+    request = make_request(tmp_path)
+    trial = install_trial(monkeypatch, request, mode)
+    assert updater_main.execute_update(request, health_timeout=0.02) == 3
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    status = json.loads(request.status_path.read_text())
+    assert status["state"] == "failed"
+    assert status["recovery"] == "rolled_back"
+    assert not (request.transaction_dir / "health-commit.json").exists()
+    assert trial.terminated or trial.returncode is not None
+
+
+def test_recovery_registration_failure_precedes_old_directory_move(tmp_path, monkeypatch):
+    request = make_request(tmp_path)
+    install_trial(monkeypatch, request)
+    def failure(*_args):
+        raise OSError("login recovery registration refused")
+    monkeypatch.setattr(updater_main, "register_login_recovery", failure)
+    assert updater_main.execute_update(request) == 3
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert not list(tmp_path.glob("install.bak.*"))
+
+
+@pytest.mark.parametrize("target", ["package", "manifest", "prepared_tree"])
+def test_inputs_reverified_after_download_and_handoff(tmp_path, monkeypatch, target):
+    request = make_request(tmp_path, prepared=target == "prepared_tree")
+    install_trial(monkeypatch, request)
+    if target == "package":
+        request.volumes[0].write_bytes(b"changed package")
+    elif target == "manifest":
+        request.tree_manifest.write_bytes(b"changed manifest")
+    else:
+        (request.prepared_payload / "SatelliteTerminalManager.exe").write_bytes(b"changed tree")
+    assert updater_main.execute_update(request) == 3
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert not list(tmp_path.glob("install.bak.*"))
+
+
+def test_trial_configuration_rollback_preserves_recordings(tmp_path, monkeypatch):
+    request = make_request(tmp_path)
+    recording = request.settings_directory / "important.sdb"
+    recording.write_bytes(b"recorded-data")
+    original = (request.settings_directory / "settings.json").read_bytes()
+    def migrate():
+        (request.settings_directory / "settings.json").write_text('{"schema":2}')
+        (request.settings_directory / "settings.json.bak").write_text("new backup")
+    install_trial(monkeypatch, request, "exit", migrate)
+    assert updater_main.execute_update(request) == 3
+    assert (request.settings_directory / "settings.json").read_bytes() == original
+    assert not (request.settings_directory / "settings.json.bak").exists()
+    assert recording.read_bytes() == b"recorded-data"
+    journal = InstallJournal.load(request.transaction_dir / "journal.json")
+    (request.settings_directory / "settings.json").write_text('{"user_changed_after_recovery":true}')
+    journal.rollback()
+    assert "user_changed_after_recovery" in (request.settings_directory / "settings.json").read_text()
+
+
+def test_trial_settings_restored_when_process_identity_lookup_fails(tmp_path, monkeypatch):
+    import psutil
+    request = make_request(tmp_path)
+    settings_file = request.settings_directory / "settings.json"
+    original = settings_file.read_bytes()
+    trial = install_trial(monkeypatch, request, on_start=lambda: settings_file.write_text('{"schema":2}'))
+    def lookup_failure(_pid):
+        raise psutil.AccessDenied(trial.pid)
+    monkeypatch.setattr(psutil, "Process", lookup_failure)
+    assert updater_main.execute_update(request) == 3
+    assert trial.terminated
+    assert settings_file.read_bytes() == original
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+
+
+@pytest.mark.parametrize("binding", ["environment", "receipt", "unknown", "denied", "unresolved_exe"])
+def test_recovery_confirms_trial_exit_when_updater_dies_before_pid_journal(tmp_path, monkeypatch, binding):
+    import psutil
+    from satellite_debug_tool.updater.health import HEALTH_ENV
+    from satellite_debug_tool.updater.recovery import recover_installation, RecoveryError
+    request = make_request(tmp_path)
+    settings_file = request.settings_directory / "settings.json"
+    original_settings = settings_file.read_bytes()
+    trial = install_trial(monkeypatch, request, on_start=lambda: settings_file.write_text('{"schema":2}'))
+    trial.info = {"pid": trial.pid, "exe": None if binding == "unresolved_exe" else trial.exe(),
+                  "name": "SatelliteTerminalManager.exe"}
+    if binding == "denied":
+        def denied(): raise psutil.AccessDenied(trial.pid)
+        trial.environ = denied
+    else:
+        trial.environ = lambda: ({HEALTH_ENV: str(request.transaction_dir / "health-request.json")}
+                                  if binding == "environment" else {})
+    monkeypatch.setattr(psutil, "process_iter", lambda **_kwargs: [trial] if trial.poll() is None else [])
+    # 初次事务仍需以原应用已退出为前提；仅在启动新版后让扫描观察到该进程。
+    monkeypatch.setattr(updater_main, "require_installation_idle", lambda *_args: None)
+    original_start = updater_main._start_trial
+    class UpdaterPowerLoss(BaseException): pass
+    def interrupted_start(request, context):
+        original_start(request, context)
+        if binding == "receipt":
+            started = context.message("started")
+            started.update(pid=trial.pid, created=trial.create_time(), executable=trial.exe())
+            write_atomic_json(context.directory / "health-process.json", started)
+        raise UpdaterPowerLoss()
+    monkeypatch.setattr(updater_main, "_start_trial", interrupted_start)
+    with pytest.raises(UpdaterPowerLoss):
+        updater_main.execute_update(request)
+    journal_path = request.transaction_dir / "journal.json"
+    assert "trial_pid" not in InstallJournal.load(journal_path).data
+    rename = Path.rename
+    renamed = []
+    def track_rename(path, destination):
+        renamed.append(path)
+        return rename(path, destination)
+    monkeypatch.setattr(Path, "rename", track_rename)
+    if binding in {"environment", "receipt"}:
+        assert recover_installation(journal_path) == "rolled_back"
+        assert trial.terminated
+        assert len(renamed) == 2
+        assert settings_file.read_bytes() == original_settings
+    else:
+        with pytest.raises(RecoveryError):
+            recover_installation(journal_path)
+        assert not trial.terminated
+        assert renamed == []
+        assert settings_file.read_text() == '{"schema":2}'
+        assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
+
+
+def test_failed_install_keeps_lock_through_rollback(tmp_path, monkeypatch):
+    from satellite_debug_tool.updater.recovery import InstallationLock, RecoveryError
+    request = make_request(tmp_path)
+    install_trial(monkeypatch, request, "exit")
+    original = InstallJournal.rollback
+    observed = []
+    def rollback(self):
+        with pytest.raises(RecoveryError):
+            with InstallationLock(request.install_dir):
+                pytest.fail("another updater entered before recovery")
+        observed.append(True)
+        return original(self)
+    monkeypatch.setattr(InstallJournal, "rollback", rollback)
+    assert updater_main.execute_update(request) == 3
+    assert observed
+
+
+@pytest.mark.parametrize("alive", [True, False])
+def test_recovery_after_committed_journal_before_commit_delivery(tmp_path, monkeypatch, alive):
+    import psutil
+    from satellite_debug_tool.updater.recovery import recover_installation
+    request = make_request(tmp_path)
+    trial = install_trial(monkeypatch, request)
+    assert updater_main.execute_update(request) == 0
+    commit = request.transaction_dir / "health-commit.json"
+    commit.unlink()
+    if not alive:
+        def absent(_pid): raise psutil.NoSuchProcess(trial.pid)
+        monkeypatch.setattr(psutil, "Process", absent)
+    assert recover_installation(request.transaction_dir / "journal.json") == "committed"
+    journal = InstallJournal.load(request.transaction_dir / "journal.json")
+    assert journal.data["application_phase"] == ("ready" if alive else "closed")
+    assert commit.exists() is alive
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import queue
 from typing import Callable, Optional
 import uuid
 
@@ -22,6 +23,7 @@ class ProductionPowerWorker(QThread):
     power_ready = Signal(object, object, object, str)
     power_failed = Signal(str, object, str)
     power_stopped = Signal(object, object, str)
+    output_changed = Signal(bool, object, object, str)
 
     def __init__(
         self,
@@ -36,6 +38,7 @@ class ProductionPowerWorker(QThread):
         self._adapter_factory = adapter_factory
         self._stop_requested = threading.Event()
         self._action_id = f"BATCH-PWR-{uuid.uuid4().hex[:12]}"
+        self._commands: queue.Queue[bool] = queue.Queue(maxsize=2)
 
     @property
     def action_id(self) -> str:
@@ -43,6 +46,11 @@ class ProductionPowerWorker(QThread):
 
     def request_verified_off(self) -> None:
         self._stop_requested.set()
+
+    def request_output(self, enabled: bool) -> None:
+        if self._stop_requested.is_set():
+            raise RuntimeError("production power owner is stopping")
+        self._commands.put_nowait(bool(enabled))
 
     def run(self) -> None:
         adapter: Optional[GwInstekPswAdapter] = None
@@ -54,11 +62,25 @@ class ProductionPowerWorker(QThread):
                 result = adapter.disable_output(fixture_action_id=self._action_id)
                 self.power_stopped.emit(result, adapter.records, self._action_id)
                 return
-            adapter.prepare_output_off(fixture_action_id=self._action_id)
+            prepared = adapter.prepare_output_off(fixture_action_id=self._action_id)
+            if self._stop_requested.is_set():
+                self.power_stopped.emit(prepared, adapter.records, self._action_id)
+                return
             result = adapter.enable_output(fixture_action_id=self._action_id)
             self.power_ready.emit(identity, result, adapter.records, self._action_id)
             while not self._stop_requested.wait(0.1):
-                continue
+                try:
+                    enabled = self._commands.get_nowait()
+                except queue.Empty:
+                    continue
+                if enabled:
+                    adapter.prepare_output_off(fixture_action_id=self._action_id)
+                    if self._stop_requested.is_set():
+                        break
+                    result = adapter.enable_output(fixture_action_id=self._action_id)
+                else:
+                    result = adapter.disable_output(fixture_action_id=self._action_id)
+                self.output_changed.emit(enabled, result, adapter.records, self._action_id)
             result = adapter.disable_output(fixture_action_id=self._action_id)
             self.power_stopped.emit(result, adapter.records, self._action_id)
         except Exception as exc:

@@ -1,0 +1,16 @@
+[Unit]
+Description=Journal evidence for failed Satellite Terminal Tool unit %i
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/journalctl --no-pager --lines=80 --output=short-iso --unit=%i
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=satellite-updates-failure
+SyslogLevel=err
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

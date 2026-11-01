@@ -42,21 +42,13 @@ from .models import (
     ProductValue,
     RfCapabilities,
     SatelliteMode,
-    TrackingPhase,
+    tracking_phase_from_wire,
     stamp_snapshot_received,
     stamp_snapshot_source,
 )
 from .timestamps import U32UptimeUnwrapper
 
 
-_TRACKING_PHASES = {
-    0: TrackingPhase.STANDBY,
-    1: TrackingPhase.ACQUIRING,
-    2: TrackingPhase.FINE_TRACKING,
-    3: TrackingPhase.LOCKED,
-    4: TrackingPhase.REACQUIRING,
-    5: TrackingPhase.FAULT,
-}
 _NAVIGATION_STATES = {
     0: NavigationState.UNAVAILABLE,
     1: NavigationState.INITIALIZING,
@@ -542,7 +534,7 @@ class ProductServiceStore(QObject):
                 tracking_phase=self._dynamic(
                     fast.valid_mask,
                     1,
-                    _TRACKING_PHASES.get(fast.tracking_phase, TrackingPhase.UNKNOWN),
+                    tracking_phase_from_wire(fast.tracking_phase),
                     fast.timestamp,
                     stale,
                 ),

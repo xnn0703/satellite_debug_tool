@@ -1,0 +1,6 @@
+{
+  "host": "updates.example.com",
+  "port": 22,
+  "username": "satellite_upload",
+  "candidate_root": "/srv/satellite-updates/incoming"
+}

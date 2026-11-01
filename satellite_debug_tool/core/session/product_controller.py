@@ -340,6 +340,8 @@ class CaptureProfileController(QObject):
         *,
         command_sender: SessionCommandSender | None = None,
         operation_gateway: SessionOperationGateway | None = None,
+        recorder_kind: SessionRecorderKind | None = SessionRecorderKind.CUSTOMER_FULL_CAPTURE,
+        retain_full_capture_operation: bool = True,
     ) -> None:
         super().__init__(parent)
         self._session = session
@@ -349,6 +351,8 @@ class CaptureProfileController(QObject):
             command_sender,
         )
         self._command_sender = self._operation_gateway
+        self._recorder_kind = recorder_kind
+        self._retain_full_capture_operation = bool(retain_full_capture_operation)
         self._pending_request_id: int | None = None
         self._pending_target: bool | None = None
         self._pending_epoch: int | None = None
@@ -391,7 +395,7 @@ class CaptureProfileController(QObject):
             return False
         target = bool(support_full)
         acquired_recorder = False
-        if target and not self.recording_lease_active:
+        if target and self._recorder_kind is not None and not self.recording_lease_active:
             acquire_recorder = getattr(
                 self._operation_gateway,
                 "acquire_recorder",
@@ -406,7 +410,7 @@ class CaptureProfileController(QObject):
                 return False
             self._recorder_lease = acquire_recorder(
                 self._lease_token,
-                kind=SessionRecorderKind.CUSTOMER_FULL_CAPTURE,
+                kind=self._recorder_kind,
             )
             if self._recorder_lease is None:
                 self.finished.emit(
@@ -483,7 +487,9 @@ class CaptureProfileController(QObject):
             if response.applied_mask & _CAPTURE_PROFILE_APPLIED_MASK:
                 self._set_resync_required(False)
                 self._clear_pending(
-                    release_operation=not target,
+                    release_operation=(
+                        not target or not self._retain_full_capture_operation
+                    ),
                     release_recorder=not target,
                 )
                 self.finished.emit(target, True, CaptureProfileResult.ACK.value)
