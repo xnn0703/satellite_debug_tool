@@ -1,6 +1,6 @@
-# Satellite Debug Tool
+# 卫通终端管理工具 / Satellite Terminal Manager
 
-卫星通信相控阵设备上位机，基于 PySide6，统一承载客户操作、内部工程诊断和批量试产。
+卫星通信相控阵设备上位机，基于 PySide6，统一承载客户操作、内部工程诊断和批量试产。客户交付名称为“卫通终端管理工具 / Satellite Terminal Manager”。
 
 当前工程架构、运行约定和验证要求以根目录 [`AGENTS.md`](AGENTS.md) 为唯一权威入口。
 
@@ -15,11 +15,15 @@
 - 设备管理：设备信息、参数表读写、工程 OTA，以及客户签名固件包 OTA
 - 批量试产：产品隔离的 recipe、设备身份门禁、批次状态与 SDB 证据；正式工艺阈值和量产放行仍需独立验收
 - 离线地图：Playback / Log 检测 `gps_lat` / `gps_lon` 后显示轨迹和事件 marker
-- 自动更新：GitHub Release 检查、下载、替换
+- 应用更新：仅运维版使用 TUF 签名更新源；Windows 可自动安装，macOS 校验下载包后由用户手动替换。客户版通过人工完整包交付，不提供应用在线更新。设备固件 OTA 与应用更新分开
 - 国际化：跟随系统 / 简体中文 / English，运行时即时切换
 - 主题：深色 / 深色高对比 / 浅色
 
 ## 安装与运行
+
+发行包分为客户版和运维全量版。客户安装目录为 `SatelliteTerminalManager`，macOS 包为 `SatelliteTerminalManager.app`；完整包归档名为 `satellite_terminal_manager-<windows|macos>-<arch>-v<version>.<7z|zip>`。运维全量版目录/app 名带 `Ops`，归档名带 `-ops-`；两版 Windows 主程序均为 `SatelliteTerminalManager.exe`。Windows 发行构建由 GitHub Actions 完成，macOS 发行构建在本机完成；完整包通过 Aliyun `https://60.205.157.141` 分发。内部 Python 包、user 构建身份、bundle identifier 和配置目录沿用既有名称。
+
+发行状态、计划、验收与实际发布记录见 [`M53_manager_naming_release_plan.md`](doc/M53_manager_naming_release_plan.md)、[`M53_manager_naming_release_acceptance.md`](doc/M53_manager_naming_release_acceptance.md) 和 [`M53_manager_naming_release_dev_log.md`](doc/M53_manager_naming_release_dev_log.md)。
 
 ```bash
 # 建议先建虚拟环境

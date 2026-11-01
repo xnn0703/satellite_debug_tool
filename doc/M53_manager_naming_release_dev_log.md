@@ -1,6 +1,6 @@
 # M53 开发与发布记录
 
-2026-11-02。用户确认命名并授权发布 v1.9.0；计划与验收先行。当前 HEAD 479e014，工作区 M47–M52 为本次对话已授权实现，随本次功能版本交付；发布仅用 github 和既有 ECS。
+2026-11-02。用户确认命名并授权发布 v1.9.0；计划与验收先行。初始检查时 HEAD 为479e014，工作区 M47–M52 为本次对话已授权实现，随本次功能版本交付；发布仅用 github 和既有 ECS。后续候选与实际验收按下文时间顺序追加。
 
 ## 进行中
 
@@ -19,7 +19,7 @@
 
 - 发布前全量：`.venv/bin/python -m pytest satellite_debug_tool/tests -q`，2063 passed / 246.05 秒，日志 `/tmp/m53-full-tests.log`。新增服务器人工交付工具若在此后完成，将单列专项及构建环境全量。
 - 翻译检查1497条、compileall和git diff --check通过。
-- GitHub master与本地HEAD均479e014，v1.9.0标签/Release尚不存在；本轮源码/tag使用github，应用二进制使用ECS。
+- 初始检查时GitHub master与本地HEAD均479e014，v1.9.0标签/Release尚不存在；本轮源码/tag使用github，应用二进制使用ECS。
 - 服务器完整user交付新增13项专项通过：receipt/包内身份、CRC、SHA、公开权限、同名冲突及安全路径；只复制已校验完整包，不进入ops在线渠道。
 - 本地AGENTS已按用户要求同步M47–M53实际领域owner、预置、默认录制路径、报告质量、命名、构建与直链交付。
 
@@ -96,3 +96,13 @@
 - 纯真实Screen的5000行探针在三个独立发布Python3.11进程保留329,934个Cell及9,998个Style，默认GC enabled/(700,10,10)。在读取 `__dict__` 前取得tracemalloc实际占用：基线36,773,822B，Style/Cell slots候选23,176,446B，slots+行尾直接追加23,176,382B，约减少37%。100字符普通追加的Cell构造从200个临时blank+100个glyph降为100个glyph。直接读取 `__dict__` 会物化Python3.11的延迟字典，因此未用该访问后的表观字节夸大收益；原始记录 `/tmp/m53-terminal-budget-{baseline,slots,slots_append}.json`。
 - 根据分配链和实测，Style/Cell保持冻结值语义并使用slots，正常width1行尾追加在组合字处理和容量检查之后直接保存最终单元；覆盖、宽字与游标补空继续使用既有模型。资源预算回归旧源码稳定2 failed / 39 passed，修复后终端语义、cadence及运动组件共63 passed；独立review确认字段读取、style快照、dataclasses.replace与光标/宽字边界一致。GC策略保持原样，完整帧耗时与Windows结果继续独立记录。
 - 最终合并工作树发布环境全量 `2130 passed / 276.63s`（`/tmp/m53-cadence-cell-motion-full.log`）；真实观测窗口累计消费737,280B，即92,160B/s，积压峰值10KiB，frame p50/p95/max为14.350/21.690/134.798ms，最长帧GC重合119.823ms。此轮Mac满足150ms退化目标，Windows继续用相同源码独立验证。1496条翻译、compileall与diff检查通过。
+
+
+## Windows 长帧与终端不可变值复用
+
+- 候选 `97c7625` 的 Windows run `41344642352` 两版 Source regression 和翻译均通过，尚未作为正式发行。实时输出确认 user 帧最大223.869ms，GC重合最大194.741ms，gen2最大194.152ms/4次；持续吞吐通过不代表150ms满载帧目标通过。完整日志及最终计数继续补录。
+- 终端已是不可变slots值对象，但5000行仍为重复字形和样式保留大量同值Cell，回收扫描与分配触发造成长尾。每个Screen以完整字形、不可变样式、格宽为键拥有最多4096项值池，覆盖仍替换行单元，组合字继续replace，reset清理自身池。构造器直接包Cell类型，不引用Screen；没有全局池、GC开关或阈值放宽。
+- 模型资源回归旧实现8 failed/39 passed（`/tmp/m53-cell-pool-old-fail.log`），新模型47 passed/0.21s（`/tmp/m53-cell-pool-fixed.log`），覆盖同值复用、5000行保留、6000不同字符与4096上限、独立Screen/reset、外部保留构造器时Screen释放、组合字和SGR快照。
+- 满载持续测试将既有150ms帧上限纳入自动断言，仍保留原8秒窗口、92,160B/s目标、积压与收尾验收；全量与两平台实际构建继续独立记录。
+
+- 值复用后的发布环境全量 `2136 passed / 286.49s`（`/tmp/m53-cell-pool-full.log`），消费92,160B/s；帧p50/p95/max为17.228/19.514/23.976ms，8秒窗口GC计数为0，默认GC策略保持。1496条翻译、compileall与diff检查通过；Windows按新候选独立验收。

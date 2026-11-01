@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import unicodedata
+import weakref
 
 import pytest
 
@@ -62,8 +64,8 @@ def test_cell_and_cursor_semantics(payload, text, column):
 
 
 @pytest.mark.parametrize("chunk_size", (1, 100))
-def test_plain_text_constructs_one_cell_per_added_column(monkeypatch, chunk_size):
-    """连续可见文字每新增一格只分配一个 Cell，分包保持相同资源预算。"""
+def test_plain_text_cell_construction_is_bounded_by_added_columns(monkeypatch, chunk_size):
+    """连续文字的构造量有界，等值格复用且分包保持同一资源预算。"""
     constructed = 0
     initialize = TerminalCell.__init__
 
@@ -79,7 +81,8 @@ def test_plain_text_constructs_one_cell_per_added_column(monkeypatch, chunk_size
         screen.feed([("text", payload[start:start + chunk_size])])
     assert screen.row.text == payload
     assert screen.column == len(screen.row.cells) == len(payload)
-    assert constructed == len(payload)
+    assert constructed <= len(payload)
+    assert constructed == len(set(payload))
 
 
 def test_plain_append_preserves_column_capacity():
@@ -165,3 +168,81 @@ def test_erase_to_start_at_last_column_keeps_capacity():
     screen.feed([('right', '999'), ('el', '1')])
     assert screen.column == 8
     assert len(screen.row.cells) == 8
+
+
+def test_repeated_rows_keep_one_immutable_cell_value() -> None:
+    """满5000行的重复值只保留一个 Cell，行和光标仍由 Screen 独立拥有。"""
+    screen = TerminalScreen(lambda: "stamp", max_rows=5000)
+    screen.feed([("text", "A\n" * 5000)])
+    assert len(screen.rows) == 5000
+    assert [row.text for row in screen.rows] == ["A"] * 4999 + [""]
+    assert len({id(cell) for row in screen.rows for cell in row.cells}) == 1
+
+
+def test_cell_value_pools_are_screen_local_and_reset_owned() -> None:
+    first = TerminalScreen(lambda: "stamp")
+    second = TerminalScreen(lambda: "stamp")
+    first.feed([("text", "AA")])
+    second.feed([("text", "A")])
+    previous = first.row.cells[0]
+    assert previous is first.row.cells[1]
+    assert previous is not second.row.cells[0]
+    first.reset()
+    assert first._cell_value.cache_info().currsize == 0
+    assert first.row.text == "" and first.column == 0
+    assert second.row.text == "A" and second._cell_value.cache_info().currsize == 1
+    first.feed([("text", "A")])
+    assert first.row.cells[0] == previous
+    assert first.row.cells[0] is not previous
+
+
+def test_cell_value_pool_wrapper_keeps_screen_lifetime_independent() -> None:
+    screen = TerminalScreen(lambda: "stamp")
+    screen.feed([("text", "A")])
+    wrapper = screen._cell_value
+    reference = weakref.ref(screen)
+    del screen
+    assert reference() is None
+    assert wrapper.cache_info().currsize == 1
+
+
+def test_cell_value_pool_capacity_preserves_diverse_text() -> None:
+    glyphs = []
+    for number in range(0x100, 0x10000):
+        char = chr(number)
+        if (
+            unicodedata.category(char)[0] in ("L", "N")
+            and unicodedata.combining(char) == 0
+            and unicodedata.east_asian_width(char) in ("N", "Na", "A", "H")
+        ):
+            glyphs.append(char)
+        if len(glyphs) == 6000:
+            break
+    assert len(glyphs) == 6000
+    text = "".join(glyphs)
+    screen = TerminalScreen(lambda: "stamp")
+    screen.feed([("text", text)])
+    assert screen.row.text == text and screen.column == 6000
+    assert len({id(cell) for cell in screen.row.cells}) == 6000
+    assert screen._cell_value.cache_info().maxsize == 4096
+    assert screen._cell_value.cache_info().currsize == 4096
+
+
+def test_combining_text_keeps_cached_base_cell_immutable() -> None:
+    screen = TerminalScreen(lambda: "stamp")
+    combined = "e" + "\u0301" * 100
+    screen.feed([("text", combined + "ee")])
+    assert screen.row.text == combined + "ee"
+    assert screen.row.cells[0].text == combined
+    assert screen.row.cells[1].text == "e"
+    assert screen.row.cells[1] is screen.row.cells[2]
+    assert screen.row.cells[0] is not screen.row.cells[1]
+    assert screen._cell_value.cache_info().currsize == 1
+
+
+def test_equal_sgr_snapshots_share_only_equal_cell_values() -> None:
+    screen = TerminalScreen(lambda: "stamp")
+    screen.feed([("sgr", "31"), ("text", "A"), ("sgr", "0"), ("text", "A"), ("sgr", "31"), ("text", "A")])
+    assert [(cell.text, cell.style.foreground) for cell in screen.row.cells] == [("A", 31), ("A", None), ("A", 31)]
+    assert screen.row.cells[0] is screen.row.cells[2]
+    assert screen.row.cells[0] is not screen.row.cells[1]

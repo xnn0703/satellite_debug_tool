@@ -2,7 +2,9 @@
 
 正式发行使用 `scripts/promote_release.py fetch / prepare / commit`。签名发生在发布者本机；纯 SFTP 只传公开的 TUF 元数据和发行文件。root/targets 私钥、本地发布账本、publication.json 均不上传。构建账号只有 incoming 权限，正式发布使用独立 SFTP 账号；两者使用独立核验的 known_hosts 和固定 SSH key。
 
-## 当前现场状态（2026-11-02）
+本页“当前现场状态”及各处“本轮”描述是 M52 阶段的 2026-11-02 历史快照。当前 v1.9.0 发行状态以 [M53 开发记录](M53_manager_naming_release_dev_log.md)和[验收标准](M53_manager_naming_release_acceptance.md)为准。
+
+## M52 现场快照（2026-11-02）
 
 北京 ECS `i-2zec7150rri51esjj28f` 已部署，生产应用根为 `https://60.205.157.141/v1/apps/satellite-terminal-tool/`。空生产仓库已通过实际客户端校验，记录 root1/targets1/snapshot2/timestamp3；已有远端 timestamp，当前仍没有正式应用包。本机受控目录为 `~/.config/satellite-release`，其中包含 upload.json、publish.json、known_hosts、SSH keys、repository、venv；root/targets 私钥仅在其中的 keys 目录，服务端仅持 timestamp/snapshot 低角色密钥。密钥和凭据内容不进入本页或源码。
 

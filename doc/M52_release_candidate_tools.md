@@ -1,8 +1,8 @@
 # M52 本地构建与候选上传工具
 
-本页记录已实现的工具合同。源码测试和模拟 SFTP 通过不代表真实 Windows 冻结、平台签名、ECS 网络、账号权限或公开发行验收通过。
+本页记录 M52 阶段实现的候选工具合同及当时的现场证据。下述 M52 现场状态是 2026-11-02 的历史快照，不代表当前 v1.9.0 的发行状态；本轮进度与最终验收以 [M53 发布记录](M53_manager_naming_release_dev_log.md)和[验收标准](M53_manager_naming_release_acceptance.md)为准。源码测试和模拟 SFTP 通过不代表真实 Windows 冻结、平台签名、ECS 网络、账号权限或公开发行验收通过。
 
-2026-11-02 现场补验：ECS 已部署，真实候选 SFTP 上传与回读、上传账号写 public 拒绝均 PASS；IP HTTPS Range 和 Downloader 续传摘要 PASS。GitHub `release-candidate` 环境已配置 `v*` tag 限制、owner reviewer、上传 secrets/config variable。工作流源码尚未 commit/push/触发，没有真实 CI 构建或正式应用包。探针结果和待验边界见 [部署记录](M52_server_deployment_task.md)。
+2026-11-02 M52 现场快照：ECS 已部署，真实候选 SFTP 上传与回读、上传账号写 public 拒绝均 PASS；IP HTTPS Range 和 Downloader 续传摘要 PASS。GitHub `release-candidate` 环境已配置 `v*` tag 限制、owner reviewer、上传 secrets/config variable。当时工作流源码尚未 commit/push/触发；后续已进入 M53 v1.9.0 候选流程。候选构建与正式发行事实继续记录在 M53 发布记录中。探针结果和 M52 当时待验边界见 [部署记录](M52_server_deployment_task.md)。
 
 ## 身份与不可变候选
 
@@ -43,7 +43,7 @@ tag/dispatch 先由 `scripts/resolve_release.py` 将 tag 解析为确切 SHA；�
 gh workflow run build.yml --ref vX.Y.Z -f tag=vX.Y.Z
 ```
 
-实际执行前将示例替换为已存在且与版本源匹配的 tag。从 master dispatch 即使成功解析输入 tag，上传 job 仍会被 environment 的 ref 规则阻断；继续使用 tag ref，不放宽该权限。此处仅说明后续操作，本轮未触发工作流。
+实际执行前将示例替换为已存在且与版本源匹配的 tag。从 master dispatch 即使成功解析输入 tag，上传 job 仍会被 environment 的 ref 规则阻断；继续使用 tag ref，不放宽该权限。以上为工具操作说明；M52 记录的“本轮未触发”只描述当时快照，当前 M53 v1.9.0 候选状态见本页开头链接。
 
 ## Mac 本地发行
 

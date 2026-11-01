@@ -411,6 +411,8 @@ class TestSustainedRate:
             assert injected_rate >= _SERIAL_RATE_BPS * 0.95, "注入端未达目标速率（TCP 背压）"
             assert rate >= _SERIAL_RATE_BPS * 0.95, "UI 实际消费速率未达目标"
             assert backlog_peak <= ring.capacity_bytes + 65536, "积压越过环容量合同"
+            assert timings.frames, "持续消费窗口需要实际帧耗时证据"
+            assert max(frame["frame_ms"] for frame in timings.frames) <= 150.0, "帧回调超出满载退化上限"
             assert workspace._output_document.blockCount() <= _DOC_BLOCK_LIMIT + 1
 
             # 突发恢复指标（独立于持续速率）：停止注入后 5 s 内归零

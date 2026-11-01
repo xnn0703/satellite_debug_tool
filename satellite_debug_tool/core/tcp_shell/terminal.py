@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import codecs
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from typing import Callable
 import unicodedata
 
@@ -161,12 +162,15 @@ class TerminalScreen:
     def __init__(self, timestamp: Callable[[], str], *, max_rows: int = 5000, max_columns: int = 16384) -> None:
         if max_rows < 1 or max_columns < 2:
             raise ValueError('terminal capacity must be positive')
+        # 每个 Screen 独占有界不可变值池，构造器只引用类型，生命周期独立。
+        self._cell_value = lru_cache(maxsize=4096)(TerminalCell)
         self._timestamp = timestamp
         self.max_rows = max_rows
         self.max_columns = max_columns
         self.reset()
 
     def reset(self) -> None:
+        self._cell_value.cache_clear()
         self.rows = [TerminalRow()]
         self.column = 0
         self.style = TerminalStyle()
@@ -180,7 +184,7 @@ class TerminalScreen:
             self.row.timestamp = self._timestamp()
 
     def _blank(self) -> TerminalCell:
-        return TerminalCell(style=self.style)
+        return self._cell_value(' ', self.style, 1)
 
     def _pad(self, length: int) -> None:
         self.row.cells.extend(self._blank() for _ in range(length - len(self.row.cells)))
@@ -210,15 +214,15 @@ class TerminalScreen:
             return
         # 行尾单格追加直接保存最终字形，覆盖和宽字继续处理既有单元格。
         if width == 1 and self.column == len(self.row.cells):
-            self.row.cells.append(TerminalCell(char, self.style, width))
+            self.row.cells.append(self._cell_value(char, self.style, width))
             self.column += width
             return
         self._pad(self.column + width)
         for index in range(self.column, self.column + width):
             self._clear_wide(index)
-        self.row.cells[self.column] = TerminalCell(char, self.style, width)
+        self.row.cells[self.column] = self._cell_value(char, self.style, width)
         if width == 2:
-            self.row.cells[self.column + 1] = TerminalCell('', self.style, 0)
+            self.row.cells[self.column + 1] = self._cell_value('', self.style, 0)
         self.column += width
 
     def _sgr(self, params: str) -> None:
