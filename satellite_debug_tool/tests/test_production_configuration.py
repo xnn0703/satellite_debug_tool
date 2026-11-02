@@ -53,10 +53,11 @@ def test_m51_builtin_electrical_catalog_and_custom_copy_preserve_hidden_fields()
     catalog = builtin_product_templates()
 
     assert [(item.product, item.supply_voltage_v, item.per_device_current_a) for item in catalog] == [
-        (product, voltage, current)
+        (product, voltage, 8.0 if product == "afd01b2" and voltage == 24.0 else current)
         for product in ("afd01b2", "afd01c", "afd01d")
         for voltage, current in ((12.0, 9.0), (24.0, 5.0))
     ]
+    assert {item.revision for item in catalog} == {2}
     source = catalog[0]
     copied = source.custom_copy(template_id="customer-48v", display_name="客户 48 V")
     assert copied.source == "custom"
@@ -65,6 +66,48 @@ def test_m51_builtin_electrical_catalog_and_custom_copy_preserve_hidden_fields()
     assert copied.tests == source.tests
     assert copied.expected == source.expected
     assert copied.tests is not source.tests
+
+
+def test_m54_new_recipe_freezes_per_test_time_and_policy_without_rewriting_template(tmp_path: Path) -> None:
+    from dataclasses import replace
+    store = _store(tmp_path)
+    resolved = store.resolve("afd01c-standard", "line-1", 1)
+    source = replace(resolved.product_template, tests={
+        "static_acquisition": {"enabled": True, "duration_s": 1800, "customer_note": "retained"},
+        "locked_rocking": {"enabled": True, "duration_s": 3600},
+    })
+    original = source.to_payload()
+    payload = replace(resolved, product_template=source).to_recipe_payload()
+    recipe = ProductionRecipe.from_mapping(payload)
+    assert recipe.schema_version == 2
+    assert recipe.duration_for("static_acquisition") == 1800
+    assert recipe.duration_for("locked_rocking") == 3600
+    motion = payload["fixtures"]["motion_platform"]["profile"]
+    assert motion["execution_mode"] == "until_observation_complete"
+    assert "steady_duration_s" not in motion
+    assert payload["duration_policy"]["tracking_criteria"]["acquisition_timeout_s"] == 300
+    assert payload["duration_policy"]["window_includes_acquisition"] is True
+    assert "minimum_effective_observation_s" not in payload["duration_policy"]
+    assert "convergence_is_outside_observation" not in payload["duration_policy"]
+    assert source.to_payload() == original
+    assert recipe.payload["tests"]["static_acquisition"]["customer_note"] == "retained"
+
+
+@pytest.mark.parametrize("count,current,power", [(1, 8, 192), (2, 16, 384), (3, 24, 576)])
+def test_m54_b2_24v_capacity_uses_eight_amps_per_device(tmp_path, count, current, power):
+    store = _store(tmp_path)
+    resolved = store.resolve("builtin-afd01b2-24v", "line-1", count)
+    assert resolved.total_current_a == current
+    assert resolved.total_power_w == power
+
+
+def test_m54_four_b2_units_exceed_psw_capacity_and_five_amp_branch_is_insufficient(tmp_path):
+    store = _store(tmp_path / "full")
+    with pytest.raises(ProductionConfigurationError, match="required current"):
+        store.resolve("builtin-afd01b2-24v", "line-1", 4)
+    limited = _store(tmp_path / "limited", station=_station(branch_current_a=5))
+    with pytest.raises(ProductionConfigurationError, match="branch rating"):
+        limited.resolve("builtin-afd01b2-24v", "line-1", 1)
 
 
 def _power(*, revision: int = 1, rated_current_a: float = 27.0) -> PowerSupplyProfile:

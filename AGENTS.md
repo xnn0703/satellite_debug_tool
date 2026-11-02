@@ -119,7 +119,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 ### 关键约定
 
-- **M51 型号预置、保存与报告**：`core/production/configuration.py:builtin_product_templates()` 提供 AFD01B2/C/D 各 12 V / 9 A、24 V / 5 A 六项只读预置；内置项通过“复制为定制”编辑，配置修改保留完整 payload 和未知字段。`core/production/storage.py:resolve_production_storage()` 独占路径解析：默认 `follow_recording` 保存到 `paths.recording_dir/自动化测试/YYYY-MM-DD`，已有显式自定义目录迁入 `custom_root`；批次创建后冻结绝对输出目录。准备页“开始测试”完成创建与启动，正常终态自动收尾并生成报告，“下一批次”清理终态。PASS/FAIL/INCOMPLETE/ABORTED 均可生成 V01，报告结论与执行结论分别保存；`reporting.py` 以实际 SDB、解析错误及可分析遥测帧数形成 `analysis/data_quality.json`，执行 PASS 在这些证据缺失时形成报告 INCOMPLETE；批次写入 `batch_summary.json`，证据收集全部夹具 session。数据质量 COMPLETE 只表示这些已实现检查通过，设备性能、INS 精度、真实供电及物理验收仍需独立证据。见 `doc/M51_automation_presets_workflow_reports_*.md`。
+- **M51 型号预置、保存与报告**：`core/production/configuration.py:builtin_product_templates()` 提供 AFD01B2/C/D 的六项只读预置：12 V 均为 9 A，24 V 的 B2 为 8 A、C/D 为 5 A（M54 预置 R2）；内置项通过“复制为定制”编辑，配置修改保留完整 payload 和未知字段。`core/production/storage.py:resolve_production_storage()` 独占路径解析：默认 `follow_recording` 保存到 `paths.recording_dir/自动化测试/YYYY-MM-DD`，已有显式自定义目录迁入 `custom_root`；批次创建后冻结绝对输出目录。准备页“开始测试”完成创建与启动，正常终态自动收尾并生成报告，“下一批次”清理终态。PASS/FAIL/INCOMPLETE/ABORTED 均可生成 V01，报告结论与执行结论分别保存；`reporting.py` 以实际 SDB、解析错误及可分析遥测帧数形成 `analysis/data_quality.json`，执行 PASS 在这些证据缺失时形成报告 INCOMPLETE；批次写入 `batch_summary.json`，证据收集全部夹具 session。数据质量 COMPLETE 只表示这些已实现检查通过，设备性能、INS 精度、真实供电及物理验收仍需独立证据。见 `doc/M51_automation_presets_workflow_reports_*.md`。
 
 - **M50 自动化完整采集**：`core/production/fleet.py` 复用 `CaptureProfileController`，通过设备能力、精确 `SET_CAPTURE_PROFILE=support_full` 响应及实际分析帧共同确认采集 READY；单纯提高 Product 快状态订阅频率或创建 SDB 文件不能证明完整采集。生产 recorder 保持唯一 owner，连接/遥测代际变化重新建立准入。正常收尾先通过同一生产会话恢复 `customer_live`，确认恢复结果后再结束录制和断电；连接故障保留明确证据。见 `doc/M50_automation_full_capture_*.md`。
 
@@ -127,7 +127,9 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **M48 批次布局**：曲线按目标数量及冻结真实参与槽位呈现，独立等待卡不绑定设备；冻结后刷新设置目录保持已创建批次的配方和夹具事实。`core/production/presentation.py` 统一启用节点、夹具相关性和槽位投影；进度/夹具组件只消费执行快照、ResultStore 与 FixtureRuntime，工况时间保持 M47 唯一 owner。横向节点、大号倒计时和红/绿/灰夹具条位于曲线上方；配置详情和事件可折叠，窄窗内容/曲线滚动且底部操作固定。配色沿用用户页共享主题。见 `doc/M48_production_layout_*.md`。
 
-- **M47 批次执行与进度**：正式启动通过 `ProductionStartPreparation` 先完成电源准备再等待数量/身份准入；按钮与公开入口共用启动链路。`ProductionExecution` / `ProductionRunCoordinator` 驱动首轮台架步骤，`ProductionExecutionHardware` 复用运动组件和唯一电源 worker。2026-10-30 用户确认 SNR 判据：配方时长为固定工况窗口，初始搜星包含在窗口内，初次搜星以设备有效快照 `tracking_phase=LOCKED`、`locked=True` 且 `SNR>0` 确认完成，之后任一零值/负值永久判该设备失败；缺口保持窗口继续并产生 INCOMPLETE。界面消费同一进度快照，隐藏后领域执行持续。车辆/导航汇总缺少各自启动证据或性能判据时明确 INCOMPLETE，SNR 不替代导航性能结论。见 `doc/M47_production_execution_progress_*.md`。 MS 精度策略按用户最新确认（2026-10-30）：当前静置/摇摆 SNR 工况只要求 MS 新鲜有效姿态数据，三轴标准差仅记录和提示；超限不阻止启动、动态上电或运行，不修改工位门限。精度不足参考样本保留质量无效标记，不生成精度合格结论。 共享供电接线已确认：摇摆中上电通过显式 PowerOnRockingPhase 管理 MS 随 DUT 断电，关闭阶段只以平台反馈决定恢复供电；开启回读后重建参考采集并等待本次新帧，旧帧不准入，正常观察仍检查参考数据连接/新鲜度。
+- **M47/M54 批次执行与判据**：正式启动通过 `ProductionStartPreparation` 先准备电源，再等待数量、身份和完整采集准入。`ProductionExecution` / `ProductionRunCoordinator` 拥有执行与固定工况计时；`tracking_criteria.py:TrackingEvaluator` 是逐设备跟踪判定唯一 owner。新批次 schema 2 冻结每项 duration_s 与完整策略；初始搜星计入总时长，默认连续 LOCKED、locked=true、有限正 SNR 达 5 秒确认，搜星上限 300 秒。正式观察单次中断≤2秒、每30分钟≤5次（按工况时长比例向上取整）、累计≤正式观察时长0.5%，连续健康3秒确认恢复；失锁但正SNR仍是中断，数据缺口与非有限值独立形成质量结果，最大采样间隔2秒。锁定后摇摆在运动前逐帧确认稳定，运动观察阶段立即执行中断规则。普通性能失败继续后续项；共享故障和主动中止保留已确认性能失败。执行节点尊重配方显式启用；optional固件/空参数规则记录SKIPPED，导航判据尚未实现时明确INCOMPLETE。报告独立保存性能、执行完整性及采集质量，质量不足不能人工批准PASS。上述参数为2026-11-02确认的工程试行值，现场遮挡门限另验收。MS精度仍只记录提示，运行需有效新鲜姿态；共享供电的摇摆上电由PowerOnRockingPhase管理预期断电、平台反馈、恢复供电及本次新参考帧。见 `doc/M54_tracking_criteria_{plan,acceptance,dev_log}.md`，历史M47判据不重写已归档结果。
+
+- **M54 观察与运动时序**：`ProductionRunCoordinator.observation_started_at/observation_deadline` 是窗口时间源，判定器与倒计时消费相同起止。自动摇摆在新配方中声明 `execution_mode=until_observation_complete`，通过既有 `MotionTrajectoryRunner` 的持续轨迹合同（`steady_duration_s=None` 且显式stop owner）运行，观察结束后停止并反馈确认回中；工程有限轨迹保持有限时长及全路径预检。锁定后摇摆从首个已发送运动与新鲜移动反馈开始窗口，渐入期纳入评价；ARMED期间持续逐帧预锁，提交轨迹前重验。共享供电重启先等待新DUT代际、完整分析采集及新参考数据，准备阶段与评价窗口分开；300秒准备超时保存INCOMPLETE，迟到ready不撤销超时。前置搜星失败通过complete_preparation保存结果，保持硬件尚未启动的事实。
 
 - **M46 电源面板交还与 MS-6222 对照**：客户外接电源页“退出遥控（恢复面板）”由同一 worker 完成当前操作、发送 `SYST:COMM:RLST LOC` 并关闭会话；monitor 保留面板控制意图，后续页面活动变化保持停止监测，显式“保存并连接”恢复监测。写入成功只呈现“已发送返回本地指令”，输出与设定值保持。`FixtureTelemetryBus` 同时拥有当前参考姿态快照，独立 MS 页和摇摆台入口发布 INS 样本与连接生命周期；总览在设备 3D 角度下方显示共享 MS 参考，固定显示原始 INS/真实航向（三位小数），摇摆台继续显示标定后的设备 FRD/相对航向，3 秒过期及断开时清除实时数字。原始快照仅服务实时对照，SDB 姿态记录继续使用既有类型化总线合同。见 `doc/M46_power_local_ms6222_readout_*.md`。
 
@@ -238,7 +240,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M47_production_execution_progress_*.md` — 自动化开始准备、固定工况窗口、SNR 判据与执行进度。
 - `doc/M48_production_layout_*.md` — 准备/运行布局、冻结槽位与统一进度呈现。
 - `doc/M49_customer_lifecycle_*.md` — 客户显式电源连接、录制连续性证据与 Shell/应用退出收尾。
-- `doc/M50_automation_full_capture_*.md` — 自动化 support_full 协商、实际分析帧准入与恢复后收尾。
+- `doc/M50_automation_full_capture_*.md` — 自动化 support_full 协商、实际分析帧准入与恢复后收尾。 已知OFF/ON恢复使用新身份双游标、新Service、新request-ID ACK和时序相容分析帧；不要求uptime倒退。正式批次由Fleet恢复/结束原Production冻结授权，controller只借用，不创建或释放父owner。
 - `doc/M51_automation_presets_workflow_reports_*.md` — 六项型号供电预置、默认录制目录、开始/下一批次流程和报告质量边界。
 - `doc/M52_*` — 双平台候选构建、ECS 上传、TUF 可信更新与签名晋升。
 - `doc/M53_manager_naming_release_*.md`、`doc/M53_release_validation.json` — Manager 命名与 v1.9.0 四包发行计划、验收、逐包摘要和实际发布状态。

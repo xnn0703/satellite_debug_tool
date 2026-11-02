@@ -90,12 +90,13 @@ ATTEMPT_TRANSITIONS = {
     AttemptStatus.WAITING_PREREQUISITE: frozenset(
         {
             AttemptStatus.ARMED,
+            AttemptStatus.ANALYZING,
             AttemptStatus.INCOMPLETE,
             AttemptStatus.ABORTED,
         }
     ),
     AttemptStatus.ARMED: frozenset(
-        {AttemptStatus.RUNNING, AttemptStatus.INCOMPLETE, AttemptStatus.ABORTED}
+        {AttemptStatus.RUNNING, AttemptStatus.ANALYZING, AttemptStatus.INCOMPLETE, AttemptStatus.ABORTED}
     ),
     AttemptStatus.RUNNING: frozenset(
         {
@@ -106,6 +107,7 @@ ATTEMPT_TRANSITIONS = {
     ),
     AttemptStatus.ANALYZING: frozenset(
         {
+            AttemptStatus.SKIPPED,
             AttemptStatus.PASS,
             AttemptStatus.FAIL,
             AttemptStatus.INCOMPLETE,

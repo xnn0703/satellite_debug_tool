@@ -8,6 +8,7 @@ import pytest
 from satellite_debug_tool.core.product import Availability, ProductSnapshot, ProductValue, TrackingPhase
 from satellite_debug_tool.core.production import ProductionRecipe, ProductionRunCoordinator, ProductionRunState
 from satellite_debug_tool.core.production.execution import ProductionExecution, compare_parameter
+from satellite_debug_tool.core.production.tracking_criteria import TrackingCriteriaPolicy
 from satellite_debug_tool.core.protocol import ParaEntry, ParaTableReport, ServiceFastState
 from satellite_debug_tool.tests.test_production_run_coordinator import _running_store
 from satellite_debug_tool.tests.test_production_recipe import valid_recipe
@@ -31,6 +32,11 @@ class Core(QObject):
 def execution(tmp_path, test_id, clock, config=None):
     store = _running_store(tmp_path, (test_id,))
     payload = valid_recipe(duration_s=2)
+    # 两秒软件用例显式使用短窗口策略；正式默认仍为5/300/2/5/.005/3/2。
+    payload['duration_policy']['tracking_criteria'] = replace(
+        TrackingCriteriaPolicy(), acquisition_stable_s=.05, acquisition_timeout_s=1,
+        recovery_stable_s=.1, interruption_max_s=.25, interruption_ratio_max=.25,
+    ).to_payload()
     if config is not None:
         payload['tests'][test_id] = dict(enabled=True, **config)
     recipe = ProductionRecipe.from_mapping(payload)
@@ -38,7 +44,12 @@ def execution(tmp_path, test_id, clock, config=None):
     for serial in ('AFD01C-A', 'AFD01C-B'):
         core = Core()
         session = SimpleNamespace(serial_number=serial, core=core, endpoint=('127.0.0.1', 4004),
-                                  is_online=lambda: True)
+                                  is_online=lambda: True, capture_ready=True)
+        session.capture_restorations = []
+        def prepare_capture(restored_ns, session=session):
+            session.capture_restorations.append(restored_ns)
+            session.capture_ready = False
+        session.prepare_capture_after_power_cycle = prepare_capture
         def snapshot():
             base = ProductSnapshot()
             valid = lambda value: ProductValue(value, Availability.VALID, received_monotonic_s=clock[0])
@@ -50,6 +61,16 @@ def execution(tmp_path, test_id, clock, config=None):
     fleet = SimpleNamespace(send=lambda *args, **kw: sent.append(args) or True)
     service = ProductionExecution(store, 'BATCH-AUTO', recipe, fleet, sessions, clock=lambda: clock[0])
     return service, store, sent
+
+
+def confirm_prelock(service, clock):
+    """向运动前准备提供连续的新帧，样本和时钟都前进。"""
+    began = clock[0]
+    for index, offset in enumerate((0, .025, .05, .075), 1):
+        clock[0] = began + offset
+        for session in service.sessions.values():
+            session.core.record_received.emit(tracking_sample(12, timestamp=index))
+        service.tick()
 
 
 def test_fixed_window_counts_search_and_preserves_per_device_evidence(tmp_path):
@@ -97,7 +118,7 @@ def test_start_requests_real_fixture_preparation(qapplication_session, tmp_path)
     store.close()
 
 
-def test_initial_search_is_excluded_from_failure_and_transient_zero_is_permanent(qapplication_session, tmp_path):
+def test_initial_search_and_tolerated_transient_keep_independent_event_evidence(qapplication_session, tmp_path):
     clock = [0.0]
     service, store, _ = execution(tmp_path, 'static_acquisition', clock)
     service.fixture_ready = lambda: (True, '')
@@ -111,9 +132,13 @@ def test_initial_search_is_excluded_from_failure_and_transient_zero_is_permanent
     for serial in service.sessions:
         service.record_tracking_sample(serial, tracking_sample(0, phase=1, locked=False), 30)
         service.record_tracking_sample(serial, tracking_sample(12), 30.1)
+        service.record_tracking_sample(serial, tracking_sample(12), 30.16)
     # 两帧位于同一个 UI 计时片段；采样入口必须保留这次归零。
     service.record_tracking_sample('AFD01C-A', tracking_sample(0, phase=4, locked=False), 30.2)
     service.record_tracking_sample('AFD01C-A', tracking_sample(12), 30.3)
+    for serial in service.sessions:
+        service.record_tracking_sample(serial, tracking_sample(12), 30.5)
+        service.record_tracking_sample(serial, tracking_sample(12), 31.5)
     clock[0] = 31
     service.tick()
     clock[0] = 32
@@ -124,8 +149,10 @@ def test_initial_search_is_excluded_from_failure_and_transient_zero_is_permanent
     assert service.run.state is ProductionRunState.RUNNING
     service.finish_observation({'center': 'feedback_confirmed'})
     attempts = {a['serial_number']: a for a in store.list_attempts('BATCH-AUTO')}
-    assert attempts['AFD01C-A']['status'] == 'fail'
+    assert attempts['AFD01C-A']['status'] == 'pass'
     assert attempts['AFD01C-B']['status'] == 'pass'
+    assert attempts['AFD01C-A']['result_json']['tracking_criteria']['interruption_count'] == 1
+    assert attempts['AFD01C-B']['result_json']['tracking_criteria']['interruption_count'] == 0
     assert service.run.state is ProductionRunState.COMPLETE
     service.stop()
     store.close()
@@ -164,6 +191,7 @@ def test_dynamic_start_requires_changed_controller_feedback(qapplication_session
     clock = [0.0]
     service, store, _ = execution(tmp_path, 'locked_rocking', clock)
     service.start()
+    confirm_prelock(service, clock)
     assert service.run.state is ProductionRunState.ARMED
     hardware = ProductionExecutionHardware(service, SimpleNamespace(set_state=lambda *args: None),
         SimpleNamespace(reference_profile=SimpleNamespace(freshness_timeout_s=1)), Power(), tmp_path)
@@ -216,6 +244,7 @@ def test_workspace_projects_progress_and_restores_hidden_view(qapplication_sessi
     service.confirm_hardware('static_acquisition', {'center': 'verified'})
     for serial in service.sessions:
         service.record_tracking_sample(serial, tracking_sample(12), 0)
+        service.record_tracking_sample(serial, tracking_sample(12), .1)
     clock[0] = 1
     service.tick()
     workspace = ProductionWorkspace(_settings(tmp_path, monkeypatch))
@@ -448,6 +477,7 @@ def test_initial_search_peaks_then_device_lock_can_pass(qapplication_session, tm
             for index, (phase, locked, snr) in enumerate([(1, False, 12), (1, False, 0),
                     (2, False, 6.2), (2, False, 0), (3, True, 12)]):
                 service.record_tracking_sample(serial, tracking_sample(snr, phase=phase, locked=locked), .1 * index)
+            service.record_tracking_sample(serial, tracking_sample(12), .5)
         clock[0] = 1
         service.tick()
         assert service.run.progress.phase.value == 'effective_observation'
@@ -456,6 +486,287 @@ def test_initial_search_peaks_then_device_lock_can_pass(qapplication_session, tm
         service.tick()
         service.finish_observation({'center': 'verified'})
         assert {item['status'] for item in store.list_attempts('BATCH-AUTO')} == {'pass'}
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_positive_snr_loss_of_lock_fails_only_affected_device(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'static_acquisition', clock)
+    service.fixture_ready = lambda: (True, '')
+    service.start()
+    service.confirm_hardware('static_acquisition', {'center': 'verified'})
+    try:
+        for index in range(20):
+            clock[0] = index / 10
+            for serial in service.sessions:
+                locked = serial != 'AFD01C-A' or not .5 <= clock[0] <= 1.0
+                service.record_tracking_sample(serial, tracking_sample(12, locked=locked), clock[0])
+            service.tick()
+        clock[0] = 2
+        service.tick()
+        service.finish_observation({'center': 'verified'})
+        attempts = {item['serial_number']: item for item in store.list_attempts('BATCH-AUTO')}
+        assert attempts['AFD01C-A']['status'] == 'fail'
+        assert attempts['AFD01C-B']['status'] == 'pass'
+        assert 'interruption_duration_exceeded' in attempts['AFD01C-A']['result_json']['tracking_criteria']['failure_reasons']
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_execution_uses_individual_test_duration(qapplication_session, tmp_path):
+    from satellite_debug_tool.core.production.recipe import resolve_test_plan
+
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'static_acquisition', clock)
+    payload = service.recipe.payload
+    payload['tests']['static_acquisition']['duration_s'] = 4
+    payload['tests'], payload['duration_policy'] = resolve_test_plan(payload['tests'], payload['duration_policy'])
+    payload['schema_version'] = 2
+    profile = payload['fixtures']['motion_platform']['profile']
+    profile.pop('steady_duration_s')
+    profile.update(execution_mode='until_observation_complete', ramp_out_s=0)
+    service.recipe = ProductionRecipe.from_mapping(payload)
+    service.fixture_ready = lambda: (True, '')
+    service.start()
+    service.confirm_hardware('static_acquisition', {'center': 'verified'})
+    try:
+        assert service.run.progress.remaining_s == 4
+        for index in range(40):
+            clock[0] = index / 10
+            for serial in service.sessions:
+                service.record_tracking_sample(serial, tracking_sample(12), clock[0])
+            service.tick()
+            if index == 20:
+                assert service.run.progress.remaining_s == 2
+                assert not service._finishing_observation
+        clock[0] = 4
+        service.tick()
+        assert service._finishing_observation
+        service.finish_observation({'center': 'verified'})
+        assert {item['status'] for item in store.list_attempts('BATCH-AUTO')} == {'pass'}
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_default_300_second_search_timeout_records_failure_without_stopping_batch(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'static_acquisition', clock)
+    service.recipe = ProductionRecipe.from_mapping(valid_recipe(duration_s=3600))
+    service.policy = TrackingCriteriaPolicy()
+    service.fixture_ready = lambda: (True, '')
+    service.start()
+    service.confirm_hardware('static_acquisition', {'center': 'verified'})
+    try:
+        for second in range(301):
+            clock[0] = second
+            for serial in service.sessions:
+                searching = serial == 'AFD01C-A'
+                service.record_tracking_sample(serial, tracking_sample(
+                    0 if searching else 12, locked=not searching, phase=1 if searching else 3), second)
+            service.tick()
+            if second == 299:
+                assert not service.snr_failures
+        assert service.snr_failures == {'AFD01C-A': {'reasons': ['acquisition_timeout']}}
+        assert service.run.state is ProductionRunState.RUNNING
+        assert service.run.progress.remaining_s == 3300
+    finally:
+        service.stop()
+        store.close()
+
+
+@pytest.mark.parametrize('test_id', ['firmware_verification', 'parameter_verification'])
+def test_unconfigured_expectations_are_skipped_not_measured_pass(qapplication_session, tmp_path, test_id):
+    service, store, sent = execution(tmp_path, test_id, [0.0])
+    payload = service.recipe.payload
+    payload['expected'] = {'main_firmware': {'match': 'optional'}, 'parameters': {}}
+    service.recipe = ProductionRecipe.from_mapping(payload)
+    try:
+        service.start()
+        assert service.run.state is ProductionRunState.COMPLETE
+        attempts = store.list_attempts('BATCH-AUTO')
+        assert {item['status'] for item in attempts} == {'skipped'}
+        assert all(item['result_json']['reason'] for item in attempts)
+        assert sent == []
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_prelock_loss_between_ticks_resets_stability(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'locked_rocking', clock)
+    service.start()
+    try:
+        for timestamp, (at, locked) in enumerate(((0, True), (.03, True), (.04, False), (.06, True)), 1):
+            clock[0] = at
+            for session in service.sessions.values():
+                session.core.record_received.emit(tracking_sample(12, locked=locked, timestamp=timestamp))
+        service.tick()
+        assert service.run.state is ProductionRunState.WAITING_PREREQUISITE
+        clock[0] = .12
+        for session in service.sessions.values():
+            session.core.record_received.emit(tracking_sample(12, timestamp=5))
+        service.tick()
+        assert service.run.state is ProductionRunState.ARMED
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_power_cycle_waits_for_current_capture_before_window(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'power_on_rocking', clock)
+    service.policy = replace(service.policy, maximum_sample_gap_s=.2)
+    service.fixture_ready = lambda: (True, '')
+    service.start()
+    service.prepare_power_cycle()
+    for session in service.sessions.values():
+        session.capture_ready = False
+    service.confirm_hardware('power_on_rocking', {'power_off': {'output': 'off_confirmed'}, 'output': 'on_confirmed', 'power_restored_monotonic_ns': 1})
+    try:
+        clock[0] = .4  # 正常重启尚无遥测，准备阶段不生成观察缺口。
+        service.tick()
+        assert service.run.state is ProductionRunState.ARMED
+        assert service._evaluators == {}
+        for session in service.sessions.values():
+            session.capture_ready = False
+            session.core.product_store.telemetry_epoch += 1
+        clock[0] = .5
+        service.tick()
+        for session in service.sessions.values():
+            session.core.generation += 1  # 采集准备期间接纳同一次重启的代际重建。
+        clock[0] = .6
+        service.tick()
+        assert service.active
+        assert service.run.state is ProductionRunState.ARMED
+        for session in service.sessions.values():
+            session.capture_ready = True
+        clock[0] = .8
+        service.tick()
+        assert service.run.state is ProductionRunState.RUNNING
+        assert service.run.progress.remaining_s == pytest.approx(2)
+        for index in range(21):
+            clock[0] = .8 + index / 10
+            for serial in service.sessions:
+                service.record_tracking_sample(serial, tracking_sample(12), clock[0])
+            service.tick()
+        service.finish_observation({'center': 'feedback_confirmed'})
+        assert {item['status'] for item in store.list_attempts('BATCH-AUTO')} == {'pass'}
+        assert service.evidence_gaps == frozenset()
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_power_cycle_missing_capture_has_bounded_incomplete_result(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'power_on_rocking', clock)
+    service.start()
+    service.prepare_power_cycle()
+    for session in service.sessions.values():
+        session.capture_ready = False
+    service.confirm_hardware('power_on_rocking', {'power_off': {'output': 'off_confirmed'}, 'output': 'on_confirmed', 'power_restored_monotonic_ns': 1})
+    clock[0] = 1
+    service.tick()
+    assert not service.active
+    assert service.run.state is ProductionRunState.INCOMPLETE
+    for attempt in store.list_attempts('BATCH-AUTO'):
+        assert 'start_evidence' not in attempt['result_json']
+        assert 'preparation timed out' in attempt['result_json']['reason']
+    store.close()
+
+
+def test_late_capture_readiness_keeps_power_preparation_timeout(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'power_on_rocking', clock)
+    service.fixture_ready = lambda: (True, '')
+    service.start()
+    service.prepare_power_cycle()
+    for session in service.sessions.values():
+        session.core.product_store.telemetry_epoch += 1
+        session.capture_ready = False
+    clock[0] = .5
+    service.tick()
+    clock[0] = 1.1
+    for session in service.sessions.values():
+        session.capture_ready = True
+    service.confirm_hardware('power_on_rocking', {'power_off': {'output': 'off_confirmed'}, 'output': 'on_confirmed', 'power_restored_monotonic_ns': 1})
+    assert service.run.state is ProductionRunState.INCOMPLETE
+    assert all('start_evidence' not in item['result_json'] for item in store.list_attempts('BATCH-AUTO'))
+    service.stop()
+    store.close()
+
+
+def test_prelock_is_rechecked_after_fixture_preparation(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'locked_rocking', clock)
+    service.start()
+    confirm_prelock(service, clock)
+    try:
+        assert service.run.state is ProductionRunState.ARMED
+        for index, (at, locked) in enumerate(((.1, False), (.11, True), (.14, True), (.17, True)), 5):
+            clock[0] = at
+            for session in service.sessions.values():
+                session.core.record_received.emit(tracking_sample(12, locked=locked, timestamp=index))
+            assert service.motion_start_ready() is (at == .17)
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_prelock_timeout_records_result_without_fabricating_hardware_start(qapplication_session, tmp_path):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'locked_rocking', clock)
+    service.start()
+    confirm_prelock(service, clock)
+    try:
+        clock[0] = .1
+        for session in service.sessions.values():
+            session.core.record_received.emit(tracking_sample(0, locked=False, timestamp=5))
+        clock[0] = 1
+        service.tick()
+        assert service.run.state is ProductionRunState.COMPLETE
+        assert all('start_evidence' not in item['result_json'] for item in store.list_attempts('BATCH-AUTO'))
+    finally:
+        service.stop()
+        store.close()
+
+
+@pytest.mark.parametrize('old_ms,new_ms', [(14377, 14559), (100000, 1000)])
+def test_same_scope_power_cycle_opens_fresh_observation_timestamps(
+    qapplication_session, tmp_path, old_ms, new_ms,
+):
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'power_on_rocking', clock)
+    service.fixture_ready = lambda: (True, '')
+    try:
+        service.start()
+        service.prepare_power_cycle()
+        scopes = dict(service._scope)
+        for serial, session in service.sessions.items():
+            service._last_device_timestamp[serial] = old_ms
+            session.capture_ready = False
+            session.core.record_received.emit(tracking_sample(12, timestamp=new_ms))
+        service.confirm_hardware('power_on_rocking', {
+            'power_off': {'output': 'off_confirmed'}, 'output': 'on_confirmed',
+            'power_restored_monotonic_ns': 1,
+        })
+        assert service.run.state is ProductionRunState.ARMED
+        clock[0] = .5
+        for session in service.sessions.values():
+            session.capture_ready = True
+        service.tick()
+        assert service.run.state is ProductionRunState.RUNNING
+        assert service._scope == scopes
+        assert service._last_device_timestamp == {}
+        for serial, session in service.sessions.items():
+            session.core.record_received.emit(tracking_sample(12, timestamp=new_ms))
+            assert service._last_device_timestamp[serial] == new_ms
+        assert service.run.progress.remaining_s == pytest.approx(2)
     finally:
         service.stop()
         store.close()

@@ -50,6 +50,7 @@ from satellite_debug_tool.core.session import (
     EndpointSessionRuntime,
     ProductionAttachmentLease,
     RuntimeOperationGateway,
+    RuntimeOperationGateState,
     SessionOperationClass,
     SessionRecorderKind,
     SessionRecorderLease,
@@ -71,6 +72,7 @@ _SNR_HISTORY_CAPACITY = int(_SNR_HISTORY_SECONDS * _SNR_CAPTURE_RATE_HZ) + (
 _CANDIDATE_LIMIT = 64
 _CANDIDATE_BYTE_LIMIT = 64 * 1024
 _CANDIDATE_TIMEOUT_NS = 10_000_000_000
+_CAPTURE_TIME_JITTER_MS = 2000  # 与TelemetryClock的传输抖动合同一致；不表示boot身份。
 
 
 class FleetConfigurationError(ValueError):
@@ -408,6 +410,10 @@ class DeviceSession(QObject):
         self._recording_complete: Optional[bool] = None
         self._runtime_record_overrides: dict[tuple[int, int, bytes], bool] = {}
         self._capture_controller: CaptureProfileController | None = None
+        # 仅引用Fleet已持有的批次授权；Fleet唯一负责结束父租约。
+        self._capture_batch_operation: tuple[
+            RuntimeOperationGateway, object, frozenset[SessionOperationClass]
+        ] | None = None
         self._capture_state = ProductionCaptureState.NOT_REQUIRED
         self._capture_confirmed = False
         self._capture_data_observed = False
@@ -415,6 +421,14 @@ class DeviceSession(QObject):
         self._capture_error = ""
         self._capture_attempted_scope: tuple[int, int] | None = None
         self._capture_restore_attempted = False
+        self._capture_restored_monotonic_ns = 0
+        self._capture_identity_baseline: tuple[int, int] | None = None
+        self._capture_participant_identity: tuple[str, str] | None = None
+        self._capture_fast_boundary: tuple[int, int] | None = None
+        self._capture_request_id: int | None = None
+        self._capture_request_monotonic_ns = 0
+        self._capture_confirmed_monotonic_ns = 0
+        self._capture_request_uptime_ms: int | None = None
         if runtime is not None:
             self._connect_runtime(runtime)
             self._bind_capture_controller()
@@ -514,6 +528,7 @@ class DeviceSession(QObject):
             and self._capture_confirmed
             and self._capture_data_observed
             and self._capture_state is ProductionCaptureState.READY
+            and self._capture_identity_ready()
         )
 
     @property
@@ -629,13 +644,12 @@ class DeviceSession(QObject):
         self._recording_root = root
         self._recording_final_path = None
         self._recording_complete = None
-        self._capture_confirmed = False
-        self._capture_data_observed = False
-        self._capture_frame_types.clear()
-        self._capture_error = ""
-        self._capture_attempted_scope = None
-        self._capture_state = ProductionCaptureState.WAITING_CAPABILITIES
-        self._capture_restore_attempted = False
+        self._capture_restored_monotonic_ns = 0
+        self._capture_identity_baseline = None
+        self._capture_participant_identity = None
+        self._capture_fast_boundary = None
+        self._capture_request_id = None
+        self._reset_capture_evidence()
         self.recording_changed.emit(self)
         self._ensure_full_capture()
         return True
@@ -725,6 +739,7 @@ class DeviceSession(QObject):
             self._disconnect_runtime(runtime)
         self.attachment = None
         self.runtime = None
+        self._capture_batch_operation = None
         return True
 
     @staticmethod
@@ -768,8 +783,11 @@ class DeviceSession(QObject):
         self.received_bytes += len(datagram.data)
         identity_changed = False
         for item in records:
+            if (isinstance(item, ServiceFastState)
+                    and datagram.monotonic_ns > self._capture_restored_monotonic_ns):
+                self._capture_fast_boundary = (int(datagram.monotonic_ns), int(item.timestamp))
             if isinstance(item, (DataReport, InsTraceRecord)):
-                self._mark_capture_data_observed(datagram.wall_time_ns, item)
+                self._mark_capture_data_observed(datagram, item)
             if (
                 isinstance(item, ServiceFastState)
                 and item.valid_mask & (1 << 11)
@@ -831,6 +849,7 @@ class DeviceSession(QObject):
             retain_full_capture_operation=False,
         )
         controller.finished.connect(self._on_capture_profile_finished)
+        controller.pending_changed.connect(self._on_capture_request_pending)
         self.core.generation_changed.connect(self._on_capture_generation_changed)
         self.core.telemetry_epoch_changed.connect(self._on_capture_generation_changed)
         self._capture_controller = controller
@@ -842,11 +861,93 @@ class DeviceSession(QObject):
         recorder = self._recorder
         if recorder is not None:
             recorder.write_metadata_event(
-                {"type": "production_capture_profile", "event": event, **details}
+                {"type": "production_capture_profile", "event": event,
+                 "request_id": self._capture_request_id,
+                 "restored_monotonic_ns": self._capture_restored_monotonic_ns,
+                 "request_monotonic_ns": self._capture_request_monotonic_ns,
+                 "request_uptime_ms": self._capture_request_uptime_ms,
+                 "confirmed_monotonic_ns": self._capture_confirmed_monotonic_ns,
+                 **details}
             )
 
-    def _ensure_full_capture(self) -> None:
+    def prepare_capture_after_power_cycle(self, restored_monotonic_ns: int) -> None:
+        """在本批ON闭环后撤销旧采集证据，等待新身份与Service再单次协商。
+
+        仅会话owner线程调用；正整数为当前ON回执的主机单调时间，不是设备采集时间。
+        停止录制后无副作用，重复或较旧边界不重发；不改变连接、epoch或物理boot身份。
+        冻结SN/UID缺失时抛出ValueError，不允许用缓存身份直接开窗。
+        """
+        restored = int(restored_monotonic_ns)
+        if restored <= 0:
+            raise ValueError("power restoration requires a positive monotonic timestamp")
         if not self.recording_armed or self._capture_controller is None:
+            return
+        if restored <= self._capture_restored_monotonic_ns:
+            return
+        identity = (self.serial_number, self.device_uid)
+        if not all(identity) or self.state is not DeviceSessionState.IDENTIFIED:
+            raise ValueError("power-cycle capture requires a frozen participant SN and UID")
+        self._capture_controller.reset()
+        self._reset_capture_evidence()
+        self._capture_restored_monotonic_ns = restored
+        self._capture_identity_baseline = (
+            self.product_store.identity_generation,
+            self.product_store.hardware_identity_generation,
+        )
+        self._capture_participant_identity = identity
+        self._capture_fast_boundary = None
+        self._write_capture_event("power_restored", serial_number=identity[0], device_uid=identity[1])
+        self.updated.emit(self)
+        # SUBSCRIBE还会请求当前身份；Boot未就绪时沿用既有1s保活，不创建重试器。
+        subscription = self.runtime.subscription_controller if self.runtime is not None else None
+        if subscription is not None:
+            subscription.send_now()
+
+    def _capture_identity_ready(self) -> bool:
+        """判断本次ON边界后的两类身份是否已重新收到并匹配冻结参与者。"""
+        baseline = self._capture_identity_baseline
+        if baseline is None:
+            return True
+        identity = self.product_store.snapshot().identity
+        restored_s = self._capture_restored_monotonic_ns / 1_000_000_000
+        received = (identity.serial_number.received_monotonic_s, identity.device_uid.received_monotonic_s)
+        return bool(
+            all(value is not None and value > restored_s for value in received)
+            and self.product_store.identity_generation > baseline[0]
+            and self.product_store.hardware_identity_generation > baseline[1]
+            and self.state is DeviceSessionState.IDENTIFIED
+            and (self.serial_number, self.device_uid) == self._capture_participant_identity
+        )
+
+    def _reset_capture_evidence(self) -> None:
+        """撤销当前请求和实际帧证据；保留录制和本次电源恢复身份边界。"""
+        self._capture_confirmed = False
+        self._capture_data_observed = False
+        self._capture_frame_types.clear()
+        self._capture_error = ""
+        self._capture_attempted_scope = None
+        self._capture_restore_attempted = False
+        self._capture_state = ProductionCaptureState.WAITING_CAPABILITIES
+        self._capture_request_id = None
+        self._capture_request_monotonic_ns = 0
+        self._capture_confirmed_monotonic_ns = 0
+        self._capture_request_uptime_ms = None
+
+    @Slot(object)
+    def _on_capture_request_pending(self, target: object) -> None:
+        """在controller发包前保存其唯一request ID，供ACK与SDB关联。"""
+        if target is None or self._capture_controller is None:
+            return
+        self._capture_request_id = self._capture_controller.pending_request_id
+        self._capture_request_monotonic_ns = time.monotonic_ns()
+        self._write_capture_event(
+            "requested" if target else "restore_requested", generation=self._capture_scope()[0],
+            telemetry_epoch=self._capture_scope()[1],
+        )
+
+    def _ensure_full_capture(self) -> None:
+        if (not self.recording_armed or self.recording_finalize_pending
+                or self._capture_controller is None):
             return
         if self._capture_confirmed or self._capture_state in {
             ProductionCaptureState.REQUESTING,
@@ -855,6 +956,9 @@ class DeviceSession(QObject):
             ProductionCaptureState.UNSUPPORTED,
         }:
             return
+        if self._capture_restored_monotonic_ns:
+            if not self._capture_identity_ready() or self._capture_fast_boundary is None:
+                return
         capabilities = self.product_store.capabilities_record
         if capabilities is None:
             if self._capture_state is not ProductionCaptureState.WAITING_CAPABILITIES:
@@ -870,17 +974,32 @@ class DeviceSession(QObject):
             self._write_capture_event("unsupported")
             self.updated.emit(self)
             return
+        parent_owner = None
+        batch_operation = self._capture_batch_operation
+        if batch_operation is not None:
+            gateway, parent_owner, allowed_operations = batch_operation
+            if self.runtime is None or self.attachment is None:
+                return
+            gate = self.runtime.operation_gate
+            if (gateway.capability != self.attachment.capability
+                    or gate.state not in {RuntimeOperationGateState.IDLE,
+                                          RuntimeOperationGateState.PRODUCTION_FROZEN}
+                    or not gateway.try_acquire_operation(
+                        parent_owner, purpose="production-batch", production_freeze=True,
+                        allowed_operations=allowed_operations,
+                    )):
+                self._capture_error = "waiting for batch operation authorization"
+                return
         scope = self._capture_scope()
         if self._capture_attempted_scope == scope:
             return
         self._capture_attempted_scope = scope
         self._capture_state = ProductionCaptureState.REQUESTING
         self._capture_error = ""
-        self._write_capture_event(
-            "requested", generation=scope[0], telemetry_epoch=scope[1]
-        )
+        if self._capture_fast_boundary is not None:
+            self._capture_request_uptime_ms = self._capture_fast_boundary[1]
         self.updated.emit(self)
-        self._capture_controller.request(True)
+        self._capture_controller.request(True, operation_owner=parent_owner)
 
     @Slot(bool, bool, str)
     def _on_capture_profile_finished(
@@ -889,6 +1008,7 @@ class DeviceSession(QObject):
         if target:
             self._capture_confirmed = bool(success)
             if success:
+                self._capture_confirmed_monotonic_ns = time.monotonic_ns()
                 self._capture_error = ""
                 self._capture_state = (
                     ProductionCaptureState.READY
@@ -917,22 +1037,33 @@ class DeviceSession(QObject):
     def _on_capture_generation_changed(self, _generation: int, _endpoint) -> None:
         if not self.recording_armed:
             return
-        self._capture_confirmed = False
-        self._capture_data_observed = False
-        self._capture_frame_types.clear()
-        self._capture_error = ""
-        self._capture_attempted_scope = None
-        self._capture_restore_attempted = False
-        self._capture_state = ProductionCaptureState.WAITING_CAPABILITIES
+        self._reset_capture_evidence()
+        self._capture_fast_boundary = None
         self._write_capture_event("session_changed")
         self.updated.emit(self)
 
-    def _mark_capture_data_observed(self, wall_time_ns: int, item: object) -> None:
+    def _mark_capture_data_observed(self, datagram: FleetDatagram, item: object) -> None:
+        """只将精确ACK之后、与本次新Service时间相容的分析帧作为恢复证据。"""
         if (
             not self.recording_armed
             or not self._capture_confirmed
         ):
             return
+        device_ms = (int(item.timestamp) if isinstance(item, DataReport)
+                     else int(item.received_timestamp_us) // 1000) & 0xFFFFFFFF
+        if self._capture_restored_monotonic_ns:
+            boundary = self._capture_fast_boundary
+            request_uptime = self._capture_request_uptime_ms
+            if (boundary is None or request_uptime is None
+                    or datagram.monotonic_ns <= max(self._capture_request_monotonic_ns,
+                                                   self._capture_confirmed_monotonic_ns)):
+                return
+            after_request = (device_ms - request_uptime) & 0xFFFFFFFF
+            nearby = ((device_ms - boundary[1] + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+            elapsed_ms = (datagram.monotonic_ns - boundary[0]) / 1_000_000
+            if (not 0 < after_request < 0x80000000 or elapsed_ms < 0
+                    or not -_CAPTURE_TIME_JITTER_MS <= nearby <= elapsed_ms + _CAPTURE_TIME_JITTER_MS):
+                return
         frame_type = type(item).__name__
         if frame_type in self._capture_frame_types:
             return
@@ -942,7 +1073,9 @@ class DeviceSession(QObject):
         self._write_capture_event(
             "data_observed",
             frame_type=frame_type,
-            host_timestamp_ns=int(wall_time_ns),
+            host_timestamp_ns=int(datagram.wall_time_ns),
+            received_monotonic_ns=int(datagram.monotonic_ns), device_timestamp_ms=device_ms,
+            service_boundary=self._capture_fast_boundary,
         )
         if self._capture_confirmed:
             self._capture_state = ProductionCaptureState.READY
@@ -959,7 +1092,11 @@ class DeviceSession(QObject):
             return self._capture_state is not ProductionCaptureState.RESTORING
         self._capture_restore_attempted = True
         self._capture_state = ProductionCaptureState.RESTORING
-        self._write_capture_event("restore_requested")
+        # 恢复意图尚未取得租约时可能BUSY；不能给未发送的失败沿用旧full-capture ID。
+        self._capture_request_id = None
+        self._capture_request_monotonic_ns = 0
+        self._capture_confirmed_monotonic_ns = 0
+        self._capture_request_uptime_ms = None
         self.updated.emit(self)
         controller.request(False)
         return controller.pending_target is not False
@@ -1058,6 +1195,7 @@ class DeviceSession(QObject):
         if self._capture_controller is not None:
             self._capture_controller.deleteLater()
         self._capture_controller = None
+        self._capture_batch_operation = None
         self._capture_confirmed = False
         self._capture_data_observed = False
         self._capture_frame_types.clear()
@@ -1454,6 +1592,11 @@ class FleetController(QObject):
         self._recording_participant_keys = frozen
         self._batch_gate_owner = gate_owner
         self._batch_gateways = acquired_gateways
+        for key in keys:
+            session = sessions_by_key[key]
+            session._capture_batch_operation = (
+                acquired_gateways[session.endpoint], gate_owner, frozenset(allowed_operations),
+            )
         return excluded_recordings
 
     def prepare_recording_stop(self) -> Callable[[], None]:
@@ -1473,6 +1616,9 @@ class FleetController(QObject):
         # End the frozen test operation before restoring the device's capture
         # profile through its regular Production gateway.  Recorder ownership
         # remains active until profile restoration and file finalization end.
+        # 先撤销恢复授权引用，避免收尾期间的新帧重新取得已结束的批次冻结。
+        for session in self.sessions():
+            session._capture_batch_operation = None
         gate_owner = self._batch_gate_owner
         pending_gateways: dict[Endpoint, RuntimeOperationGateway] = {}
         for endpoint, gateway in self._batch_gateways.items():
@@ -1521,13 +1667,16 @@ class FleetController(QObject):
     ) -> bool:
         if not self._batch_gate_owner or not self._batch_gateways:
             return False
-        return all(
-            gateway.update_production_allowlist(
-                self._batch_gate_owner,
-                allowed_operations,
-            )
+        if not all(
+            gateway.update_production_allowlist(self._batch_gate_owner, allowed_operations)
             for gateway in self._batch_gateways.values()
-        )
+        ):
+            return False
+        for session in self.sessions():
+            operation = session._capture_batch_operation
+            if operation is not None:
+                session._capture_batch_operation = (operation[0], operation[1], frozenset(allowed_operations))
+        return True
 
     @Slot(object)
     def _on_datagram(self, datagram: FleetDatagram) -> None:

@@ -42,3 +42,13 @@
 - “录制期间打开摇摆台或Shell偶发中断”仍是独立问题；当前源码审查和自动化测试没有形成稳定复现，本次没有将其猜测性地并入完整采集根因。
 
 对照验收：软件侧已建立“请求、精确确认、确认后实际数据、文件完成”四层独立事实，并覆盖能力拒绝、代际变化、正常恢复及异常收尾。现场信息充分性和弹窗偶发中断不由上述软件测试替代。
+
+## 2026-11-02 同scope供电恢复与父冻结生命周期
+
+新增DeviceSession.prepare_capture_after_power_cycle，消费者仅正式Hardware匹配ON闭环。两类身份游标和接收时间、新Service及精确新request-ID/ACK/分析时间门共同撤销旧ready；metadata保存请求/ACK处理单调时刻、设备基线与实际data_observed时间。没有新增timer、重试或身份owner。
+
+正式freeze回归先稳定复现capture自行申请owner导致BUSY。现有CaptureProfileController.request可借Fleet原父owner；RuntimeGateway.owns_production_operation只读确认确为当前同Production capability的冻结，借用不覆盖父context、不释放父租约。长OFF的Runtime presence失效和终止宽限后，使用Fleet原gateway/owner授权恢复原冻结；TERMINATING/他人owner期间等待，finalize先清引用。普通Customer默认仍为原独立租约。
+
+最终相关、production、全量pytest、翻译与独立review结果保存于固件仓库doc/afd01_dynamic_closure_20261102/capture_*。实物电源循环和持续分析帧仍待板级验证。
+
+最终冻结验证（2026-11-02）：相关93 passed/5.51s，Production+Runtime/Customer相邻394 passed/14.35s，完整2238 passed/271.75s；三段前后5生产文件摘要不变。翻译1505条全部完成，update/check及diff检查0退出。独立借用租约review通过。最终源摘要、完整命令和日志保存在固件仓库`doc/afd01_dynamic_closure_20261102/capture_final_validation.json`和`capture_*_pytest.log`。当前只证明软件合同；现场电源循环、持续分析数据、MCU物理复位和RF仍单独验收。

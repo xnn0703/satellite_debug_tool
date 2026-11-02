@@ -25,10 +25,12 @@ from satellite_debug_tool.core.production import (
 )
 from satellite_debug_tool.core.production.report_analysis import (
     build_report_analysis,
+    project_attempt_outcomes,
     render_report_charts,
 )
 from satellite_debug_tool.core.protocol import CmdType, build_frame
 from satellite_debug_tool.io.data_recorder import DataRecorder, SDB_VERSION_V3
+from satellite_debug_tool.io.sdb_schema import SDB_FOOTER
 from satellite_debug_tool.tests.test_production_recipe import valid_recipe
 
 
@@ -36,6 +38,7 @@ def _finish_attempt(
     store: ProductionResultStore,
     attempt_id: int,
     verdict: AttemptStatus,
+    result: dict[str, object] | None = None,
 ) -> None:
     for status in (
         AttemptStatus.WAITING_PREREQUISITE,
@@ -47,7 +50,7 @@ def _finish_attempt(
         store.transition_attempt(
             attempt_id,
             status,
-            result={"reason": "sample result"} if status == verdict else None,
+            result=(result if result is not None else {"reason": "sample result"}) if status == verdict else None,
         )
 
 
@@ -56,6 +59,7 @@ def _terminal_batch(
     verdicts: tuple[AttemptStatus, ...],
     *,
     test_ids: tuple[str, ...] | None = None,
+    result_payloads: tuple[dict[str, object], ...] | None = None,
 ) -> tuple[ProductionResultStore, Path, str]:
     output = tmp_path / "raw" / "BATCH-01"
     output.mkdir(parents=True)
@@ -85,8 +89,9 @@ def _terminal_batch(
         test_ids or tuple(f"test-{index}" for index in range(len(verdicts))),
     )
     attempts = store.list_attempts("BATCH-01")
-    for attempt, verdict in zip(attempts, verdicts):
-        _finish_attempt(store, int(attempt["attempt_id"]), verdict)
+    for index, (attempt, verdict) in enumerate(zip(attempts, verdicts)):
+        _finish_attempt(store, int(attempt["attempt_id"]), verdict,
+                        result_payloads[index] if result_payloads else None)
         store.record_metric(
             int(attempt["attempt_id"]),
             "snr_median",
@@ -166,6 +171,16 @@ def _service_fast(timestamp_ms: int, snr_db: float, roll_deg: float) -> bytes:
         snr_db,
     )
     return build_frame(CmdType.SERVICE_FAST_STATE, payload)
+
+
+def _write_valid_device_sdb(output: Path, serial: str) -> Path:
+    path = output / "devices" / serial / "evidence" / "capture.sdb"
+    path.unlink()
+    recorder = DataRecorder(path, format_version=SDB_VERSION_V3)
+    assert recorder.start()
+    assert recorder.write_frame(_service_fast(1000, 12.0, 0.0))
+    assert recorder.stop()
+    return path
 
 
 def test_curve_analysis_uses_sdb_host_time_and_generates_stage_charts(tmp_path: Path) -> None:
@@ -436,6 +451,7 @@ def test_invalid_sdb_is_reported_as_incomplete_quality_and_all_fixture_files_are
 def test_fail_v1_can_create_one_audited_v2_without_overwriting_v1(tmp_path: Path) -> None:
     store, output, serial = _terminal_batch(tmp_path, (AttemptStatus.FAIL,))
     try:
+        _write_valid_device_sdb(output, serial)
         service = ProductionReportService(
             store,
             batch_output_dir=output,
@@ -493,6 +509,122 @@ def test_incomplete_generates_readable_v1_and_cannot_be_approved(tmp_path: Path)
             )
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("verdict", (AttemptStatus.PASS, AttemptStatus.FAIL))
+def test_incomplete_recording_quality_blocks_review_pass_but_keeps_fail_review(
+    tmp_path: Path, verdict: AttemptStatus,
+) -> None:
+    store, output, serial = _terminal_batch(tmp_path, (verdict,))
+    try:
+        service = ProductionReportService(store, batch_output_dir=output, report_root=tmp_path / "reports")
+        service.archive_device("BATCH-01", serial)
+        with pytest.raises(ResultStoreError, match="complete data quality"):
+            service.review("BATCH-01", serial, reviewer="审核员", final_verdict="PASS", reason="缺少采集证据")
+        review = service.review("BATCH-01", serial, reviewer="审核员", final_verdict="FAIL", reason="保留失败并记录证据不足")
+        assert review.final_verdict == "FAIL"
+        assert store.get_report_review("BATCH-01", serial)["reason"] == "保留失败并记录证据不足"
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("source", ("missing_sdb", "no_samples", "missing_footer", "tracking_gap"))
+def test_specific_quality_gaps_cannot_be_approved_pass(tmp_path: Path, source: str) -> None:
+    payload = {"data_quality": "INCOMPLETE", "tracking_criteria": {"quality_reasons": ["tracking_sample_gap"]}}
+    store, output, serial = _terminal_batch(
+        tmp_path, (AttemptStatus.PASS,), result_payloads=(payload,) if source == "tracking_gap" else None,
+    )
+    try:
+        path = _write_valid_device_sdb(output, serial)
+        if source == "missing_sdb":
+            path.unlink()
+        elif source == "no_samples":
+            path.unlink()
+            recorder = DataRecorder(path, format_version=SDB_VERSION_V3)
+            assert recorder.start() and recorder.stop()
+        elif source == "missing_footer":
+            path.write_bytes(path.read_bytes()[:-len(SDB_FOOTER)])
+        service = ProductionReportService(store, batch_output_dir=output, report_root=tmp_path / "reports")
+        service.archive_device("BATCH-01", serial)
+        snapshot = store.get_report_snapshot("BATCH-01", serial)["snapshot_json"]
+        assert snapshot["data_quality"]["state"] == "INCOMPLETE"
+        with pytest.raises(ResultStoreError, match="complete data quality"):
+            service.review("BATCH-01", serial, reviewer="审核员", final_verdict="PASS", reason="证据不足")
+    finally:
+        store.close()
+
+
+def test_tracking_report_preserves_failure_quality_and_readable_rule_statistics(tmp_path: Path) -> None:
+    criteria = {
+        "rule_version": 1,
+        "policy": {
+            "acquisition_stable_s": 5.0, "acquisition_timeout_s": 300.0,
+            "interruption_max_s": 2.0, "interruptions_per_30min": 5,
+            "interruption_ratio_max": 0.005, "recovery_stable_s": 3.0, "maximum_sample_gap_s": 2.0,
+        },
+        "duration_s": 1800.0, "acquisition_required": True,
+        "acquisition_elapsed_s": 45.5, "observation_duration_s": 1754.5,
+        "interruption_count": 1, "interruption_limit": 5,
+        "interruption_max_s": 2.1, "interruption_total_s": 2.1,
+        "interruption_ratio": 2.1 / 1754.5, "sample_count": 100, "valid_sample_count": 99,
+        "maximum_observed_gap_s": 3.0, "recovery_pending": True,
+        "failure_reasons": ["interruption_duration_exceeded"], "quality_reasons": ["tracking_sample_gap"],
+        "interruptions": [],
+    }
+    result = {"tracking_criteria": criteria, "performance_verdict": "FAIL", "data_quality": "INCOMPLETE"}
+    store, output, serial = _terminal_batch(
+        tmp_path, (AttemptStatus.FAIL, AttemptStatus.INCOMPLETE),
+        test_ids=("static_acquisition", "whole_navigation"), result_payloads=(result, {"reason": "criteria unavailable"}),
+    )
+    try:
+        _write_valid_device_sdb(output, serial)
+        service = ProductionReportService(store, batch_output_dir=output, report_root=tmp_path / "reports")
+        artifact = service.archive_device("BATCH-01", serial)
+        snapshot = store.get_report_snapshot("BATCH-01", serial)["snapshot_json"]
+        assert snapshot["automatic_verdict"] == snapshot["report_verdict"] == "INCOMPLETE"
+        assert snapshot["performance_verdict"] == "FAIL"
+        assert snapshot["execution_completeness"] == "INCOMPLETE"
+        assert snapshot["data_quality"]["state"] == "INCOMPLETE"
+        stage = snapshot["analysis"]["stages"][0]
+        assert stage["result_json"]["tracking_criteria"] == criteria
+        assert stage["performance_verdict"] == "FAIL"
+        manifest = json.loads(artifact.manifest_path.read_text())
+        assert manifest["performance_verdict"] == "FAIL"
+        assert manifest["execution_completeness"] == manifest["data_quality"] == "INCOMPLETE"
+        text = _document_text(artifact.document_path)
+        for expected in ("跟踪判据与事件统计", "45.500 s", "2.100 s", "0.500%", "恢复确认中",
+                         "单次中断时长超过允许值", "采样间隔超过允许值", "性能结论", "执行完整性"):
+            assert expected in text
+        assert "interruption_duration_exceeded" not in text
+        with zipfile.ZipFile(artifact.evidence_path) as archive:
+            frozen_attempts = json.loads(archive.read("test/attempts.json"))
+            assert frozen_attempts[0]["result_json"] == result
+        legacy = dict(snapshot)
+        for key in ("performance_verdict", "execution_completeness", "data_quality"):
+            legacy.pop(key)
+        legacy["attempts"] = [{**item, "result_json": {"reason": "legacy reason"}} for item in snapshot["attempts"]]
+        legacy_path = tmp_path / "legacy.docx"
+        service._write_docx(legacy, legacy_path, version=1, review=None)
+        assert "该版本未记录" in _document_text(legacy_path)
+        assert "legacy reason" in _document_text(legacy_path)
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    ("attempts", "performance", "execution"),
+    (
+        ([{"status": "incomplete", "result_json": {"performance_verdict": "FAIL"}}], "FAIL", "INCOMPLETE"),
+        ([{"status": "fail"}, {"status": "aborted"}], "FAIL", "INCOMPLETE"),
+        ([{"status": "pass"}, {"status": "skipped"}], "PASS", "COMPLETE"),
+        ([{"status": "fail"}], "FAIL", "COMPLETE"),
+        ([], "INCOMPLETE", "INCOMPLETE"),
+    ),
+)
+def test_outcomes_keep_performance_separate_from_execution(attempts, performance, execution) -> None:
+    assert project_attempt_outcomes(attempts) == {
+        "performance_verdict": performance, "execution_completeness": execution,
+    }
 
 
 def test_path_components_are_safe_and_bounded() -> None:

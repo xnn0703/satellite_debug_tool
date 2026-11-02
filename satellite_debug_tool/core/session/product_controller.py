@@ -356,6 +356,7 @@ class CaptureProfileController(QObject):
         self._pending_request_id: int | None = None
         self._pending_target: bool | None = None
         self._pending_epoch: int | None = None
+        self._borrowed_operation_owner: object | None = None
         self._resync_required = False
         self._lease_token = object()
         self._recorder_lease: SessionRecorderLease | None = None
@@ -390,10 +391,23 @@ class CaptureProfileController(QObject):
     def resync_required(self) -> bool:
         return self._resync_required
 
-    def request(self, support_full: bool) -> bool:
+    def request(self, support_full: bool, *, operation_owner: object | None = None) -> bool:
+        """申请采集profile；Production可借用其已持有的父操作，不取得第二个owner。
+
+        operation_owner仅用于无自有recorder且ACK后释放本地请求的Production路径。
+        gateway仍验证相同capability/owner；借用时不修改或释放父操作上下文。
+        默认None保持Customer/串口原有独立租约、ACK和超时合同。
+        """
+        if operation_owner is not None and (self._recorder_kind is not None or self._retain_full_capture_operation):
+            raise ValueError("borrowed capture operation requires Production recorder ownership")
         if self._pending_request_id is not None:
             return False
         target = bool(support_full)
+        if operation_owner is not None:
+            owns_production = getattr(self._operation_gateway, "owns_production_operation", None)
+            if owns_production is None or not owns_production(operation_owner):
+                self.finished.emit(target, False, f"{CaptureProfileResult.DEVICE_ERROR.value}:BUSY")
+                return False
         acquired_recorder = False
         if target and self._recorder_kind is not None and not self.recording_lease_active:
             acquire_recorder = getattr(
@@ -421,7 +435,7 @@ class CaptureProfileController(QObject):
                 return False
             acquired_recorder = True
         if not self._operation_gateway.try_acquire_operation(
-            self._lease_token,
+            self._lease_token if operation_owner is None else operation_owner,
             purpose="capture-profile",
         ):
             if acquired_recorder:
@@ -432,6 +446,7 @@ class CaptureProfileController(QObject):
                 f"{CaptureProfileResult.DEVICE_ERROR.value}:BUSY",
             )
             return False
+        self._borrowed_operation_owner = operation_owner
         request_id = self._session.next_request_id()
         self._pending_request_id = request_id
         self._pending_target = target
@@ -441,7 +456,7 @@ class CaptureProfileController(QObject):
             "update_operation_context",
             None,
         )
-        if update_context is not None:
+        if update_context is not None and operation_owner is None:
             update_context(
                 self._lease_token,
                 request_id=request_id,
@@ -571,8 +586,9 @@ class CaptureProfileController(QObject):
         self._pending_request_id = None
         self._pending_target = None
         self._pending_epoch = None
-        if release_operation:
+        if release_operation and self._borrowed_operation_owner is None:
             self._operation_gateway.release_operation(self._lease_token)
+        self._borrowed_operation_owner = None
         if release_recorder:
             self._release_recorder()
         if had_pending:
@@ -589,6 +605,9 @@ class CaptureProfileController(QObject):
 
     @Slot(object)
     def _on_destroyed(self, _obj=None) -> None:
+        if self._borrowed_operation_owner is not None:
+            self._clear_pending(release_operation=False)
+            return
         if self.recording_lease_active:
             self._finish_unconfirmed()
             return

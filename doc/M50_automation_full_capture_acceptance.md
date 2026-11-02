@@ -9,3 +9,11 @@
 5. 正常完成、中止、异常、退出均正确收尾；采集前Debug状态依协议恢复，原始数据和结果事件保留。
 6. 采集质量报告区分请求已发送、设备已确认、实际数据已到达和文件已完成；逐设备展示实际帧类别及丢块/缺口。
 7. 每项根因具有回归；相关与全量测试和翻译检查通过，文档记录与计划逐项比对。软件测试不替代真实设备验收。
+
+## 2026-11-02 电源循环专项
+
+- 同scope14.377→14.559秒仍需新capture；旧ACK、请求/ACK前接收后处理的分析帧、旧低/高uptime及未来帧不能误确认；自然回绕和当前Trace时间可通过。
+- ON后Identity和HardwareIdentity游标均推进，且SN/UID匹配冻结参与者；旧缓存/断电前排队回调/不同UID阻止采集准入。
+- OFF/ON检查当前动作、phase、请求后OUTP命令/查询及实际结果；OFF_CONFIRMED和READY_OFF均属于有效关闭回读，不能把已验证设参的READY_OFF拒绝为未关电。
+- 父冻结在ACK、拒绝、超时、reset、send失败、销毁路径不被controller释放或覆盖context；错owner/capability及IDLE借用不发包，其他owner仍被拒。
+- 真实Runtime的OFF空窗>presence上限与Qt终止宽限后，新身份/Service恢复同批次冻结，再发capture；TERMINATING不抢占，结束后不重获父gate。

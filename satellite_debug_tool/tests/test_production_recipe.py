@@ -182,7 +182,7 @@ def test_motion_amplitude_cannot_exceed_fixture_limit() -> None:
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (lambda data: data.update(schema_version=2), "schema_version"),
+        (lambda data: data.update(schema_version=3), "schema_version"),
         (lambda data: data.update(product="esa01"), "product"),
         (
             lambda data: data["fixtures"]["motion_platform"].update(
@@ -209,3 +209,29 @@ def test_invalid_recipe_is_rejected(mutate, message: str) -> None:
     mutate(payload)
     with pytest.raises(RecipeValidationError, match=message):
         ProductionRecipe.from_mapping(payload)
+
+
+def test_m54_legacy_read_preserves_payload_and_digest() -> None:
+    import hashlib
+    raw = valid_recipe(duration_s=30)
+    encoded = json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    recipe = ProductionRecipe.from_mapping(raw)
+    assert recipe.payload == raw
+    assert recipe.sha256 == hashlib.sha256(encoded.encode()).hexdigest()
+    assert recipe.duration_for("static_acquisition") == 30
+
+
+def test_m54_new_short_recipe_requires_explicit_short_acquisition_policy() -> None:
+    from satellite_debug_tool.core.production.recipe import resolve_test_plan
+    payload = valid_recipe(duration_s=30)
+    payload["schema_version"] = 2
+    payload["tests"], payload["duration_policy"] = resolve_test_plan(payload["tests"], payload["duration_policy"])
+    motion = payload["fixtures"]["motion_platform"]["profile"]
+    motion.pop("steady_duration_s")
+    motion.update(execution_mode="until_observation_complete", ramp_out_s=0)
+    with pytest.raises(RecipeValidationError, match="acquisition timeout"):
+        ProductionRecipe.from_mapping(payload)
+    payload["duration_policy"]["tracking_criteria"].update(acquisition_timeout_s=10)
+    recipe = ProductionRecipe.from_mapping(payload)
+    assert recipe.duration_for("static_acquisition") == 30
+    assert recipe.engineering_only

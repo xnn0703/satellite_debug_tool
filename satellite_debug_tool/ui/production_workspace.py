@@ -78,7 +78,7 @@ from satellite_debug_tool.core.production.storage import resolve_production_stor
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import styles as S
 from satellite_debug_tool.core.production.presentation import (
-    chart_slots, enabled_production_tests, fixture_requirements,
+    chart_slots, enabled_production_tests, fixture_requirements, tracking_reason_text,
 )
 from satellite_debug_tool.ui.production_progress_widgets import (
     FixturePresentation, ProductionFixtureStrip, ProductionProgressPanel, StepPresentation,
@@ -1928,7 +1928,8 @@ class ProductionWorkspace(QWidget):
             "Recipe requires per-device parameter expectations": tr("Recipe requires per-device parameter expectations"),
             "Waiting for fixture preparation and start confirmation": tr("Waiting for fixture preparation and start confirmation"),
             "Waiting for online devices": tr("Waiting for online devices"),
-            "Waiting for new device boot evidence": tr("Waiting for new device boot evidence"),
+            "Waiting for device restart and analysis capture": tr("Waiting for device restart and analysis capture"),
+            "Device restart and analysis capture preparation timed out": tr("Device restart and analysis capture preparation timed out"),
             "Waiting for initial acquisition confirmation": tr("Waiting for initial acquisition confirmation"),
             "Finishing fixture motion and verifying center": tr("Finishing fixture motion and verifying center"),
             "Vehicle scenario requires operator start and driving evidence": tr("Vehicle scenario requires operator start and driving evidence"),
@@ -1978,10 +1979,19 @@ class ProductionWorkspace(QWidget):
         if self._store is not None:
             for session in self._execution.sessions.values():
                 own = progress.effective_s.get(session.serial_number, 0)
+                metrics = self._execution.tracking_metrics(session.serial_number)
                 if session.serial_number in self._execution.snr_failures:
-                    device_result = tr("Fail: SNR became zero or negative after acquisition")
+                    reasons = self._execution.snr_failures[session.serial_number]["reasons"]
+                    device_result = tr("Tracking criteria failed") + ": " + "; ".join(tracking_reason_text(r) for r in reasons)
                 elif session.serial_number in self._execution.evidence_gaps:
                     device_result = tr("Incomplete evidence")
+                elif metrics:
+                    device_result = tr("Interruptions: {count} | Longest: {longest}s | Total: {total}s",
+                        count=metrics.get("interruption_count", 0),
+                        longest=f"{metrics.get('interruption_max_s', 0):.2f}",
+                        total=f"{metrics.get('interruption_total_s', 0):.2f}")
+                    if metrics.get("recovery_pending"):
+                        device_result += " · " + tr("Confirming tracking recovery")
                 else:
                     device_result = tr("Positive SNR duration: {duration}", duration=duration(own))
                 device_phase = phases[self._execution.device_phase(session.serial_number).value]

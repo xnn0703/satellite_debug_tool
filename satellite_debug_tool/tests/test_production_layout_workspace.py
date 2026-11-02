@@ -84,9 +84,7 @@ def test_created_batch_keeps_frozen_recipe_and_ready_facts_after_catalog_changes
     assert workspace.recipe is recipe
     assert workspace._resolved_configuration is resolved
     assert workspace.batch["recipe_sha256"] == recipe.sha256
-    assert workspace._progress_panel.node_ids == (
-        "firmware_verification", "parameter_verification", "static_acquisition", "whole_navigation",
-    )
+    assert workspace._progress_panel.node_ids == ("static_acquisition",)
     assert "192.168.1.108" in workspace._configuration_summary.text()
     assert "192.168.1.109" not in workspace._configuration_summary.text()
     assert {fixture: workspace._fixture_runtime.fact(fixture) for fixture in facts} == facts

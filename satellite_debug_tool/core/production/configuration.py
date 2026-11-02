@@ -24,6 +24,8 @@ from satellite_debug_tool.core.production.fixture_profile import (
     FixtureProfileStore,
     WorkstationFixtureProfile,
 )
+from satellite_debug_tool.core.production.recipe import TIMED_TEST_IDS, resolve_test_plan
+from satellite_debug_tool.core.production.tracking_criteria import TrackingCriteriaPolicy
 
 
 PRODUCTION_CONFIGURATION_SCHEMA = "satellite-debug-tool/production-configuration"
@@ -128,20 +130,33 @@ class ProductTestTemplate:
         ):
             raise ProductionConfigurationError("at least one test must be enabled")
         duration = _copy_mapping(self.duration_policy, "duration_policy")
-        minimum = duration.get("minimum_effective_observation_s")
         window = duration.get("report_first_last_window_s")
-        if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
-            raise ProductionConfigurationError(
-                "minimum_effective_observation_s must be a positive integer"
-            )
         if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
             raise ProductionConfigurationError(
                 "report_first_last_window_s must be a positive integer"
             )
-        if duration.get("convergence_is_outside_observation") is not True:
-            raise ProductionConfigurationError(
-                "convergence_is_outside_observation must be true"
-            )
+        legacy = "window_includes_acquisition" not in duration
+        if legacy:
+            minimum = duration.get("minimum_effective_observation_s")
+            if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
+                raise ProductionConfigurationError("minimum_effective_observation_s must be a positive integer")
+        elif duration.get("window_includes_acquisition") is not True:
+            raise ProductionConfigurationError("window_includes_acquisition must be true")
+        try:
+            resolved_tests, resolved_policy = resolve_test_plan(tests, duration)
+            criteria = TrackingCriteriaPolicy.from_mapping(resolved_policy["tracking_criteria"])
+        except (TypeError, ValueError) as exc:
+            raise ProductionConfigurationError(str(exc)) from exc
+        for test_id, config in resolved_tests.items():
+            if test_id in TIMED_TEST_IDS and config.get("enabled"):
+                seconds = config.get("duration_s")
+                if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
+                    raise ProductionConfigurationError(f"tests.{test_id}.duration_s must be a positive integer")
+                if not legacy:
+                    if test_id in {"static_acquisition", "power_on_rocking", "power_on_drive"} and seconds <= criteria.acquisition_timeout_s + criteria.recovery_stable_s:
+                        raise ProductionConfigurationError(f"tests.{test_id}.duration_s must exceed acquisition timeout plus recovery confirmation")
+                    if seconds <= criteria.recovery_stable_s:
+                        raise ProductionConfigurationError(f"tests.{test_id}.duration_s must exceed recovery confirmation")
         if self.source not in {"builtin", "custom", "imported", "legacy"}:
             raise ProductionConfigurationError("source is not supported")
         if self.source_revision is not None:
@@ -238,10 +253,12 @@ def builtin_product_templates() -> tuple[ProductTestTemplate, ...]:
     items: list[ProductTestTemplate] = []
     for product in ("afd01b2", "afd01c", "afd01d"):
         for voltage, current in ((12.0, 9.0), (24.0, 5.0)):
+            if product == "afd01b2" and voltage == 24.0:
+                current = 8.0
             variant = f"{int(voltage)}v"
             items.append(ProductTestTemplate(
                 template_id=f"builtin-{product}-{variant}",
-                revision=1,
+                revision=2,
                 display_name=f"{product.upper()} · {int(voltage)} V / {int(current)} A",
                 product=product,
                 supply_voltage_v=voltage,
@@ -255,8 +272,8 @@ def builtin_product_templates() -> tuple[ProductTestTemplate, ...]:
                     "locked_rocking": {"enabled": True, "duration_s": 1800},
                 },
                 duration_policy={
-                    "minimum_effective_observation_s": 1800,
-                    "convergence_is_outside_observation": True,
+                    "window_includes_acquisition": True,
+                    "tracking_criteria": TrackingCriteriaPolicy().to_payload(),
                     "report_first_last_window_s": 300,
                 },
                 source="builtin",
@@ -579,9 +596,7 @@ class ResolvedProductionConfiguration:
         template = self.product_template
         snapshot = self.to_snapshot()
         motion = self.motion_profile
-        steady_duration = int(
-            template.duration_policy["minimum_effective_observation_s"]
-        )
+        tests, duration_policy = resolve_test_plan(template.tests, template.duration_policy)
         sample_period_ms = max(20, int(motion.minimum_duration_ms))
         motion_contract = {
             "driver": "lingjing_udp_v1",
@@ -603,9 +618,9 @@ class ResolvedProductionConfiguration:
             "profile": {
                 "profile_id": motion.profile_id,
                 "sample_period_ms": sample_period_ms,
-                "steady_duration_s": steady_duration,
+                "execution_mode": "until_observation_complete",
                 "ramp_in_s": 5,
-                "ramp_out_s": 5,
+                "ramp_out_s": 0,
                 "roll": {
                     "amplitude_deg": min(10.0, motion.roll_limits.abs_angle_deg),
                     "frequency_hz": min(0.2, motion.roll_limits.max_frequency_hz or 0.2),
@@ -624,7 +639,7 @@ class ResolvedProductionConfiguration:
             },
         }
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "recipe_id": f"{template.template_id}-R{template.revision}",
             "product": template.product,
             "target_device_count": self.device_count,
@@ -635,10 +650,8 @@ class ResolvedProductionConfiguration:
                 "reference_sensor": self.reference_profile.profile_id,
                 "vehicle": {"driver": "manual"},
             },
-            "duration_policy": _copy_mapping(
-                template.duration_policy, "duration_policy"
-            ),
-            "tests": _copy_mapping(template.tests, "tests"),
+            "duration_policy": duration_policy,
+            "tests": tests,
             "resolved_configuration": snapshot,
             "resolved_configuration_sha256": self.sha256,
         }

@@ -26,7 +26,8 @@ from docx.shared import Cm, Mm, Pt, RGBColor
 from satellite_debug_tool import __app_name_cn__, __version__
 
 from .models import AttemptStatus, BatchStatus
-from .report_analysis import build_report_analysis, render_report_charts
+from .presentation import tracking_reason_text
+from .report_analysis import build_report_analysis, project_attempt_outcomes, render_report_charts
 from .result_store import ProductionResultStore, ResultStoreError
 
 
@@ -387,6 +388,18 @@ class ProductionReportService:
             quality_reasons.extend(str(item) for item in analysis["source_errors"])
         if analyzable_samples <= 0:
             quality_reasons.append("SDB contains no analyzable telemetry frames")
+        for source in analysis.get("source_files", []):
+            recording_quality = source.get("recording_quality", {})
+            if recording_quality.get("complete") is not True:
+                quality_reasons.append(f"{source['file']}：录制收尾证据不完整")
+            if any(int(recording_quality.get(key, 0)) > 0 for key in ("gap_markers", "gap_chunks", "dropped_chunks")):
+                quality_reasons.append(f"{source['file']}：录制存在数据缺口")
+        for attempt in attempts:
+            result = attempt.get("result_json", {})
+            reasons = result.get("tracking_criteria", {}).get("quality_reasons", [])
+            if result.get("data_quality") == "INCOMPLETE" or reasons:
+                detail = "、".join(tracking_reason_text(reason) for reason in reasons) or "判定数据不完整"
+                quality_reasons.append(f"{attempt['test_id']} 第 {attempt['ordinal']} 次：{detail}")
         data_quality = {
             "schema": "satellite-debug-tool/production-data-quality",
             "schema_version": 1,
@@ -402,10 +415,11 @@ class ProductionReportService:
         local_now = datetime.now().astimezone()
         return {
             "schema": "satellite-debug-tool/device-report-snapshot",
-            "schema_version": 2,
+            "schema_version": 3,
             "report_id": report_id,
             "automatic_verdict": verdict,
             "report_verdict": report_verdict,
+            **project_attempt_outcomes(attempts),
             "data_quality": data_quality,
             "frozen_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "batch": batch,
@@ -548,6 +562,9 @@ class ProductionReportService:
             "serial_number": snapshot["device"]["serial_number"],
             "report_id": snapshot["report_id"],
             "automatic_verdict": snapshot["automatic_verdict"],
+            "performance_verdict": snapshot.get("performance_verdict"),
+            "execution_completeness": snapshot.get("execution_completeness"),
+            "data_quality": snapshot.get("data_quality", {}).get("state"),
             "final_verdict": (
                 review["final_verdict"]
                 if review is not None
@@ -739,6 +756,8 @@ def _add_summary(document: Document, snapshot: Mapping[str, Any], review: Option
         document,
         (
             ("自动结论", snapshot["automatic_verdict"]),
+            ("性能结论", snapshot.get("performance_verdict", "该版本未记录")),
+            ("执行完整性", snapshot.get("execution_completeness", "该版本未记录")),
             ("采集质量", snapshot.get("data_quality", {}).get("state", "该版本未记录")),
             ("最终结论", final_verdict),
             ("测试时段", _time_range(snapshot["batch"])),
@@ -764,7 +783,7 @@ def _add_summary(document: Document, snapshot: Mapping[str, Any], review: Option
                 test_id,
                 str(len(values)),
                 str(latest["status"]).upper(),
-                _compact_json(latest.get("result_json", {})),
+                _result_summary(latest.get("result_json", {})),
             )
         )
     _add_table(document, rows, widths=(5.0, 2.0, 3.0, 7.0))
@@ -887,6 +906,8 @@ def _add_curve_analysis(document: Document, snapshot: Mapping[str, Any]) -> None
             (
                 ("工况状态", state_text),
                 ("自动结果", scenario.get("automatic_result", "未记录")),
+                ("性能结论", scenario.get("performance_verdict", "该版本未记录")),
+                ("执行完整性", scenario.get("execution_completeness", "该版本未记录")),
                 ("测试项", "、".join(scenario.get("test_ids", []))),
                 ("曲线窗口", f"{scenario.get('start_s', '-')} ～ {scenario.get('end_s', '-')} s"),
             ),
@@ -963,6 +984,84 @@ def _add_stage_statistics(
     conclusion.add_run(str(stage.get("conclusion") or "未生成结论。"))
 
 
+def _tracking_number(value: object, *, percent: bool = False) -> str:
+    if value is None:
+        return "未记录"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number * 100:.3f}%" if percent else f"{number:.3f} s"
+
+
+def _result_summary(result: Mapping[str, Any]) -> str:
+    criteria = result.get("tracking_criteria")
+    if not isinstance(criteria, Mapping):
+        return _compact_json(result)
+    parts = [
+        f"性能 {result.get('performance_verdict', '未记录')}",
+        f"数据质量 {result.get('data_quality', '未记录')}",
+        f"中断 {criteria.get('interruption_count', '未记录')} 次",
+        f"最长 {_tracking_number(criteria.get('interruption_max_s'))}",
+        f"累计 {_tracking_number(criteria.get('interruption_total_s'))}",
+        f"占比 {_tracking_number(criteria.get('interruption_ratio'), percent=True)}",
+    ]
+    reasons = list(criteria.get("failure_reasons", [])) + list(criteria.get("quality_reasons", []))
+    if reasons:
+        parts.append("；".join(tracking_reason_text(reason) for reason in reasons))
+    return "；".join(parts)
+
+
+def _add_tracking_criteria(
+    document: Document, criteria: Mapping[str, Any], result: Mapping[str, Any]
+) -> None:
+    policy = criteria.get("policy", {})
+    document.add_heading("跟踪判据与事件统计", level=3)
+    _add_key_value_table(
+        document,
+        (
+            ("判据版本", criteria.get("rule_version", "未记录")),
+            ("工况总时长（含搜星）", _tracking_number(criteria.get("duration_s"))),
+            ("有效跟踪条件", "跟踪阶段为 LOCKED、锁定标志为 true、SNR > 0；三项数据均有效"),
+            ("连续锁定确认时间", _tracking_number(policy.get("acquisition_stable_s"))),
+            ("搜星时限", _tracking_number(policy.get("acquisition_timeout_s"))),
+            ("单次中断上限", _tracking_number(policy.get("interruption_max_s"))),
+            ("次数配额", f"每 30 分钟 {policy.get('interruptions_per_30min', '未记录')} 次；本项 {criteria.get('interruption_limit', '未记录')} 次"),
+            ("累计中断占比上限", _tracking_number(policy.get("interruption_ratio_max"), percent=True)),
+            ("连续恢复确认时间", _tracking_number(policy.get("recovery_stable_s"))),
+            ("最大允许采样间隔", _tracking_number(policy.get("maximum_sample_gap_s"))),
+        ),
+    )
+    acquisition = (
+        _tracking_number(criteria.get("acquisition_elapsed_s"))
+        if criteria.get("acquisition_required") is True else "前置步骤已确认稳定锁定"
+        if criteria.get("acquisition_required") is False else "未记录"
+    )
+    _add_key_value_table(
+        document,
+        (
+            ("性能结论", result.get("performance_verdict", "未记录")),
+            ("数据质量", result.get("data_quality", "未记录")),
+            ("初次稳定锁定耗时", acquisition),
+            ("正式观察时长", _tracking_number(criteria.get("observation_duration_s"))),
+            ("中断次数", criteria.get("interruption_count", "未记录")),
+            ("最长已观测中断时长", _tracking_number(criteria.get("interruption_max_s"))),
+            ("累计已观测中断时长", _tracking_number(criteria.get("interruption_total_s"))),
+            ("累计中断占比", _tracking_number(criteria.get("interruption_ratio"), percent=True)),
+            ("窗口结束恢复状态", "恢复确认中" if criteria.get("recovery_pending") else "无待确认恢复"),
+            ("判定样本数", criteria.get("sample_count", "未记录")),
+            ("有效判定样本数", criteria.get("valid_sample_count", "未记录")),
+            ("最大已观测采样间隔", _tracking_number(criteria.get("maximum_observed_gap_s"))),
+        ),
+    )
+    for field, label in (("failure_reasons", "性能失败原因"), ("quality_reasons", "数据质量原因")):
+        reasons = criteria.get(field, [])
+        document.add_paragraph(f"{label}：" + ("；".join(tracking_reason_text(value) for value in reasons) or "未记录此类原因"))
+    document.add_paragraph(
+        "统计依据有效采样证据；未采样区间的物理状态未作推断。中断明细及原始判据保存在 test/attempts.json。"
+    )
+
+
 def _add_results(document: Document, snapshot: Mapping[str, Any]) -> None:
     document.add_heading("四、自动测试结果", level=1)
     attempts = snapshot["attempts"]
@@ -981,9 +1080,12 @@ def _add_results(document: Document, snapshot: Mapping[str, Any]) -> None:
                 ("开始单调时间", attempt.get("started_monotonic_ns") or "未记录"),
                 ("结束单调时间", attempt.get("ended_monotonic_ns") or "未记录"),
                 ("共享夹具动作", attempt.get("fixture_action_id") or "无"),
-                ("结果详情", _compact_json(attempt.get("result_json", {}))),
+                ("结果详情", _result_summary(attempt.get("result_json", {}))),
             ),
         )
+        criteria = attempt.get("result_json", {}).get("tracking_criteria")
+        if isinstance(criteria, Mapping):
+            _add_tracking_criteria(document, criteria, attempt.get("result_json", {}))
         metric_rows = [("指标", "值", "单位", "判定", "样本数", "证据等级")]
         for metric in attempt.get("metrics", []):
             metric_rows.append(
@@ -1023,7 +1125,8 @@ def _add_integrity(document: Document, snapshot: Mapping[str, Any]) -> None:
             ("事件总数", len(events)),
             ("不完整测试项", len(incomplete)),
             ("时间对齐", "使用主机 UTC 与单调时钟"),
-            ("完整性结论", "完整" if quality.get("state") == "COMPLETE" and not incomplete else "存在数据缺口"),
+            ("执行完整性", snapshot.get("execution_completeness", "该版本未记录")),
+            ("采集完整性", "完整" if quality.get("state") == "COMPLETE" else "证据不完整"),
         ),
     )
     for reason in quality.get("reasons", []):

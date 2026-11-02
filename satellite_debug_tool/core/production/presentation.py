@@ -20,32 +20,42 @@ TEST_ORDER: tuple[str, ...] = (
     "external_ins",
     "whole_navigation",
 )
-MANDATORY_TEST_IDS: frozenset[str] = frozenset(TEST_ORDER[:2])
 SCENARIO_TEST_IDS: tuple[str, ...] = TEST_ORDER[2:7]
 SUMMARY_TEST_IDS: tuple[str, ...] = TEST_ORDER[7:]
 
 _BENCH_TEST_IDS: frozenset[str] = frozenset(SCENARIO_TEST_IDS[:3])
 _VEHICLE_TEST_IDS: frozenset[str] = frozenset(SCENARIO_TEST_IDS[3:])
 
+_TRACKING_REASON_LABELS = {
+    "invalid_tracking_sample": "跟踪状态或 SNR 样本无效",
+    "tracking_samples_missing": "缺少跟踪样本",
+    "valid_tracking_samples_missing": "缺少有效跟踪样本",
+    "observation_start_evidence_missing": "观察窗口起点采样证据缺失",
+    "observation_end_evidence_missing": "观察窗口终点采样证据缺失",
+    "tracking_sample_gap": "采样间隔超过允许值",
+    "acquisition_evidence_incomplete": "搜星阶段证据不完整",
+    "acquisition_timeout": "超过搜星时限仍未建立稳定锁定",
+    "interruption_count_exceeded": "中断次数超过允许值",
+    "interruption_duration_exceeded": "单次中断时长超过允许值",
+    "interruption_ratio_exceeded": "累计中断时间占比超过允许值",
+}
+
+
+def tracking_reason_text(reason: object) -> str:
+    """以统一中文文案呈现判定器原因，未知原因保留原值。"""
+    text = str(reason)
+    return _TRACKING_REASON_LABELS.get(text, text)
+
 
 def enabled_production_tests(recipe: ProductionRecipe | None) -> tuple[str, ...]:
-    """按正式流程顺序投影启用项，整机汇总由场景窗口派生。
-
-    固件和参数校验是每份配方的固定入口。未知的显式启用项保留在
-    已知流程之后，供界面和执行证据明确呈现其待确认状态。
-    """
+    """按流程顺序呈现配方显式启用项；未知项保留其待确认状态。"""
     if recipe is None:
         return ()
 
     tests = recipe.payload["tests"]
-    explicit = {
+    enabled = {
         test_id for test_id, config in tests.items() if config["enabled"]
     }
-    enabled = explicit | MANDATORY_TEST_IDS
-    if explicit.intersection(SCENARIO_TEST_IDS):
-        enabled.add("whole_navigation")
-    else:
-        enabled.discard("whole_navigation")
 
     known = tuple(test_id for test_id in TEST_ORDER if test_id in enabled)
     unknown = tuple(sorted(enabled.difference(TEST_ORDER)))

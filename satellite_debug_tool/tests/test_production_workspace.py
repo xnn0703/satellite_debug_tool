@@ -757,6 +757,7 @@ def test_workflow_separates_scenarios_from_navigation_summaries(
     payload["tests"]["gnss"] = {"enabled": True}
     payload["tests"]["imu_static"] = {"enabled": True}
     payload["tests"]["external_ins"] = {"enabled": True}
+    payload["tests"]["whole_navigation"] = {"enabled": True}
     recipe_path = tmp_path / "navigation-recipe.json"
     recipe_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -764,8 +765,6 @@ def test_workflow_separates_scenarios_from_navigation_summaries(
     assert workspace.load_recipe_file(recipe_path)
 
     assert workspace._progress_panel.node_ids == (
-        "firmware_verification",
-        "parameter_verification",
         "static_acquisition",
         "locked_rocking",
         "gnss",
@@ -802,19 +801,17 @@ def test_workflow_separates_scenarios_from_navigation_summaries(
 
 
 def test_recipe_disables_missing_metric_views(qapp, settings, tmp_path: Path) -> None:
-    from satellite_debug_tool.i18n import tr
     from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
 
     workspace = ProductionWorkspace(settings)
     assert workspace.load_recipe_file(_write_recipe(tmp_path / "recipe.json"))
 
-    for test_id in ("gnss", "imu_static", "external_ins"):
+    for test_id in ("gnss", "imu_static", "external_ins", "whole_navigation",
+                    "firmware_verification", "parameter_verification"):
         assert test_id not in workspace._progress_panel.node_ids
     assert workspace._progress_panel.node_ids == (
-        "firmware_verification", "parameter_verification", "static_acquisition",
-        "locked_rocking", "whole_navigation",
+        "static_acquisition", "locked_rocking",
     )
-    assert workspace._progress_panel._nodes["whole_navigation"].state_label.text() == tr("Pending")
     workspace.close()
 
 

@@ -27,3 +27,9 @@
 ## 验证交付
 
 新增稳定复现旧自动化仅订阅状态的回归；涵盖上电前创建、能力拒绝、成功响应但数据缺失、正常采集、重启重协商、多设备隔离、中止与恢复、SDB回放。完成相关与全量pytest、翻译检查，维护开发记录，对照验收标准交付；现场硬件及信息完整性另行验证。
+
+## 2026-11-02 已确认的电源循环恢复修订
+
+实际OFF/ON不必让首条已观测uptime倒退。已知供电恢复由现Hardware闭环通知DeviceSession；ON后两类新身份接收游标、匹配冻结SN/UID、新Service、本次request-ID精确ACK及时序相容分析帧重新建立采集。开窗依据该组事实，不能伪造epoch或沿用断电前ready。实际主机/设备时间及nonce写入metadata；无boot ID时不宣称绝对排除数值碰撞旧包。
+
+正式批次借用Fleet原有生产冻结授权，不能新建第二gate或临时解冻。长OFF使Runtime在presence超时及终止宽限后结束旧gate时，新身份/Service后通过原gateway恢复同批次owner的PRODUCTION_FROZEN，再由既有controller单次申请采集。TERMINATING/他人owner期间等待；finalize先清恢复引用，Fleet唯一释放父租约。共享controller借用前必须通过RuntimeGateway只读owns_production_operation验证当前Production capability/owner确已冻结；IDLE不允许借用入口凭空创建MUTATING。

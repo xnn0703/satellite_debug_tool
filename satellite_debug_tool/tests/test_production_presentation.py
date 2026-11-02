@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from satellite_debug_tool.core.production.presentation import (
-    MANDATORY_TEST_IDS,
     SCENARIO_TEST_IDS,
     SUMMARY_TEST_IDS,
     TEST_ORDER,
@@ -32,7 +31,6 @@ def test_test_groups_cover_known_flow_in_declared_order() -> None:
         "locked_rocking", "power_on_rocking", "locked_drive", "power_on_drive",
         "gnss", "imu_static", "external_ins", "whole_navigation",
     )
-    assert MANDATORY_TEST_IDS == frozenset(TEST_ORDER[:2])
     assert SCENARIO_TEST_IDS == TEST_ORDER[2:7]
     assert SUMMARY_TEST_IDS == TEST_ORDER[7:]
 
@@ -42,25 +40,21 @@ def test_recipe_absence_has_empty_flow_and_fixture_requirements() -> None:
     assert fixture_requirements(None) == frozenset()
 
 
-def test_explicitly_disabled_mandatory_checks_remain_enabled() -> None:
+def test_explicitly_disabled_checks_stay_out_of_execution() -> None:
     recipe = _recipe("gnss", disabled=("firmware_verification", "parameter_verification"))
-    assert enabled_production_tests(recipe) == (
-        "firmware_verification", "parameter_verification", "gnss",
-    )
+    assert enabled_production_tests(recipe) == ("gnss",)
 
 
 @pytest.mark.parametrize("scenario", SCENARIO_TEST_IDS)
-def test_each_enabled_scenario_derives_whole_navigation(scenario: str) -> None:
+def test_scenario_preserves_explicitly_disabled_navigation(scenario: str) -> None:
     recipe = _recipe(scenario, disabled=("whole_navigation",))
-    assert enabled_production_tests(recipe) == (
-        "firmware_verification", "parameter_verification", scenario, "whole_navigation",
-    )
+    assert enabled_production_tests(recipe) == (scenario,)
 
 
-def test_whole_navigation_requires_a_scenario_window() -> None:
+def test_explicit_navigation_stays_visible_for_execution_readiness() -> None:
     recipe = _recipe("whole_navigation", "gnss")
     assert enabled_production_tests(recipe) == (
-        "firmware_verification", "parameter_verification", "gnss",
+        "gnss", "whole_navigation",
     )
 
 
@@ -68,15 +62,14 @@ def test_known_tests_follow_flow_order_and_disabled_tests_are_absent() -> None:
     recipe = _recipe("external_ins", "power_on_rocking", "imu_static", "gnss", "static_acquisition",
                      disabled=("locked_rocking", "locked_drive"))
     assert enabled_production_tests(recipe) == (
-        "firmware_verification", "parameter_verification", "static_acquisition",
-        "power_on_rocking", "gnss", "imu_static", "external_ins", "whole_navigation",
+        "static_acquisition", "power_on_rocking", "gnss", "imu_static", "external_ins",
     )
 
 
 def test_unknown_enabled_tests_remain_visible_after_known_tests() -> None:
     recipe = _recipe("vendor_z", "gnss", "vendor_a", disabled=("vendor_disabled",))
     assert enabled_production_tests(recipe) == (
-        "firmware_verification", "parameter_verification", "gnss", "vendor_a", "vendor_z",
+        "gnss", "vendor_a", "vendor_z",
     )
 
 

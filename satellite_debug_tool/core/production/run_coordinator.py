@@ -37,6 +37,7 @@ class DeviceStepResult:
     passed: bool
     result: Mapping[str, object]
     incomplete: bool = False
+    skipped: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,13 +110,23 @@ class ProductionRunCoordinator(QObject):
         self._previous_valid: frozenset[str] = frozenset()
 
     @property
+    def observation_started_at(self) -> float | None:
+        return self._observation_started_at
+
+    @property
+    def observation_deadline(self) -> float | None:
+        if self._observation_started_at is None or self._observation_s is None:
+            return None
+        return self._observation_started_at + self._observation_s
+
+    @property
     def progress(self) -> ProductionProgress:
         now = self._clock() if self._step_finished_at is None else self._step_finished_at
         timed = self.current_test_id in {"static_acquisition", "locked_rocking", "power_on_rocking"}
         remaining = None
         if timed and self._observation_s is not None:
-            elapsed = 0.0 if self._observation_started_at is None else now - self._observation_started_at
-            remaining = max(0.0, self._observation_s - elapsed)
+            deadline = self.observation_deadline
+            remaining = self._observation_s if deadline is None else max(0.0, deadline - now)
         return ProductionProgress(
             self.current_test_id, self._state, self._phase,
             self._step_index + 1, len(self._test_ids),
@@ -126,6 +137,13 @@ class ProductionRunCoordinator(QObject):
     def explain_wait(self, reason: str) -> None:
         self._reason = str(reason)
         self.progress_changed.emit(self.progress)
+
+    def set_observation_duration(self, duration_s: float) -> None:
+        """当前步骤准备时冻结本项工况时长。"""
+        self._require_state(ProductionRunState.WAITING_PREREQUISITE)
+        if not math.isfinite(duration_s) or duration_s <= 0:
+            raise ValueError("observation duration must be finite and positive")
+        self._observation_s = float(duration_s)
 
     def observe(self, valid_serials: Sequence[str], *, acquired_serials: Sequence[str], maximum_gap_s: float) -> bool:
         """固定工况窗口持续计时；独立保留每台设备的正 SNR 证据时长。"""
@@ -203,9 +221,23 @@ class ProductionRunCoordinator(QObject):
         results: Mapping[str, DeviceStepResult],
     ) -> ProductionStepRequest | None:
         self._require_state(ProductionRunState.RUNNING)
+        return self._complete_results(results, AttemptStatus.RUNNING)
+
+    def complete_preparation(self, results: Mapping[str, DeviceStepResult]) -> ProductionStepRequest | None:
+        """前置条件未满足时保存判定，不生成硬件已启动证据。"""
+        if self._state not in {ProductionRunState.WAITING_PREREQUISITE, ProductionRunState.ARMED}:
+            raise RuntimeError("preparation result requires a preparing step")
+        if any(result.passed or result.skipped for result in results.values()):
+            raise ValueError("preparation failure requires FAIL or INCOMPLETE results")
+        status = (AttemptStatus.ARMED if self._state is ProductionRunState.ARMED
+                  else AttemptStatus.WAITING_PREREQUISITE)
+        return self._complete_results(results, status)
+
+    def _complete_results(self, results: Mapping[str, DeviceStepResult],
+                          status: AttemptStatus) -> ProductionStepRequest | None:
         if set(results) != set(self._participants):
             raise ValueError("step results must contain every frozen participant exactly once")
-        attempts = self._current_attempts(AttemptStatus.RUNNING)
+        attempts = self._current_attempts(status)
         self._phase = AttemptPhase.FINISHING
         for serial in self._participants:
             attempt = attempts[serial]
@@ -219,11 +251,11 @@ class ProductionRunCoordinator(QObject):
             payload.update(outcome.result)
             payload["effective_observation_s"] = self._effective[serial]
             payload["step_elapsed_s"] = self.progress.elapsed_s
-            verdict = "incomplete" if outcome.incomplete else "pass" if outcome.passed else "fail"
+            verdict = "skipped" if outcome.skipped else "incomplete" if outcome.incomplete else "pass" if outcome.passed else "fail"
             payload.setdefault("verdict", verdict)
             self._store.transition_attempt(
                 int(attempt["attempt_id"]),
-                AttemptStatus.INCOMPLETE if outcome.incomplete else AttemptStatus.PASS if outcome.passed else AttemptStatus.FAIL,
+                AttemptStatus.SKIPPED if outcome.skipped else AttemptStatus.INCOMPLETE if outcome.incomplete else AttemptStatus.PASS if outcome.passed else AttemptStatus.FAIL,
                 result=payload,
             )
         if self._step_index + 1 >= len(self._test_ids):
@@ -231,7 +263,8 @@ class ProductionRunCoordinator(QObject):
             return None
         return self._request_next_step()
 
-    def fail_shared_step(self, reason: str, *, evidence: Mapping[str, object]) -> None:
+    def fail_shared_step(self, reason: str, *, evidence: Mapping[str, object],
+                         device_results: Mapping[str, Mapping[str, object]] | None = None) -> None:
         if self._state not in {
             ProductionRunState.WAITING_PREREQUISITE,
             ProductionRunState.ARMED,
@@ -245,6 +278,7 @@ class ProductionRunCoordinator(QObject):
         }[self._state]
         for attempt in self._current_attempts(status).values():
             payload = dict(attempt.get("result_json") or {})
+            payload.update((device_results or {}).get(attempt["serial_number"], {}))
             payload.update(
                 {"reason": str(reason), "shared_evidence": dict(evidence)}
             )
@@ -253,7 +287,7 @@ class ProductionRunCoordinator(QObject):
             )
         self._set_state(ProductionRunState.INCOMPLETE)
 
-    def abort(self, reason: str) -> None:
+    def abort(self, reason: str, *, device_results: Mapping[str, Mapping[str, object]] | None = None) -> None:
         if self._state in {
             ProductionRunState.COMPLETE,
             ProductionRunState.INCOMPLETE,
@@ -271,7 +305,8 @@ class ProductionRunCoordinator(QObject):
             self._store.transition_attempt(
                 int(attempt["attempt_id"]),
                 AttemptStatus.ABORTED,
-                result={"reason": str(reason)},
+                result={**dict(attempt.get("result_json") or {}),
+                        **dict((device_results or {}).get(attempt["serial_number"], {})), "reason": str(reason)},
             )
         self._set_state(ProductionRunState.ABORTED)
 

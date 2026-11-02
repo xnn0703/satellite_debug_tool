@@ -10,11 +10,37 @@ import re
 from typing import Any, Mapping, Tuple
 
 from satellite_debug_tool.core.product import production_recipe_product_policy
+from satellite_debug_tool.core.production.tracking_criteria import TrackingCriteriaPolicy
 
 
 _RECIPE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_RECIPE_BYTES = 1024 * 1024
 _FORMAL_MINIMUM_OBSERVATION_S = 3600
+TIMED_TEST_IDS = frozenset({
+    "static_acquisition", "locked_rocking", "power_on_rocking", "locked_drive", "power_on_drive",
+})
+
+
+def resolve_test_plan(tests: Mapping[str, Any], duration_policy: Mapping[str, Any]) -> tuple[dict, dict]:
+    """仅在创建新配方时将旧模板时间字段迁入逐项目合同。"""
+    resolved_tests = json.loads(json.dumps(tests))
+    policy = json.loads(json.dumps(duration_policy))
+    legacy_duration = policy.pop("minimum_effective_observation_s", None)
+    legacy_convergence = policy.pop("convergence_is_outside_observation", None)
+    if legacy_duration is not None or legacy_convergence is not None:
+        policy["timing_migration"] = {
+            "source": "legacy_global_duration",
+            "minimum_effective_observation_s": legacy_duration,
+            "convergence_is_outside_observation": legacy_convergence,
+        }
+    policy["window_includes_acquisition"] = True
+    policy["tracking_criteria"] = TrackingCriteriaPolicy.from_mapping(policy.get("tracking_criteria")).to_payload()
+    for test_id, config in resolved_tests.items():
+        if not isinstance(config, dict):
+            raise ValueError(f"tests.{test_id} must be an object")
+        if test_id in TIMED_TEST_IDS and config.get("enabled"):
+            config.setdefault("duration_s", legacy_duration)
+    return resolved_tests, policy
 
 
 class RecipeValidationError(ValueError):
@@ -77,9 +103,11 @@ class ProductionRecipe:
             allow_nan=False,
         )
 
-        minimum_observation_s = int(
-            normalized["duration_policy"]["minimum_effective_observation_s"]
-        )
+        durations = [int(config["duration_s"]) for test_id, config in normalized["tests"].items()
+                     if normalized["schema_version"] == 2 and test_id in TIMED_TEST_IDS
+                     and config.get("enabled") and "duration_s" in config]
+        minimum_observation_s = min(durations, default=int(
+            normalized["duration_policy"].get("minimum_effective_observation_s", _FORMAL_MINIMUM_OBSERVATION_S)))
         return cls(
             recipe_id=str(normalized["recipe_id"]),
             product=str(normalized["product"]),
@@ -98,6 +126,15 @@ class ProductionRecipe:
     def canonical_json(self) -> str:
         return self._canonical_json
 
+    def duration_for(self, test_id: str) -> float:
+        payload = self.payload
+        if self.schema_version == 1:
+            return float(payload["duration_policy"]["minimum_effective_observation_s"])
+        config = payload["tests"].get(test_id, {})
+        if "duration_s" in config:
+            return float(config["duration_s"])
+        raise RecipeValidationError((f"tests.{test_id}.duration_s is required",))
+
     def write_snapshot(self, path: str | Path) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -109,8 +146,9 @@ class ProductionRecipe:
 
 def _validate_recipe(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    if payload.get("schema_version") != 1:
-        errors.append("schema_version must be 1")
+    schema = payload.get("schema_version")
+    if schema not in {1, 2}:
+        errors.append("schema_version must be 1 or 2")
 
     recipe_id = payload.get("recipe_id")
     if not isinstance(recipe_id, str) or not _RECIPE_ID_RE.fullmatch(recipe_id):
@@ -138,14 +176,29 @@ def _validate_recipe(payload: dict[str, Any]) -> list[str]:
 
     duration = payload.get("duration_policy")
     if isinstance(duration, dict):
-        minimum = duration.get("minimum_effective_observation_s")
-        if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
-            errors.append("minimum_effective_observation_s must be a positive integer")
+        if schema == 1:
+            minimum = duration.get("minimum_effective_observation_s")
+            if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
+                errors.append("minimum_effective_observation_s must be a positive integer")
         first_last = duration.get("report_first_last_window_s")
         if isinstance(first_last, bool) or not isinstance(first_last, int) or first_last <= 0:
             errors.append("report_first_last_window_s must be a positive integer")
-        if duration.get("convergence_is_outside_observation") is not True:
+        if schema == 1 and duration.get("convergence_is_outside_observation") is not True:
             errors.append("convergence_is_outside_observation must be true")
+        if schema == 2:
+            if duration.get("window_includes_acquisition") is not True:
+                errors.append("window_includes_acquisition must be true")
+            if "minimum_effective_observation_s" in duration or "convergence_is_outside_observation" in duration:
+                errors.append("schema 2 uses per-test duration_s and window_includes_acquisition")
+            if not isinstance(duration.get("tracking_criteria"), dict):
+                errors.append("tracking_criteria must be an object")
+            else:
+                try:
+                    if set(duration["tracking_criteria"]) != set(TrackingCriteriaPolicy.__dataclass_fields__):
+                        errors.append("schema 2 tracking_criteria requires every policy field")
+                    TrackingCriteriaPolicy.from_mapping(duration["tracking_criteria"])
+                except (ValueError, TypeError) as exc:
+                    errors.append(str(exc))
 
     tests = payload.get("tests")
     if isinstance(tests, dict):
@@ -162,6 +215,19 @@ def _validate_recipe(payload: dict[str, Any]) -> list[str]:
                 errors.append(f"tests.{test_id}.enabled must be boolean")
             elif enabled:
                 enabled_count += 1
+            if test_id in TIMED_TEST_IDS and (schema == 2 and enabled or "duration_s" in test_config):
+                seconds = test_config.get("duration_s")
+                if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
+                    errors.append(f"tests.{test_id}.duration_s must be a positive integer")
+                elif schema == 2 and enabled and isinstance(duration, dict):
+                    try:
+                        criteria = TrackingCriteriaPolicy.from_mapping(duration.get("tracking_criteria"))
+                        if test_id in {"static_acquisition", "power_on_rocking", "power_on_drive"} and seconds <= criteria.acquisition_timeout_s + criteria.recovery_stable_s:
+                            errors.append(f"tests.{test_id}.duration_s must exceed acquisition timeout plus recovery confirmation")
+                        elif seconds <= criteria.recovery_stable_s:
+                            errors.append(f"tests.{test_id}.duration_s must exceed recovery confirmation")
+                    except (ValueError, TypeError):
+                        pass
         if enabled_count == 0:
             errors.append("at least one test must be enabled")
 
@@ -172,12 +238,12 @@ def _validate_recipe(payload: dict[str, Any]) -> list[str]:
             errors.append("fixtures.power_profile must be a non-empty string")
         platform = fixtures.get("motion_platform")
         if platform is not None:
-            _validate_motion_platform(platform, errors)
+            _validate_motion_platform(platform, errors, schema=schema)
         vehicle = fixtures.get("vehicle")
         if not isinstance(vehicle, dict) or vehicle.get("driver") != "manual":
             errors.append("fixtures.vehicle.driver must be 'manual'")
 
-    if isinstance(duration, dict) and isinstance(fixtures, dict):
+    if schema == 1 and isinstance(duration, dict) and isinstance(fixtures, dict):
         platform = fixtures.get("motion_platform")
         profile = platform.get("profile") if isinstance(platform, dict) else None
         steady = profile.get("steady_duration_s") if isinstance(profile, dict) else None
@@ -191,7 +257,7 @@ def _validate_recipe(payload: dict[str, Any]) -> list[str]:
         ):
             errors.append(
                 "motion profile steady_duration_s cannot be shorter than "
-                "minimum_effective_observation_s"
+                "the configured observation duration"
             )
     return errors
 
@@ -272,7 +338,7 @@ def _validate_expected(expected: dict[str, Any], errors: list[str]) -> None:
             errors.append(f"{prefix} must define a comparison rule or per_device")
 
 
-def _validate_motion_platform(platform: Any, errors: list[str]) -> None:
+def _validate_motion_platform(platform: Any, errors: list[str], *, schema: int) -> None:
     if not isinstance(platform, dict):
         errors.append("fixtures.motion_platform must be an object")
         return
@@ -332,9 +398,17 @@ def _validate_motion_platform(platform: Any, errors: list[str]) -> None:
     sample_period = profile.get("sample_period_ms")
     if isinstance(sample_period, bool) or not isinstance(sample_period, int) or sample_period <= 0:
         errors.append("motion profile sample_period_ms must be a positive integer")
-    steady = profile.get("steady_duration_s")
-    if isinstance(steady, bool) or not isinstance(steady, int) or steady <= 0:
-        errors.append("motion profile steady_duration_s must be a positive integer")
+    if schema == 2:
+        if profile.get("execution_mode") != "until_observation_complete":
+            errors.append("motion profile execution_mode must be 'until_observation_complete'")
+        if "steady_duration_s" in profile:
+            errors.append("motion duration is owned by tests.duration_s")
+        if profile.get("ramp_out_s", 0) != 0:
+            errors.append("continuous motion finishes through controlled stop and center")
+    else:
+        steady = profile.get("steady_duration_s")
+        if isinstance(steady, bool) or not isinstance(steady, int) or steady <= 0:
+            errors.append("motion profile steady_duration_s must be a positive integer")
     for key in ("ramp_in_s", "ramp_out_s"):
         if key not in profile:
             continue

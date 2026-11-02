@@ -416,6 +416,16 @@ class RuntimeOperationGateway(SessionOperationGateway):
 
         return False
 
+    def owns_production_operation(self, owner: object) -> bool:
+        """只读确认本gateway当前持有同owner的Production冻结；不取得或改变租约。"""
+        gate = self._runtime.operation_gate
+        return bool(
+            self.capability.facet == "production"
+            and gate.state is RuntimeOperationGateState.PRODUCTION_FROZEN
+            and gate.capability_token == self.capability.token
+            and _owners_equal(gate.owner, owner)
+        )
+
     def try_acquire_operation(
         self,
         owner: object,

@@ -16,15 +16,30 @@ from satellite_debug_tool.core.production import (
     FixtureRuntime, FixtureRuntimeState, ProductionRecipe, ProductionRunState,
 )
 from satellite_debug_tool.core.production import execution_hardware as module
+from satellite_debug_tool.core.production.power_supply import (
+    PowerActionResult, PowerCommandRecord, PowerEvidenceLevel, PowerMeasurement, PowerSupplyState,
+)
 from satellite_debug_tool.core.production.ms6222_protocol import Ms6222InsRecord, Ms6222StreamParser
 from satellite_debug_tool.tests.test_ms6222_protocol import _ins_frame
 from satellite_debug_tool.tests.test_production_configuration_workspace import _catalog
-from satellite_debug_tool.tests.test_production_execution import execution
+from satellite_debug_tool.tests.test_production_execution import execution, confirm_prelock
 
 
-@dataclass
-class _Output:
-    output_enabled: bool = True
+def _output(enabled: bool = True) -> PowerActionResult:
+    return PowerActionResult(
+        PowerSupplyState.ON_CONFIRMED if enabled else PowerSupplyState.READY_OFF,
+        PowerEvidenceLevel.VOLTAGE_CONFIRMED if enabled else PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED,
+        enabled, PowerMeasurement(24.0 if enabled else .024, .5 if enabled else 0), 0, 0, False,
+    )
+
+
+def _power_records(hardware, enabled: bool, *, at_ns: int | None = None):
+    at = module.time.monotonic_ns() if at_ns is None else at_ns
+    action_id = hardware.power.action_id
+    return (
+        PowerCommandRecord(f"OUTP {int(enabled)}", "", False, 1, at, 1, action_id),
+        PowerCommandRecord("OUTP?", str(int(enabled)), True, 2, at + 1, 1, action_id),
+    )
 
 
 class _Power(QObject):
@@ -32,6 +47,7 @@ class _Power(QObject):
 
     def __init__(self) -> None:
         super().__init__()
+        self.action_id = "POWER-CYCLE-1"
         self.outputs: list[bool] = []
 
     def request_output(self, enabled: bool) -> None:
@@ -83,8 +99,17 @@ def reference_hardware(qapplication_session, tmp_path, monkeypatch, request):
     service, store, _sent = execution(tmp_path, test_id, clock)
     payload = service.recipe.payload
     payload["fixtures"]["motion_platform"]["profile"]["ramp_in_s"] = 5
+    if test_id == "power_on_rocking":
+        service.policy = replace(service.policy, acquisition_timeout_s=20)
+        payload["duration_policy"].update(minimum_effective_observation_s=30,
+                                          tracking_criteria=service.policy.to_payload())
+        payload["fixtures"]["motion_platform"]["profile"]["steady_duration_s"] = 30
     service.recipe = ProductionRecipe.from_mapping(payload)
+    if test_id == 'locked_rocking':
+        clock[0] = -.075
     service.start()
+    if test_id == 'locked_rocking':
+        confirm_prelock(service, clock)
     assert service.run.state is ProductionRunState.ARMED
     hardware = module.ProductionExecutionHardware(service, runtime, configuration, _Power(), tmp_path)
     hardware._test_id = test_id
@@ -110,7 +135,7 @@ def reference_hardware(qapplication_session, tmp_path, monkeypatch, request):
     def start_trajectory() -> None:
         if test_id == "power_on_rocking":
             hardware._connected()
-            hardware._power_changed(False, _Output(False), (), "OFF-1")
+            hardware._power_changed(False, _output(False), _power_records(hardware, False), hardware.power.action_id)
         else:
             hardware._start_trajectory()
         event = MotionCommandEvent(
@@ -183,25 +208,49 @@ def test_reference_precision_loss_during_ramp_allows_countdown(reference_hardwar
     assert case.runtime.fact("reference").state is not FixtureRuntimeState.READY
 
 
-def test_fresh_valid_reference_and_sent_anchor_start_dynamic_countdown(reference_hardware) -> None:
+def test_locked_rocking_counts_ramp_from_first_fresh_motion_feedback(reference_hardware) -> None:
     case = reference_hardware
     case.reference(0.9)
     case.start_trajectory()
     assert case.hardware._motion_started_at is not None
 
-    case.clock[0] = 4.9
+    case.clock[0] = 0.1
     case.reference(0.95)
-    case.moved_feedback()
-    assert case.service.run.state is ProductionRunState.ARMED
-    assert case.service.run.progress.remaining_s == 2.0
-
-    case.clock[0] = 5.1
-    case.reference(0.97)
     case.moved_feedback()
     assert case.service.run.state is ProductionRunState.RUNNING
     assert case.service.run.progress.remaining_s == 2.0
-    case.clock[0] = 5.6
+    assert case.hardware.observation_ready() == (True, "")
+
+    case.clock[0] = 0.3
+    case.reference(0.97)
+    case.moved_feedback()
+    assert case.service.run.state is ProductionRunState.RUNNING
+    assert case.service.run.progress.remaining_s == pytest.approx(1.8)
+    case.clock[0] = 0.6
     assert case.service.run.progress.remaining_s == pytest.approx(1.5)
+
+
+def test_armed_prelock_loss_waits_for_new_stable_frames_before_motion(reference_hardware):
+    from satellite_debug_tool.tests.test_production_execution import tracking_sample
+
+    case = reference_hardware
+    case.reference(0.9)
+    submitted = []
+    case.hardware.control.submit_trajectory = lambda trajectory: submitted.append(trajectory) or "MOTION-1"
+    case.clock[0] = .1
+    for session in case.service.sessions.values():
+        session.core.record_received.emit(tracking_sample(0, locked=False, timestamp=100))
+    case.hardware._start_trajectory()
+    assert case.hardware._operation == "waiting_prelock_trajectory"
+    assert submitted == []
+    for index, moment in enumerate((.2, .225, .25, .275), 101):
+        case.clock[0] = moment
+        for session in case.service.sessions.values():
+            session.core.record_received.emit(tracking_sample(12, timestamp=index))
+    assert case.hardware._operation == "trajectory"
+    assert len(submitted) == 1
+    case.service.motion_precondition_changed.emit()
+    assert len(submitted) == 1
 
 
 @pytest.mark.parametrize("reference_hardware", ("power_on_rocking",), indirect=True)
@@ -276,17 +325,17 @@ def test_invalid_reference_data_still_blocks_start(reference_hardware, values):
     assert case.hardware._reference_data_gate()[0] is False
 
 
-def test_snr_drop_still_fails_with_reference_precision_advisory(reference_hardware):
+def test_snr_drop_during_ramp_counts_with_reference_precision_advisory(reference_hardware):
     from satellite_debug_tool.tests.test_production_execution import tracking_sample
 
     case = reference_hardware
     case.reference(8.0)
     case.start_trajectory()
-    case.clock[0] = 5.1
+    case.clock[0] = .1
     case.reference(8.0)
     case.moved_feedback()
     for offset in (0, 0.5, 1.0, 1.5, 2.0):
-        case.clock[0] = 5.1 + offset
+        case.clock[0] = .1 + offset
         case.reference(8.0)
         case.moved_feedback()
         for index, serial in enumerate(case.service.sessions):
@@ -315,7 +364,7 @@ def test_shared_power_restores_output_without_reference_and_waits_for_new_frames
     assert case.service.run.state is ProductionRunState.ARMED
     assert case.hardware._reference_at_ns == 0
 
-    case.hardware._power_changed(True, _Output(), (), "RESTORED-1")
+    case.hardware._power_changed(True, _output(), _power_records(case.hardware, True), case.hardware.power.action_id)
     assert "recovery" in case.hardware.preparation_reason()
     assert case.service.run.state is ProductionRunState.ARMED
     assert case.hardware._power_restored_at_ns > old_at
@@ -326,9 +375,14 @@ def test_shared_power_restores_output_without_reference_and_waits_for_new_frames
     case.clock[0] = 6.2
     case.hardware._reference_connection(True, "MS-PORT")
     case.reference(8.0)
+    assert case.service.run.state is ProductionRunState.ARMED  # MS恢复后仍等待本次DUT采集。
+    for session in case.service.sessions.values():
+        assert session.capture_restorations == [case.hardware._power_restored_at_ns]
+        session.capture_ready = True
+    case.service.tick()
     assert case.service.run.state is ProductionRunState.RUNNING
     case.clock[0] = 6.7
-    assert case.service.run.progress.remaining_s == pytest.approx(1.5)
+    assert case.service.run.progress.remaining_s == pytest.approx(29.5)
     assert failed == []
     case.hardware._reference_connection(False, "MS-PORT")
     assert len(failed) == 1  # 正常观察阶段的真实断连继续生效。
@@ -368,7 +422,7 @@ def test_shared_power_serial_restart_waits_for_old_reader_to_finish(reference_ha
     assert reader.stops == 1
     case.clock[0] = 6.0
     case.moved_feedback()
-    case.hardware._power_changed(True, _Output(), (), "ON-1")
+    case.hardware._power_changed(True, _output(), _power_records(case.hardware, True), case.hardware.power.action_id)
     assert opened == []
     case.hardware._reference_worker_finished()
     assert opened == ["open"]
@@ -377,3 +431,51 @@ def test_shared_power_serial_restart_waits_for_old_reader_to_finish(reference_ha
     case.hardware._reference_worker = Reader()
     case.hardware._reference_worker_finished()
     assert opened == ["open"]
+
+
+@pytest.mark.parametrize('reference_hardware', ('power_on_rocking',), indirect=True)
+@pytest.mark.parametrize('fault', ['action', 'old_records', 'missing_readback'])
+def test_power_cycle_ignores_unmatched_output_receipts(reference_hardware, fault):
+    case = reference_hardware
+    case.start_trajectory()
+    case.clock[0] = 6.0
+    case.moved_feedback()
+    records = _power_records(case.hardware, True)
+    action_id = case.hardware.power.action_id
+    if fault == 'action':
+        action_id = 'OTHER-OWNER'
+    elif fault == 'old_records':
+        records = _power_records(case.hardware, True, at_ns=1_000_000_000_000)
+    else:
+        records = records[:1]
+    case.hardware._power_changed(True, _output(), records, action_id)
+    assert case.hardware._power_phase is module.PowerOnRockingPhase.POWERING_ON
+    assert all(session.capture_restorations == [] for session in case.service.sessions.values())
+    assert case.service.run.state is ProductionRunState.ARMED
+
+
+@pytest.mark.parametrize('reference_hardware', ('power_on_rocking',), indirect=True)
+def test_power_cycle_rejects_output_result_contradicting_command(reference_hardware):
+    case = reference_hardware
+    case.start_trajectory()
+    case.clock[0] = 6.0
+    case.moved_feedback()
+    case.hardware._power_changed(True, _output(False), _power_records(case.hardware, True),
+                                 case.hardware.power.action_id)
+    assert not case.service.active
+    assert all(session.capture_restorations == [] for session in case.service.sessions.values())
+
+
+@pytest.mark.parametrize('reference_hardware', ('power_on_rocking',), indirect=True)
+def test_power_cycle_duplicate_on_and_quiesced_callback_do_not_prepare_capture(reference_hardware):
+    case = reference_hardware
+    case.start_trajectory()
+    case.clock[0] = 6.0
+    case.moved_feedback()
+    result, records, action_id = _output(), _power_records(case.hardware, True), case.hardware.power.action_id
+    case.hardware._power_changed(True, result, records, action_id)
+    case.hardware._power_changed(True, result, records, action_id)
+    assert all(len(session.capture_restorations) == 1 for session in case.service.sessions.values())
+    case.hardware.quiesce()
+    case.hardware._power_changed(True, result, records, action_id)
+    assert all(len(session.capture_restorations) == 1 for session in case.service.sessions.values())

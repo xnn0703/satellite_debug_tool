@@ -31,7 +31,7 @@ class SineAxis:
 class SineTrajectory:
     sample_period_ms: int
     ramp_in_s: float
-    steady_duration_s: float
+    steady_duration_s: float | None
     ramp_out_s: float
     roll: SineAxis
     pitch: SineAxis
@@ -40,31 +40,40 @@ class SineTrajectory:
     profile_id: str = "trajectory"
 
     @property
-    def total_duration_s(self) -> float:
+    def total_duration_s(self) -> float | None:
+        if self.steady_duration_s is None:
+            return None
         return self.ramp_in_s + self.steady_duration_s + self.ramp_out_s
 
     @property
-    def sample_count(self) -> int:
-        return int(math.ceil(self.total_duration_s * 1000.0 / self.sample_period_ms))
+    def sample_count(self) -> int | None:
+        duration = self.total_duration_s
+        return None if duration is None else int(math.ceil(duration * 1000.0 / self.sample_period_ms))
 
     def validate(self) -> None:
         if self.sample_period_ms <= 0:
             raise MotionPlatformError("trajectory sample period must be positive")
-        if self.ramp_in_s < 0 or self.steady_duration_s <= 0 or self.ramp_out_s < 0:
+        if (not all(math.isfinite(value) and value >= 0 for value in (self.ramp_in_s, self.ramp_out_s))
+                or (self.steady_duration_s is not None
+                    and (not math.isfinite(self.steady_duration_s) or self.steady_duration_s <= 0))):
             raise MotionPlatformError("trajectory durations are invalid")
+        if self.steady_duration_s is None and self.ramp_out_s != 0:
+            raise MotionPlatformError("continuous trajectory finishes through controlled stop and center")
         for axis in (self.roll, self.pitch, self.yaw):
             axis.validate()
         if not any(axis.enabled for axis in (self.roll, self.pitch, self.yaw)):
             raise MotionPlatformError("trajectory requires an enabled axis")
 
     def pose_at(self, elapsed_s: float) -> PlatformPose:
-        elapsed = min(max(float(elapsed_s), 0.0), self.total_duration_s)
+        elapsed = max(float(elapsed_s), 0.0)
+        duration = self.total_duration_s
+        if duration is not None:
+            elapsed = min(elapsed, duration)
         envelope = 1.0
         if self.ramp_in_s > 0 and elapsed < self.ramp_in_s:
             envelope = math.sin(math.pi * elapsed / (2.0 * self.ramp_in_s)) ** 2
-        ramp_out_start = self.ramp_in_s + self.steady_duration_s
-        if self.ramp_out_s > 0 and elapsed > ramp_out_start:
-            remaining = max(0.0, self.total_duration_s - elapsed)
+        if duration is not None and self.ramp_out_s > 0 and elapsed > duration - self.ramp_out_s:
+            remaining = max(0.0, duration - elapsed)
             envelope = math.sin(math.pi * remaining / (2.0 * self.ramp_out_s)) ** 2
         return PlatformPose(
             _axis_value(self.roll, elapsed, envelope),
@@ -76,7 +85,7 @@ class SineTrajectory:
 
 @dataclass(frozen=True)
 class TrajectoryResult:
-    intended_points: int
+    intended_points: int | None
     sent_points: int
     skipped_points: int
     maximum_lateness_ms: float
@@ -102,8 +111,11 @@ class MotionTrajectoryRunner:
         if trajectory.sample_period_ms < self._controller.config.minimum_duration_ms:
             raise MotionPlatformError("trajectory sample period is shorter than controller minimum")
         count = trajectory.sample_count
+        # 持续轨迹先检验渐入路径，后续各点仍由 controller 逆解并检查行程。
+        if count is None:
+            count = max(1, int(math.ceil(trajectory.ramp_in_s * 1000.0 / trajectory.sample_period_ms)))
         points = tuple(
-            trajectory.pose_at(min((index + 1) * trajectory.sample_period_ms / 1000.0, trajectory.total_duration_s))
+            trajectory.pose_at((index + 1) * trajectory.sample_period_ms / 1000.0)
             for index in range(count)
         )
         for point in points:
@@ -111,7 +123,10 @@ class MotionTrajectoryRunner:
         return points
 
     def run(self, trajectory: SineTrajectory, *, stop_event: threading.Event | None = None) -> TrajectoryResult:
+        if trajectory.steady_duration_s is None and stop_event is None:
+            raise MotionPlatformError("continuous trajectory requires an explicit stop owner")
         points = self.preflight(trajectory)
+        count = trajectory.sample_count
         stop = stop_event or threading.Event()
         period_ns = trajectory.sample_period_ms * 1_000_000
         start_ns = self._clock_ns()
@@ -121,7 +136,7 @@ class MotionTrajectoryRunner:
         maximum_lateness_ns = 0
         self._controller.mark_trajectory_active()
         try:
-            while index < len(points) and not stop.is_set():
+            while (count is None or index < count) and not stop.is_set():
                 deadline_ns = start_ns + index * period_ns
                 now = self._clock_ns()
                 if now < deadline_ns:
@@ -130,23 +145,27 @@ class MotionTrajectoryRunner:
                 if stop.is_set():
                     break
                 if now >= deadline_ns + period_ns:
-                    new_index = min(len(points), int((now - start_ns) // period_ns))
+                    new_index = int((now - start_ns) // period_ns)
+                    if count is not None:
+                        new_index = min(count, new_index)
                     skipped += max(1, new_index - index)
                     index = new_index
-                    if index >= len(points):
+                    if count is not None and index >= count:
                         break
                     deadline_ns = start_ns + index * period_ns
                 maximum_lateness_ns = max(maximum_lateness_ns, max(0, now - deadline_ns))
-                self._controller.send_trajectory_point(points[index], duration_ms=trajectory.sample_period_ms)
+                point = (points[index] if count is not None else
+                         trajectory.pose_at((index + 1) * trajectory.sample_period_ms / 1000.0))
+                self._controller.send_trajectory_point(point, duration_ms=trajectory.sample_period_ms)
                 sent += 1
                 index += 1
         finally:
             self._controller.mark_trajectory_stopped()
         arrival = None
-        if not stop.is_set() and sent and index == len(points):
+        if not stop.is_set() and sent and count is not None and index == count:
             arrival = self._controller.wait_for_target(points[-1], action="trajectory")
         return TrajectoryResult(
-            intended_points=len(points),
+            intended_points=count,
             sent_points=sent,
             skipped_points=skipped,
             maximum_lateness_ms=maximum_lateness_ns / 1_000_000.0,

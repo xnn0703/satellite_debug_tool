@@ -172,6 +172,44 @@ def test_product_template_picker_lists_registered_production_products(
     dialog.close()
 
 
+def test_m54_editor_preserves_independent_durations_rules_and_extensions(qapplication_session, tmp_path):
+    from satellite_debug_tool.ui.production_configuration_dialog import ProductionConfigurationDialog
+    store = _catalog(tmp_path / "configuration.json")
+    products, powers, references, stations = store.load_full_catalog()
+    source = replace(products[0], tests={
+        "static_acquisition": {"enabled": True, "duration_s": 1800, "customer_note": "keep"},
+        "locked_rocking": {"enabled": True, "duration_s": 3600},
+    })
+    store.save_catalog([source], powers, stations, references)
+    dialog = ProductionConfigurationDialog(store=store)
+    try:
+        dialog._product_select.setCurrentIndex(dialog._product_select.findData(source.template_id))
+        assert dialog._test_durations["static_acquisition"].value() == 1800
+        assert dialog._test_durations["locked_rocking"].value() == 3600
+        assert dialog._criteria_spins["acquisition_timeout_s"].value() == 300
+        assert dialog._criteria_spins["interruption_ratio_max"].value() == 0.5
+        dialog._product_revision.setValue(2)
+        dialog._test_durations["locked_rocking"].setValue(2700)
+        dialog._criteria_spins["interruption_max_s"].setValue(1.5)
+        dialog._save_product()
+        saved = store.load_full_catalog()[0][0]
+        assert saved.tests["static_acquisition"]["duration_s"] == 1800
+        assert saved.tests["locked_rocking"]["duration_s"] == 2700
+        assert saved.tests["static_acquisition"]["customer_note"] == "keep"
+        assert saved.duration_policy["tracking_criteria"]["interruption_max_s"] == 1.5
+        assert saved.duration_policy["tracking_criteria"]["interruption_ratio_max"] == 0.005
+        assert saved.duration_policy["window_includes_acquisition"] is True
+        assert "minimum_effective_observation_s" not in saved.duration_policy
+        assert "convergence_is_outside_observation" not in saved.duration_policy
+        dialog._new_product()
+        assert dialog._criteria_spins["interruption_max_s"].value() == 2
+        assert set(widget.value() for widget in dialog._test_durations.values()) == {1800}
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapplication_session.processEvents()
+
+
 def test_visual_selection_generates_afd01c_times_two_snapshot(
     qapplication_session,
     tmp_path: Path,

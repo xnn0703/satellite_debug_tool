@@ -20,6 +20,7 @@ from .ms6222_protocol import Ms6222FrameType, Ms6222InsRecord
 from .fixture_session import FixtureSessionRecorder, FixtureSessionConclusion
 from .fixture_telemetry import FixtureAttitudeSource, FixtureAttitudeSample
 from .production_power import ProductionPowerWorker
+from .power_supply import PowerActionResult, PowerEvidenceLevel, PowerSupplyState
 
 
 class PowerOnRockingPhase(str, Enum):
@@ -60,8 +61,11 @@ class ProductionExecutionHardware(QObject):
         self._start_evidence = None
         self._power_phase = PowerOnRockingPhase.IDLE
         self._power_restored_at_ns = 0
+        self._power_requested_at_ns = 0
+        self._power_off_evidence: dict | None = None
         execution.hardware_requested.connect(self.prepare)
         execution.observation_complete.connect(self.finish)
+        execution.motion_precondition_changed.connect(self._motion_precondition_changed)
         power.output_changed.connect(self._power_changed)
         execution.fixture_ready = self.observation_ready
         execution.preparation_reason = self.preparation_reason
@@ -274,10 +278,13 @@ class ProductionExecutionHardware(QObject):
             return "Waiting for platform center confirmation"
         if self._operation == "power_off":
             return "Waiting for power output-off confirmation"
+        if self._operation == "waiting_prelock_trajectory":
+            return "Waiting for initial acquisition confirmation"
         if self._operation == "trajectory":
             if self._motion_started_at is None:
                 return "Waiting for trajectory command send confirmation"
-            if time.monotonic() - self._motion_started_at < self._ramp_in_s:
+            if (self._test_id == "power_on_rocking"
+                    and time.monotonic() - self._motion_started_at < self._ramp_in_s):
                 return "Waiting for trajectory steady phase"
             return "Waiting for motion feedback confirmation"
         return "Waiting for fixture preparation and start confirmation"
@@ -305,7 +312,9 @@ class ProductionExecutionHardware(QObject):
             return
         try:
             if self._test_id == "power_on_rocking":
-                self.execution.expect_boot()
+                self.execution.prepare_power_cycle()
+                self._power_off_evidence = None
+                self._power_requested_at_ns = time.monotonic_ns()
                 self._power_phase = PowerOnRockingPhase.POWERING_OFF
                 self._operation = "power_off"
                 self._clear_reference_data("MS-6222 shares the controlled power cycle")
@@ -331,8 +340,9 @@ class ProductionExecutionHardware(QObject):
             )
         return SineTrajectory(
             sample_period_ms=int(config["sample_period_ms"]), ramp_in_s=self._ramp_in_s,
-            steady_duration_s=float(config["steady_duration_s"]),
-            ramp_out_s=float(config.get("ramp_out_s", 0)),
+            # 工况观察拥有唯一结束时刻；上电和参考恢复耗时不消耗运动时长。
+            steady_duration_s=None,
+            ramp_out_s=0,
             work_z_mm=self.configuration.motion_profile.center_pose.z_mm,
             profile_id=config["profile_id"], **axes,
         )
@@ -343,26 +353,79 @@ class ProductionExecutionHardware(QObject):
             if not reference_valid:
                 self._operation = "waiting_reference_trajectory"
                 return
+        if not self.execution.motion_start_ready():
+            self._operation = "waiting_prelock_trajectory"
+            return
         self._baseline_pulses = self.control.controller.snapshot.actual_pulses
         self._motion_confirmed = False
         self._operation = "trajectory"
         self._request_id = self.control.submit_trajectory(self._trajectory())
 
-    @Slot(bool, object, object, str)
-    def _power_changed(self, enabled, result, records, action_id) -> None:
-        if self._closed or self._test_id != "power_on_rocking":
+    @Slot()
+    def _motion_precondition_changed(self) -> None:
+        if self._closed or self._operation != "waiting_prelock_trajectory":
             return
         try:
-            if enabled and self._power_phase is PowerOnRockingPhase.POWERING_ON:
+            self._start_trajectory()
+        except (RuntimeError, ValueError, KeyError) as exc:
+            self.execution.fail(str(exc))
+
+    @Slot(bool, object, object, str)
+    def _power_changed(self, enabled, result, records, action_id) -> None:
+        """当前供电动作的闭环回执推进准备；旧动作、错阶段及停止后回执无副作用。"""
+        if self._closed or self._test_id != "power_on_rocking" or action_id != self.power.action_id:
+            return
+        expected = (PowerOnRockingPhase.POWERING_ON if enabled
+                    else PowerOnRockingPhase.POWERING_OFF)
+        if self._power_phase is not expected:
+            return
+        # action_id整批复用，必须同时匹配本次请求之后的OUTP命令与回读。
+        command = f"OUTP {int(enabled)}"
+        current = [item for item in records
+                   if item.fixture_action_id == action_id
+                   and item.monotonic_ns >= self._power_requested_at_ns]
+        writes = [item for item in current if item.command == command and not item.is_query]
+        if not writes:
+            return
+        issued = writes[-1]
+        readback = [item for item in current if item.is_query and item.command == "OUTP?"
+                    and item.monotonic_ns > issued.monotonic_ns
+                    and item.response.strip() == str(int(enabled))]
+        if not readback:
+            return
+        try:
+            states = ((PowerSupplyState.ON_CONFIRMED,) if enabled
+                      else (PowerSupplyState.OFF_CONFIRMED, PowerSupplyState.READY_OFF))
+            evidence = (PowerEvidenceLevel.VOLTAGE_CONFIRMED if enabled
+                        else PowerEvidenceLevel.OUTPUT_STATE_CONFIRMED)
+            if (not isinstance(result, PowerActionResult) or result.state not in states
+                    or result.evidence_level is not evidence or result.output_enabled is not enabled
+                    or result.protection_tripped or result.questionable_condition
+                    or not math.isfinite(result.measurement.voltage_v)):
+                raise ValueError("power output result does not match the current verified action")
+            record_end = max(item.monotonic_ns for item in current)
+            if enabled:
+                if self._power_off_evidence is None:
+                    raise ValueError("power restoration requires this cycle's verified OFF")
                 self._power_phase = PowerOnRockingPhase.RECOVERING_REFERENCE
                 self._power_restored_at_ns = time.monotonic_ns()
+                for session in self.execution.sessions.values():
+                    session.prepare_capture_after_power_cycle(self._power_restored_at_ns)
                 self._clear_reference_data("Waiting for MS-6222 recovery after power-on")
-                self._start_evidence = {"power_action": action_id, "output": asdict(result),
-                                        "power_restored_monotonic_ns": self._power_restored_at_ns}
+                self._start_evidence = {
+                    "power_action": action_id, "power_off": self._power_off_evidence,
+                    "output": asdict(result), "power_on_record_monotonic_ns": record_end,
+                    "power_restored_monotonic_ns": self._power_restored_at_ns,
+                }
                 if self._reference_worker is None:
                     self._open_reference_worker()
                 self._confirm_start()
-            elif not enabled and self._power_phase is PowerOnRockingPhase.POWERING_OFF:
+            else:
+                self._power_off_evidence = {
+                    "action_id": action_id, "output": asdict(result),
+                    "record_monotonic_ns": record_end,
+                    "participants": list(self.execution.sessions),
+                }
                 self._power_phase = PowerOnRockingPhase.POWER_OFF
                 self._clear_reference_data("MS-6222 shares the controlled power cycle")
                 self._start_trajectory()
@@ -405,8 +468,9 @@ class ProductionExecutionHardware(QObject):
             return
         moved = bool(snapshot.actual_pulses and snapshot.actual_pulses != self._baseline_pulses)
         fresh = snapshot.feedback_monotonic_ns / 1e9 >= self._motion_started_at
-        steady = time.monotonic() - self._motion_started_at >= self._ramp_in_s
-        if moved and fresh and steady and snapshot.state is MotionPlatformState.TRAJECTORY:
+        phase_ready = (self._test_id == "locked_rocking"
+                       or time.monotonic() - self._motion_started_at >= self._ramp_in_s)
+        if moved and fresh and phase_ready and snapshot.state is MotionPlatformState.TRAJECTORY:
             if self._power_phase is not PowerOnRockingPhase.POWER_OFF:
                 reference_valid, reason = self._reference_data_gate()
                 if not reference_valid:
@@ -415,6 +479,7 @@ class ProductionExecutionHardware(QObject):
             self._motion_confirmed = True
             if self._test_id == "power_on_rocking":
                 self._power_phase = PowerOnRockingPhase.POWERING_ON
+                self._power_requested_at_ns = time.monotonic_ns()
                 self.power.request_output(True)
             else:
                 self._start_evidence = {"motion_request": self._request_id, "motion_feedback": asdict(snapshot)}
@@ -465,7 +530,7 @@ class ProductionExecutionHardware(QObject):
         reference_valid, reason = self._reference_data_gate()
         if not reference_valid:
             return False, reason
-        if self._test_id != "static_acquisition":
+        if self._test_id == "power_on_rocking":
             if self._motion_started_at is None or time.monotonic() - self._motion_started_at < self._ramp_in_s:
                 return False, "Waiting for trajectory steady phase"
         return True, ""

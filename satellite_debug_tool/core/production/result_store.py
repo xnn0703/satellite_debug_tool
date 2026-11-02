@@ -838,7 +838,7 @@ class ProductionResultStore:
         with self.transaction() as connection:
             snapshot = connection.execute(
                 """
-                SELECT automatic_verdict FROM report_snapshots
+                SELECT automatic_verdict, snapshot_json FROM report_snapshots
                 WHERE batch_id = ? AND serial_number = ?
                 """,
                 (batch_id, serial_number),
@@ -847,6 +847,9 @@ class ProductionResultStore:
                 raise ResultStoreError(f"report snapshot is not frozen: {serial_number}")
             if snapshot["automatic_verdict"] not in {"PASS", "FAIL"}:
                 raise ResultStoreError("incomplete or aborted results cannot be approved")
+            evidence = json.loads(snapshot["snapshot_json"])
+            if verdict == "PASS" and evidence.get("data_quality", {}).get("state") != "COMPLETE":
+                raise ResultStoreError("complete data quality is required to approve PASS")
             artifact = connection.execute(
                 """
                 SELECT 1 FROM report_artifacts

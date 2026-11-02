@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -47,6 +48,8 @@ from satellite_debug_tool.core.production import (
     psw80_27_validation_policy,
 )
 from satellite_debug_tool.core.product import production_product_policies
+from satellite_debug_tool.core.production.recipe import TIMED_TEST_IDS, resolve_test_plan
+from satellite_debug_tool.core.production.tracking_criteria import TrackingCriteriaPolicy
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 
@@ -87,7 +90,13 @@ _FORM_LABEL_SOURCES = (
     tr_source("Per-device voltage"),
     tr_source("Per-device current limit"),
     tr_source("Expected firmware (optional)"),
-    tr_source("Observation duration (s)"),
+    tr_source("Acquisition stable time"),
+    tr_source("Acquisition timeout"),
+    tr_source("Maximum interruption duration"),
+    tr_source("Interruptions per 30 minutes"),
+    tr_source("Maximum interruption ratio (%)"),
+    tr_source("Recovery stable time"),
+    tr_source("Maximum sample gap"),
     tr_source("Profile ID"),
     tr_source("Power model"),
     tr_source("IPv4 address"),
@@ -213,9 +222,6 @@ class ProductionConfigurationDialog(QDialog):
         self._product_voltage = self._double_spin(0.001, 80.0, " V")
         self._product_current = self._double_spin(0.001, 100.0, " A")
         self._firmware_value = QLineEdit()
-        self._duration = QSpinBox()
-        self._duration.setRange(1, 7 * 24 * 3600)
-        self._duration.setValue(3600)
         self._add_form_row(form, "Template ID", self._product_id)
         self._add_form_row(form, "Revision", self._product_revision)
         self._add_form_row(form, "Display name", self._product_name)
@@ -223,18 +229,49 @@ class ProductionConfigurationDialog(QDialog):
         self._add_form_row(form, "Per-device voltage", self._product_voltage)
         self._add_form_row(form, "Per-device current limit", self._product_current)
         self._add_form_row(form, "Expected firmware (optional)", self._firmware_value)
-        self._add_form_row(form, "Observation duration (s)", self._duration)
         root.addLayout(form)
         self._test_checks: dict[str, QCheckBox] = {}
+        self._test_durations: dict[str, QSpinBox] = {}
         tests = QGridLayout()
         for index, test_id in enumerate(_TEST_IDS):
             checkbox = QCheckBox(tr(_TEST_LABELS[test_id]))
             checkbox.setChecked(test_id in {"firmware_verification", "static_acquisition"})
             self._test_checks[test_id] = checkbox
-            tests.addWidget(checkbox, index // 3, index % 3)
+            row = QHBoxLayout()
+            row.addWidget(checkbox)
+            if test_id in TIMED_TEST_IDS:
+                seconds = QSpinBox()
+                seconds.setRange(1, 7 * 24 * 3600)
+                seconds.setSuffix(" s")
+                seconds.setValue(1800)
+                self._test_durations[test_id] = seconds
+                row.addWidget(seconds)
+            tests.addLayout(row, index // 2, index % 2)
         self._enabled_tests_label = QLabel(tr("Enabled tests"))
         root.addWidget(self._enabled_tests_label)
         root.addLayout(tests)
+        criteria_form = QFormLayout()
+        self._criteria_spins: dict[str, QDoubleSpinBox | QSpinBox] = {}
+        defaults = TrackingCriteriaPolicy().to_payload()
+        for key, label in (
+            ("acquisition_stable_s", "Acquisition stable time"),
+            ("acquisition_timeout_s", "Acquisition timeout"),
+            ("interruption_max_s", "Maximum interruption duration"),
+            ("interruptions_per_30min", "Interruptions per 30 minutes"),
+            ("interruption_ratio_max", "Maximum interruption ratio (%)"),
+            ("recovery_stable_s", "Recovery stable time"),
+            ("maximum_sample_gap_s", "Maximum sample gap"),
+        ):
+            if key == "interruptions_per_30min":
+                widget = QSpinBox()
+                widget.setRange(1, 100000)
+            else:
+                widget = self._double_spin(0.001, 100.0 if key == "interruption_ratio_max" else 86400.0,
+                                           " %" if key == "interruption_ratio_max" else " s")
+            widget.setValue(defaults[key] * (100 if key == "interruption_ratio_max" else 1))
+            self._criteria_spins[key] = widget
+            self._add_form_row(criteria_form, label, widget)
+        root.addLayout(criteria_form)
         root.addStretch(1)
         actions = QHBoxLayout()
         new_button = QPushButton(tr("New"))
@@ -254,7 +291,10 @@ class ProductionConfigurationDialog(QDialog):
         actions.addWidget(self._product_delete_button)
         actions.addStretch(1)
         root.addLayout(actions)
-        return page
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        return scroll
 
     def _build_power_tab(self) -> QWidget:
         page = QWidget()
@@ -616,7 +656,12 @@ class ProductionConfigurationDialog(QDialog):
         self._product_current.setValue(item.per_device_current_a)
         firmware = item.expected.get("main_firmware", {})
         self._firmware_value.setText(str(firmware.get("value", "")))
-        self._duration.setValue(int(item.duration_policy["minimum_effective_observation_s"]))
+        tests, duration = resolve_test_plan(item.tests, item.duration_policy)
+        for test_id, widget in self._test_durations.items():
+            widget.setValue(int(tests.get(test_id, {}).get("duration_s") or
+                                item.duration_policy.get("minimum_effective_observation_s", 1800)))
+        for key, widget in self._criteria_spins.items():
+            widget.setValue(duration["tracking_criteria"][key] * (100 if key == "interruption_ratio_max" else 1))
         for test_id, checkbox in self._test_checks.items():
             checkbox.setChecked(bool(item.tests.get(test_id, {}).get("enabled", False)))
         editable = not item.is_builtin
@@ -628,7 +673,8 @@ class ProductionConfigurationDialog(QDialog):
             self._product_voltage,
             self._product_current,
             self._firmware_value,
-            self._duration,
+            *self._test_durations.values(),
+            *self._criteria_spins.values(),
             *self._test_checks.values(),
         ):
             widget.setEnabled(editable)
@@ -644,7 +690,13 @@ class ProductionConfigurationDialog(QDialog):
         self._product_voltage.setValue(12.0)
         self._product_current.setValue(1.0)
         self._firmware_value.clear()
-        self._duration.setValue(3600)
+        for widget in self._test_durations.values():
+            widget.setValue(1800)
+        defaults = TrackingCriteriaPolicy().to_payload()
+        for key, widget in self._criteria_spins.items():
+            widget.setValue(defaults[key] * (100 if key == "interruption_ratio_max" else 1))
+        for test_id, checkbox in self._test_checks.items():
+            checkbox.setChecked(test_id in {"static_acquisition", "locked_rocking"})
         for widget in (
             self._product_id,
             self._product_revision,
@@ -653,7 +705,8 @@ class ProductionConfigurationDialog(QDialog):
             self._product_voltage,
             self._product_current,
             self._firmware_value,
-            self._duration,
+            *self._test_durations.values(),
+            *self._criteria_spins.values(),
             *self._test_checks.values(),
         ):
             widget.setEnabled(True)
@@ -700,15 +753,21 @@ class ProductionConfigurationDialog(QDialog):
             current = tests.get(test_id, {})
             current = dict(current) if isinstance(current, dict) else {}
             current["enabled"] = checkbox.isChecked()
-            if checkbox.isChecked() and test_id not in {"firmware_verification", "parameter_verification"}:
-                current["duration_s"] = self._duration.value()
+            if test_id in self._test_durations:
+                current["duration_s"] = self._test_durations[test_id].value()
             tests[test_id] = current
         duration_policy = {} if existing is None else dict(existing.duration_policy)
-        duration_policy.update({
-            "minimum_effective_observation_s": self._duration.value(),
-            "convergence_is_outside_observation": True,
-            "report_first_last_window_s": min(300, self._duration.value()),
-        })
+        duration_policy.setdefault("report_first_last_window_s", 300)
+        criteria = dict(duration_policy.get("tracking_criteria", {}))
+        criteria.update({key: widget.value() / (100 if key == "interruption_ratio_max" else 1)
+                         for key, widget in self._criteria_spins.items()})
+        criteria["interruptions_per_30min"] = self._criteria_spins["interruptions_per_30min"].value()
+        duration_policy["tracking_criteria"] = criteria
+        try:
+            tests, duration_policy = resolve_test_plan(tests, duration_policy)
+        except (ValueError, TypeError) as exc:
+            QMessageBox.critical(self, tr("Production configurations"), str(exc))
+            return
         item = ProductTestTemplate(
             template_id=self._product_id.text().strip(),
             revision=self._product_revision.value(),

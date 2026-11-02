@@ -62,6 +62,34 @@ _CROSS_SCENARIO_TEST_IDS = frozenset(
 )
 
 
+def project_attempt_outcomes(attempts: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    """分别投影性能与执行完整性，保留已有证据确认的性能失败。"""
+    assessments: list[str] = []
+    for attempt in attempts:
+        status = str(attempt.get("status", "")).upper()
+        if status == "SKIPPED":
+            continue
+        result = attempt.get("result_json", {})
+        value = result.get("performance_verdict")
+        assessments.append(
+            str(value) if value in {"PASS", "FAIL", "INCOMPLETE"}
+            else status if status in {"PASS", "FAIL"} else "INCOMPLETE"
+        )
+    performance = (
+        "FAIL" if "FAIL" in assessments else
+        "PASS" if assessments and all(value == "PASS" for value in assessments) else
+        "INCOMPLETE"
+    )
+    complete = bool(attempts) and all(
+        str(attempt.get("status", "")).upper() in {"PASS", "FAIL", "SKIPPED"}
+        for attempt in attempts
+    )
+    return {
+        "performance_verdict": performance,
+        "execution_completeness": "COMPLETE" if complete else "INCOMPLETE",
+    }
+
+
 def build_report_analysis(
     sdb_paths: Sequence[Path],
     attempts: Sequence[Mapping[str, Any]],
@@ -105,6 +133,7 @@ def build_report_analysis(
                     "sha256": _sha256(path),
                     "product_samples": product_count,
                     "legacy_samples": legacy_count,
+                    "recording_quality": dict(sdb.quality),
                 }
             )
         except (OSError, ValueError, SdbFormatError) as exc:
@@ -169,6 +198,8 @@ def build_report_analysis(
                 "end_s": _relative_seconds(end_wall, origin_ns),
                 "statistics": stats,
                 "conclusion": _stage_conclusion(stats, fixture_available=bool(fixture)),
+                "result_json": dict(attempt.get("result_json", {})),
+                **project_attempt_outcomes((attempt,)),
             }
         )
 
@@ -300,6 +331,7 @@ def _build_scenario_groups(stages: Sequence[Mapping[str, Any]]) -> list[dict[str
                 "test_ids": list(test_ids),
                 "state": state,
                 "automatic_result": automatic_result,
+                **project_attempt_outcomes(selected),
                 "start_s": min(starts) if starts else None,
                 "end_s": max(ends) if ends else None,
                 "stages": selected,
