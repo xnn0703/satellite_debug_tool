@@ -246,8 +246,8 @@ class LiveView(QWidget):
         self._customer_recording_state = CustomerRecordingState.IDLE
         self._customer_capture_stage = CustomerCaptureStage.IDLE
         self._customer_recording_started_ns = 0
-        self._customer_full_started_ns = 0
-        self._customer_full_intervals: list[tuple[int, int]] = []
+        self._customer_full_started_monotonic_ns = 0
+        self._customer_full_intervals_monotonic_ns: list[tuple[int, int]] = []
         self._customer_recording_path: Optional[Path] = None
         self._customer_capture_confirmed = False
         self._capture_restore_debug = False
@@ -2196,18 +2196,33 @@ class LiveView(QWidget):
         )
         self.customer_recording_state_changed.emit(state.value, path)
 
+    @staticmethod
+    def _customer_capture_clock_ns() -> int:
+        """完整采集覆盖持续时间的唯一单调时钟。"""
+        return time.monotonic_ns()
+
     def _set_customer_capture_stage(self, stage: CustomerCaptureStage) -> None:
         if self._customer_capture_stage is stage:
             return
-        now_ns = time.time_ns()
+        now_monotonic_ns = (
+            self._customer_capture_clock_ns()
+            if stage is CustomerCaptureStage.FULL
+            or (
+                self._customer_capture_stage is CustomerCaptureStage.FULL
+                and self._customer_full_started_monotonic_ns
+            )
+            else 0
+        )
         if (
             self._customer_capture_stage is CustomerCaptureStage.FULL
-            and self._customer_full_started_ns
+            and self._customer_full_started_monotonic_ns
         ):
-            self._customer_full_intervals.append((self._customer_full_started_ns, now_ns))
-            self._customer_full_started_ns = 0
+            self._customer_full_intervals_monotonic_ns.append(
+                (self._customer_full_started_monotonic_ns, now_monotonic_ns)
+            )
+            self._customer_full_started_monotonic_ns = 0
         if stage is CustomerCaptureStage.FULL:
-            self._customer_full_started_ns = now_ns
+            self._customer_full_started_monotonic_ns = now_monotonic_ns
         self._customer_capture_stage = stage
         self.customer_capture_stage_changed.emit(stage.value)
         if self._recorder is not None and self._customer_recording:
@@ -2546,8 +2561,8 @@ class LiveView(QWidget):
         if customer:
             self._customer_recording_path = Path(actual_target)
             self._customer_recording_started_ns = time.time_ns()
-            self._customer_full_started_ns = 0
-            self._customer_full_intervals = []
+            self._customer_full_started_monotonic_ns = 0
+            self._customer_full_intervals_monotonic_ns = []
             self._set_customer_recording_state(CustomerRecordingState.ACTIVE)
         self._render_recording_state()
         self.status_message.emit(
@@ -2651,17 +2666,22 @@ class LiveView(QWidget):
         recorder = self._recorder
         was_customer = self._customer_recording
         if was_customer and recorder is not None:
-            now_ns = time.time_ns()
-            intervals = list(self._customer_full_intervals)
-            if self._customer_full_started_ns:
-                intervals.append((self._customer_full_started_ns, now_ns))
-                self._customer_full_started_ns = 0
+            stopped_ns = time.time_ns()
+            now_monotonic_ns = self._customer_capture_clock_ns()
+            intervals = list(self._customer_full_intervals_monotonic_ns)
+            if self._customer_full_started_monotonic_ns:
+                intervals.append(
+                    (self._customer_full_started_monotonic_ns, now_monotonic_ns)
+                )
+                self._customer_full_started_monotonic_ns = 0
             recorder.set_summary_facts(
                 {
                     "recording_started_ns": self._customer_recording_started_ns,
-                    "recording_stopped_ns": now_ns,
+                    "recording_stopped_ns": stopped_ns,
                     "final_capture_stage": self._customer_capture_stage.value,
-                    "support_full_intervals_ns": [list(item) for item in intervals],
+                    "support_full_intervals_monotonic_ns": [
+                        list(item) for item in intervals
+                    ],
                     "support_full_coverage_ns": sum(end - start for start, end in intervals),
                 }
             )

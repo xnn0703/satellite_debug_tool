@@ -114,6 +114,8 @@ def test_customer_recording_starts_before_exact_ack_and_restores_on_stop(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view, worker = _ready_view(settings)
+    monotonic_values = iter((1_000_000_000, 1_000_000_123))
+    monkeypatch.setattr(view, "_customer_capture_clock_ns", lambda: next(monotonic_values))
     target = tmp_path / "support.sdb"
     monkeypatch.setattr(
         "satellite_debug_tool.ui.live_view.QFileDialog.getSaveFileName",
@@ -150,8 +152,10 @@ def test_customer_recording_starts_before_exact_ack_and_restores_on_stop(
     assert sdb.version == 3
     assert sdb.metadata["capture_profile"] == "current_stream_pending_negotiation"
     assert sdb.quality["complete"] is True
-    assert sdb.quality["session_facts"]["support_full_coverage_ns"] > 0
-    assert len(sdb.quality["session_facts"]["support_full_intervals_ns"]) == 1
+    assert sdb.quality["session_facts"]["support_full_coverage_ns"] == 123
+    assert sdb.quality["session_facts"]["support_full_intervals_monotonic_ns"] == [
+        [1_000_000_000, 1_000_000_123]
+    ]
 
 
 def test_customer_recording_persists_external_power_metadata(

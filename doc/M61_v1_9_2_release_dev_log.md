@@ -32,3 +32,10 @@
 
 - v1.9.2 是首个包含 M57 macOS 自动安装器的桥接版本；v1.9.1 到本版仍需人工替换。
 - macOS 当前为 arm64 ad-hoc 签名，未完成 Apple notarization；Windows 系统签名、真实系统升级和设备/夹具/RF 现场验收独立记录。
+
+## v1.9.2 停止结论
+
+- 源码提交/tag：`9268ba850608f718103fd0382fa5e2548fe7e5f4` / `v1.9.2`，保持不可变。
+- tag Actions `41621070816` 的 Windows user 源码回归稳定报告 1 项失败：Windows 墙钟分辨率使 FULL 覆盖区间为 0。
+- v1.9.2 未进入正式 TUF 或 `/downloads` 目录，不作为正式已发布版本。
+- 修复转入 M62 和新版本 v1.9.3；不改写 v1.9.2 tag 或候选字节。
