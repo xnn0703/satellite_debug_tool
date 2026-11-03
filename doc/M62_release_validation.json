@@ -1,0 +1,77 @@
+{
+  "schema": "satellite.release-validation/v1",
+  "version": "1.9.3",
+  "source_commit": "57f6b1f08a1bd03741b21fcc8439cae905b2912e",
+  "tag": "v1.9.3",
+  "github_actions": {
+    "run_id": 41625049569,
+    "url": "https://github.com/xnn0703/satellite_debug_tool/actions/runs/41625049569",
+    "conclusion": "success"
+  },
+  "update_channels": {
+    "macos_arm64": {
+      "version": "1.9.3",
+      "installation_mode": "automatic",
+      "sha256": "eefc1b7dee9139eca7175d9928fd536ee031823405517c66c8d6ac1a53c718a8",
+      "size": 284349075,
+      "delta_count": 0,
+      "publication_bundle_id": "3320f0b8d4c13afb2baca9efbbd97610e73ea5dd7eb202e48bc31ac2818934d7"
+    },
+    "windows_x86_64": {
+      "version": "1.9.3",
+      "installation_mode": "automatic",
+      "sha256": "d46a8a9abe386b19ddb397563a3a509e72453d49a072e8f8b787bc988ef2aeee",
+      "size": 217335406,
+      "delta_count": 0,
+      "publication_bundle_id": "20a6e0fd66478d98b13fba4909a7990941a648eccb5ebcbf280bdec8396a4253"
+    }
+  },
+  "downloads": {
+    "release_index": "https://60.205.157.141/downloads/v1.9.3/release.json",
+    "sha256sums": "https://60.205.157.141/downloads/v1.9.3/SHA256SUMS.txt",
+    "artifacts": [
+      {
+        "edition": "user",
+        "platform": "windows",
+        "url": "https://60.205.157.141/downloads/v1.9.3/satellite_terminal_manager-windows-x86_64-v1.9.3.7z",
+        "size": 56971754,
+        "sha256": "11a4d5e3b7905c4d5282bc181d3bea87d44c26c6ea28b80d8622470ae74e81e7"
+      },
+      {
+        "edition": "ops",
+        "platform": "windows",
+        "url": "https://60.205.157.141/downloads/v1.9.3/satellite_terminal_manager-ops-windows-x86_64-v1.9.3.7z",
+        "size": 217335406,
+        "sha256": "d46a8a9abe386b19ddb397563a3a509e72453d49a072e8f8b787bc988ef2aeee"
+      },
+      {
+        "edition": "user",
+        "platform": "macos",
+        "url": "https://60.205.157.141/downloads/v1.9.3/satellite_terminal_manager-macos-arm64-v1.9.3.zip",
+        "size": 70558028,
+        "sha256": "b40a902168c267b93d340bea015d38589b63e391e78c2f0eb8091bd80f778a7a"
+      },
+      {
+        "edition": "ops",
+        "platform": "macos",
+        "url": "https://60.205.157.141/downloads/v1.9.3/satellite_terminal_manager-ops-macos-arm64-v1.9.3.zip",
+        "size": 284349075,
+        "sha256": "eefc1b7dee9139eca7175d9928fd536ee031823405517c66c8d6ac1a53c718a8"
+      }
+    ]
+  },
+  "verification": {
+    "source_tests": "2266 passed",
+    "windows_actions": "PASS",
+    "macos_frozen_smoke": "PASS",
+    "server_sha256": "PASS",
+    "archive_crc": "PASS",
+    "fresh_release_checker": "PASS",
+    "https_range": "PASS"
+  },
+  "boundaries": {
+    "windows_real_install_and_rollback": "NOT_RUN",
+    "apple_notarization": "NOT_RUN",
+    "physical_device_rf_power_motion": "NOT_RUN"
+  }
+}
