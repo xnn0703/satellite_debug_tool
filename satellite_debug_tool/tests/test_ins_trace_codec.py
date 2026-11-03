@@ -36,6 +36,44 @@ def test_imu_delta_wire_keeps_dt_and_increment_units():
     assert rate_record.values["gyro_rad_s"] == pytest.approx((.1, -.2, .3))
 
 
+@pytest.mark.parametrize("mode", [0, 1])
+@pytest.mark.parametrize("input_result", range(5))
+def test_imu_schema2_keeps_original_input_and_separate_time_labels(mode, input_result):
+    legacy = _header(1, 1) + struct.pack("<BBH8f", mode, 3, 7, .01, 25, .1, -.2, .3, 1, -2, 3)
+    driver_us = 0x2122232425262728
+    filter_us = 0x3132333435363738
+    payload = b"\2" + legacy[1:] + struct.pack("<QQB3s", driver_us, filter_us, input_result, bytes(3))
+    assert len(payload) == 88
+    assert payload[1:68] == legacy[1:]
+    original = decode_ins_trace(legacy)
+    record = decode_ins_trace(payload)
+    assert record.schema == 2
+    assert (record.kind, record.source, record.health, record.seq, record.source_seq, record.timestamp_us,
+            record.received_timestamp_us, record.flags) == (
+        original.kind, original.source, original.health, original.seq, original.source_seq, original.timestamp_us,
+        original.received_timestamp_us, original.flags)
+    assert record.values == {**original.values, "driver_received_timestamp_us": driver_us,
+                             "filter_input_timestamp_us": filter_us, "input_result": input_result}
+    assert "driver_received_timestamp_us" not in original.values
+
+
+def test_imu_schema2_invalid_contract_is_rejected():
+    payload = b"\2" + (_header(1) + struct.pack("<BBH8f", 1, 3, 7, .01, 25, *range(6)))[1:]
+    payload += struct.pack("<QQB3s", 2000, 3000, 4, bytes(3))
+    invalid_payloads = [payload[:-1], payload + b"\0", payload[:68], b"\1" + payload[1:],
+                        b"\3" + payload[1:], payload[:28] + struct.pack("<I", 2) + payload[32:],
+                        payload[:32] + b"\2" + payload[33:]]
+    invalid_payloads.extend(payload[:84] + bytes([result]) + payload[85:] for result in (5, 255))
+    for offset in range(85, 88):
+        invalid_payloads.append(payload[:offset] + b"\1" + payload[offset + 1:])
+    for invalid in invalid_payloads:
+        with pytest.raises(CodecError):
+            decode_ins_trace(invalid)
+    for kind, length in ((2, 100), (3, 196), (4, 80), (5, 192), (6, 120), (7, 56), (8, 76), (9, 96)):
+        with pytest.raises(CodecError, match="unsupported schema or kind"):
+            decode_ins_trace(b"\2" + _header(kind)[1:] + bytes(length - 32))
+
+
 def test_gnss_float64_and_invalid_edge_are_preserved():
     data = _header(2, 4) + struct.pack("<dd12f4B", 31.1234567890123, 121.234567890123,
         *range(12), 2, 3, 4, 18)
@@ -121,6 +159,30 @@ def test_framing_chunk_split_and_sdb_round_trip(tmp_path):
     assert ProductServiceStore().feed(result[0]) is False
     playback = build_engineering_playback(path)
     playback.close()
+
+
+def test_imu_schema1_schema2_mixed_sdb_preserves_time_and_results(tmp_path):
+    legacy = _header(1, 1) + struct.pack("<BBH8f", 1, 3, 7, .01, 25, .1, -.2, .3, 1, -2, 3)
+    payloads = [legacy] + [b"\2" + legacy[1:] + struct.pack("<QQB3s", 2000000, 3000000, result, bytes(3))
+                           for result in range(5)]
+    stream = b"".join(build_frame(CmdType.INS_TRACE, payload) for payload in payloads)
+    path = tmp_path / "imu_time_labels.sdb"
+    recorder = DataRecorder(path, format_version=SDB_VERSION_V3)
+    assert recorder.start()
+    receiver = FrameReceiverV2()
+    decoded = []
+    for offset in range(0, len(stream), 19):
+        chunk = stream[offset:offset + 19]
+        decoded.extend(receiver.feed(chunk))
+        assert recorder.write_frame(chunk, host_timestamp_ns=offset + 1)
+    recorder.stop()
+    assert receiver.crc_errors == 0
+    assert decoded == [decode_ins_trace(payload) for payload in payloads]
+    assert [record.schema for record in decoded] == [1, 2, 2, 2, 2, 2]
+    assert [record.values["input_result"] for record in decoded[1:]] == list(range(5))
+    sdb = DataImporter.open_sdb(path)
+    assert [record for _, record in sdb.iter_timed_records()] == decoded
+    assert sdb.quality["complete"]
 
 
 def _rf_header(kind, flags=0, source_seq=0):

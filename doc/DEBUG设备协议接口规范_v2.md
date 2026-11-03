@@ -1275,8 +1275,10 @@ START/SAMPLE 连续 2000 ms 未到达时设备自动退出仿真。仿真期间�
 不占用标量 channel ID，不改变 Product Service。普通 SDB v3 录制保存收到的全部原始 RX chunk，因此无需额外弹窗即可保留该流；
 新解析器通过 `InsTraceRecord` 提供精确 us 时刻与 kind 对应的字段，旧解析器按未知 RawFrame 忽略。
 
-公共头固定32B：`schema:u8=1 | kind:u8 | source:u8 | health:u8 | seq:u32 | source_seq:u32 |
+公共头固定32B：`schema:u8 | kind:u8 | source:u8 | health:u8 | seq:u32 | source_seq:u32 |
 measurement_us:u64 | received_us:u64 | flags:u32`。
+schema 1 支持下表全部 kind；schema 2 仅支持 kind 1 的固定 88B IMU 记录。
+未知 schema/kind、长度不匹配、非法 flags、非法枚举或非零保留字段按对应记录合同拒绝。
 
 - `source/health` 为固件统一 nav_sensor 枚举；filter/update 的source/health为0，不代表传感器健康。
 - `measurement_us` 为MCU单调测量/滤波时刻，`received_us` 为完整帧提交/consumer接收/快照时刻；不得用主机到达时间覆盖。
@@ -1285,7 +1287,7 @@ measurement_us:u64 | received_us:u64 | flags:u32`。
 
 | kind | DATA总长 | 头后固定载荷与单位 |
 |---:|---:|---|
-| 1 IMU | 68B | `sample_type:u8,time_quality:u8,mount_rot:u16,dt:f32,temp:f32,gyro_or_delta[3]:f32,accel_or_delta[3]:f32` |
+| 1 IMU | schema1: 68B；schema2: 88B | `sample_type:u8,time_quality:u8,mount_rot:u16,dt:f32,temp:f32,gyro_or_delta[3]:f32,accel_or_delta[3]:f32`；schema2追加下述时间/结果尾字段 |
 | 2 GNSS | 100B | `lat/lon:f64`；依次12个f32：MSL高、椭球高、水平/垂直位置std、N/E/D速度、地速、水平/垂直速度std、COG、COGstd；末尾`fix_class/raw_fix_type/raw_fix_flags/num_svs:u8` |
 | 3 FILTER | 196B | 内部四元数、姿态std、bg与std、ba、静止证据、GNSS平移/激励资格、计数、载体速度辅助诊断、yaw量测累计注入，详见下文 |
 | 4 RF | 80B | `target_generation/authority_epoch/rf_measurement_timestamp_ms:u32`；`type/ownership/reject/reserved:u8`；7个f32：value、variance、innovation、applied、beam_az、beam_el、SNR；最后`internal_shadow_correction_sequence:u32` |
@@ -1297,6 +1299,13 @@ measurement_us:u64 | received_us:u64 | flags:u32`。
 
 IMU为设备body FRD，`sample_type=0`时向量单位rad/s和m/s²，`sample_type=1`时为采样窗增量rad和m/s，dt为对应窗秒数；
 mount_rot只说明上游已经应用的旋转，不得重复应用。温度单位℃，flags.bit0为温度有效。
+IMU schema2 的偏移0–67保持 schema1 字段语义（schema字段值为2）：公共头 measurement_us 为原始测量时间，
+received_us 为 locate callback 接收时间，time_quality 为原始输入的时间质量；A/B诊断标签不覆盖这些字段。
+偏移68为 `driver_received_timestamp_us:u64`（driver完整帧解析提交时刻）；偏移76为
+`filter_input_timestamp_us:u64`（本次拟输入内部滤波器的时间标签，不表示已接纳）；偏移84为 `input_result:u8`，
+偏移85–87为保留字节，固定0。input_result只允许：0=未尝试；1=原测量/driver时间无效或原测量时间未前进；
+2=timeline拒绝；3=timeline接纳且filter未输出；4=filter_updated。输入结果仍需结合FILTER状态时刻/计数判读，
+不能由拟输入时间非零或出现TRACE记录推断滤波更新。上位机将尾字段原样提供于 `InsTraceRecord.values`，schema1不补造尾字段。
 GNSS位置单位deg/m，速度m/s，COG及std为rad；flags.bit0..3依次为has_fix/ellipsoid_height_valid/velocity_valid/cog_valid。
 RF的header.source_seq保存已发送命令身份；rf_measurement_timestamp_ms为原始RF测量时刻，公共measurement_us可为内部相对yaw传输后的状态时刻。
 RF的internal_shadow_correction_sequence保存观测传输所依据的内部yaw校正身份；locate在锁内与当前filter身份比较，跨校正拒绝可由此追查。累计录制丢弃数仍由kind3记录。

@@ -1478,16 +1478,17 @@ __all__ = [
 
 
 def decode_ins_trace(data: bytes) -> InsTraceRecord:
-    """解码 schema1 固定长度 INS 工程记录，不将诊断中的 NaN 伪造成有效测量。"""
+    """解码 schema1/IMU schema2 固定长度工程记录，保留原时间与输入结果事实。"""
     header = struct.Struct("<4BIIQQI")
     if len(data) < header.size:
         raise CodecError("INS_TRACE header truncated")
     schema, kind, source, health, seq, source_seq, timestamp_us, received_us, flags = header.unpack_from(data)
     lengths = {1: 68, 2: 100, 3: 196, 4: 80, 5: 192, 6: 120, 7: 56, 8: 76, 9: 96}
     masks = {1: 1, 2: 15, 3: 15, 4: 3, 5: 15, 6: 255, 7: 63, 8: 3, 9: 15}
-    if schema != 1 or kind not in lengths:
+    if kind not in lengths or not (schema == 1 or (schema == 2 and kind == 1)):
         raise CodecError("INS_TRACE unsupported schema or kind")
-    if len(data) != lengths[kind] or flags & ~masks[kind]:
+    expected_length = 88 if schema == 2 else lengths[kind]
+    if len(data) != expected_length or flags & ~masks[kind]:
         raise CodecError("INS_TRACE invalid length or flags")
     if kind >= 6 and (source != 0 or health != 0 or (kind != 9 and source_seq != 0)):
         raise CodecError("INS_TRACE invalid RF diagnostic identity")
@@ -1500,6 +1501,12 @@ def decode_ins_trace(data: bytes) -> InsTraceRecord:
                   "dt_s": dt, "temperature_c": temperature,
                   "gyro_rad_s" if mode == 0 else "delta_ang_rad": tuple(axes[:3]),
                   "accel_m_s2" if mode == 0 else "delta_vel_m_s": tuple(axes[3:])}
+        if schema == 2:
+            driver_received_us, filter_input_us, input_result, reserved = struct.unpack_from("<QQB3s", data, 68)
+            if input_result > 4 or reserved != bytes(3):
+                raise CodecError("INS_TRACE invalid IMU input result or reserved bytes")
+            values.update(driver_received_timestamp_us=driver_received_us,
+                          filter_input_timestamp_us=filter_input_us, input_result=input_result)
     elif kind == 2:
         lat, lon, *items = struct.unpack_from("<dd12f4B", data, 32)
         names = ("alt_m", "height_ellipsoid_m", "pos_h_std_m", "pos_v_std_m", "vel_n_ms", "vel_e_ms",
