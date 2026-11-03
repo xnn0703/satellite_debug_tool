@@ -8,11 +8,14 @@ import re
 import shutil
 import threading
 import time
+import zipfile
+import stat
+import subprocess
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from satellite_debug_tool.updater.errors import UpdaterError
-from satellite_debug_tool.updater.recovery import InstallJournal
+from satellite_debug_tool.updater.recovery import InstallJournal, staging_path
 from satellite_debug_tool.updater.status import sync_file
 
 
@@ -41,6 +44,7 @@ class PayloadContract:
     runtime_dir_name: str = "_internal"
     edition: str | None = None
     target_version: str = ""
+    platform: str = "windows"
 
 
 def _archive_path(name: str) -> str:
@@ -125,9 +129,63 @@ class Applier:
         self._progress("extract", 1.0)
         return staging
 
+    def extract_zip_to(self, archive: Path, staging: Path, *,
+                       max_expanded_bytes: int = MAX_EXPANDED_BYTES) -> Path:
+        """提取唯一 macOS app；拒绝链接、路径逃逸、重复项和展开超限。"""
+        if not Path(archive).is_file() or not zipfile.is_zipfile(archive):
+            raise ApplyError("apply_invalid_archive", path=str(archive))
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            with zipfile.ZipFile(archive) as bundle:
+                infos = [item for item in bundle.infolist() if not item.filename.startswith("__MACOSX/")]
+                if len(infos) > MAX_ARCHIVE_ENTRIES:
+                    raise ValueError("archive entry budget exceeded")
+                total, seen = 0, set()
+                for item in infos:
+                    name = _archive_path(item.filename.rstrip("/"))
+                    if not name:
+                        continue
+                    key = name.casefold()
+                    if key in seen:
+                        raise ValueError("archive has duplicate or case-conflicting paths")
+                    seen.add(key)
+                    mode = item.external_attr >> 16
+                    if stat.S_ISLNK(mode):
+                        target = bundle.read(item).decode("utf-8")
+                        if not target or PurePosixPath(target).is_absolute():
+                            raise ValueError("macOS update payload contains an invalid symbolic link")
+                    total += item.file_size
+                    if total > max_expanded_bytes:
+                        raise ValueError("archive expanded size budget exceeded")
+                if shutil.disk_usage(staging.parent).free < total:
+                    raise OSError("insufficient space to extract update payload")
+            # ditto 保留 app 的权限、AppleDouble 元数据和签名所需属性；上面的
+            # 规范预检先拒绝了路径逃逸、重复项和越界链接。
+            subprocess.run(["/usr/bin/ditto", "-x", "-k", str(archive), str(staging)],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            for entry in staging.rglob("*"):
+                if entry.is_symlink():
+                    resolved = entry.resolve()
+                    if staging.resolve() not in resolved.parents and resolved != staging.resolve():
+                        raise ValueError("macOS update payload link escapes the application")
+                elif not (entry.is_file() or entry.is_dir()):
+                    raise ValueError("extracted payload contains an unsupported file type")
+        except Exception as exc:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise ApplyError("apply_extract_failed", str(exc)) from exc
+        return staging
+
     def resolve_payload_root(self, staging: Path, contract: PayloadContract) -> Path:
         self._progress("validate", 0.0)
         candidates = []
+        if contract.platform == "macos":
+            candidates = [path.resolve() for path in staging.iterdir()
+                          if path.suffix == ".app" and path.is_dir() and not path.is_symlink()]
+            if len(candidates) != 1:
+                raise ApplyError("apply_payload_ambiguous", candidates=[str(p) for p in candidates])
+            self._validate_identity(candidates[0], contract)
+            self._progress("validate", 1.0)
+            return candidates[0]
         for executable in staging.rglob(contract.executable_name):
             root = executable.parent
             if ((root / contract.updater_name).is_file()
@@ -149,7 +207,8 @@ class Applier:
             return
         from satellite_debug_tool.edition import Edition, validate_payload_identity
         try:
-            validate_payload_identity(root, Edition(contract.edition), contract.target_version)
+            validate_payload_identity(root, Edition(contract.edition), contract.target_version,
+                                      platform=contract.platform)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ApplyError("apply_payload_identity", str(exc)) from exc
 
@@ -161,14 +220,15 @@ class Applier:
         source = Path(payload_root).resolve()
         if re.fullmatch(r"[a-f0-9]{32}", transaction_id) is None:
             raise ApplyError("apply_transaction_identity")
-        staging = install.parent / f".{install.name}.staging.{transaction_id}"
+        staging = staging_path(install, transaction_id)
         if source == install or install in source.parents:
             raise ApplyError("apply_source_overlaps_installation")
         if not source.is_dir():
             raise ApplyError("apply_source_missing", path=str(source))
         if contract.edition is not None:
             try:
-                identity = install / "_internal" / "satellite_debug_tool" / "build_identity.json"
+                from satellite_debug_tool.updater.install_platform import identity_path
+                identity = identity_path(install, contract.platform)
                 installed_edition = json.loads(identity.read_text(encoding="utf-8"))["edition"]
                 if installed_edition != contract.edition:
                     raise ValueError("installed edition differs from updater request")
@@ -179,20 +239,28 @@ class Applier:
         self._progress("prepare", 0.0)
         try:
             verify_tree(source, tree_manifest)
-            identity_file = source / "_internal/satellite_debug_tool/build_identity.json"
+            from satellite_debug_tool.updater.install_platform import identity_path, validate_macos_bundle
+            identity_file = identity_path(source, contract.platform)
             packed_identity = json.loads(identity_file.read_text(encoding="utf-8"))
-            packed_identity["platform"] = {"win": "windows"}.get(packed_identity.get("platform"), packed_identity.get("platform"))
+            packed_identity["platform"] = {"win": "windows", "mac": "macos"}.get(
+                packed_identity.get("platform"), packed_identity.get("platform"))
             for field, value in tree_manifest["identity"].items():
                 if packed_identity.get(field) != value:
                     raise ValueError(f"payload build identity differs from the trusted manifest: {field}")
-            total = sum(int(entry["size"]) for entry in tree_manifest["files"])
+            total = sum(int(entry["size"]) for entry in tree_manifest["files"]
+                        if entry["kind"] == "file")
             if shutil.disk_usage(install.parent).free < total:
                 raise OSError("insufficient space to prepare update beside the installation")
-            shutil.copytree(source, staging)
+            if contract.platform == "macos":
+                subprocess.run(["/usr/bin/ditto", str(source), str(staging)], check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            else:
+                shutil.copytree(source, staging)
             verify_tree(staging, tree_manifest)
             self._validate_identity(staging, contract)
             for entry in tree_manifest["files"]:
-                sync_file(staging / entry["path"])
+                if entry["kind"] == "file":
+                    sync_file(staging / entry["path"])
         except Exception as exc:
             if staging.exists():
                 shutil.rmtree(staging)

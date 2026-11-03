@@ -14,8 +14,12 @@ from securesystemslib.signer import CryptoSigner
 from tuf.api.exceptions import DownloadHTTPError
 from tuf.ngclient.fetcher import FetcherInterface
 
-from scripts.promote_release import PUBLIC_ROOT, STATE_ROOT, _ensure_directory, commit_bundle, fetch_candidate, prepare_bundle
+from scripts.promote_release import (
+    PUBLIC_ROOT, STATE_ROOT, VERIFY_REQUEST_ROOT, VERIFY_RESULT_ROOT,
+    _ensure_directory, commit_bundle, fetch_candidate, prepare_bundle,
+)
 from scripts.upload_release import CANDIDATE_ROOT, ensure_directory as ensure_candidate_directory
+from scripts.verify_publication_server import process_requests
 from satellite_debug_tool.edition import create_build_identity
 from satellite_debug_tool.release_config import DEFAULTS
 from satellite_debug_tool.updater.checker import ReleaseChecker
@@ -29,8 +33,11 @@ class Sftp:
         self.prefetches = []
         self.moves = []
         self.fail_timestamp = False
+        self.corrupt_before_verification = False
         (root / PUBLIC_ROOT.lstrip("/")).mkdir(parents=True)
         (root / STATE_ROOT.lstrip("/")).mkdir(parents=True)
+        (root / VERIFY_REQUEST_ROOT.lstrip("/")).mkdir(parents=True)
+        (root / VERIFY_RESULT_ROOT.lstrip("/")).mkdir(parents=True)
 
     def path(self, value):
         return self.root / value.lstrip("/")
@@ -61,6 +68,15 @@ class Sftp:
             raise OSError("injected timestamp interruption")
         self.path(source).replace(self.path(destination))
         self.moves.append(destination)
+        if destination.startswith(VERIFY_REQUEST_ROOT + "/"):
+            if self.corrupt_before_verification:
+                package = next(self.path(PUBLIC_ROOT).rglob("*.7z"))
+                package.write_bytes(package.read_bytes() + b"tamper")
+            process_requests(
+                self.path(VERIFY_REQUEST_ROOT),
+                self.path(VERIFY_RESULT_ROOT),
+                self.path(PUBLIC_ROOT),
+            )
 
 
 class Fetcher(FetcherInterface):
@@ -78,6 +94,9 @@ class Fetcher(FetcherInterface):
             raise DownloadHTTPError("missing", 404)
         yield path.read_bytes()
 
+    def fetch_range(self, url, start, end):
+        return b"".join(self._fetch(url))[start:end + 1]
+
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX publication directory permission contract")
 def test_public_directories_allow_nginx_traversal_and_private_state_keeps_its_mode(tmp_path):
@@ -88,6 +107,7 @@ def test_public_directories_allow_nginx_traversal_and_private_state_keeps_its_mo
         _ensure_directory(sftp, public, PUBLIC_ROOT)
         for name in ("satellite-terminal-tool", "satellite-terminal-tool/targets", "satellite-terminal-tool/targets/packages"):
             assert stat.S_IMODE(sftp.path(PUBLIC_ROOT + "/" + name).stat().st_mode) == 0o755
+        shutil.rmtree(sftp.path(STATE_ROOT + "/verification"))
         sftp.path(STATE_ROOT).rmdir()
         _ensure_directory(sftp, STATE_ROOT, STATE_ROOT)
         assert stat.S_IMODE(sftp.path(STATE_ROOT).stat().st_mode) == 0o750
@@ -166,6 +186,26 @@ def test_readback_failure_keeps_old_channel_and_same_bundle_retries(deployment):
     assert check().tag_name == "2.0.0"
     commit_bundle(sftp, second, fetcher=fetcher)
     assert check().tag_name == "2.1.0"
+
+
+def test_server_digest_failure_keeps_timestamp_unpublished(deployment):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    manifest = prepare("bundle")
+    sftp.corrupt_before_verification = True
+    with pytest.raises(ValueError, match="server publication verification failed"):
+        commit_bundle(sftp, manifest, fetcher=fetcher)
+    assert not sftp.path(PUBLIC_ROOT + "/satellite-terminal-tool/metadata/timestamp.json").exists()
+
+
+def test_server_archives_a_request_when_verified_result_is_reused(deployment):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    commit_bundle(sftp, prepare("bundle"), fetcher=fetcher)
+    requests = sftp.path(VERIFY_REQUEST_ROOT)
+    archive = sftp.path(STATE_ROOT + "/verification/archive")
+    assert list(requests.glob("*.json"))
+    process_requests(requests, sftp.path(VERIFY_RESULT_ROOT), sftp.path(PUBLIC_ROOT), archive)
+    assert not list(requests.glob("*.json"))
+    assert list(archive.glob("*.json"))
 
 
 def test_interrupted_timestamp_commit_reuses_uploaded_files(deployment):
@@ -303,10 +343,10 @@ def test_remote_metadata_signature_is_verified_before_preparation(deployment):
         prepare("second", initial=False, version="2.1.0", commit="b" * 40)
 
 
-@pytest.mark.parametrize("corrupt_public_package", [False, True])
-def test_cli_preserves_publication_connection_across_long_https_readback(
-        deployment, monkeypatch, corrupt_public_package):
-    """HTTPS 回读与 SFTP 控制共用 owner；长空闲后仍提交或完整报告校验失败。"""
+@pytest.mark.parametrize("corrupt_public_range", [False, True])
+def test_cli_uses_bounded_https_ranges_and_keeps_one_sftp_owner(
+        deployment, monkeypatch, corrupt_public_range):
+    """ECS 完整校验后只做有界 Range，分段不一致不提交 timestamp。"""
     import sys
     from types import SimpleNamespace
     from scripts import promote_release
@@ -383,17 +423,21 @@ def test_cli_preserves_publication_connection_across_long_https_readback(
             transport.active = False
             events.append("ssh-closed")
 
-    class LongReadback(Fetcher):
-        def _fetch(self, url):
-            for block in super()._fetch(url):
-                if url.endswith("complete.7z"):
-                    transport.advance(14 * 60)
-                    if corrupt_public_package:
-                        block = block[:-1] + b"!"
-                yield block
+    class RangeProbe(Fetcher):
+        def __init__(self, target):
+            super().__init__(target)
+            self.ranges = []
+
+        def fetch_range(self, url, start, end):
+            self.ranges.append((url, start, end))
+            block = super().fetch_range(url, start, end)
+            if corrupt_public_range and url.endswith("complete.7z"):
+                block = block[:-1] + b"!"
+            return block
 
     monkeypatch.setitem(sys.modules, "paramiko", SimpleNamespace(SSHClient=Client, RejectPolicy=object))
-    monkeypatch.setattr(promote_release, "HttpsFetcher", lambda *_args: LongReadback(sftp))
+    probe = RangeProbe(sftp)
+    monkeypatch.setattr(promote_release, "PublicRangeFetcher", lambda *_args: probe)
     config = tmp / "connection.json"
     config.write_text(json.dumps({"host": "example.test", "username": "publisher",
                                   "public_root": PUBLIC_ROOT, "state_root": STATE_ROOT}))
@@ -402,15 +446,17 @@ def test_cli_preserves_publication_connection_across_long_https_readback(
     identity.touch()
     arguments = ["commit", "--config", str(config), "--known-hosts", str(known_hosts),
                  "--identity-file", str(identity), "--bundle", str(manifest)]
-    if corrupt_public_package:
-        with pytest.raises(ValueError, match="public publication file differs"):
+    if corrupt_public_range:
+        with pytest.raises(ValueError, match="public publication range differs"):
             promote_release.main(arguments)
         assert not sftp.path(PUBLIC_ROOT + "/satellite-terminal-tool/metadata/timestamp.json").exists()
     else:
         promote_release.main(arguments)
         assert sftp.moves[-1].endswith("/timestamp.json")
         assert check().tag_name == "2.0.0"
-    assert transport.heartbeats > 0
+    assert probe.ranges
+    assert all(end - start + 1 <= 4096 for _url, start, end in probe.ranges)
+    assert transport.heartbeats == 0
     assert events.count("authenticated") == 1
     assert events[-2:] == ["sftp-closed", "ssh-closed"]
     assert not sftp.path(STATE_ROOT + "/satellite-terminal-tool.publication.lock").exists()

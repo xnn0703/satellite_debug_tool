@@ -881,7 +881,7 @@ class _SoakRun:
                     format_version=SDB_VERSION_V3,
                     metadata={
                         "capture_profile": "support_full",
-                        "recording_mode": "customer_full_capture",
+                        "recording_mode": "customer_recording",
                         "presentation": "customer",
                         "hardware_type": item.spec.hardware_type,
                         "identity": {

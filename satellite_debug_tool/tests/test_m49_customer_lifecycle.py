@@ -161,8 +161,7 @@ def test_opening_tools_preserves_runtime_recorder_and_all_raw_frames(qapplicatio
     if support_full:
         from satellite_debug_tool.core.product import CustomerRecordingState
         live = bundle.live
-        live._customer_recording_path = path
-        live._set_customer_recording_state(CustomerRecordingState.PREPARING)
+        assert live._start_recording(format_version=3, customer=True, filepath=path)
         assert live._capture_profile_controller.request(True)
         request_id = live._capture_profile_controller.pending_request_id
         live._capture_profile_controller.feed_response(_capture_response(request_id))

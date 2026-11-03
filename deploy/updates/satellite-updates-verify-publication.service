@@ -1,0 +1,17 @@
+[Unit]
+Description=Verify Satellite Terminal Manager publication files locally
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=satellite_metadata
+UMask=0027
+WorkingDirectory=/opt/satellite-updates/tools
+ExecStart=/opt/satellite-updates/venv/bin/python /opt/satellite-updates/tools/scripts/verify_publication_server.py --requests /srv/satellite-updates/receipts/verification/requests --results /srv/satellite-updates/receipts/verification/results --archive /srv/satellite-updates/receipts/verification/archive --public-apps-root /srv/satellite-updates/public/v1/apps
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/satellite-updates/public
+ReadWritePaths=/srv/satellite-updates/receipts/verification/requests /srv/satellite-updates/receipts/verification/results /srv/satellite-updates/receipts/verification/archive

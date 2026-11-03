@@ -883,7 +883,7 @@ Configuration file: {path}</source>
         <location filename="../../ui/chart_group_dialog.py" line="78"/>
         <location filename="../../ui/chart_group_dialog.py" line="419"/>
         <location filename="../../ui/customer_overview_view.py" line="343"/>
-        <location filename="../../ui/customer_overview_view.py" line="973"/>
+        <location filename="../../ui/customer_overview_view.py" line="967"/>
         <source>No device connected</source>
         <translation>未连接设备</translation>
     </message>
@@ -950,7 +950,7 @@ Configuration file: {path}</source>
         <location filename="../../ui/control_panel_widget.py" line="125"/>
         <location filename="../../ui/control_panel_widget.py" line="147"/>
         <location filename="../../ui/customer_overview_view.py" line="682"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="300"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="322"/>
         <location filename="../../ui/settings_dialog.py" line="360"/>
         <location filename="../../ui/update_dialog.py" line="346"/>
         <source>Cancel</source>
@@ -2048,8 +2048,8 @@ Its channels will return to the unassigned list.</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="643"/>
-        <location filename="../../ui/customer_overview_view.py" line="1479"/>
-        <location filename="../../ui/customer_overview_view.py" line="1483"/>
+        <location filename="../../ui/customer_overview_view.py" line="1473"/>
+        <location filename="../../ui/customer_overview_view.py" line="1477"/>
         <source>Not configured</source>
         <translation>未配置</translation>
     </message>
@@ -2837,7 +2837,7 @@ Azimuth/elevation is not valid yet</source>
     <message>
         <location filename="../../ui/connection_dialog.py" line="33"/>
         <location filename="../../ui/connection_dialog.py" line="114"/>
-        <location filename="../../ui/live_view.py" line="737"/>
+        <location filename="../../ui/live_view.py" line="738"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="453"/>
         <source>Serial</source>
         <translation>串口</translation>
@@ -2845,35 +2845,35 @@ Azimuth/elevation is not valid yet</source>
     <message>
         <location filename="../../ui/connection_dialog.py" line="48"/>
         <location filename="../../ui/connection_dialog.py" line="116"/>
-        <location filename="../../ui/live_view.py" line="754"/>
+        <location filename="../../ui/live_view.py" line="755"/>
         <source>Port:</source>
         <translation>端口：</translation>
     </message>
     <message>
         <location filename="../../ui/connection_dialog.py" line="56"/>
         <location filename="../../ui/connection_dialog.py" line="117"/>
-        <location filename="../../ui/live_view.py" line="762"/>
+        <location filename="../../ui/live_view.py" line="763"/>
         <source>Baud rate:</source>
         <translation>波特率：</translation>
     </message>
     <message>
         <location filename="../../ui/connection_dialog.py" line="82"/>
         <location filename="../../ui/connection_dialog.py" line="118"/>
-        <location filename="../../ui/live_view.py" line="773"/>
+        <location filename="../../ui/live_view.py" line="774"/>
         <source>Remote IP:</source>
         <translation>远端 IP：</translation>
     </message>
     <message>
         <location filename="../../ui/connection_dialog.py" line="89"/>
         <location filename="../../ui/connection_dialog.py" line="119"/>
-        <location filename="../../ui/live_view.py" line="780"/>
+        <location filename="../../ui/live_view.py" line="781"/>
         <source>Remote port:</source>
         <translation>远端端口：</translation>
     </message>
     <message>
         <location filename="../../ui/connection_dialog.py" line="98"/>
         <location filename="../../ui/connection_dialog.py" line="120"/>
-        <location filename="../../ui/live_view.py" line="787"/>
+        <location filename="../../ui/live_view.py" line="788"/>
         <source>Local port:</source>
         <translation>本地端口：</translation>
     </message>
@@ -2947,8 +2947,8 @@ group_id：{group_id}  flags：0x{flags:02X}
     </message>
     <message>
         <location filename="../../ui/device_view.py" line="219"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="787"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2706"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="811"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2790"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="166"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="664"/>
         <location filename="../../ui/orbit_widget.py" line="190"/>
@@ -3165,7 +3165,7 @@ group_id：{group_id}  flags：0x{flags:02X}
         <location filename="../../ui/customer_maintenance_view.py" line="208"/>
         <location filename="../../ui/customer_maintenance_view.py" line="1027"/>
         <location filename="../../ui/customer_overview_view.py" line="418"/>
-        <location filename="../../ui/customer_overview_view.py" line="1599"/>
+        <location filename="../../ui/customer_overview_view.py" line="1593"/>
         <location filename="../../ui/device_view.py" line="249"/>
         <location filename="../../ui/orbit_widget.py" line="595"/>
         <source>Status</source>
@@ -3361,16 +3361,16 @@ group_id：{group_id}  flags：0x{flags:02X}
         <location filename="../../ui/customer_maintenance_view.py" line="338"/>
         <location filename="../../ui/customer_maintenance_view.py" line="366"/>
         <location filename="../../ui/customer_overview_view.py" line="233"/>
-        <location filename="../../ui/customer_overview_view.py" line="907"/>
-        <location filename="../../ui/customer_overview_view.py" line="1001"/>
-        <location filename="../../ui/customer_overview_view.py" line="1009"/>
-        <location filename="../../ui/customer_overview_view.py" line="1027"/>
-        <location filename="../../ui/customer_overview_view.py" line="1046"/>
-        <location filename="../../ui/customer_overview_view.py" line="1070"/>
-        <location filename="../../ui/customer_overview_view.py" line="1087"/>
-        <location filename="../../ui/customer_overview_view.py" line="1283"/>
-        <location filename="../../ui/customer_overview_view.py" line="1298"/>
-        <location filename="../../ui/customer_overview_view.py" line="1512"/>
+        <location filename="../../ui/customer_overview_view.py" line="901"/>
+        <location filename="../../ui/customer_overview_view.py" line="995"/>
+        <location filename="../../ui/customer_overview_view.py" line="1003"/>
+        <location filename="../../ui/customer_overview_view.py" line="1021"/>
+        <location filename="../../ui/customer_overview_view.py" line="1040"/>
+        <location filename="../../ui/customer_overview_view.py" line="1064"/>
+        <location filename="../../ui/customer_overview_view.py" line="1081"/>
+        <location filename="../../ui/customer_overview_view.py" line="1277"/>
+        <location filename="../../ui/customer_overview_view.py" line="1292"/>
+        <location filename="../../ui/customer_overview_view.py" line="1506"/>
         <source>{value} (stale)</source>
         <translation>{value}（已过期）</translation>
     </message>
@@ -3556,29 +3556,29 @@ group_id：{group_id}  flags：0x{flags:02X}
     <message>
         <location filename="../../ui/customer_maintenance_view.py" line="722"/>
         <location filename="../../ui/customer_overview_view.py" line="605"/>
-        <location filename="../../ui/customer_overview_view.py" line="1602"/>
+        <location filename="../../ui/customer_overview_view.py" line="1596"/>
         <source>Converter</source>
         <translation>变频板</translation>
     </message>
     <message>
         <location filename="../../ui/customer_maintenance_view.py" line="723"/>
         <location filename="../../ui/customer_overview_view.py" line="606"/>
-        <location filename="../../ui/customer_overview_view.py" line="1603"/>
+        <location filename="../../ui/customer_overview_view.py" line="1597"/>
         <source>TX array</source>
         <translation>发射阵列</translation>
     </message>
     <message>
         <location filename="../../ui/customer_maintenance_view.py" line="724"/>
         <location filename="../../ui/customer_overview_view.py" line="607"/>
-        <location filename="../../ui/customer_overview_view.py" line="1604"/>
+        <location filename="../../ui/customer_overview_view.py" line="1598"/>
         <source>RX array</source>
         <translation>接收阵列</translation>
     </message>
     <message>
         <location filename="../../ui/customer_maintenance_view.py" line="730"/>
-        <location filename="../../ui/customer_overview_view.py" line="982"/>
-        <location filename="../../ui/customer_overview_view.py" line="1084"/>
-        <location filename="../../ui/customer_overview_view.py" line="1440"/>
+        <location filename="../../ui/customer_overview_view.py" line="976"/>
+        <location filename="../../ui/customer_overview_view.py" line="1078"/>
+        <location filename="../../ui/customer_overview_view.py" line="1434"/>
         <location filename="../../ui/production_workspace.py" line="1310"/>
         <source>Online</source>
         <translation>在线</translation>
@@ -3634,11 +3634,11 @@ group_id：{group_id}  flags：0x{flags:02X}
     <message>
         <location filename="../../ui/customer_maintenance_view.py" line="426"/>
         <location filename="../../ui/customer_maintenance_view.py" line="730"/>
-        <location filename="../../ui/customer_overview_view.py" line="988"/>
-        <location filename="../../ui/customer_overview_view.py" line="1084"/>
-        <location filename="../../ui/customer_overview_view.py" line="1440"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="794"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2858"/>
+        <location filename="../../ui/customer_overview_view.py" line="982"/>
+        <location filename="../../ui/customer_overview_view.py" line="1078"/>
+        <location filename="../../ui/customer_overview_view.py" line="1434"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="818"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2940"/>
         <location filename="../../ui/production_snr_widget.py" line="72"/>
         <location filename="../../ui/production_workspace.py" line="1310"/>
         <source>Offline</source>
@@ -3811,8 +3811,8 @@ group_id：{group_id}  flags：0x{flags:02X}
     <message>
         <location filename="../../ui/device_view.py" line="631"/>
         <location filename="../../ui/device_view.py" line="657"/>
-        <location filename="../../ui/live_view.py" line="1602"/>
-        <location filename="../../ui/live_view.py" line="1637"/>
+        <location filename="../../ui/live_view.py" line="1604"/>
+        <location filename="../../ui/live_view.py" line="1639"/>
         <source>Not connected; command was not sent</source>
         <translation>设备未连接，命令未发送</translation>
     </message>
@@ -4205,7 +4205,7 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="67"/>
-        <location filename="../../ui/customer_overview_view.py" line="1024"/>
+        <location filename="../../ui/customer_overview_view.py" line="1018"/>
         <source>Locked</source>
         <translation>已锁定</translation>
     </message>
@@ -4239,7 +4239,7 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="79"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2860"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2942"/>
         <location filename="../../ui/production_workspace.py" line="747"/>
         <source>Ready</source>
         <translation>就绪</translation>
@@ -4282,14 +4282,14 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="225"/>
-        <location filename="../../ui/customer_overview_view.py" line="1064"/>
+        <location filename="../../ui/customer_overview_view.py" line="1058"/>
         <location filename="../../ui/external_power_window.py" line="338"/>
         <source>On</source>
         <translation>开启</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="225"/>
-        <location filename="../../ui/customer_overview_view.py" line="1064"/>
+        <location filename="../../ui/customer_overview_view.py" line="1058"/>
         <location filename="../../ui/external_power_window.py" line="338"/>
         <source>Off</source>
         <translation>停用</translation>
@@ -4332,13 +4332,13 @@ A manually adjusted Y axis is shown in orange.</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="507"/>
-        <location filename="../../ui/customer_overview_view.py" line="1590"/>
+        <location filename="../../ui/customer_overview_view.py" line="1584"/>
         <source>Shared MS-6222 reference for device attitude comparison</source>
         <translation>共享 MS-6222 参考，用于设备姿态比对</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="640"/>
-        <location filename="../../ui/customer_overview_view.py" line="1612"/>
+        <location filename="../../ui/customer_overview_view.py" line="1606"/>
         <location filename="../../ui/external_power_window.py" line="54"/>
         <location filename="../../ui/external_power_window.py" line="207"/>
         <location filename="../../ui/external_power_window.py" line="221"/>
@@ -4350,7 +4350,7 @@ A manually adjusted Y axis is shown in orange.</source>
         <translation>外接电源</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1193"/>
+        <location filename="../../ui/customer_overview_view.py" line="1187"/>
         <source>{name} (NORAD {norad})
 Array az/off-axis: {array_az}° / {offaxis}°
 Geographic az/el: {geo_az}° / {geo_el}°
@@ -4361,73 +4361,73 @@ Range: {range_km} km · TLE age: {age_days} d</source>
 距离：{range_km} km · TLE 龄期：{age_days} 天</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1268"/>
+        <location filename="../../ui/customer_overview_view.py" line="1262"/>
         <source>Failed to send tracking target request</source>
         <translation>发送跟踪目标请求失败</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1299"/>
+        <location filename="../../ui/customer_overview_view.py" line="1293"/>
         <source>PLL lock: {value}</source>
         <translation>本振锁定：{value}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1328"/>
+        <location filename="../../ui/customer_overview_view.py" line="1322"/>
         <source>NORAD {id}</source>
         <translation>NORAD {id}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1330"/>
+        <location filename="../../ui/customer_overview_view.py" line="1324"/>
         <source>LEO/TLE</source>
         <translation>LEO/TLE</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1360"/>
+        <location filename="../../ui/customer_overview_view.py" line="1354"/>
         <source>MS-6222 ({basis}) · Roll: {roll:.3f}°  Pitch: {pitch:.3f}°  Yaw: {yaw:.3f}°</source>
         <translation>MS-6222（{basis}）· 横滚：{roll:.3f}°  俯仰：{pitch:.3f}°  航向：{yaw:.3f}°</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1357"/>
+        <location filename="../../ui/customer_overview_view.py" line="1351"/>
         <source>Raw INS, true heading</source>
         <translation>原始 INS，真实航向</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1366"/>
+        <location filename="../../ui/customer_overview_view.py" line="1360"/>
         <source>Waiting for attitude</source>
         <translation>等待姿态</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1368"/>
+        <location filename="../../ui/customer_overview_view.py" line="1362"/>
         <source>Attitude data is stale</source>
         <translation>姿态数据已过期</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1369"/>
+        <location filename="../../ui/customer_overview_view.py" line="1363"/>
         <source>Reference quality invalid</source>
         <translation>参考姿态质量无效</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1485"/>
+        <location filename="../../ui/customer_overview_view.py" line="1479"/>
         <source>Monitoring inactive</source>
         <translation>监测未启用</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1487"/>
+        <location filename="../../ui/customer_overview_view.py" line="1481"/>
         <location filename="../../ui/production_workspace.py" line="745"/>
         <source>Connecting</source>
         <translation>连接中</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1489"/>
+        <location filename="../../ui/customer_overview_view.py" line="1483"/>
         <source>Read failed</source>
         <translation>读取失败</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1491"/>
+        <location filename="../../ui/customer_overview_view.py" line="1485"/>
         <source>Data unavailable</source>
         <translation>数据不可用</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1592"/>
+        <location filename="../../ui/customer_overview_view.py" line="1586"/>
         <source>Clear this device&apos;s local display data</source>
         <translation>清除当前设备的本地显示数据</translation>
     </message>
@@ -4439,7 +4439,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     <message>
         <location filename="../../ui/component_temperature_window.py" line="220"/>
         <location filename="../../ui/customer_overview_view.py" line="586"/>
-        <location filename="../../ui/customer_overview_view.py" line="1622"/>
+        <location filename="../../ui/customer_overview_view.py" line="1616"/>
         <location filename="../../ui/grouped_chart_widget.py" line="345"/>
         <source>Device uptime</source>
         <translation>设备开机时间</translation>
@@ -4472,7 +4472,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="516"/>
-        <location filename="../../ui/customer_overview_view.py" line="1595"/>
+        <location filename="../../ui/customer_overview_view.py" line="1589"/>
         <source>Beam direction</source>
         <translation>波束方向</translation>
     </message>
@@ -4491,7 +4491,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="565"/>
-        <location filename="../../ui/customer_overview_view.py" line="1598"/>
+        <location filename="../../ui/customer_overview_view.py" line="1592"/>
         <source>Signal strength - last 5 minutes</source>
         <translation>信号强度 - 最近 5 分钟</translation>
     </message>
@@ -4560,7 +4560,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="444"/>
-        <location filename="../../ui/customer_overview_view.py" line="1600"/>
+        <location filename="../../ui/customer_overview_view.py" line="1594"/>
         <source>Runtime data</source>
         <translation>运行数据</translation>
     </message>
@@ -4599,49 +4599,44 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>停止录制</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="750"/>
-        <source>Cancel recording</source>
-        <translation>取消录制准备</translation>
-    </message>
-    <message>
-        <location filename="../../ui/customer_overview_view.py" line="753"/>
+        <location filename="../../ui/customer_overview_view.py" line="747"/>
         <source>Restoring...</source>
         <translation>正在恢复客户数据流...</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="966"/>
+        <location filename="../../ui/customer_overview_view.py" line="960"/>
         <source>{model} | SN {serial} | Firmware {firmware}</source>
         <translation>{model} | SN {serial} | 固件 {firmware}</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="969"/>
-        <location filename="../../ui/live_view.py" line="1394"/>
+        <location filename="../../ui/customer_overview_view.py" line="963"/>
+        <location filename="../../ui/live_view.py" line="1396"/>
         <source>Waiting for device...</source>
         <translation>正在等待设备上线...</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="971"/>
-        <location filename="../../ui/live_view.py" line="1396"/>
+        <location filename="../../ui/customer_overview_view.py" line="965"/>
+        <location filename="../../ui/live_view.py" line="1398"/>
         <source>Reconnecting to device...</source>
         <translation>正在重新连接设备...</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="980"/>
+        <location filename="../../ui/customer_overview_view.py" line="974"/>
         <source>Loaded</source>
         <translation>已载入</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="984"/>
+        <location filename="../../ui/customer_overview_view.py" line="978"/>
         <source>Waiting</source>
         <translation>等待设备</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="986"/>
+        <location filename="../../ui/customer_overview_view.py" line="980"/>
         <source>Reconnecting</source>
         <translation>正在重连</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1024"/>
+        <location filename="../../ui/customer_overview_view.py" line="1018"/>
         <source>Unlocked</source>
         <translation>未锁定</translation>
     </message>
@@ -4662,30 +4657,30 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>⚑ 用户标记</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1958"/>
+        <location filename="../../ui/live_view.py" line="1960"/>
         <location filename="../../ui/orbit_widget.py" line="309"/>
         <source>Device is not connected</source>
         <translation>设备未连接</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1960"/>
+        <location filename="../../ui/live_view.py" line="1962"/>
         <source>Another Debug command is awaiting confirmation</source>
         <translation>已有 Debug 命令正在等待确认</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1962"/>
+        <location filename="../../ui/live_view.py" line="1964"/>
         <source>Failed to send Debug command</source>
         <translation>Debug 命令发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="741"/>
+        <location filename="../../ui/live_view.py" line="742"/>
         <source>Type:</source>
         <translation>类型：</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="358"/>
         <location filename="../../ui/customer_overview_view.py" line="680"/>
-        <location filename="../../ui/live_view.py" line="795"/>
+        <location filename="../../ui/live_view.py" line="796"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="168"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="618"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="493"/>
@@ -4694,131 +4689,131 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>连接</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="798"/>
+        <location filename="../../ui/live_view.py" line="799"/>
         <source>Open the serial port or bind UDP, then start the handshake</source>
         <translation>打开串口或绑定 UDP，然后开始握手</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="807"/>
+        <location filename="../../ui/live_view.py" line="808"/>
         <source>Disconnect without clearing received data or the Profile</source>
         <translation>断开连接，但保留已接收数据和 Profile</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="814"/>
-        <location filename="../../ui/live_view.py" line="1253"/>
-        <location filename="../../ui/live_view.py" line="1886"/>
+        <location filename="../../ui/live_view.py" line="815"/>
+        <location filename="../../ui/live_view.py" line="1254"/>
+        <location filename="../../ui/live_view.py" line="1888"/>
         <source>Debug: OFF</source>
         <translation>Debug：关</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="818"/>
+        <location filename="../../ui/live_view.py" line="819"/>
         <source>Send CONTROL.DEBUG_ENABLE to start or stop device data reports</source>
         <translation>下发 CONTROL.DEBUG_ENABLE 启动或停止设备数据上报</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="826"/>
+        <location filename="../../ui/live_view.py" line="827"/>
         <source>Start or stop recording .sdb v2 with a Profile snapshot</source>
         <translation>开始或停止录制带 Profile 快照的 .sdb v2 文件</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="831"/>
+        <location filename="../../ui/live_view.py" line="832"/>
         <source>Import</source>
         <translation>导入</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="834"/>
+        <location filename="../../ui/live_view.py" line="835"/>
         <source>Import an .sdb v2 file into Live; Playback is recommended</source>
         <translation>将 .sdb v2 文件导入实时页；常规查看建议使用回放页</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="843"/>
+        <location filename="../../ui/live_view.py" line="844"/>
         <source>Clear charts, dashboard, events, and counters while retaining the Profile and current state panel</source>
         <translation>清空曲线、仪表板、事件和计数，但保留 Profile 和当前状态面板</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="853"/>
+        <location filename="../../ui/live_view.py" line="854"/>
         <source>Open the sky plot and signal-level C/N₀ window</source>
         <translation>打开天空图和逐信号 C/N₀ 窗口</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="869"/>
-        <location filename="../../ui/live_view.py" line="1520"/>
-        <location filename="../../ui/live_view.py" line="1786"/>
-        <location filename="../../ui/live_view.py" line="1888"/>
-        <location filename="../../ui/live_view.py" line="2989"/>
+        <location filename="../../ui/live_view.py" line="870"/>
+        <location filename="../../ui/live_view.py" line="1522"/>
+        <location filename="../../ui/live_view.py" line="1788"/>
+        <location filename="../../ui/live_view.py" line="1890"/>
+        <location filename="../../ui/live_view.py" line="3047"/>
         <source>Device: {hardware}</source>
         <translation>设备：{hardware}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1057"/>
+        <location filename="../../ui/live_view.py" line="1058"/>
         <source>No ports</source>
         <translation>无端口</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1073"/>
+        <location filename="../../ui/live_view.py" line="1074"/>
         <source>No serial port is available</source>
         <translation>没有可用串口</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="675"/>
-        <location filename="../../ui/live_view.py" line="1135"/>
+        <location filename="../../ui/live_view.py" line="1136"/>
         <source>Connection failed</source>
         <translation>连接失败</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1497"/>
+        <location filename="../../ui/live_view.py" line="1499"/>
         <source>Channel enable mask → 0x{mask:016X}</source>
         <translation>通道使能掩码 → 0x{mask:016X}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1506"/>
+        <location filename="../../ui/live_view.py" line="1508"/>
         <source>Profile ready: {hardware}</source>
         <translation>Profile 就绪：{hardware}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1625"/>
+        <location filename="../../ui/live_view.py" line="1627"/>
         <source>Another device operation is active</source>
         <translation>另一项设备操作正在进行</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1677"/>
+        <location filename="../../ui/live_view.py" line="1679"/>
         <source>Requested sample rate: {rate} Hz</source>
         <translation>已请求采样率：{rate} Hz</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1682"/>
+        <location filename="../../ui/live_view.py" line="1684"/>
         <source>Mark #{mark_id} sent</source>
         <translation>标记 #{mark_id} 已发送</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1687"/>
+        <location filename="../../ui/live_view.py" line="1689"/>
         <source>Requested device statistics reset</source>
         <translation>已请求复位设备统计</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1693"/>
+        <location filename="../../ui/live_view.py" line="1695"/>
         <source>Profile handshake is incomplete; mode change was not sent</source>
         <translation>Profile 握手未完成，模式切换未发送</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1701"/>
+        <location filename="../../ui/live_view.py" line="1703"/>
         <source>state_id={state_id} has no control_binding; mode change was not sent</source>
         <translation>state_id={state_id} 没有 control_binding，模式切换未发送</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1715"/>
+        <location filename="../../ui/live_view.py" line="1717"/>
         <source>Requested mode change (state_id={state_id} → {target_value})</source>
         <translation>已请求切换模式（state_id={state_id} → {target_value}）</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1724"/>
+        <location filename="../../ui/live_view.py" line="1726"/>
         <source>control_binding={subcmd}/{value_from} is not supported</source>
         <translation>不支持 control_binding={subcmd}/{value_from}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1887"/>
-        <location filename="../../ui/live_view.py" line="2977"/>
-        <location filename="../../ui/live_view.py" line="2991"/>
+        <location filename="../../ui/live_view.py" line="1889"/>
+        <location filename="../../ui/live_view.py" line="3035"/>
+        <location filename="../../ui/live_view.py" line="3049"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="854"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="497"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="1234"/>
@@ -4827,50 +4822,50 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>已断开</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1938"/>
+        <location filename="../../ui/live_view.py" line="1940"/>
         <source>Debug: {state}...</source>
         <translation>Debug：{state}...</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1964"/>
+        <location filename="../../ui/live_view.py" line="1966"/>
         <source>Debug command not confirmed</source>
         <translation>Debug 指令未确认</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1967"/>
+        <location filename="../../ui/live_view.py" line="1969"/>
         <source>Debug command failed: {detail}</source>
         <translation>Debug 指令失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1985"/>
+        <location filename="../../ui/live_view.py" line="1987"/>
         <source>Debug: {state}</source>
         <translation>Debug：{state}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1996"/>
+        <location filename="../../ui/live_view.py" line="1998"/>
         <source>Error: {detail}</source>
         <translation>错误：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1112"/>
-        <location filename="../../ui/live_view.py" line="1259"/>
-        <location filename="../../ui/live_view.py" line="2064"/>
+        <location filename="../../ui/live_view.py" line="1113"/>
+        <location filename="../../ui/live_view.py" line="1260"/>
+        <location filename="../../ui/live_view.py" line="2066"/>
         <source>Transport worker did not stop</source>
         <translation>通信线程未能停止</translation>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="369"/>
-        <location filename="../../ui/customer_overview_view.py" line="756"/>
+        <location filename="../../ui/customer_overview_view.py" line="750"/>
         <source>Record</source>
         <translation>录制</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2642"/>
+        <location filename="../../ui/live_view.py" line="2688"/>
         <source>Recording stopped</source>
         <translation>录制已停止</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2414"/>
+        <location filename="../../ui/live_view.py" line="2425"/>
         <source>Save recording</source>
         <translation>保存录制文件</translation>
     </message>
@@ -4899,8 +4894,8 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/customer_playback_view.py" line="200"/>
-        <location filename="../../ui/live_view.py" line="2416"/>
-        <location filename="../../ui/live_view.py" line="2674"/>
+        <location filename="../../ui/live_view.py" line="2427"/>
+        <location filename="../../ui/live_view.py" line="2732"/>
         <location filename="../../ui/playback_view.py" line="251"/>
         <source>SDB files (*.sdb);;All files (*)</source>
         <translation>SDB 文件 (*.sdb);;所有文件 (*)</translation>
@@ -4958,199 +4953,190 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>GNSS 详情 - 回放</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2426"/>
-        <location filename="../../ui/live_view.py" line="2985"/>
+        <location filename="../../ui/live_view.py" line="2437"/>
+        <location filename="../../ui/live_view.py" line="3043"/>
         <location filename="../../ui/tracking_simulator_view.py" line="117"/>
         <source>Stop</source>
         <translation>停止</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2524"/>
+        <location filename="../../ui/live_view.py" line="2555"/>
         <source>Recording to {path}{profile_suffix}</source>
         <translation>正在录制到 {path}{profile_suffix}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2526"/>
+        <location filename="../../ui/live_view.py" line="2557"/>
         <source> + Profile</source>
         <translation> + Profile</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2512"/>
+        <location filename="../../ui/live_view.py" line="2539"/>
         <source>Failed to start recording</source>
         <translation>启动录制失败</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="860"/>
+        <location filename="../../ui/live_view.py" line="861"/>
         <source>Open the XESA01 satellite catalog and prediction window</source>
         <translation>打开 XESA01 卫星目录与轨道预测窗口</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1392"/>
+        <location filename="../../ui/live_view.py" line="1394"/>
         <source>Device online</source>
         <translation>设备已上线</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2174"/>
+        <location filename="../../ui/live_view.py" line="2182"/>
         <source>A customer recording operation is already pending</source>
         <translation>已有客户录制操作正在进行</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2261"/>
+        <location filename="../../ui/live_view.py" line="2292"/>
         <source>Capture profile command could not be sent</source>
         <translation>采集配置命令发送失败</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2241"/>
+        <location filename="../../ui/live_view.py" line="2272"/>
         <source>Preparing full support recording...</source>
         <translation>正在准备全量支持录制...</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2243"/>
+        <location filename="../../ui/live_view.py" line="2274"/>
         <source>Restoring customer live stream...</source>
         <translation>正在恢复客户实时数据流...</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2291"/>
+        <location filename="../../ui/live_view.py" line="2314"/>
         <source>Device rejected the capture profile ({code})</source>
         <translation>设备拒绝采集配置（{code}）</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2323"/>
+        <location filename="../../ui/live_view.py" line="2332"/>
         <source>Full support recording resumed</source>
         <translation>全量支持录制已恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2327"/>
+        <location filename="../../ui/live_view.py" line="2336"/>
         <source>Customer live stream restored</source>
         <translation>客户实时数据流已恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2266"/>
+        <location filename="../../ui/live_view.py" line="2297"/>
         <source>Full support recording was not confirmed</source>
         <translation>未确认全量支持录制</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="592"/>
-        <source>Pending recording request cancelled</source>
-        <translation>等待中的录制请求已取消</translation>
-    </message>
-    <message>
-        <location filename="../../ui/live_view.py" line="608"/>
-        <source>Recording requested; waiting for device...</source>
-        <translation>已请求录制，正在等待设备...</translation>
-    </message>
-    <message>
-        <location filename="../../ui/live_view.py" line="2214"/>
-        <source>Connected device firmware does not support full support recording</source>
-        <translation>已连接的设备固件不支持全量支持录制</translation>
-    </message>
-    <message>
-        <location filename="../../ui/live_view.py" line="2268"/>
+        <location filename="../../ui/live_view.py" line="2299"/>
         <source>Customer stream restore was not confirmed</source>
         <translation>未确认客户数据流恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2640"/>
+        <location filename="../../ui/live_view.py" line="2686"/>
         <source>Recording stopped with {count} dropped chunk(s)</source>
         <translation>录制已停止，丢失 {count} 个数据块</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2630"/>
+        <location filename="../../ui/live_view.py" line="2676"/>
         <source>Recording stop did not complete cleanly</source>
         <translation>录制停止过程未正常完成</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="539"/>
+        <location filename="../../ui/live_view.py" line="548"/>
         <source>The customer session endpoint is fixed; edit it in the device list</source>
         <translation>客户会话端点已固定；请在设备列表中编辑</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="545"/>
+        <location filename="../../ui/live_view.py" line="554"/>
         <source>The shared UDP local port is fixed in Settings</source>
         <translation>共享 UDP 本地端口已在设置中固定</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="733"/>
+        <location filename="../../ui/live_view.py" line="734"/>
         <location filename="../../ui/main_window.py" line="387"/>
         <location filename="../../ui/main_window.py" line="830"/>
         <source>Shared customer UDP</source>
         <translation>共享客户 UDP</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="735"/>
+        <location filename="../../ui/live_view.py" line="736"/>
         <location filename="../../ui/main_window.py" line="383"/>
         <location filename="../../ui/main_window.py" line="826"/>
         <source>Engineering serial</source>
         <translation>工程串口</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1233"/>
+        <location filename="../../ui/live_view.py" line="1234"/>
         <source>Finish restoring the customer stream before disconnecting</source>
         <translation>断开连接前请完成客户数据流配置恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1239"/>
+        <location filename="../../ui/live_view.py" line="1240"/>
         <source>Finish the pending Debug operation before disconnecting</source>
         <translation>断开连接前请完成待处理的 Debug 操作</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1245"/>
+        <location filename="../../ui/live_view.py" line="1246"/>
         <source>Disable Debug and wait for confirmation before disconnecting</source>
         <translation>断开连接前请关闭 Debug 并等待确认</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="1617"/>
+        <location filename="../../ui/live_view.py" line="1619"/>
         <source>This command has no device confirmation contract</source>
         <translation>此命令没有设备确认合同</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2472"/>
+        <location filename="../../ui/live_view.py" line="2248"/>
+        <source>Recording continues with the current device stream; full support capture is unavailable</source>
+        <translation>继续录制设备当前数据流；完整支持采集不可用</translation>
+    </message>
+    <message>
+        <location filename="../../ui/live_view.py" line="2483"/>
+        <location filename="../../ui/live_view.py" line="2495"/>
         <source>This device recorder is busy</source>
         <translation>此设备的录制器正忙</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2489"/>
+        <location filename="../../ui/live_view.py" line="2514"/>
         <source>Failed to reserve recording path: {detail}</source>
         <translation>预留录制路径失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2583"/>
+        <location filename="../../ui/live_view.py" line="2614"/>
         <source>Fixture attitude recording has a data gap</source>
         <translation>夹具姿态录制出现数据缺口</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2672"/>
+        <location filename="../../ui/live_view.py" line="2730"/>
         <source>Import data into Live</source>
         <translation>导入数据到实时页</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2708"/>
+        <location filename="../../ui/live_view.py" line="2766"/>
         <source>Imported {count} DataReport record(s) from {path}</source>
         <translation>已从 {path} 导入 {count} 条 DataReport 记录</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2715"/>
+        <location filename="../../ui/live_view.py" line="2773"/>
         <source>Import failed: {detail}</source>
         <translation>导入失败：{detail}</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2747"/>
+        <location filename="../../ui/live_view.py" line="2805"/>
         <source>Display cleared</source>
         <translation>显示已清空</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2823"/>
-        <location filename="../../ui/live_view.py" line="2995"/>
+        <location filename="../../ui/live_view.py" line="2881"/>
+        <location filename="../../ui/live_view.py" line="3053"/>
         <source>GNSS sky plot and signal-level C/N₀ — Live</source>
         <translation>GNSS 天空图与逐信号 C/N₀ — 实时</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2834"/>
+        <location filename="../../ui/live_view.py" line="2892"/>
         <source>The connected firmware does not advertise Orbit/TLE support</source>
         <translation>当前连接的固件未声明 Orbit/TLE 能力</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2850"/>
+        <location filename="../../ui/live_view.py" line="2908"/>
         <source>Satellite catalog and orbit prediction — Live</source>
         <translation>卫星目录与轨道预测 — 实时</translation>
     </message>
@@ -5793,7 +5779,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/customer_maintenance_view.py" line="528"/>
-        <location filename="../../ui/customer_overview_view.py" line="1066"/>
+        <location filename="../../ui/customer_overview_view.py" line="1060"/>
         <location filename="../../ui/customer_rf_control_view.py" line="261"/>
         <location filename="../../ui/customer_rf_control_view.py" line="320"/>
         <location filename="../../ui/customer_rf_control_view.py" line="405"/>
@@ -6019,7 +6005,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>导出 CSV/JSON</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="378"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="400"/>
         <location filename="../../ui/orbit_widget.py" line="268"/>
         <source>Target</source>
         <translation>目标</translation>
@@ -6076,7 +6062,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>预测任务已提交...</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1259"/>
+        <location filename="../../ui/customer_overview_view.py" line="1253"/>
         <location filename="../../ui/orbit_widget.py" line="360"/>
         <location filename="../../ui/orbit_widget.py" line="366"/>
         <source>Tracking target</source>
@@ -6088,7 +6074,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>请先选择一条星历记录。</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1261"/>
+        <location filename="../../ui/customer_overview_view.py" line="1255"/>
         <location filename="../../ui/orbit_widget.py" line="367"/>
         <source>Set {name} (NORAD {norad}) as the tracking target? This does not enable TX.</source>
         <translation>将 {name}（NORAD {norad}）设为跟踪目标？该操作不会开启发射。</translation>
@@ -6136,7 +6122,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>正在上传 tle.txt：{percent}%</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2777"/>
+        <location filename="../../ui/live_view.py" line="2835"/>
         <location filename="../../ui/orbit_widget.py" line="486"/>
         <source>Orbit request {operation} failed: {status}</source>
         <translation>Orbit 请求 {operation} 失败：{status}</translation>
@@ -6147,7 +6133,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>tle.txt 已上传，已请求设备重扫目录</translation>
     </message>
     <message>
-        <location filename="../../ui/live_view.py" line="2774"/>
+        <location filename="../../ui/live_view.py" line="2832"/>
         <location filename="../../ui/orbit_widget.py" line="501"/>
         <source>Tracking target accepted; TX state was not changed</source>
         <translation>设备已接受跟踪目标；发射状态未改变</translation>
@@ -6260,75 +6246,75 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>预测结果已导出至 {path}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1211"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1236"/>
         <source>Fixture profile</source>
         <translation>夹具档案</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="136"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1150"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="158"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1175"/>
         <source>Custom or migrated profile</source>
         <translation>自定义或迁移档案</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="156"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="776"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2702"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="178"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="800"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2786"/>
         <source>Motion platform model</source>
         <translation>摇摆台型号</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="157"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="179"/>
         <location filename="../../ui/production_configuration_dialog.py" line="100"/>
         <source>Profile ID</source>
         <translation>档案 ID</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="162"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="184"/>
         <source>Calibration ID</source>
         <translation>标定 ID</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="163"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="185"/>
         <source>Minimum command time (ms)</source>
         <translation>最短指令时间 (ms)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="178"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="955"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="978"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2712"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="200"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="979"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1002"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2796"/>
         <source>Axis</source>
         <translation>轴</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="179"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="201"/>
         <source>Angle (deg)</source>
         <translation>角度 (deg)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="180"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="202"/>
         <source>Frequency (Hz)</source>
         <translation>频率 (Hz)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="181"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="203"/>
         <source>Velocity (deg/s)</source>
         <translation>速度 (deg/s)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="182"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="204"/>
         <source>Acceleration (deg/s²)</source>
         <translation>加速度 (deg/s²)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="183"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="205"/>
         <source>Sign</source>
         <translation>符号</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="204"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="286"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="226"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="308"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="139"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="140"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="819"/>
@@ -6336,28 +6322,28 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>必填</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="217"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="287"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="239"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="309"/>
         <source>Confirmed A6 geometry</source>
         <translation>已确认的 A6 几何位姿</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="231"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="253"/>
         <source>Center Z (mm)</source>
         <translation>回中 Z (mm)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="232"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="254"/>
         <source>Minimum Z (mm)</source>
         <translation>最小 Z (mm)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="233"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="255"/>
         <source>Maximum Z (mm)</source>
         <translation>最大 Z (mm)</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="297"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="319"/>
         <location filename="../../ui/production_configuration_dialog.py" line="282"/>
         <location filename="../../ui/production_configuration_dialog.py" line="357"/>
         <location filename="../../ui/production_configuration_dialog.py" line="425"/>
@@ -6367,139 +6353,139 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>保存</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="379"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="401"/>
         <source>Measured</source>
         <translation>实测</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="380"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="402"/>
         <source>Error</source>
         <translation>误差</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="385"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="486"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="407"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="508"/>
         <source>Session time</source>
         <translation>会话时间</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="717"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2682"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="741"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2766"/>
         <source>Motion platform profile</source>
         <translation>摇摆台档案</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="772"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2684"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="796"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2768"/>
         <source>Fixture profile and reference</source>
         <translation>夹具档案与姿态参考</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="782"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1188"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2412"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="806"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1213"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2496"/>
         <source>No fixture profile</source>
         <translation>未选择夹具档案</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="784"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2705"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="808"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2789"/>
         <source>MS-6222 port</source>
         <translation>MS-6222 端口</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="789"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1291"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1304"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1346"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2708"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="813"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1316"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1329"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1371"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2792"/>
         <source>Connect reference</source>
         <translation>连接姿态参考</translation>
     </message>
     <message>
-        <location filename="../../ui/customer_overview_view.py" line="1367"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="791"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1293"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1309"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1349"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2776"/>
+        <location filename="../../ui/customer_overview_view.py" line="1361"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="815"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1318"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1334"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1374"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2858"/>
         <source>Reference disconnected</source>
         <translation>姿态参考未连接</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="811"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2686"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="835"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2770"/>
         <source>Motion safety gate</source>
         <translation>运动安全确认</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="817"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="841"/>
         <source>Platform is centered</source>
         <translation>摇摆台已回中</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="818"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="842"/>
         <source>Area is clear</source>
         <translation>运动区域已清空</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="819"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="843"/>
         <source>Emergency stop is available</source>
         <translation>急停可用</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="820"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="844"/>
         <source>Fixture is secured</source>
         <translation>设备安装牢固</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="827"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2687"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="851"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2771"/>
         <source>Start engineering session</source>
         <translation>开始工程会话</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="830"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2688"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="854"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2772"/>
         <source>Finish session</source>
         <translation>结束会话</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="863"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2395"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2700"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="887"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2479"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2784"/>
         <source>Target / measured / error attitude</source>
         <translation>目标 / 实测 / 误差姿态</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="869"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2407"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="893"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2491"/>
         <source>Raw attitude only; no confirmed coordinate calibration.</source>
         <translation>仅显示原始姿态；尚无已确认的坐标标定。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="876"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2701"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="900"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2785"/>
         <source>Fixture events</source>
         <translation>夹具事件</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="893"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1539"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="917"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1564"/>
         <source>Profile not ready</source>
         <translation>档案未就绪</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="897"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2756"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="921"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2838"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="269"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="690"/>
         <source>Inconclusive</source>
         <translation>无法判定</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="898"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2757"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="922"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2839"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="270"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="691"/>
         <location filename="../../ui/production_progress_widgets.py" line="57"/>
@@ -6507,8 +6493,8 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>通过</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="899"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2758"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="923"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2840"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="271"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="692"/>
         <location filename="../../ui/production_progress_widgets.py" line="58"/>
@@ -6516,659 +6502,690 @@ Range: {range_km} km · TLE age: {age_days} d</source>
         <translation>不通过</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="901"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2752"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="925"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2834"/>
         <source>Operator notes</source>
         <translation>操作员备注</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="903"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2753"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="927"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2835"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="267"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="688"/>
         <source>Engineering conclusion</source>
         <translation>工程结论</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="910"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2689"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="934"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2773"/>
         <source>Absolute movement (device FRD)</source>
         <translation>绝对运动（设备 FRD）</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="914"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2691"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="938"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2775"/>
         <source>FRD positive directions: Roll right wing down / Pitch nose up / Yaw right (clockwise from above)</source>
         <translation>FRD 正方向：Roll 右翼下沉 / Pitch 机头上抬 / Yaw 向右（俯视顺时针）</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2047"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2103"/>
         <source>Motion stopped within the actuator guard; maximum residual {error:.4f} mm.</source>
         <translation>运动已停止且位于执行器保护范围内；最大残差 {error:.4f} mm。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2054"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2110"/>
         <source>Motion stopped outside the actuator guard; maximum residual {error:.4f} mm.</source>
         <translation>运动已停止但超出执行器保护范围；最大残差 {error:.4f} mm。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2298"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2382"/>
         <source>Absolute movement</source>
         <translation>绝对定位</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="939"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2724"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="963"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2808"/>
         <source>Send absolute target</source>
         <translation>下发绝对目标</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="166"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="267"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="188"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="289"/>
         <source>Model parameters and FRD-to-controller signs are generated by software. The pending calibration ID is replaced after guided MS-6222 calibration.</source>
         <translation>型号参数及 FRD 到控制器的符号转换由软件生成。完成 MS-6222 引导标定后，待标定 ID 将替换为真实标定 ID。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="731"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2676"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="755"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2760"/>
         <source>Motion platform and attitude reference</source>
         <translation>摇摆台与姿态参考</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="732"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2677"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="756"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2761"/>
         <source>Motion safety confirmation</source>
         <translation>运动控制安全确认</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="733"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2678"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="757"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2762"/>
         <source>Start control session</source>
         <translation>开始控制会话</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="734"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2679"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="758"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2763"/>
         <source>Finish control session</source>
         <translation>结束控制会话</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="871"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="895"/>
         <source>MS-6222 absolute heading: unavailable</source>
         <translation>MS-6222 绝对航向：不可用</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="929"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="953"/>
         <source>MS-6222 bounded attitude correction</source>
         <translation>MS-6222 有界姿态修正</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="941"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2301"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2725"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="965"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2385"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2809"/>
         <source>Center</source>
         <translation>回中</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="943"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2727"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="967"/>
         <source>Stop sequence</source>
         <translation>停止序列</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="956"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2713"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="980"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2797"/>
         <source>Target angle</source>
         <translation>目标角度</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="957"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2714"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="981"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2798"/>
         <source>Total completion time</source>
         <translation>总完成时间</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="974"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2696"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="998"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2780"/>
         <source>Three-axis sine trajectory</source>
         <translation>三轴正弦轨迹</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="979"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1003"/>
         <source>Amplitude</source>
         <translation>幅值</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="980"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1004"/>
         <source>Frequency</source>
         <translation>频率</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="981"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1005"/>
         <source>Phase</source>
         <translation>相位</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1027"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2720"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1052"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2804"/>
         <source>Ramp in</source>
         <translation>渐入</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1028"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2721"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1053"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2805"/>
         <source>Steady</source>
         <translation>稳定段</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1029"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2722"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1054"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2806"/>
         <source>Ramp out</source>
         <translation>渐出</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1030"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2723"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1055"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2807"/>
         <source>Sample period</source>
         <translation>采样周期</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="738"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1051"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2730"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="762"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1076"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2812"/>
         <source>Preview and validate</source>
         <translation>预览并校验</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="384"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="485"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="406"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="507"/>
         <source>Attitude and error</source>
         <translation>姿态与误差</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="737"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2694"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="761"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2778"/>
         <source>Combined continuous rocking</source>
         <translation>组合连续摇摆</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="739"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2732"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="763"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2814"/>
         <source>Start combined rocking</source>
         <translation>开始组合摇摆</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="740"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2727"/>
-        <source>Controlled stop</source>
-        <translation>受控停止</translation>
-    </message>
-    <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1053"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2734"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1078"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2816"/>
         <source>Start trajectory</source>
         <translation>开始轨迹</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1061"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2699"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1086"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2783"/>
         <source>Guided coordinate calibration</source>
         <translation>引导式坐标标定</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1085"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2698"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1110"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2782"/>
         <source>Automatic platform qualification</source>
         <translation>摇摆台自动资格测试</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1089"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2746"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1114"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2828"/>
         <source>Ready to test center and Roll/Pitch/Yaw ±3 deg with MS-6222.</source>
         <translation>已准备使用 MS-6222 测试中心位及 Roll/Pitch/Yaw ±3°。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1092"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1654"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2742"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1117"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1681"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2824"/>
         <source>Start automatic test</source>
         <translation>开始自动测试</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1454"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1479"/>
         <source>MS-6222 absolute heading: {heading:.3f} deg | standard deviation {std:.3f} deg</source>
         <translation>MS-6222 绝对航向：{heading:.3f}° | 标准差 {std:.3f}°</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1465"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1490"/>
         <source>MS-6222 absolute heading: unavailable (reference quality invalid)</source>
         <translation>MS-6222 绝对航向：不可用（参考质量无效）</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1649"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2740"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1676"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2822"/>
         <source>Stop automatic test</source>
         <translation>停止自动测试</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1652"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1679"/>
         <source>Cancel automatic test start</source>
         <translation>取消自动测试启动</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1668"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1695"/>
         <source>Automatic test start cancelled.</source>
         <translation>已取消自动测试启动。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1674"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1701"/>
         <source>Opening MS-6222 and waiting for a valid attitude frame...</source>
         <translation>正在打开 MS-6222 并等待有效姿态帧...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1681"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1708"/>
         <source>Automatic test could not start.</source>
         <translation>自动测试无法启动。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1691"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1718"/>
         <source>Waiting for a valid MS-6222 attitude frame...</source>
         <translation>正在等待有效的 MS-6222 姿态帧...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1753"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1780"/>
         <source>Automatic platform qualification started.</source>
         <translation>摇摆台自动资格测试已开始。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1776"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1803"/>
         <source>Qualification stage command submitted: {stage}</source>
         <translation>资格测试阶段指令已提交：{stage}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1790"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1817"/>
         <source>Stage {index}/{total}: {stage} | {state}</source>
         <translation>阶段 {index}/{total}：{stage} | {state}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1807"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1834"/>
         <source>Automatic test complete; finalizing evidence package...</source>
         <translation>自动测试已完成，正在收尾证据包…</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1810"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1837"/>
         <source>Automatic platform qualification sequence completed.</source>
         <translation>摇摆台自动资格测试序列已完成。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1824"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1851"/>
         <source>Automatic platform qualification completed; thresholds remain engineering-only.</source>
         <translation>摇摆台自动资格测试已完成；阈值仍为工程验证用途。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1830"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1857"/>
         <source>Automatic test incomplete: {details}</source>
         <translation>自动测试未完成：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1833"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1860"/>
         <source>Automatic platform qualification stopped: {details}</source>
         <translation>摇摆台自动资格测试已停止：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1894"/>
-        <source>Controlled stop requested; no further trajectory points will be sent. Use the physical emergency stop for an unsafe motion.</source>
-        <translation>已请求受控停止；不会再发送后续轨迹点。如运动存在安全风险，请使用物理急停。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1902"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1936"/>
         <source>Home platform</source>
         <translation>平台回原点</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1903"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1937"/>
         <source>Homing may interrupt feedback for about one minute. Confirm the mechanism is safe before continuing.</source>
         <translation>回原点期间反馈可能中断约一分钟。继续前请确认机构处于安全状态。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2026"/>
-        <source>Trajectory executed: sent {sent}/{intended}, skipped {skipped}; maximum scheduler lateness {lateness:.2f} ms.</source>
-        <translation>轨迹执行完成：已发送 {sent}/{intended} 点，跳过 {skipped} 点；最大调度迟到 {lateness:.2f} ms。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2060"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2116"/>
         <source>Trajectory generation stopped; no final position conclusion.</source>
         <translation>轨迹生成已停止；没有最终位置结论。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2063"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2119"/>
         <source>Control request completed without a motion settlement result.</source>
         <translation>控制请求已结束，但没有运动停止结果。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2111"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2167"/>
         <source>Attitude correction iteration {iteration}: error {error:.3f} deg.</source>
         <translation>姿态修正第 {iteration} 轮：误差 {error:.3f}°。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2125"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2181"/>
         <source>MS-6222 verified the target attitude; residual {error:.3f} deg.</source>
         <translation>MS-6222 已确认目标姿态；残差 {error:.3f}°。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2129"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2185"/>
         <source>Attitude correction stopped at its iteration limit; residual {error:.3f} deg.</source>
         <translation>姿态修正达到迭代上限并停止；残差 {error:.3f}°。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2133"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2189"/>
         <source>Attitude correction stopped because the error increased to {error:.3f} deg.</source>
         <translation>姿态误差增大至 {error:.3f}°，修正已停止。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2145"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2201"/>
         <source>Attitude correction stopped: {details}</source>
         <translation>姿态修正已停止：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2302"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2227"/>
+        <source>Fading motion...</source>
+        <translation>正在渐出减幅...</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2228"/>
+        <source>Centering...</source>
+        <translation>正在回正...</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2229"/>
+        <source>Centered</source>
+        <translation>已回正</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2230"/>
+        <source>Center failed</source>
+        <translation>回正失败</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2234"/>
+        <source>Soft-center phase: {phase}.</source>
+        <translation>缓停回正阶段：{phase}。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2386"/>
         <source>Home</source>
         <translation>回原点</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2332"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2416"/>
         <source>Coordinate calibration rejected</source>
         <translation>坐标标定已拒绝</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2334"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2418"/>
         <source>The center reference is not stable. Maximum center dispersion is {dispersion:.3f} deg; the engineering limit is {limit:.3f} deg. Wait for MS-6222 heading to stabilize, then run the qualification test again.</source>
         <translation>中心参考不稳定。最大中心离散度为 {dispersion:.3f}°，工程门限为 {limit:.3f}°。请等待 MS-6222 航向稳定后重新执行资格测试。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2383"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2467"/>
         <source>Coordinate calibration confirmed and saved: {calibration_id}</source>
         <translation>坐标标定已确认并保存：{calibration_id}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2525"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2609"/>
         <source>Diagnostic ZIP generation failed: {details}</source>
         <translation>诊断 ZIP 生成失败：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2529"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2613"/>
         <source>Diagnostic ZIP saved: {path}</source>
         <translation>诊断 ZIP 已保存：{path}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2787"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2869"/>
         <source>A fixture engineering session is active. Closing will stop future commands, close controller feedback, and save the session as incomplete. The platform may continue an already accepted movement. Close anyway?</source>
         <translation>夹具工程会话正在运行。关闭将停止后续指令、关闭控制器反馈，并把会话保存为不完整。平台可能继续执行已经接受的运动。仍要关闭吗？</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2839"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2921"/>
         <source>Motion controller feedback is connected.</source>
         <translation>运动控制器反馈已连接。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2859"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2941"/>
         <source>Waiting for controller feedback</source>
         <translation>等待控制器反馈</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2861"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2943"/>
         <source>Homing</source>
         <translation>正在回原点</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2862"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2944"/>
         <source>Moving</source>
         <translation>正在运动</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2863"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2945"/>
         <source>Trajectory running</source>
         <translation>轨迹运行中</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2864"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2946"/>
         <source>Recovery required</source>
         <translation>需要执行恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2865"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2947"/>
         <source>Controller fault</source>
         <translation>控制器故障</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2874"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2956"/>
         <source>{state} | generation {generation} | feedback {age} | servo errors {errors} | target [{target}] | actual [{actual}] | delta [{delta}] | {details}</source>
         <translation>{state} | 连接代次 {generation} | 反馈 {age} | 伺服错误 {errors} | 目标 [{target}] | 实际 [{actual}] | 差值 [{delta}] | {details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1064"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1095"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2267"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1089"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1120"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2351"/>
         <source>Not started</source>
         <translation>尚未开始</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1066"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2748"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="764"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2221"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2251"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2810"/>
+        <source>Soft stop and center</source>
+        <translation>缓停并回正</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1091"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2830"/>
         <source>Start guide</source>
         <translation>开始标定引导</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1068"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2749"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1093"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2831"/>
         <source>Send guide pose</source>
         <translation>下发引导位姿</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1071"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2750"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1096"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2832"/>
         <source>Capture last 2 s</source>
         <translation>采集最近 2 s</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1074"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2751"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1099"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2833"/>
         <source>Evaluate and confirm...</source>
         <translation>评估并确认...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1182"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2416"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1207"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2500"/>
         <source>Profile valid | r{revision} | SHA {sha}</source>
         <translation>档案有效 | r{revision} | SHA {sha}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1273"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1298"/>
         <source>Opening reference serial port...</source>
         <translation>正在打开姿态参考串口...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1304"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2708"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1329"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2792"/>
         <source>Disconnect reference</source>
         <translation>断开姿态参考</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1307"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1332"/>
         <source>Reference serial open: {port}</source>
         <translation>姿态参考串口已打开：{port}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1312"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1337"/>
         <source>MS-6222 serial connected</source>
         <translation>MS-6222 串口已连接</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1312"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1337"/>
         <source>MS-6222 serial disconnected</source>
         <translation>MS-6222 串口已断开</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1330"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2773"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1355"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2855"/>
         <source>Reference error: {details}</source>
         <translation>姿态参考错误：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1367"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1392"/>
         <source>Reference open | INS {ins:.1f} Hz | GNSS {gnss:.1f} Hz | RAWIMU {raw:.1f} Hz | valid {ratio:.1f}% | GNSS/Fix/EKF {quality}</source>
         <translation>参考源已打开 | INS {ins:.1f} Hz | GNSS {gnss:.1f} Hz | RAWIMU {raw:.1f} Hz | 有效率 {ratio:.1f}% | GNSS/定位/EKF {quality}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2284"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1924"/>
+        <source>Soft stopping...</source>
+        <translation>正在缓停...</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1927"/>
+        <source>Soft stop requested; amplitude will fade before feedback-confirmed centering. Use the physical emergency stop for an unsafe motion.</source>
+        <translation>已请求缓停；幅值将逐步衰减，随后回正并等待反馈确认。危险运动请使用物理急停。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1991"/>
+        <source>Trajectory validated: {points} command points, {duration:.1f} s; axis {axis} minimum extension {margin:.2f} mm. Single-axis limits do not guarantee combined-pose reachability.</source>
+        <translation>轨迹校验通过：{points} 个指令点，时长 {duration:.1f} s；轴 {axis} 最小伸长量 {margin:.2f} mm。单轴角度限制不代表任意组合姿态均可达。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2069"/>
+        <source>Trajectory executed: sent {sent}/{intended}, skipped {skipped}; maximum scheduler lateness {lateness:.2f} ms, maximum send interval {interval:.2f} ms, control gaps {gaps}, timing fault {fault}.</source>
+        <translation>轨迹执行：已发送 {sent}/{intended}，跳过 {skipped}；最大调度迟到 {lateness:.2f} ms，最大发送间隔 {interval:.2f} ms，控制空洞 {gaps}，时序故障 {fault}。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2368"/>
         <source>Center static sample (start)</source>
         <translation>回中静置采样（开始）</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2285"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2369"/>
         <source>Roll +3 deg</source>
         <translation>横滚 +3°</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2286"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2370"/>
         <source>Roll -3 deg</source>
         <translation>横滚 -3°</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2287"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2371"/>
         <source>Pitch +3 deg</source>
         <translation>俯仰 +3°</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2288"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2372"/>
         <source>Pitch -3 deg</source>
         <translation>俯仰 -3°</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2289"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2373"/>
         <source>Yaw +3 deg</source>
         <translation>航向 +3°</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2290"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2374"/>
         <source>Yaw -3 deg</source>
         <translation>航向 -3°</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2291"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2375"/>
         <source>Center static sample (end)</source>
         <translation>回中静置采样（结束）</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2299"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2383"/>
         <source>Absolute pose</source>
         <translation>绝对位姿</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2300"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2384"/>
         <source>Trajectory</source>
         <translation>周期轨迹</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2405"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2489"/>
         <source>MS-6222 raw installation attitude</source>
         <translation>MS-6222 原始安装姿态</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2509"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2593"/>
         <source>Finalizing incomplete fixture session...</source>
         <translation>正在收尾未完成的夹具会话...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2536"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2620"/>
         <source>Session incomplete: {path}</source>
         <translation>会话未完成：{path}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2539"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2623"/>
         <source>Fixture evidence failed; session saved as incomplete.</source>
         <translation>夹具证据记录失败；会话已按未完成状态保存。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2613"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2697"/>
         <source>Evidence recording failed: {details}</source>
         <translation>证据记录失败：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2785"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2867"/>
         <source>Close fixture diagnostics</source>
         <translation>关闭夹具调试</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1537"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1562"/>
         <source>Preflight complete | control lease held</source>
         <translation>预检完成 | 已持有控制权</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="126"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="251"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="148"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="273"/>
         <source>Installation configuration</source>
         <translation>安装配置</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="174"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="271"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="196"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="293"/>
         <source>Axis operating envelope</source>
         <translation>各轴运行边界</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="780"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2703"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="804"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2787"/>
         <source>Installation configuration...</source>
         <translation>安装配置...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1541"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1566"/>
         <source>Waiting for all safety confirmations</source>
         <translation>等待全部安全确认</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1543"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1568"/>
         <source>Profile valid | ready to start engineering session</source>
         <translation>档案有效 | 可开始工程会话</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1612"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1639"/>
         <source>Engineering session started: {path}</source>
         <translation>工程会话已开始：{path}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1955"/>
-        <source>Trajectory validated: {points} command points, {duration:.1f} s.</source>
-        <translation>轨迹校验通过：{points} 个指令点，时长 {duration:.1f} s。</translation>
-    </message>
-    <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2012"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2055"/>
         <source>Command sent | {action} | sequence {sequence}</source>
         <translation>指令已发送 | {action} | 序号 {sequence}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2151"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2207"/>
         <source>Control request failed: {details}</source>
         <translation>控制请求失败：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2270"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2354"/>
         <source>All guide stages captured; evaluate the result.</source>
         <translation>全部引导阶段已采集，请评估结果。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2274"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2358"/>
         <source>Next stage: {stage} ({completed}/{total})</source>
         <translation>下一阶段：{stage} ({completed}/{total})</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2352"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2436"/>
         <source>Confirm coordinate calibration</source>
         <translation>确认坐标标定</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2354"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2438"/>
         <source>Detected mapping: {mapping}
 Maximum cross coupling: {coupling:.3f}
 This remains ENGINEERING_ONLY. Confirm and save?</source>
@@ -7177,65 +7194,65 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
 结果仍标记为 ENGINEERING_ONLY。确认并保存吗？</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2262"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2320"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2346"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2404"/>
         <source>Calibration saved: {calibration_id}</source>
         <translation>标定已保存：{calibration_id}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="158"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="180"/>
         <source>Local feedback IPv4</source>
         <translation>本机反馈 IPv4</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="159"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="181"/>
         <source>Feedback port</source>
         <translation>反馈端口</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="160"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="182"/>
         <source>Controller IPv4</source>
         <translation>控制器 IPv4</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="161"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="183"/>
         <source>Command port</source>
         <translation>命令端口</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="793"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2704"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="817"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2788"/>
         <source>Motion controller</source>
         <translation>运动控制器</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="946"/>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2729"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="970"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2811"/>
         <source>Home...</source>
         <translation>回原点...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2398"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2482"/>
         <source>Coordinate calibration {calibration_id} applied. Timing uses host serial arrival; phase and delay are engineering estimates.</source>
         <translation>已应用坐标标定 {calibration_id}。时间采用主机串口到达时刻；相位和时延仅为工程估计。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2511"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2595"/>
         <source>Finishing session and calculating engineering metrics...</source>
         <translation>正在结束会话并计算工程指标...</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2532"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2616"/>
         <source>Session saved: {path}</source>
         <translation>会话已保存：{path}</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2533"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2617"/>
         <source>Fixture engineering session saved.</source>
         <translation>夹具工程会话已保存。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="2547"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="2631"/>
         <source>Session finalization failed: {details}</source>
         <translation>会话收尾失败：{details}</translation>
     </message>
@@ -8310,12 +8327,12 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
 <context>
     <name>FixtureDebugWorkspace</name>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1249"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1274"/>
         <source>Select an MS-6222 serial port.</source>
         <translation>请选择 MS-6222 串口。</translation>
     </message>
     <message>
-        <location filename="../../ui/fixture_debug_workspace.py" line="1940"/>
+        <location filename="../../ui/fixture_debug_workspace.py" line="1974"/>
         <source>Select a valid fixture profile first.</source>
         <translation>请先选择有效的夹具档案。</translation>
     </message>

@@ -13,7 +13,6 @@ import sys
 import time
 from typing import Optional
 
-from satellite_debug_tool.package_names import WINDOWS_EXECUTABLE
 from satellite_debug_tool.updater.applier import Applier, PayloadContract
 from satellite_debug_tool.updater.handoff import UpdateLaunchRequest, load_update_launch_request, sha256_file
 from satellite_debug_tool.updater.health import HEALTH_ENV, HEALTH_SCHEMA, StartupHealthContext, validate_health_message
@@ -22,6 +21,10 @@ from satellite_debug_tool.updater.recovery import (
     register_login_recovery, remove_login_recovery, require_recovered_installation,
 )
 from satellite_debug_tool.updater.status import write_atomic_json, write_update_status
+from satellite_debug_tool.updater.install_platform import (
+    host_platform, installed_identity, installation_platform, main_executable,
+    validate_macos_bundle,
+)
 
 
 log = logging.getLogger("updater")
@@ -73,7 +76,7 @@ def require_installation_idle(install_dir: Path) -> None:
 
 
 def _start_trial(request: UpdateLaunchRequest, context: StartupHealthContext):
-    executable = request.install_dir / WINDOWS_EXECUTABLE
+    executable = main_executable(request.install_dir)
     if not executable.is_file():
         raise RecoveryError("installed executable is missing")
     health_request = context.directory / "health-request.json"
@@ -108,6 +111,28 @@ def _wait_for_health(process, context: StartupHealthContext, timeout: float) -> 
     raise RecoveryError("new application health receipt timed out")
 
 
+def _start_recovered_application(install_dir: Path):
+    executable = main_executable(install_dir)
+    if not executable.is_file():
+        raise RecoveryError("recovered application executable is missing")
+    options = {"close_fds": True, "cwd": str(install_dir.parent)}
+    if os.name == "nt":
+        options["creationflags"] = 0x00000008
+    else:
+        options["start_new_session"] = True
+    return subprocess.Popen([str(executable)], **options)
+
+
+def _attempt_recovered_application_restart(install_dir: Path) -> tuple[str, str]:
+    """回滚事实与应用重启事实分开；重启失败不能否定已经完成的目录恢复。"""
+    try:
+        _start_recovered_application(install_dir)
+    except Exception as exc:
+        log.exception("Recovered application could not be restarted")
+        return "failed", str(exc)
+    return "started", ""
+
+
 def _verify_inputs(request: UpdateLaunchRequest) -> dict:
     from satellite_debug_tool.updater.payload import read_manifest
     if sha256_file(request.volumes[0]) != request.package_sha256:
@@ -116,14 +141,15 @@ def _verify_inputs(request: UpdateLaunchRequest) -> dict:
         raise RecoveryError("target file manifest changed after verification")
     manifest = read_manifest(request.tree_manifest)
     identity = manifest["identity"]
-    if (identity["edition"] != "ops" or identity["platform"] != "windows"
+    platform = installation_platform(request.install_dir)
+    if (identity["edition"] != "ops" or identity["platform"] != platform
             or str(identity["version"]).lstrip("v") != request.target_version.lstrip("v")):
         raise RecoveryError("target tree identity differs from the installation request")
-    installed = json.loads((request.install_dir / "_internal/satellite_debug_tool/build_identity.json").read_text(encoding="utf-8"))
+    installed = installed_identity(request.install_dir)
     for field in ("app_id", "edition", "architecture"):
         if installed.get(field) != identity[field]:
             raise RecoveryError(f"installed {field} differs from the trusted target")
-    if {"win": "windows"}.get(installed.get("platform"), installed.get("platform")) != identity["platform"]:
+    if {"win": "windows", "mac": "macos"}.get(installed.get("platform"), installed.get("platform")) != identity["platform"]:
         raise RecoveryError("installed platform differs from the trusted target")
     return manifest
 
@@ -157,12 +183,18 @@ def execute_update(request: UpdateLaunchRequest, *, wait_timeout: float = 30.0,
             log.info("%s %.3f", stage, value)
 
         applier = Applier(on_progress=progress)
-        contract = PayloadContract(WINDOWS_EXECUTABLE, "updater.exe",
-                                   edition="ops", target_version=request.target_version)
+        platform = installation_platform(request.install_dir)
+        contract = PayloadContract(
+            main_executable(request.install_dir).name,
+            "updater" if platform == "macos" else "updater.exe",
+            edition="ops", target_version=request.target_version, platform=platform)
         phase = "preparing"
         if request.prepared_payload is None:
-            extracted = applier.extract_to(request.volumes[0], request.work_dir / "extracted",
-                max_expanded_bytes=sum(int(item["size"]) for item in manifest["files"]))
+            extractor = applier.extract_zip_to if platform == "macos" else applier.extract_to
+            extracted = extractor(request.volumes[0], request.work_dir / "extracted",
+                                  max_expanded_bytes=sum(int(item["size"]) if item["kind"] == "file"
+                                                         else len(item["target"].encode("utf-8"))
+                                                         for item in manifest["files"]))
             payload = applier.resolve_payload_root(extracted, contract)
         else:
             payload = request.prepared_payload
@@ -178,6 +210,8 @@ def execute_update(request: UpdateLaunchRequest, *, wait_timeout: float = 30.0,
         journal.save("recovery_ready")
         phase = "swapping"
         result = applier.install_prepared(journal)
+        if platform == "macos":
+            validate_macos_bundle(result.install_dir, version=request.target_version)
         phase = "waiting_for_health"
         context = StartupHealthContext(request.transaction_dir, request.transaction_id,
             request.target_version, secrets.token_hex(32), request.settings_directory,
@@ -227,9 +261,17 @@ def execute_update(request: UpdateLaunchRequest, *, wait_timeout: float = 30.0,
                 recovery = "recovery_required"
                 log.exception("Update recovery requires the persistent entry")
                 exc = RecoveryError(f"{exc}; recovery: {recovery_error}")
+        application_restart = "not_required"
+        application_restart_detail = ""
+        if recovery == "rolled_back":
+            application_restart, application_restart_detail = _attempt_recovered_application_restart(
+                request.install_dir
+            )
         write_update_status(request.status_path, "failed", stage=phase, detail=str(exc),
                             recovery=recovery, transaction_id=request.transaction_id,
-                            journal=str(journal.path) if journal is not None else "")
+                            journal=str(journal.path) if journal is not None else "",
+                            application_restart=application_restart,
+                            application_restart_detail=application_restart_detail)
         _show_windows_failure(phase, str(exc), request.log_path)
         return 3
     finally:
@@ -245,8 +287,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--wait-timeout", type=float, default=30.0)
     parser.add_argument("--health-timeout", type=float, default=30.0)
     args = parser.parse_args(argv)
-    if sys.platform != "win32":
-        raise SystemExit("automatic application installation currently supports Windows ops")
+    try:
+        host_platform()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if args.recover:
         args.recover = args.recover.resolve()
         # 登录恢复和手动恢复都先释放继承的安装目录占用，再允许 rename。
@@ -255,9 +299,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             result = recover_installation(args.recover)
             journal = InstallJournal.load(args.recover)
+            application_restart = "not_required"
+            application_restart_detail = ""
+            if result == "rolled_back":
+                application_restart, application_restart_detail = _attempt_recovered_application_restart(
+                    journal.install_dir
+                )
             write_update_status(args.recover.parent / "update-status.json", result,
                                 application_phase=journal.data.get("application_phase", "closed"),
-                                transaction_id=journal.data["transaction_id"])
+                                transaction_id=journal.data["transaction_id"],
+                                application_restart=application_restart,
+                                application_restart_detail=application_restart_detail)
             return 0
         except Exception as exc:
             log.exception("Recovery failed")

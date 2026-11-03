@@ -171,6 +171,17 @@ def prepare_update_launch_request(
     install = Path(install_dir).resolve()
     if not install.is_dir():
         raise ValueError(f"install directory is missing: {install}")
+    from satellite_debug_tool.updater.install_platform import installation_platform
+    platform = installation_platform(install)
+    if platform == "macos":
+        from satellite_debug_tool.updater.install_platform import validate_macos_bundle
+        validate_macos_bundle(install)
+    permission_probe = install.parent / (".satellite-update-permission-" + uuid4().hex)
+    try:
+        permission_probe.mkdir()
+        permission_probe.rmdir()
+    except OSError as exc:
+        raise ValueError(f"application directory is not writable for automatic update: {install.parent}") from exc
 
     transaction_id = uuid4().hex
     root = Path(transaction_dir).resolve() / transaction_id
@@ -185,10 +196,29 @@ def prepare_update_launch_request(
         _copy_file(executable, copied_executable, cancel_event)
         if sha256_file(copied_executable, cancel_event) != sha256_file(executable, cancel_event):
             raise ValueError("persistent updater copy verification failed")
+        if platform == "macos":
+            subprocess.run(["codesign", "--verify", "--strict", str(copied_executable)],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         frozen_manifest = root / "target-tree.json"
         _copy_file(manifest, frozen_manifest, cancel_event)
         if sha256_file(frozen_manifest, cancel_event) != tree_manifest_sha256:
             raise ValueError("persistent target manifest verification failed")
+        frozen_payload = None if prepared_payload is None else Path(prepared_payload).resolve()
+        if platform == "macos" and frozen_payload is None:
+            from satellite_debug_tool.updater.applier import Applier, PayloadContract
+            from satellite_debug_tool.updater.install_platform import main_executable
+            from satellite_debug_tool.updater.payload import read_manifest
+            manifest_data = read_manifest(frozen_manifest)
+            applier = Applier()
+            extracted = applier.extract_zip_to(normalized_volumes[0], root / "verified-payload",
+                max_expanded_bytes=sum(int(item["size"]) if item["kind"] == "file"
+                                       else len(item["target"].encode("utf-8"))
+                                       for item in manifest_data["files"]))
+            contract = PayloadContract(main_executable(install).name, "updater", edition="ops",
+                                       target_version=str(target_version), platform="macos")
+            frozen_payload = applier.resolve_payload_root(extracted, contract)
+            from satellite_debug_tool.updater.payload import verify_tree
+            verify_tree(frozen_payload, manifest_data, cancel_event)
         request = UpdateLaunchRequest(
             target_version=str(target_version),
             main_pid=os.getpid() if main_pid is None else int(main_pid),
@@ -204,7 +234,7 @@ def prepare_update_launch_request(
             package_sha256=package_sha256,
             tree_manifest=frozen_manifest,
             tree_manifest_sha256=tree_manifest_sha256,
-            prepared_payload=None if prepared_payload is None else Path(prepared_payload).resolve(),
+            prepared_payload=frozen_payload,
             settings_directory=(Path.home() / ".satellite_debug_tool" if settings_directory is None
                                 else Path(settings_directory).resolve()),
             edition=Edition(edition),

@@ -18,7 +18,7 @@ class SessionOperationClass(str, Enum):
 class SessionRecorderKind(str, Enum):
     """Recorder ownership classes with explicit Production-freeze semantics."""
 
-    CUSTOMER_FULL_CAPTURE = "customer_full_capture"
+    CUSTOMER_RECORDING = "customer_recording"
     ENGINEERING_PASSIVE = "engineering_passive"
     PRODUCTION_EVIDENCE = "production_evidence"
 

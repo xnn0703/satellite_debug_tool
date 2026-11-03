@@ -1,6 +1,6 @@
 # 卫通终端管理工具发行 SOP
 
-适用 M52～M55 发行链路。当前发行版本为 v1.9.1；本文件描述操作流程，v1.9.0 逐包公开状态及验收结果见 [发行验证记录](M53_release_validation.json)，v1.9.1 见 [M55 发版记录](M55_v1_9_1_release_dev_log.md)。源码与 tag 使用 GitHub `github` 远端，Windows 使用 GitHub Actions，Mac 使用本地 Python 3.11，完整包和 ops 可信更新由阿里云 ECS HTTPS 服务分发。
+适用 M52～M61 发行链路。当前发行版本为 v1.9.2；本文件描述操作流程，v1.9.0 逐包公开状态及验收结果见 [发行验证记录](M53_release_validation.json)，v1.9.1 见 [M55 发版记录](M55_v1_9_1_release_dev_log.md)。源码与 tag 使用 GitHub `github` 远端，Windows 使用 GitHub Actions，Mac 使用本地 Python 3.11，完整包和 ops 可信更新由阿里云 ECS HTTPS 服务分发。
 
 ## 版本与迁移合同
 
@@ -8,7 +8,7 @@
 - 文件名称统一由 `satellite_debug_tool/package_names.py` 定义。Windows 主程序为 `SatelliteTerminalManager.exe`，两版目录为 `SatelliteTerminalManager`、`SatelliteTerminalManagerOps`；Mac 使用对应同名 app。客户完整包归档使用 `satellite_terminal_manager-{platform}-{arch}-v{version}.{extension}`，运维全量包增加 `-ops-` 标识；内部 edition 继续用于构建身份校验。
 - 客户完整包名为 `satellite_terminal_manager-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`，运维全量版为 `satellite_terminal_manager-ops-<windows|macos>-<x86_64|arm64>-v<version>.<7z|zip>`。历史 <=1.8.1 包保持原样，首次人工安装完整 v1.9.0 后进入新站合同。
 - 内部 Python 包、app/repo 信任身份、bundle identifier、配置目录和设备固件认证域保持原合同。
-- user 使用人工完整包交付；ops 使用 TUF 签名更新。Windows 支持自动安装，Mac 校验下载后由人员退出旧程序并替换 app。首个正式可信版本没有上一基线，只发布完整包。
+- user 使用人工完整包交付；ops 使用 TUF 签名更新。Windows 与 M57 之后的 Mac ops 支持“安装并重启”的事务自动安装；v1.9.0/v1.9.1 Mac 客户端仍需人工安装一次具备 M57 更新器的桥接版本。首个正式可信版本没有上一基线，只发布完整包。
 
 ## 准备与提交
 
@@ -21,7 +21,7 @@ git status --short
 git diff --check
 ```
 
-确认单一版本源、发布说明及干净 commit 后创建并推送对应 tag，例如本轮 `v1.9.1`。已公开的版本和标签保持不可变，修复使用新版本。
+确认单一版本源、发布说明及干净 commit 后创建并推送对应 tag，例如本轮 `v1.9.2`。已公开的版本和标签保持不可变，修复使用新版本。
 
 ## Windows 候选
 
@@ -35,7 +35,7 @@ git diff --check
 
 ```bash
 .venv/bin/python scripts/release_macos.py \
-  --source-commit <完整源码SHA> --version 1.9.1 --edition both \
+  --source-commit <完整源码SHA> --version 1.9.2 --edition both \
   --release-id <本次唯一发行ID> --config <部署配置JSON> \
   --known-hosts <known_hosts文件> --identity-file <上传身份私钥>
 ```
@@ -50,7 +50,7 @@ spec 声明 macOS `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统
 
 ops 晋升 stable 时，TUF target 的 app/repo/edition/平台/架构/版本/源 SHA 必须与候选一致。先提交不可变 target 和版本元数据，最后提交 timestamp，并验证公开 HTTPS 元数据的签名、有效期与包摘要。首轮没有上一基线，不生成或宣称差量更新。
 
-user 完整包公开到服务器下载目录，保留候选身份与摘要，不加入 ops 更新渠道。四份完整包均提供 `/downloads/v1.9.1/<完整归档文件名>` 直链，附 SHA256SUMS 和验证记录；交付采用服务器链接，不把包另存至本机 Downloads。提供直链前实际检查 HTTPS 下载、归档 CRC、包内身份和 SHA-256。
+user 完整包公开到服务器下载目录，保留候选身份与摘要，不加入 ops 更新渠道。四份完整包均提供 `/downloads/v1.9.2/<完整归档文件名>` 直链，附 SHA256SUMS 和验证记录；交付采用服务器链接，不把包另存至本机 Downloads。提供直链前实际检查 HTTPS 下载、归档 CRC、包内身份和 SHA-256。
 
 ## 交付证据
 

@@ -433,9 +433,9 @@ def _publish_frozen_candidate(
                "config_schema": {"min": config_schema_min, "max": config_schema_max},
                "package_format": "7z" if platform == "windows" else "zip",
                "layout_version": "windows-onedir-v1" if platform == "windows" else "macos-app-v1",
-               "installation_mode": "automatic" if platform == "windows" else "manual",
+               "installation_mode": "automatic",
                "package": f"{prefix}/{packages[0].name}", "notes": notes, "deltas": []}
-    if platform == "windows":
+    if platform in {"windows", "macos"}:
         tree = read_manifest(artifacts["payload-manifest.json"])
         if tree["identity"] != identity:
             raise ValueError("candidate tree identity differs from receipt")

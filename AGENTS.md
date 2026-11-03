@@ -114,7 +114,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `i18n/` — `TranslationManager` + TS/QM 翻译资源（`translations/satellite_debug_tool_zh_CN.{ts,qm}`）
 - `io/` — `DataRecorder`、流式 `DataImporter` 与唯一 `sdb_schema.py`；大型 SDB 在原文件旁生成可重建的稀疏 `.sdbi` 索引
 - `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）、`build_encrypted_firmware_package.py`（客户 OTA 加密固件打包工具）
-- `updater/` — **M52** ops 应用更新：TUF 仓库验证元数据，Downloader 校验摘要及续传范围，payload/preparation 提供上一正式基线的文件级增量与完整包回退。UpdateDialog 下载后等待安装意图，MainWindow 完成资源收尾后启动安装目录外的持久 updater。Applier 只在同盘 staging 校验后 rename；recovery 独占 journal/安装锁/Windows 登录恢复，health 验证新进程初始化回执。user 构建裁剪这条应用更新路径，设备固件 OTA 保留。
+- `updater/` — **M52/M56/M57** ops 应用更新：TUF 仓库验证元数据，Downloader 校验摘要及续传范围，payload/preparation 提供完整包和 Windows 上一正式基线文件级增量。UpdateDialog 下载后等待安装意图，MainWindow 完成资源收尾后启动安装目录外的持久 updater。Windows onedir 与 macOS `.app` 共用同一请求、journal、同盘 staging/rename、健康回执和回滚事实；macOS 额外验证唯一 app、受约束相对链接、bundle 身份及 codesign，并用用户 LaunchAgent 保留登录恢复入口。user 构建裁剪这条应用更新路径，设备固件 OTA 保留。M56 正式晋升由 ECS 本机完整 SHA-256 回执与发布机有界 HTTPS Range 共同准入，不再从公网完整回读发布包。
 - `platform/macos/{en,zh_CN}.lproj/InfoPlist.strings` — macOS `CFBundleLocalizations` 用的本地化 InfoPlist 字符串
 
 ### 关键约定
@@ -195,7 +195,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **开发验证方式（2026-10-23 用户确认）**：每轮修复默认验证源码并提供运行命令；用户完成功能验证、明确要求打包后，再执行本地打包或主动触发发行构建。
 
-- **M52 分发策略（2026-11-02 用户确认）**：Windows 保留 GitHub Actions 构建，Mac 本地发行命令构建，两端验证后自动上传阿里云 ECS 候选。user 通过公开完整包直链人工交付，不进入更新渠道；ops 使用可信在线更新，首轮 Windows 自动安装、Mac 校验下载后人工安装。首轮使用 ECS 公网 IP 的 HTTPS 入口，域名/OSS/CDN/内网 Runner 后续按需部署；上传候选与签名晋升分开。源码最低 Python 3.10（TUF 7），打包工具链固定 Python 3.11。计划、验收、实现与现场记录见 `doc/M52_*`。
+- **M52/M57 分发策略**：Windows 保留 GitHub Actions 构建，Mac 本地发行命令构建，两端验证后自动上传阿里云 ECS 候选。user 通过公开完整包直链人工交付，不进入更新渠道；ops 使用可信在线更新。M52 首轮 Mac 只校验下载并人工安装；M57 起后续 Mac ops 候选携带树清单并进入事务自动安装，v1.9.0/v1.9.1 仍需人工安装一次桥接版本。首轮使用 ECS 公网 IP 的 HTTPS 入口，域名/OSS/CDN/内网 Runner 后续按需部署；上传候选与签名晋升分开。源码最低 Python 3.10（TUF 7），打包工具链固定 Python 3.11。计划、验收、实现与现场记录见 `doc/M52_*`、`doc/M57_*`。
 
 - **M39 应用图标**：`ui/assets/icons/app_icon_master.png` 是已确认图稿，`scripts/generate_application_icons.py` 从母版生成 Windows 多尺寸 ICO、macOS ICNS 和实际尺寸预览。主程序/updater 的 Windows spec、macOS BUNDLE、QApplication 与顶栏共用该资源；运行时入口为 `ui/application_icon.py`。
 
@@ -204,11 +204,11 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **CI 放行证据**：完整 pytest 与翻译检查分别作为独立 step 接收退出码；源码失败或原生崩溃立即阻止构建。Mac 与 Windows 测试、冻结 smoke、归档身份/CRC/SHA-256 和服务端公开下载分别记录，某一平台成功只证明该平台对应阶段。
 - **Windows 包合同**：ops `.7z` 归档根包含 `SatelliteTerminalManager.exe`、`updater.exe` 与 `_internal/`；user 完整包保留主程序及运行依赖、裁剪应用 updater 和在线源配置。上传前由 `scripts/verify_update_archive.py` 验证唯一完整载荷。旧版本 <=1.8.1 首次人工取得 v1.9.0 完整包迁入新站；历史包保持原样。
 - **CI**：`.github/workflows/build.yml` 用 Windows Runner 构建 user/ops。tag/dispatch 精确解析并 checkout 标签 SHA，测试与冻结 smoke 后生成不可变候选；两版成功后通过受保护的 `release-candidate` environment 上传 ECS 暂存区。普通分支/PR 只产出 artifact。工作流不创建 GitHub Release，不持有正式签名密钥。
-- **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、冻结 smoke 并上传候选；ops 客户端首轮支持可信检查和校验下载，安装由人员退出旧程序后替换应用。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
+- **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、树清单、冻结 smoke 并上传候选；M57 后 ops 支持事务自动安装，user 保持人工完整包。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
 - **v1.9.0 发行证据**：四包均来自不可变标签 SHA `a867cfed9da78186db33d67b4a389279e2d8dfa7`，Mac 双版及 Windows Actions 双版完成构建/冻结/归档验证；四份完整包已公开至阿里云，ops 两平台通过独立新缓存 TUF 验证。逐包 SHA、平台签名边界、真实硬件及 Windows 实机升级边界见 `doc/M53_release_validation.json`。后续文档和发布CLI保活修复保持这四包字节与标签不变。
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.0`，发布状态以 M53 验证记录为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.1`，发布状态以 M55 验证记录为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；Mac 本地使用 Python 3.11 调用 `scripts/release_macos.py` 构建并上传候选；四包校验后 ops 签名晋升 stable，user 公开完整包
-- **签名晋升连接**：`scripts/promote_release.py` 的唯一 SSH Transport 在认证后启用30秒协议保活，跨完整 HTTPS 回读保持 SFTP 控制连接；包摘要通过后才原子提交 timestamp。恢复同一 bundle 的遗留锁前，先确认旧发布进程已经停止并核对远端版本围栏。
+- **签名晋升连接**：`scripts/promote_release.py` 的唯一 SSH Transport 仅通过纯 SFTP 上传公开字节、投递 ECS 校验请求并读取 root 回执；回执绑定 bundle/request/文件数/总字节，实际 HTTPS 只做每文件首/中/尾最多 4 KiB Range。完整摘要和 Range 均通过后才原子提交 timestamp。恢复同一 bundle 的遗留锁前，先确认旧发布进程已经停止并核对远端版本围栏。
 - **`release.config.json`** 配 `app_id/repo_id/channel`、HTTPS metadata/target 入口和内嵌 TUF 公钥 root；未配置时明确等待部署，不回退 GitHub。私钥和上传凭据保存在仓库外。
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
 
@@ -243,6 +243,8 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M50_automation_full_capture_*.md` — 自动化 support_full 协商、实际分析帧准入与恢复后收尾。 已知OFF/ON恢复使用新身份双游标、新Service、新request-ID ACK和时序相容分析帧；不要求uptime倒退。正式批次由Fleet恢复/结束原Production冻结授权，controller只借用，不创建或释放父owner。
 - `doc/M51_automation_presets_workflow_reports_*.md` — 六项型号供电预置、默认录制目录、开始/下一批次流程和报告质量边界。
 - `doc/M52_*` — 双平台候选构建、ECS 上传、TUF 可信更新与签名晋升。
+- `doc/M56_server_release_verification_*` — ECS 本机完整摘要、root 回执、公网有界 Range 与服务器现场证据。
+- `doc/M57_macos_automatic_update_*` — macOS ops 自动退出、app 事务替换、健康确认、登录恢复与失败回滚。
 - `doc/M53_manager_naming_release_*.md`、`doc/M53_release_validation.json` — Manager 命名与 v1.9.0 四包发行计划、验收、逐包摘要和实际发布状态。
 - `doc/M45_shell_terminal_throughput_*.md` — Shell 有界消费与按帧投影计划、验收与开发记录；含三轮评审合同修订与两次 P0 投影升级的实测依据（头删 O(文档) 归因、maximumBlockCount 接管、16 KiB 帧预算）。
 - `doc/M44_snr_time_axis_recovery_*.md` — 客户 SNR/温度历史的同连接采集代际恢复、u32/乱序准入、事务授权与回放断点证据。

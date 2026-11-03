@@ -58,7 +58,8 @@ def prepare_download(latest: LatestRelease, directory: Path, *, install_dir: Pat
         base_ready = False
         base = None
         try:
-            installed = json.loads((Path(install_dir) / "_internal/satellite_debug_tool/build_identity.json").read_text(encoding="utf-8"))
+            from satellite_debug_tool.updater.install_platform import installed_identity
+            installed = installed_identity(Path(install_dir))
             if not isinstance(installed, dict):
                 raise PayloadError("installed build identity requires an object")
             if installed.get("build_id") == delta.base_build_id:

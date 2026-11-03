@@ -340,8 +340,9 @@ class CaptureProfileController(QObject):
         *,
         command_sender: SessionCommandSender | None = None,
         operation_gateway: SessionOperationGateway | None = None,
-        recorder_kind: SessionRecorderKind | None = SessionRecorderKind.CUSTOMER_FULL_CAPTURE,
+        recorder_kind: SessionRecorderKind | None = None,
         retain_full_capture_operation: bool = True,
+        operation_owner: object | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
@@ -358,7 +359,7 @@ class CaptureProfileController(QObject):
         self._pending_epoch: int | None = None
         self._borrowed_operation_owner: object | None = None
         self._resync_required = False
-        self._lease_token = object()
+        self._lease_token = operation_owner if operation_owner is not None else object()
         self._recorder_lease: SessionRecorderLease | None = None
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)
@@ -477,7 +478,9 @@ class CaptureProfileController(QObject):
         if self._pending_request_id is not None or self.recording_lease_active:
             self._finish_unconfirmed()
             return
-        self._clear_pending()
+        # support_full ACK 后可按合同保留 mutation owner；recorder 生命周期已经
+        # 独立，故无 pending/recorder 也必须显式释放该 owner。
+        self._clear_pending(release_operation=True, release_recorder=True)
 
     @Slot(object)
     def feed_response(self, response: ServiceControlResponse) -> None:

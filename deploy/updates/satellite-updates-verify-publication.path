@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Satellite Terminal Manager publication verification requests
+
+[Path]
+PathChanged=/srv/satellite-updates/receipts/verification/requests
+Unit=satellite-updates-verify-publication.service
+
+[Install]
+WantedBy=multi-user.target

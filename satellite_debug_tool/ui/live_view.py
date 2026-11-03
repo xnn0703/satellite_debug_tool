@@ -42,6 +42,7 @@ from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.data import DataStore, EventRecord, StateStore
 from satellite_debug_tool.core.link_trace import trace_message
 from satellite_debug_tool.core.product import (
+    CustomerCaptureStage,
     CustomerRecordingState,
     ProductServiceStore,
 )
@@ -130,6 +131,7 @@ class LiveView(QWidget):
     profile_ready = Signal(str)
     recording_state_changed = Signal(bool, str)
     customer_recording_state_changed = Signal(str, str)
+    customer_capture_stage_changed = Signal(str)
     capture_profile_resync_changed = Signal(bool)
     orbit_capability_changed = Signal(bool)
 
@@ -237,9 +239,15 @@ class LiveView(QWidget):
         self._recorder = None
         self._engineering_recorder_lease: SessionRecorderLease | None = None
         self._engineering_recorder_owner = object()
+        self._customer_recorder_lease: SessionRecorderLease | None = None
+        self._customer_recorder_owner = object()
         self._is_recording = False
         self._customer_recording = False
         self._customer_recording_state = CustomerRecordingState.IDLE
+        self._customer_capture_stage = CustomerCaptureStage.IDLE
+        self._customer_recording_started_ns = 0
+        self._customer_full_started_ns = 0
+        self._customer_full_intervals: list[tuple[int, int]] = []
         self._customer_recording_path: Optional[Path] = None
         self._customer_capture_confirmed = False
         self._capture_restore_debug = False
@@ -247,6 +255,7 @@ class LiveView(QWidget):
             self._session_core,
             parent=self,
             operation_gateway=self.new_operation_gateway(),
+            operation_owner=self._customer_recorder_owner,
         )
         self._capture_profile_controller.finished.connect(
             self._on_capture_profile_finished
@@ -587,27 +596,19 @@ class LiveView(QWidget):
         if state == CustomerRecordingState.ACTIVE and self._is_recording:
             self._stop_recording(restore_customer_profile=self._customer_recording)
             return
-        if state == CustomerRecordingState.ARMED:
-            self._clear_customer_recording_intent()
-            self.status_message.emit(tr("Pending recording request cancelled"), 2500)
-            return
-        if state == CustomerRecordingState.PREPARING:
-            self._capture_profile_controller.reset()
-            self._set_customer_recording_state(CustomerRecordingState.RESTORING)
-            self._request_capture_profile(False)
-            return
         if state == CustomerRecordingState.RESTORING:
             return
 
         filepath = self._choose_recording_path(customer=True)
         if filepath is None:
             return
-        self._customer_recording_path = filepath
-        self._set_customer_recording_state(CustomerRecordingState.ARMED)
-        self.status_message.emit(
-            tr("Recording requested; waiting for device..."),
-            0,
-        )
+        if not self._start_recording(
+            format_version=SDB_VERSION_V3,
+            customer=True,
+            filepath=filepath,
+        ):
+            return
+        self._set_customer_capture_stage(CustomerCaptureStage.WAITING_DEVICE)
         self._try_start_armed_customer_recording()
 
     def show_gnss_details(self) -> None:
@@ -1374,6 +1375,7 @@ class LiveView(QWidget):
             and self._customer_recording
         ):
             self._customer_capture_confirmed = False
+            self._set_customer_capture_stage(CustomerCaptureStage.WAITING_DEVICE)
             self._recorder.write_metadata_event(
                 {"event": "device_offline", "phase": phase.value}
             )
@@ -2076,16 +2078,22 @@ class LiveView(QWidget):
         if self._is_recording and self._customer_recording:
             if not self._stop_recording(restore_customer_profile=True):
                 return False
-        if not self._capture_profile_controller.recording_lease_active:
-            if self._customer_recording_state is CustomerRecordingState.ARMED:
-                self._clear_customer_recording_intent()
-            return self._customer_recording_state is CustomerRecordingState.IDLE
-        self._capture_profile_controller.reset()
-        self._customer_capture_confirmed = False
-        self._capture_restore_debug = False
-        self._customer_recording_path = None
-        self._set_customer_recording_state(CustomerRecordingState.IDLE)
-        return True
+        if (
+            self._capture_profile_controller.pending_request_id is not None
+            or self._customer_recording_state is CustomerRecordingState.RESTORING
+        ):
+            self._capture_profile_controller.reset()
+            self._customer_capture_confirmed = False
+            self._capture_restore_debug = False
+            self._customer_recording_path = None
+            self._set_customer_capture_stage(CustomerCaptureStage.IDLE)
+            self._set_customer_recording_state(CustomerRecordingState.IDLE)
+        else:
+            self._capture_profile_controller.reset()
+        return (
+            self._customer_recording_state is CustomerRecordingState.IDLE
+            and self._customer_recorder_lease is None
+        )
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if not self.shutdown():
@@ -2188,18 +2196,45 @@ class LiveView(QWidget):
         )
         self.customer_recording_state_changed.emit(state.value, path)
 
+    def _set_customer_capture_stage(self, stage: CustomerCaptureStage) -> None:
+        if self._customer_capture_stage is stage:
+            return
+        now_ns = time.time_ns()
+        if (
+            self._customer_capture_stage is CustomerCaptureStage.FULL
+            and self._customer_full_started_ns
+        ):
+            self._customer_full_intervals.append((self._customer_full_started_ns, now_ns))
+            self._customer_full_started_ns = 0
+        if stage is CustomerCaptureStage.FULL:
+            self._customer_full_started_ns = now_ns
+        self._customer_capture_stage = stage
+        self.customer_capture_stage_changed.emit(stage.value)
+        if self._recorder is not None and self._customer_recording:
+            self._recorder.write_metadata_event(
+                {
+                    "type": "customer_capture_stage/v1",
+                    "stage": stage.value,
+                    "device_online": self.is_device_online(),
+                }
+            )
+
     def _clear_customer_recording_intent(self) -> None:
         self._capture_profile_controller.reset()
         self._capture_restore_debug = False
         self._customer_capture_confirmed = False
         self._customer_recording_path = None
+        self._set_customer_capture_stage(CustomerCaptureStage.IDLE)
         self._set_customer_recording_state(CustomerRecordingState.IDLE)
 
     def _try_start_armed_customer_recording(self) -> None:
         state = self._customer_recording_state
-        if state not in {
-            CustomerRecordingState.ARMED,
-            CustomerRecordingState.ACTIVE,
+        if state is not CustomerRecordingState.ACTIVE or not self._is_recording:
+            return
+        if self._customer_capture_stage in {
+            CustomerCaptureStage.NEGOTIATING_FULL,
+            CustomerCaptureStage.FULL,
+            CustomerCaptureStage.PASSIVE,
         }:
             return
         if not self.is_device_online() or self._capture_pending_id is not None:
@@ -2208,21 +2243,17 @@ class LiveView(QWidget):
         if capabilities is None:
             return
         if not (capabilities.capture_profile_mask & 0x02):
-            if state == CustomerRecordingState.ARMED:
-                self.status_message.emit(
-                    tr(
-                        "Connected device firmware does not support full support recording"
-                    ),
-                    4000,
-                )
-                self._clear_customer_recording_intent()
+            self._set_customer_capture_stage(CustomerCaptureStage.PASSIVE)
+            self.status_message.emit(
+                tr("Recording continues with the current device stream; full support capture is unavailable"),
+                4000,
+            )
             return
         if state == CustomerRecordingState.ACTIVE and self._customer_capture_confirmed:
             return
 
-        if state == CustomerRecordingState.ARMED:
-            self._capture_restore_debug = self._debug_controller.enabled
-            self._set_customer_recording_state(CustomerRecordingState.PREPARING)
+        self._capture_restore_debug = self._debug_controller.enabled
+        self._set_customer_capture_stage(CustomerCaptureStage.NEGOTIATING_FULL)
         self._request_capture_profile(True)
 
     def _try_restore_customer_profile(self) -> None:
@@ -2268,21 +2299,13 @@ class LiveView(QWidget):
                     else tr("Customer stream restore was not confirmed"),
                     4500,
                 )
-                if (
-                    target
-                    and self._customer_recording_state
-                    == CustomerRecordingState.PREPARING
-                ):
-                    self._set_customer_recording_state(
-                        CustomerRecordingState.RESTORING
-                    )
-                    if self.is_device_online():
-                        self._request_capture_profile(False)
-                elif target:
+                if target:
                     self._customer_capture_confirmed = False
+                    self._set_customer_capture_stage(CustomerCaptureStage.PASSIVE)
                 else:
                     self._capture_restore_debug = False
                     self._customer_recording_path = None
+                    self._set_customer_capture_stage(CustomerCaptureStage.IDLE)
                     self._set_customer_recording_state(CustomerRecordingState.IDLE)
                 return
             else:
@@ -2291,34 +2314,20 @@ class LiveView(QWidget):
                     tr("Device rejected the capture profile ({code})", code=code),
                     4500,
                 )
-            if (
-                target
-                and self._customer_recording_state
-                == CustomerRecordingState.PREPARING
-            ):
-                self._clear_customer_recording_intent()
-            elif target:
+            if target:
                 self._customer_capture_confirmed = False
+                self._set_customer_capture_stage(CustomerCaptureStage.PASSIVE)
             else:
                 self._capture_restore_debug = False
                 self._customer_recording_path = None
+                self._set_customer_capture_stage(CustomerCaptureStage.IDLE)
                 self._set_customer_recording_state(CustomerRecordingState.IDLE)
             return
 
         if target:
             self._customer_capture_confirmed = True
-            if self._customer_recording_state == CustomerRecordingState.PREPARING:
-                path = self._customer_recording_path
-                if path is None or not self._start_recording(
-                    format_version=SDB_VERSION_V3,
-                    customer=True,
-                    filepath=path,
-                ):
-                    self._set_customer_recording_state(
-                        CustomerRecordingState.RESTORING
-                    )
-                    self._request_capture_profile(False)
-            elif self._customer_recording_state == CustomerRecordingState.ACTIVE:
+            self._set_customer_capture_stage(CustomerCaptureStage.FULL)
+            if self._customer_recording_state == CustomerRecordingState.ACTIVE:
                 self.status_message.emit(
                     tr("Full support recording resumed"),
                     2500,
@@ -2327,6 +2336,7 @@ class LiveView(QWidget):
             self.status_message.emit(tr("Customer live stream restored"), 2500)
             self._customer_capture_confirmed = False
             self._customer_recording_path = None
+            self._set_customer_capture_stage(CustomerCaptureStage.IDLE)
             self._set_customer_recording_state(CustomerRecordingState.IDLE)
             self._restore_debug_after_capture()
 
@@ -2366,7 +2376,8 @@ class LiveView(QWidget):
     def _customer_recording_metadata(self) -> dict:
         snapshot = self._product_store.snapshot()
         metadata = {
-            "capture_profile": "support_full",
+            "capture_profile": "current_stream_pending_negotiation",
+            "recording_started_before_capture_negotiation": True,
             "presentation": "customer",
             "hardware_type": self._profile_store.current_hw_type(),
             "identity": {
@@ -2459,6 +2470,18 @@ class LiveView(QWidget):
             return False
 
         engineering_lease: SessionRecorderLease | None = None
+        customer_lease: SessionRecorderLease | None = None
+        if customer and self._customer_binding is not None:
+            gateway = self.new_operation_gateway()
+            if gateway is None:
+                return False
+            customer_lease = gateway.acquire_recorder(
+                self._customer_recorder_owner,
+                kind=SessionRecorderKind.CUSTOMER_RECORDING,
+            )
+            if customer_lease is None:
+                self.status_message.emit(tr("This device recorder is busy"), 3500)
+                return False
         if not customer and self._customer_binding is not None:
             gateway = self.new_operation_gateway()
             if gateway is None:
@@ -2485,6 +2508,8 @@ class LiveView(QWidget):
         except (OSError, RecordingPathError) as exc:
             if engineering_lease is not None:
                 engineering_lease.release()
+            if customer_lease is not None:
+                customer_lease.release()
             self.status_message.emit(
                 tr("Failed to reserve recording path: {detail}", detail=str(exc)),
                 3500,
@@ -2509,14 +2534,20 @@ class LiveView(QWidget):
             self._recorder = None
             if engineering_lease is not None:
                 engineering_lease.release()
+            if customer_lease is not None:
+                customer_lease.release()
             self.status_message.emit(tr("Failed to start recording"), 3000)
             return False
 
         self._engineering_recorder_lease = engineering_lease
+        self._customer_recorder_lease = customer_lease
         self._is_recording = True
         self._customer_recording = customer
         if customer:
             self._customer_recording_path = Path(actual_target)
+            self._customer_recording_started_ns = time.time_ns()
+            self._customer_full_started_ns = 0
+            self._customer_full_intervals = []
             self._set_customer_recording_state(CustomerRecordingState.ACTIVE)
         self._render_recording_state()
         self.status_message.emit(
@@ -2619,6 +2650,21 @@ class LiveView(QWidget):
     def _stop_recording(self, *, restore_customer_profile: bool) -> bool:
         recorder = self._recorder
         was_customer = self._customer_recording
+        if was_customer and recorder is not None:
+            now_ns = time.time_ns()
+            intervals = list(self._customer_full_intervals)
+            if self._customer_full_started_ns:
+                intervals.append((self._customer_full_started_ns, now_ns))
+                self._customer_full_started_ns = 0
+            recorder.set_summary_facts(
+                {
+                    "recording_started_ns": self._customer_recording_started_ns,
+                    "recording_stopped_ns": now_ns,
+                    "final_capture_stage": self._customer_capture_stage.value,
+                    "support_full_intervals_ns": [list(item) for item in intervals],
+                    "support_full_coverage_ns": sum(end - start for start, end in intervals),
+                }
+            )
         try:
             stopped = recorder.stop() if recorder is not None else True
             dropped = recorder.dropped_count if recorder is not None else 0
@@ -2653,14 +2699,26 @@ class LiveView(QWidget):
                 return False
             return True
 
+        full_capture_was_confirmed = self._customer_capture_confirmed
         self._customer_capture_confirmed = False
+        lease, self._customer_recorder_lease = self._customer_recorder_lease, None
+        if lease is not None and not lease.release():
+            self._customer_recorder_lease = lease
+            return False
         if restore_customer_profile:
+            self._set_customer_capture_stage(CustomerCaptureStage.RESTORING)
             self._set_customer_recording_state(CustomerRecordingState.RESTORING)
-            if self.is_device_online():
+            if self.is_device_online() and full_capture_was_confirmed:
                 self._request_capture_profile(False)
+            else:
+                self._capture_restore_debug = False
+                self._customer_recording_path = None
+                self._set_customer_capture_stage(CustomerCaptureStage.IDLE)
+                self._set_customer_recording_state(CustomerRecordingState.IDLE)
         else:
             self._capture_restore_debug = False
             self._customer_recording_path = None
+            self._set_customer_capture_stage(CustomerCaptureStage.IDLE)
             self._set_customer_recording_state(CustomerRecordingState.IDLE)
         return True
 

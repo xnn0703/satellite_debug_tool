@@ -2,7 +2,7 @@
 
 from .legacy_v2 import LegacyV2Projector
 from .identity import verified_device_uid, verified_identity_text
-from .recording_state import CustomerRecordingState
+from .recording_state import CustomerCaptureStage, CustomerRecordingState
 from .playback_projection import (
     CUSTOMER_PLAYBACK_HW_TYPE,
     CustomerPlaybackChannel,
@@ -59,6 +59,7 @@ __all__ = [
     "ControlMode",
     "CustomerProductPolicy",
     "CustomerRecordingState",
+    "CustomerCaptureStage",
     "CustomerServiceState",
     "CUSTOMER_PLAYBACK_HW_TYPE",
     "CustomerPlaybackChannel",

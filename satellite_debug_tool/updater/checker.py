@@ -179,11 +179,11 @@ class ReleaseChecker:
         length = max(len(minimum_os), len(host_tuple))
         if host_tuple + (0,) * (length - len(host_tuple)) < minimum_os + (0,) * (length - len(minimum_os)):
             raise ValueError("release requires a newer operating system")
-        automatic = self.platform == "windows"
-        expected_layout = "windows-onedir-v1" if automatic else "macos-app-v1"
+        automatic = True
+        expected_layout = "windows-onedir-v1" if self.platform == "windows" else "macos-app-v1"
         if self.platform not in ("windows", "macos") or catalog.get("layout_version") != expected_layout:
             raise ValueError("release layout differs from supported installer")
-        if catalog.get("package_format") != ("7z" if automatic else "zip"):
+        if catalog.get("package_format") != ("7z" if self.platform == "windows" else "zip"):
             raise ValueError("release archive format differs")
         mode = "automatic" if automatic else "manual"
         if catalog.get("installation_mode") != mode:
@@ -199,7 +199,7 @@ class ReleaseChecker:
         deltas: list[DeltaRelease] = []
         declared_deltas = catalog.get("deltas", [])
         if not isinstance(declared_deltas, list) or len(declared_deltas) > 1 or (declared_deltas and not automatic):
-            raise ValueError("release supports one previous Windows baseline delta")
+            raise ValueError("release supports one previous operations baseline delta")
         for item in declared_deltas:
             base = asset(item["base_manifest"])
             candidate = asset(item["package"])

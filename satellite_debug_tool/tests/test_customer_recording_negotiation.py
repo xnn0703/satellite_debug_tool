@@ -17,7 +17,7 @@ from satellite_debug_tool.core.external_power_monitor import (
     ExternalPowerSample,
 )
 from satellite_debug_tool.core.production.power_supply import PowerIdentity
-from satellite_debug_tool.core.product import CustomerRecordingState
+from satellite_debug_tool.core.product import CustomerCaptureStage, CustomerRecordingState
 from satellite_debug_tool.core.protocol import (
     CmdType,
     CommandResponse,
@@ -110,7 +110,7 @@ def test_product_subscription_starts_before_profile_handshake_ready(
     view._on_disconnected()
 
 
-def test_customer_recording_waits_for_exact_ack_and_restores_on_stop(
+def test_customer_recording_starts_before_exact_ack_and_restores_on_stop(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view, worker = _ready_view(settings)
@@ -123,13 +123,15 @@ def test_customer_recording_waits_for_exact_ack_and_restores_on_stop(
     view.toggle_customer_recording()
     request_id = view._capture_pending_id
     assert request_id is not None
-    assert view.customer_recording_state() == CustomerRecordingState.PREPARING
+    assert view.customer_recording_state() == CustomerRecordingState.ACTIVE
+    assert view._customer_capture_stage is CustomerCaptureStage.NEGOTIATING_FULL
     assert worker.sent[-1][11] == ServiceControlOp.SET_CAPTURE_PROFILE
     assert worker.sent[-1][12] == 1
-    assert not view.is_recording()
+    assert view.is_recording()
+    assert target.exists()
 
     view._on_capture_response(_response(request_id + 1))
-    assert not view.is_recording()
+    assert view.is_recording()
     assert view._capture_pending_id == request_id
 
     view._on_capture_response(_response(request_id))
@@ -146,8 +148,10 @@ def test_customer_recording_waits_for_exact_ack_and_restores_on_stop(
 
     sdb = DataImporter.open_sdb(target)
     assert sdb.version == 3
-    assert sdb.metadata["capture_profile"] == "support_full"
+    assert sdb.metadata["capture_profile"] == "current_stream_pending_negotiation"
     assert sdb.quality["complete"] is True
+    assert sdb.quality["session_facts"]["support_full_coverage_ns"] > 0
+    assert len(sdb.quality["session_facts"]["support_full_intervals_ns"]) == 1
 
 
 def test_customer_recording_persists_external_power_metadata(
@@ -222,7 +226,7 @@ def test_customer_recording_persists_external_power_metadata(
     assert action_events[0]["device_id"] == "9e6810a8-593b-4e61-9850-bb3a6e7f1761"
     assert action_events[0]["device_endpoint"] == "192.168.1.12:4004"
 
-def test_full_capture_timeout_requests_customer_profile_restore(
+def test_full_capture_timeout_keeps_passive_recording_active(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view, worker = _ready_view(settings)
@@ -236,11 +240,11 @@ def test_full_capture_timeout_requests_customer_profile_restore(
 
     view._on_capture_timeout()
 
-    assert not view.is_recording()
-    assert view._capture_pending_target is False
-    assert view.customer_recording_state() == CustomerRecordingState.RESTORING
-    assert worker.sent[-1][11] == ServiceControlOp.SET_CAPTURE_PROFILE
-    assert worker.sent[-1][12] == 0
+    assert view.is_recording()
+    assert view._capture_pending_target is None
+    assert view.customer_recording_state() == CustomerRecordingState.ACTIVE
+    assert view._customer_capture_stage is CustomerCaptureStage.PASSIVE
+    view.toggle_customer_recording()
 
 
 def test_customer_recording_restores_previous_debug_state(
@@ -280,7 +284,7 @@ def test_customer_recording_restores_previous_debug_state(
     assert view.is_debug_enabled()
 
 
-def test_customer_recording_can_be_armed_before_device_is_online(
+def test_customer_recording_creates_sdb_before_device_is_online(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view = LiveView(settings)
@@ -310,17 +314,26 @@ def test_customer_recording_can_be_armed_before_device_is_online(
 
     view.toggle_customer_recording()
 
-    assert view.customer_recording_state() == CustomerRecordingState.ARMED
+    assert view.customer_recording_state() == CustomerRecordingState.ACTIVE
+    assert view._customer_capture_stage is CustomerCaptureStage.WAITING_DEVICE
     assert view._capture_pending_id is None
-    assert not target.exists()
+    assert target.exists()
+    early_bytes = b"device-startup-before-online"
+    view._on_data_received(early_bytes)
 
     view._mark_device_activity()
 
-    assert view.customer_recording_state() == CustomerRecordingState.PREPARING
+    assert view.customer_recording_state() == CustomerRecordingState.ACTIVE
+    assert view._customer_capture_stage is CustomerCaptureStage.NEGOTIATING_FULL
     assert view._capture_pending_id is not None
+    view._capture_profile_controller.reset()
+    view.toggle_customer_recording()
+    sdb = DataImporter.open_sdb(target)
+    assert len(sdb.raw_records) == 1
+    assert sdb.raw_records[0].data == early_bytes
 
 
-def test_cancelling_armed_recording_does_not_create_a_file(
+def test_stopping_offline_prerecord_keeps_a_complete_sdb(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view = LiveView(settings)
@@ -337,10 +350,11 @@ def test_cancelling_armed_recording_does_not_create_a_file(
     view.toggle_customer_recording()
 
     assert view.customer_recording_state() == CustomerRecordingState.IDLE
-    assert not target.exists()
+    assert target.exists()
+    assert DataImporter.open_sdb(target).quality["complete"] is True
 
 
-def test_disconnect_clears_armed_recording_intent(
+def test_transport_disconnect_closes_prerecord_without_deleting_it(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view = LiveView(settings)
@@ -357,10 +371,11 @@ def test_disconnect_clears_armed_recording_intent(
     view._on_disconnected()
 
     assert view.customer_recording_state() == CustomerRecordingState.IDLE
-    assert not target.exists()
+    assert target.exists()
+    assert DataImporter.open_sdb(target).quality["complete"] is True
 
 
-def test_unsupported_full_capture_does_not_create_or_arm_a_recording(
+def test_unsupported_full_capture_keeps_current_stream_recording(
     app, settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
     view = LiveView(settings)
@@ -390,10 +405,12 @@ def test_unsupported_full_capture_does_not_create_or_arm_a_recording(
 
     view.toggle_customer_recording()
 
-    assert view.customer_recording_state() == CustomerRecordingState.IDLE
+    assert view.customer_recording_state() == CustomerRecordingState.ACTIVE
+    assert view._customer_capture_stage is CustomerCaptureStage.PASSIVE
     assert view._capture_pending_id is None
-    assert not target.exists()
+    assert target.exists()
     assert not worker.sent
+    view.toggle_customer_recording()
 
 
 def test_active_recording_marks_outage_and_renegotiates_after_reconnect(
@@ -421,7 +438,7 @@ def test_active_recording_marks_outage_and_renegotiates_after_reconnect(
 
     view.toggle_customer_recording()
     sdb = DataImporter.open_sdb(target)
-    assert [event["event"] for event in sdb.metadata_events] == [
+    assert [event["event"] for event in sdb.metadata_events if "event" in event] == [
         "device_offline",
         "device_online",
     ]

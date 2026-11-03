@@ -19,6 +19,8 @@ from satellite_debug_tool.core.motion_platform import (
     MotionTrajectoryRunner,
     PlatformPose,
     SineTrajectory,
+    SoftCenterPhase,
+    TrajectoryPreflightResult,
 )
 from .fixture_profile import WorkstationFixtureProfile
 from .fixture_session import FixtureSessionRecorder
@@ -41,6 +43,7 @@ class FixtureControlRequest:
     target_deg: float = 0.0
     duration_ms: int = 0
     trajectory: Optional[SineTrajectory] = None
+    trajectory_preflight: Optional[TrajectoryPreflightResult] = None
     target_pose: Optional[PlatformPose] = None
 
 
@@ -56,6 +59,7 @@ class FixtureControlWorker(QThread):
     busy_changed = Signal(bool)
     snapshot_changed = Signal(object)
     connected = Signal()
+    soft_center_phase_changed = Signal(str)
 
     def __init__(
         self,
@@ -79,6 +83,8 @@ class FixtureControlWorker(QThread):
         self._queue: queue.Queue[FixtureControlRequest] = queue.Queue(maxsize=16)
         self._shutdown_event = threading.Event()
         self._current_stop_event = threading.Event()
+        self._current_soft_center_event = threading.Event()
+        self._active_request_type: Optional[FixtureControlRequestType] = None
         self._recorder = recorder
         self._sequence = 0
         self._preflight_confirmed = False
@@ -113,11 +119,23 @@ class FixtureControlWorker(QThread):
             duration_ms=int(total_duration_ms),
         ))
 
-    def submit_trajectory(self, trajectory: SineTrajectory) -> str:
+    def preflight_trajectory(self, trajectory: SineTrajectory) -> TrajectoryPreflightResult:
+        return MotionTrajectoryRunner(self._controller).preflight(trajectory)
+
+    def submit_trajectory(
+        self,
+        trajectory: SineTrajectory,
+        *,
+        preflight: TrajectoryPreflightResult | None = None,
+    ) -> str:
+        checked = preflight or self.preflight_trajectory(trajectory)
+        if checked.trajectory != trajectory:
+            raise MotionPlatformError("trajectory preflight result does not match submitted profile")
         return self._submit(FixtureControlRequest(
             uuid.uuid4().hex,
             FixtureControlRequestType.TRAJECTORY,
             trajectory=trajectory,
+            trajectory_preflight=checked,
         ))
 
     def submit_pose(self, pose: PlatformPose, *, total_duration_ms: int) -> str:
@@ -175,10 +193,17 @@ class FixtureControlWorker(QThread):
             self._queue.put_nowait(retained_shutdown)
 
     @Slot()
+    def request_soft_center(self) -> None:
+        """请求当前轨迹按冻结渐出参数减幅并反馈确认回正。"""
+
+        if self._active_request_type != FixtureControlRequestType.TRAJECTORY:
+            raise MotionPlatformError("soft center requires an active trajectory")
+        self._current_soft_center_event.set()
+
+    @Slot()
     def shutdown(self) -> None:
         self._shutdown_event.set()
         self.stop_sequence()
-        self._controller.close()
         try:
             self._queue.put_nowait(FixtureControlRequest(
                 uuid.uuid4().hex,
@@ -204,6 +229,8 @@ class FixtureControlWorker(QThread):
             if request.request_type == FixtureControlRequestType.SHUTDOWN:
                 break
             self._current_stop_event = threading.Event()
+            self._current_soft_center_event = threading.Event()
+            self._active_request_type = request.request_type
             self.busy_changed.emit(True)
             self.request_started.emit(request.request_id, request.request_type.value)
             try:
@@ -214,6 +241,7 @@ class FixtureControlWorker(QThread):
             else:
                 self.request_finished.emit(request.request_id, result)
             finally:
+                self._active_request_type = None
                 self.busy_changed.emit(False)
         self._controller.close()
 
@@ -246,9 +274,16 @@ class FixtureControlWorker(QThread):
             if request.trajectory is None:
                 raise MotionPlatformError("trajectory request has no profile")
             return MotionTrajectoryRunner(self._controller).run(
-                request.trajectory, stop_event=self._current_stop_event
+                request.trajectory,
+                stop_event=self._current_stop_event,
+                soft_center_event=self._current_soft_center_event,
+                soft_center_phase_callback=self._publish_soft_center_phase,
+                preflight=request.trajectory_preflight,
             )
         raise MotionPlatformError("unsupported fixture control request")
+
+    def _publish_soft_center_phase(self, phase: SoftCenterPhase) -> None:
+        self.soft_center_phase_changed.emit(phase.value)
 
     def _handle_command(self, event: MotionCommandEvent) -> None:
         self._sequence += 1

@@ -94,6 +94,13 @@ class DirectMotionPlatformController:
     def add_command_callback(self, callback: CommandCallback) -> None:
         self._command_callbacks.append(callback)
 
+    def trajectory_process_socket(self) -> socket.socket | None:
+        """返回可由 multiprocessing 复制的真实 UDP socket；测试传输不启用进程调度。"""
+
+        with self._condition:
+            transport = self._socket
+        return transport if isinstance(transport, socket.socket) else None
+
     def connect(self, *, wait_ready_ms: int = 3000) -> MotionPlatformSnapshot:
         details = ""
         with self._condition:
@@ -280,6 +287,23 @@ class DirectMotionPlatformController:
     def send_trajectory_point(self, pose: PlatformPose, *, duration_ms: int) -> MotionCommandEvent:
         targets = solve_actuator_targets(self._config, pose)
         frame = build_position_frame(duration_ms, targets.pulses)
+        return self.send_compiled_trajectory_point(
+            pose,
+            target_pulses=targets.pulses,
+            frame=frame,
+            duration_ms=duration_ms,
+        )
+
+    def send_compiled_trajectory_point(
+        self,
+        pose: PlatformPose,
+        *,
+        target_pulses: tuple[int, ...],
+        frame: bytes,
+        duration_ms: int,
+    ) -> MotionCommandEvent:
+        """发送已完成运动学与协议编码的轨迹点。"""
+
         with self._condition:
             if self._snapshot.state != MotionPlatformState.TRAJECTORY:
                 raise MotionPlatformError("trajectory is not active")
@@ -288,14 +312,44 @@ class DirectMotionPlatformController:
             action="trajectory_point",
             raw_command=frame,
             target_pose=pose,
-            target_pulses=targets.pulses,
+            target_pulses=tuple(target_pulses),
             duration_ms=duration_ms,
             monotonic_ns=self._clock_ns(),
             generation=generation,
         )
         self._send_frame(event)
         with self._condition:
-            self._snapshot = replace(self._snapshot, target_pulses=targets.pulses)
+            self._snapshot = replace(self._snapshot, target_pulses=tuple(target_pulses))
+            self._condition.notify_all()
+        return event
+
+    def accept_external_trajectory_send(
+        self,
+        pose: PlatformPose,
+        *,
+        target_pulses: tuple[int, ...],
+        frame: bytes,
+        duration_ms: int,
+        sent_monotonic_ns: int,
+    ) -> MotionCommandEvent:
+        """接纳独立时间线进程已经完成的发送事实。"""
+
+        with self._condition:
+            if self._snapshot.state != MotionPlatformState.TRAJECTORY:
+                raise MotionPlatformError("trajectory is not active")
+            generation = self._snapshot.generation
+        event = MotionCommandEvent(
+            action="trajectory_point",
+            raw_command=frame,
+            target_pose=pose,
+            target_pulses=tuple(target_pulses),
+            duration_ms=int(duration_ms),
+            monotonic_ns=int(sent_monotonic_ns),
+            generation=generation,
+        )
+        self._publish_sent_event(event)
+        with self._condition:
+            self._snapshot = replace(self._snapshot, target_pulses=tuple(target_pulses))
             self._condition.notify_all()
         return event
 
@@ -505,6 +559,9 @@ class DirectMotionPlatformController:
             raise MotionPlatformError(f"command send failed: {exc}") from exc
         if size != len(event.raw_command):
             raise MotionPlatformError("controller datagram was not sent completely")
+        self._publish_sent_event(event)
+
+    def _publish_sent_event(self, event: MotionCommandEvent) -> None:
         if self._recorder is not None:
             self._recorder.record("commands", "sent", event)
         for callback in tuple(self._command_callbacks):

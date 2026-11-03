@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import errno
 import hashlib
 import json
@@ -18,6 +19,7 @@ from satellite_debug_tool.core.motion_platform import (
     DirectMotionPlatformController,
     LingjingProtocolError,
     MotionActionOutcome,
+    MotionCommandEvent,
     MotionPlatformConfig,
     MotionPlatformError,
     MotionPlatformState,
@@ -479,6 +481,495 @@ def test_trajectory_preflight_rejects_entire_invalid_path_before_send() -> None:
     with pytest.raises(MotionPlatformError, match="amplitude"):
         MotionTrajectoryRunner(controller).preflight(trajectory)
     assert transport.sent == []
+
+
+def test_combined_pose_preflight_matches_field_14_and_15_degree_boundary() -> None:
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    controller = ConfirmedMotionController(
+        fixture_model_presets()[0].create_profile().to_motion_config()
+    )
+
+    def trajectory(amplitude: float) -> SineTrajectory:
+        return SineTrajectory(
+            sample_period_ms=50,
+            ramp_in_s=5.0,
+            steady_duration_s=20.0,
+            ramp_out_s=5.0,
+            roll=SineAxis(amplitude, 0.25),
+            pitch=SineAxis(amplitude, 0.25),
+            yaw=SineAxis(amplitude, 0.1),
+        )
+
+    accepted = MotionTrajectoryRunner(controller).preflight(trajectory(14.0))
+    assert accepted.limiting_axis == 4
+    assert accepted.minimum_extension_mm == pytest.approx(0.51)
+
+    with pytest.raises(
+        MotionPlatformError,
+        match=r"axis 4 extension -0\.21 mm.*roll=-14\.113.*pitch=-14\.113.*yaw=-13\.491",
+    ):
+        MotionTrajectoryRunner(controller).preflight(trajectory(15.0))
+
+
+def test_trajectory_minor_timing_gap_is_recorded_without_stopping_motion() -> None:
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    now_ns = 0
+    sleep_count = 0
+
+    def clock_ns() -> int:
+        return now_ns
+
+    def sleep(seconds: float) -> None:
+        nonlocal now_ns, sleep_count
+        sleep_count += 1
+        now_ns += round(seconds * 1_000_000_000)
+        if sleep_count == 1:
+            now_ns += 30_000_000
+
+    controller = ConfirmedMotionController(
+        fixture_model_presets()[0].create_profile().to_motion_config(),
+        clock_ns=clock_ns,
+    )
+    trajectory = SineTrajectory(
+        sample_period_ms=50,
+        ramp_in_s=0.0,
+        steady_duration_s=0.15,
+        ramp_out_s=0.0,
+        roll=SineAxis(1.0, 0.1),
+        pitch=SineAxis(0.0, 0.0, enabled=False),
+        yaw=SineAxis(0.0, 0.0, enabled=False),
+    )
+    result = MotionTrajectoryRunner(
+        controller,
+        clock_ns=clock_ns,
+        sleep=sleep,
+    ).run(trajectory)
+
+    assert not result.timing_fault
+    assert result.control_gap_count == 1
+    assert result.maximum_send_interval_ms == pytest.approx(80.0)
+    assert result.sent_points == 3
+    assert result.arrival is not None
+
+
+def test_trajectory_missing_a_complete_slot_resynchronizes_without_skipping() -> None:
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    now_ns = 0
+    sleep_count = 0
+
+    def clock_ns() -> int:
+        return now_ns
+
+    def sleep(seconds: float) -> None:
+        nonlocal now_ns, sleep_count
+        sleep_count += 1
+        now_ns += round(seconds * 1_000_000_000)
+        if sleep_count == 1:
+            now_ns += 55_000_000
+
+    controller = ConfirmedMotionController(
+        fixture_model_presets()[0].create_profile().to_motion_config(),
+        clock_ns=clock_ns,
+    )
+    trajectory = SineTrajectory(
+        sample_period_ms=50,
+        ramp_in_s=0.0,
+        steady_duration_s=0.15,
+        ramp_out_s=0.0,
+        roll=SineAxis(1.0, 0.1),
+        pitch=SineAxis(0.0, 0.0, enabled=False),
+        yaw=SineAxis(0.0, 0.0, enabled=False),
+    )
+
+    result = MotionTrajectoryRunner(
+        controller,
+        clock_ns=clock_ns,
+        sleep=sleep,
+    ).run(trajectory)
+
+    assert result.timing_fault
+    assert result.skipped_points == 0
+    assert result.control_gap_count == 1
+    assert result.maximum_send_interval_ms == pytest.approx(105.0)
+    assert result.sent_points == 3
+    assert result.arrival is not None
+
+
+def test_isolated_timeline_reports_late_slot_and_keeps_sending() -> None:
+    from satellite_debug_tool.core.motion_platform.timeline_process import (
+        run_timeline_process,
+    )
+
+    class DelayedEmptyQueue:
+        def __init__(self) -> None:
+            self.wait_count = 0
+
+        def get(self, *, timeout: float):
+            self.wait_count += 1
+            time.sleep(timeout + (0.025 if self.wait_count == 2 else 0.0))
+            raise queue.Empty
+
+        def get_nowait(self):
+            raise queue.Empty
+
+    class RecordingTransport:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+            self.closed = False
+
+        def sendto(self, frame: bytes, _endpoint) -> int:
+            self.sent.append(frame)
+            return len(frame)
+
+        def close(self) -> None:
+            self.closed = True
+
+    transport = RecordingTransport()
+    events: queue.Queue[tuple] = queue.Queue()
+    frames = (b"one", b"two", b"three")
+
+    run_timeline_process(
+        transport,
+        ("127.0.0.1", 7408),
+        frames,
+        (),
+        (),
+        len(frames),
+        10_000_000,
+        object(),
+        object(),
+        12,
+        DelayedEmptyQueue(),
+        events,
+    )
+
+    recorded = []
+    while not events.empty():
+        recorded.append(events.get_nowait())
+    assert transport.sent == list(frames)
+    assert transport.closed
+    assert [event[0] for event in recorded].count("timing_fault") == 1
+    assert recorded[-1][0] == "finished"
+
+
+def test_finite_trajectory_execution_uses_precompiled_frames(monkeypatch) -> None:
+    import satellite_debug_tool.core.motion_platform.trajectory as trajectory_module
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    now_ns = 0
+
+    def clock_ns() -> int:
+        return now_ns
+
+    def sleep(seconds: float) -> None:
+        nonlocal now_ns
+        now_ns += round(seconds * 1_000_000_000)
+
+    controller = ConfirmedMotionController(
+        fixture_model_presets()[0].create_profile().to_motion_config(),
+        clock_ns=clock_ns,
+    )
+    trajectory = SineTrajectory(
+        sample_period_ms=50,
+        ramp_in_s=0.0,
+        steady_duration_s=0.15,
+        ramp_out_s=0.0,
+        roll=SineAxis(1.0, 0.1),
+        pitch=SineAxis(0.0, 0.0, enabled=False),
+        yaw=SineAxis(0.0, 0.0, enabled=False),
+    )
+    runner = MotionTrajectoryRunner(controller, clock_ns=clock_ns, sleep=sleep)
+    checked = runner.preflight(trajectory)
+
+    assert len(checked.compiled.finite_points) == trajectory.sample_count == 3
+    assert all(point.frame.startswith(b"\xAA\x55\x00\x1b\xC0") for point in checked.compiled.finite_points)
+
+    monkeypatch.setattr(
+        trajectory_module,
+        "solve_actuator_targets",
+        lambda *_args, **_kwargs: pytest.fail("runtime must not solve inverse kinematics"),
+    )
+    result = runner.run(trajectory, preflight=checked)
+
+    assert result.sent_points == 3
+    assert result.arrival is not None and result.arrival.successful
+
+    changed = replace(trajectory, roll=SineAxis(1.1, 0.1))
+    with pytest.raises(MotionPlatformError, match="does not match"):
+        runner.run(changed, preflight=checked)
+
+
+def test_soft_center_fades_from_current_phase_and_confirms_center() -> None:
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    now_ns = 0
+    soft_center = threading.Event()
+    commands: list = []
+    events = []
+    phases = []
+
+    def clock_ns() -> int:
+        return now_ns
+
+    def sleep(seconds: float) -> None:
+        nonlocal now_ns
+        now_ns += round(seconds * 1_000_000_000)
+        if now_ns >= 200_000_000:
+            soft_center.set()
+
+    controller = ConfirmedMotionController(
+        fixture_model_presets()[0].create_profile().to_motion_config(),
+        commands,
+        clock_ns=clock_ns,
+    )
+    controller.add_command_callback(events.append)
+    trajectory = SineTrajectory(
+        sample_period_ms=100,
+        ramp_in_s=0.0,
+        steady_duration_s=2.0,
+        ramp_out_s=0.2,
+        roll=SineAxis(2.0, 0.2),
+        pitch=SineAxis(0.0, 0.0, enabled=False),
+        yaw=SineAxis(0.0, 0.0, enabled=False),
+    )
+
+    result = MotionTrajectoryRunner(
+        controller,
+        clock_ns=clock_ns,
+        sleep=sleep,
+    ).run(
+        trajectory,
+        soft_center_event=soft_center,
+        soft_center_phase_callback=phases.append,
+    )
+
+    assert result.soft_center_requested
+    assert result.fade_points == 2
+    assert result.center_confirmed
+    assert result.arrival is not None and result.arrival.successful
+    assert result.stopped
+    assert len(commands) == result.sent_points + 1
+    trajectory_events = [event for event in events if event.action == "trajectory_point"]
+    before_fade = trajectory_events[-result.fade_points - 1].target_pose
+    first_fade = trajectory_events[-result.fade_points].target_pose
+    final_fade = trajectory_events[-1].target_pose
+    assert abs(first_fade.roll_deg - before_fade.roll_deg) < 0.3
+    assert final_fade.roll_deg == pytest.approx(0.0, abs=1e-12)
+    assert [phase.value for phase in phases] == [
+        "fading",
+        "centering",
+        "center_confirmed",
+    ]
+
+
+def test_soft_center_failure_keeps_an_explicit_failed_phase() -> None:
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    class FailingCenterController(ConfirmedMotionController):
+        def recover_to_center(self, *, duration_ms: int = 3000):
+            raise MotionPlatformError("center feedback timeout")
+
+    now_ns = 0
+    soft_center = threading.Event()
+    phases = []
+
+    def clock_ns() -> int:
+        return now_ns
+
+    def sleep(seconds: float) -> None:
+        nonlocal now_ns
+        now_ns += round(seconds * 1_000_000_000)
+        if now_ns >= 100_000_000:
+            soft_center.set()
+
+    controller = FailingCenterController(
+        fixture_model_presets()[0].create_profile().to_motion_config(),
+        clock_ns=clock_ns,
+    )
+    trajectory = SineTrajectory(
+        sample_period_ms=100,
+        ramp_in_s=0.0,
+        steady_duration_s=1.0,
+        ramp_out_s=0.1,
+        roll=SineAxis(1.0, 0.1),
+        pitch=SineAxis(0.0, 0.0, enabled=False),
+        yaw=SineAxis(0.0, 0.0, enabled=False),
+    )
+
+    with pytest.raises(MotionPlatformError, match="center feedback timeout"):
+        MotionTrajectoryRunner(
+            controller,
+            clock_ns=clock_ns,
+            sleep=sleep,
+        ).run(
+            trajectory,
+            soft_center_event=soft_center,
+            soft_center_phase_callback=phases.append,
+        )
+
+    assert [phase.value for phase in phases] == [
+        "fading",
+        "centering",
+        "center_failed",
+    ]
+
+
+def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
+    from satellite_debug_tool.core.production import fixture_model_presets
+    from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
+
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    receiver.bind(("127.0.0.1", 0))
+    receiver.settimeout(1.0)
+    endpoint = receiver.getsockname()
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    config = replace(
+        fixture_model_presets()[0].create_profile().to_motion_config(),
+        local_ipv4="127.0.0.1",
+        controller_ipv4="127.0.0.1",
+        command_port=endpoint[1],
+    )
+
+    class ProcessController(ConfirmedMotionController):
+        def trajectory_process_socket(self):
+            return sender
+
+        def accept_external_trajectory_send(
+            self,
+            pose,
+            *,
+            target_pulses,
+            frame,
+            duration_ms,
+            sent_monotonic_ns,
+        ):
+            event = MotionCommandEvent(
+                action="trajectory_point",
+                raw_command=frame,
+                target_pose=pose,
+                target_pulses=tuple(target_pulses),
+                duration_ms=duration_ms,
+                monotonic_ns=sent_monotonic_ns,
+                generation=1,
+            )
+            for callback in self._command_callbacks:
+                callback(event)
+            # 父进程即使处理UI/证据较慢，也不能拖慢子进程的UDP时间线。
+            time.sleep(0.08)
+            return event
+
+    controller = ProcessController(config)
+    trajectory = SineTrajectory(
+        sample_period_ms=50,
+        ramp_in_s=0.0,
+        steady_duration_s=0.5,
+        ramp_out_s=0.0,
+        roll=SineAxis(1.0, 0.1),
+        pitch=SineAxis(0.0, 0.0, enabled=False),
+        yaw=SineAxis(0.0, 0.0, enabled=False),
+    )
+    received_at = []
+
+    def receive() -> None:
+        while len(received_at) < trajectory.sample_count:
+            receiver.recvfrom(4096)
+            received_at.append(time.monotonic_ns())
+
+    receive_thread = threading.Thread(target=receive)
+    receive_thread.start()
+    try:
+        run_results = []
+        run_errors = []
+
+        def execute() -> None:
+            try:
+                run_results.append(MotionTrajectoryRunner(controller).run(trajectory))
+            except Exception as exc:
+                run_errors.append(exc)
+
+        control_thread = threading.Thread(target=execute)
+        control_thread.start()
+        control_thread.join(timeout=3.0)
+        assert not control_thread.is_alive()
+        assert run_errors == []
+        result = run_results[0]
+        receive_thread.join(timeout=2.0)
+        receiver.settimeout(0.05)
+        soft_center = threading.Event()
+        receive_done = threading.Event()
+        soft_received_at = []
+        phases = []
+        soft_trajectory = replace(
+            trajectory,
+            steady_duration_s=2.0,
+            ramp_out_s=0.2,
+        )
+
+        def receive_soft() -> None:
+            while not receive_done.is_set():
+                try:
+                    receiver.recvfrom(4096)
+                except socket.timeout:
+                    continue
+                soft_received_at.append(time.monotonic_ns())
+
+        soft_receiver = threading.Thread(target=receive_soft)
+        soft_receiver.start()
+        timer = threading.Timer(0.2, soft_center.set)
+        timer.start()
+        soft_results = []
+        soft_errors = []
+
+        def execute_soft() -> None:
+            try:
+                soft_results.append(
+                    MotionTrajectoryRunner(controller).run(
+                        soft_trajectory,
+                        soft_center_event=soft_center,
+                        soft_center_phase_callback=phases.append,
+                    )
+                )
+            except Exception as exc:
+                soft_errors.append(exc)
+
+        soft_control_thread = threading.Thread(target=execute_soft)
+        soft_control_thread.start()
+        soft_control_thread.join(timeout=3.0)
+        assert not soft_control_thread.is_alive()
+        assert soft_errors == []
+        soft_result = soft_results[0]
+        timer.cancel()
+        receive_done.set()
+        soft_receiver.join(timeout=1.0)
+    finally:
+        receiver.close()
+        sender.close()
+
+    assert result.sent_points == trajectory.sample_count == 10
+    assert not result.timing_fault
+    assert len(received_at) == 10
+    intervals_ms = [
+        (current - previous) / 1_000_000.0
+        for previous, current in zip(received_at, received_at[1:])
+    ]
+    assert max(intervals_ms) < 100.0
+    assert soft_result.center_confirmed
+    assert soft_result.fade_points == 4
+    assert len(soft_received_at) == soft_result.sent_points
+    assert [phase.value for phase in phases] == [
+        "fading",
+        "centering",
+        "center_confirmed",
+    ]
 
 
 def test_motion_evidence_manifest_hashes_every_record(tmp_path) -> None:

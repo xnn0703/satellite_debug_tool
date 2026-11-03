@@ -114,7 +114,7 @@ class _LiveDouble(QObject):
         self.customer_state = (
             CustomerRecordingState.IDLE
             if self.customer_state != CustomerRecordingState.IDLE
-            else CustomerRecordingState.ARMED
+            else CustomerRecordingState.ACTIVE
         )
         self.customer_recording_state_changed.emit(self.customer_state.value, "")
 
@@ -722,14 +722,9 @@ def test_customer_overview_component_strip_is_last(app) -> None:
     assert view._root_layout.indexOf(view._component_panel) == view._root_layout.count() - 1
 
 
-def test_customer_record_button_renders_armed_active_and_restoring_states(app) -> None:
+def test_customer_record_button_renders_active_and_restoring_states(app) -> None:
     live = _LiveDouble()
     view = CustomerOverviewView(live, _SettingsDouble(), enable_3d=False)
-
-    live.customer_state = CustomerRecordingState.ARMED
-    live.customer_recording_state_changed.emit("armed", "/tmp/support.sdb")
-    assert view._record_btn.text() == tr("Cancel recording")
-    assert view._record_btn.isEnabled()
 
     live.customer_state = CustomerRecordingState.ACTIVE
     live.customer_recording_state_changed.emit("active", "/tmp/support.sdb")

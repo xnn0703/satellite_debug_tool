@@ -1290,6 +1290,10 @@ measurement_us:u64 | received_us:u64 | flags:u32`。
 | 3 FILTER | 196B | 内部四元数、姿态std、bg与std、ba、静止证据、GNSS平移/激励资格、计数、载体速度辅助诊断、yaw量测累计注入，详见下文 |
 | 4 RF | 80B | `target_generation/authority_epoch/rf_measurement_timestamp_ms:u32`；`type/ownership/reject/reserved:u8`；7个f32：value、variance、innovation、applied、beam_az、beam_el、SNR；最后`internal_shadow_correction_sequence:u32` |
 | 5 UPDATE | 192B | 四组GNSS NIS与更新事实、实际增益、ZARU与数值诊断，详见下文 |
+| 6 GEOMETRY | 120B | Tracking本轮 POSE 与 TARGET，详见下文 |
+| 7 SNR_INPUT | 56B | Tracking owner 消费的 SNR 输入，详见下文 |
+| 8 BEAM_ACTION | 76B | Tracking 波束动作意图，详见下文 |
+| 9 BEAM_STATUS | 96B | antenna 波束发送状态，详见下文 |
 
 IMU为设备body FRD，`sample_type=0`时向量单位rad/s和m/s²，`sample_type=1`时为采样窗增量rad和m/s，dt为对应窗秒数；
 mount_rot只说明上游已经应用的旋转，不得重复应用。温度单位℃，flags.bit0为温度有效。
@@ -1317,11 +1321,49 @@ UPDATE公共头后依次为水平位置、垂直位置、水平速度、垂直�
 4个u32：numeric_fault、covariance_repair、ZARU接受数、tilt接受数；4个u8：last_measurement/last_update/last_zaru_update/last_numeric_reason；最后yaw_correction_seq:u32（滤波更新确实改变内部yaw时递增，用于拒绝RF构造至consumer之间的校正竞态）。
 UPDATE flags.bit0..3为initialized/healthy/covariance_psd/bias_converged。分组各有自身更新时间，不能将所有NIS解释成本拍新GNSS。
 
+RF 直接观测补充流使用相同 header 和小端编码，kind 6–9 的 `source/health` 均为0，除 kind 9 的
+`source_seq` 为 `tracking_command_seq`，其余为0。header 时间由毫秒乘1000表示，精度仍为毫秒。
+无效 float 原样保留；接收输入或解码成功均不表示 ESKF 接受、硬件应用或物理 RF 生效。
+
+- **GEOMETRY (6)**：`seq=pose.sequence`，measurement为pose源时刻，received为TARGET形成时刻。
+  flags bit0–7 依次为 pose.valid、target.valid、TARGET ingest接受、relative_yaw_valid、
+  internal_shadow_rp_valid、body_rate_valid、yaw_observation_affects_active_pose、external_heading_aligned。
+  偏移32的7个u32依次为 pose_arrival_ms、target_timestamp_ms、target_sequence、target_id、
+  pose_authority_epoch、internal_shadow_timestamp_ms、relative_yaw_timestamp_ms；偏移60的12个f32依次为
+  heading/pitch/roll(deg)、gyro_x/y/z(dps)、relative_yaw、internal_shadow_roll/pitch/rp_std、
+  target_azimuth/elevation（均deg）；偏移108为 correction_sequence:u32、correction_sum_deg:f32、
+  motion_state:u8、reserved[3]=0。pose接纳须与后续动作身份精确关联，不从此flags推断。
+- **SNR_INPUT (7)**：seq为Tracking消费的本地事件序号，measurement为原解析时刻，received为callback到达时刻。
+  flags bit0–5依次为 input.valid、ingest接受、tracking_metric_valid、signal_present、normalized_valid、rx_online。
+  偏移32依次为 owner_timestamp_ms:u32、raw_snr_db/normalized_snr_db/scan_loss_db/tracking_metric_db:f32、
+  trace_dropped_records:u32。ingest接受不表示采样轮采用；丢失数为全局工程环累计值，增加时相关区间不能作为完整样本。
+- **BEAM_ACTION (8)**：seq为action_sequence，measurement和received均为动作执行时刻。flags bit0/1为
+  action.valid/probe_valid。偏移32的5个u32为 epoch、source_pose_timestamp_ms、source_pose_sequence、
+  source_target_timestamp_ms、source_target_sequence；偏移52的5个f32为 azimuth_deg、second_angle_deg、
+  offaxis_deg、probe_azimuth_deg、probe_second_angle_deg；偏移72为 probe_phase:u8、reserved[3]=0。
+  此记录是登记和发布前的动作意图；须关联后续状态才能证明发送。
+- **BEAM_STATUS (9)**：seq为antenna本地command_seq，source_seq为tracking_command_seq，两个时间均为状态形成时刻。
+  flags bit0–3为 rx_online、tx_online、command_scan_loss_valid、tracking_probe_valid。偏移32的10个u32依次为
+  command_timestamp、command_source_timestamp、command_imu_timestamp、command_rx_ms、tracking_epoch、
+  coalesced_count、rx_send_start_ms、rx_send_done_ms、tx_send_start_ms、tx_send_done_ms；偏移72为
+  source、beam_type、tracking_probe_phase、evidence（u8）；偏移76为 command_scan_loss_db、
+  tracking_probe_az_deg、rx_angle[0..2]（f32）。evidence仅有 SEND_FAILED=0、BEAM_SENT=1；波束类型
+  0=RX、1=TX、2=ALL。角度是阵面原生命令角，当前没有 ARRAY_APPLIED 或实测角证据。
+  SEND_FAILED时done字段仍可能是非零的调用返回tick，不能由done非零判断完整发送。
+
+kind6–9保留当前输入的准入事实，不补造Modem源帧序号、物理采样时刻或controller轮边界。
+GEOMETRY的internal_shadow_rp_valid包含当前RP质量门；false不等于没有RP数值。
+分析窗口须同时核对前后drop、Debug连续开启、SDB完整性和身份/时标；drop不变不是完整性充分条件。
+Tracking的GEOMETRY/SNR_INPUT/ACTION排除仿真输入，STATUS仍记录antenna真实结果，分析排除仿真区间。
+
 采集和发送采用既有单个有界Debug环：16槽，工程流最多占12槽，普通事件保留4槽；满时丢工程记录并计数，不阻塞IMU或滤波。
 原有事件1秒去重不作用于INS_TRACE。worker每10ms最多发送4条；发送失败及被普通事件挤出的工程记录也计入丢失数。
 Debug队列每槽204B，比原72B增加132B，共增加2112B，另有4B累计计数；Release每槽仍72B，仅新增4B累计计数。
 以200Hz IMU、10Hz GNSS、20Hz FILTER+UPDATE计，净新增完整帧约24.6KB/s（不含原有遥测与RF观测）；
 100Hz IMU时约16.9KB/s。计数/序号出现缺口的段不能作为完整原始重放验收。
+新增100Hz GEOMETRY、50Hz SNR_INPUT、各约33Hz ACTION/STATUS，约增加22.4KB/s；加上100Hz IMU、
+10Hz GNSS和各20Hz FILTER/UPDATE时约366条/s，接近现有发送预算。该频率是容量估算，实板丢失和
+时序仍需核验；200Hz IMU或更密波束可能超限，不将不完整区间作为完整物理模型证据。
 
 ---
 

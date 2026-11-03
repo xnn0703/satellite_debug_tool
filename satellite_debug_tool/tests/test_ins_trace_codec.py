@@ -121,3 +121,71 @@ def test_framing_chunk_split_and_sdb_round_trip(tmp_path):
     assert ProductServiceStore().feed(result[0]) is False
     playback = build_engineering_playback(path)
     playback.close()
+
+
+def _rf_header(kind, flags=0, source_seq=0):
+    return struct.pack("<4BIIQQI", 1, kind, 0, 0, 123, source_seq, 1000, 2000, flags)
+
+
+def _rf_vectors():
+    return [
+        (_rf_header(6, 255) + struct.pack("<7I12fIfB3s", *range(1, 8), *range(11, 23), 31, 32, 33, bytes(3)),
+         {**dict(zip(("pose_arrival_ms", "target_timestamp_ms", "target_sequence", "target_id", "pose_authority_epoch", "internal_shadow_timestamp_ms", "relative_yaw_timestamp_ms"), range(1, 8))),
+          **dict(zip(("heading_deg", "pitch_deg", "roll_deg", "gyro_x_dps", "gyro_y_dps", "gyro_z_dps", "relative_yaw_deg", "internal_shadow_roll_deg", "internal_shadow_pitch_deg", "internal_shadow_rp_std_deg", "target_azimuth_deg", "target_elevation_deg"), range(11, 23))),
+          "correction_sequence": 31, "correction_sum_deg": 32, "motion_state": 33}),
+        (_rf_header(7, 63) + struct.pack("<I4fI", 1, 2, 3, 4, 5, 6),
+         dict(zip(("owner_timestamp_ms", "raw_snr_db", "normalized_snr_db", "scan_loss_db", "tracking_metric_db", "trace_dropped_records"), range(1, 7)))),
+        (_rf_header(8, 3) + struct.pack("<5I5fB3s", *range(1, 11), 11, bytes(3)),
+         dict(zip(("epoch", "source_pose_timestamp_ms", "source_pose_sequence", "source_target_timestamp_ms", "source_target_sequence", "azimuth_deg", "second_angle_deg", "offaxis_deg", "probe_azimuth_deg", "probe_second_angle_deg", "probe_phase"), range(1, 12)))),
+        (_rf_header(9, 15, 456) + struct.pack("<10I4B5f", *range(1, 11), 11, 12, 13, 1, *range(15, 20)),
+         {**dict(zip(("command_timestamp", "command_source_timestamp", "command_imu_timestamp", "command_rx_ms", "tracking_epoch", "coalesced_count", "rx_send_start_ms", "rx_send_done_ms", "tx_send_start_ms", "tx_send_done_ms", "source", "beam_type", "tracking_probe_phase", "evidence", "command_scan_loss_db", "tracking_probe_az_deg"), (*range(1, 14), 1, 15, 16))), "rx_angle": (17, 18, 19)}),
+    ]
+
+
+@pytest.mark.parametrize("payload,expected", _rf_vectors())
+def test_rf_diagnostic_wire_fields_and_validation(payload, expected):
+    record = decode_ins_trace(payload)
+    assert record.values == expected
+    assert (record.schema, record.source, record.health, record.seq, record.timestamp_us, record.received_timestamp_us) == (1, 0, 0, 123, 1000, 2000)
+    assert record.source_seq == (456 if record.kind == 9 else 0)
+    assert record.flags == {6: 255, 7: 63, 8: 3, 9: 15}[record.kind]
+    for invalid in (payload[:-1], payload + b"\0", payload[:28] + struct.pack("<I", 0x80000000) + payload[32:], payload[:2] + b"\1" + payload[3:], payload[:3] + b"\1" + payload[4:]):
+        with pytest.raises(CodecError):
+            decode_ins_trace(invalid)
+    if record.kind != 9:
+        with pytest.raises(CodecError):
+            decode_ins_trace(payload[:8] + struct.pack("<I", 1) + payload[12:])
+    if record.kind in (6, 8):
+        with pytest.raises(CodecError):
+            decode_ins_trace(payload[:-1] + b"\1")
+
+
+def test_rf_diagnostic_nan_and_failed_send():
+    snr = bytearray(_rf_vectors()[1][0])
+    struct.pack_into("<f", snr, 36, float("nan"))
+    assert math.isnan(decode_ins_trace(bytes(snr)).values["raw_snr_db"])
+    status = bytearray(_rf_vectors()[3][0])
+    status[75] = 0
+    assert decode_ins_trace(bytes(status)).values["evidence"] == 0
+    status[75] = 2
+    with pytest.raises(CodecError):
+        decode_ins_trace(bytes(status))
+
+
+def test_rf_diagnostics_sdb_chunk_round_trip(tmp_path):
+    payloads = [item[0] for item in _rf_vectors()]
+    stream = b"".join(build_frame(CmdType.INS_TRACE, payload) for payload in payloads)
+    path = tmp_path / "rf.sdb"
+    recorder = DataRecorder(path, format_version=SDB_VERSION_V3)
+    assert recorder.start()
+    receiver = FrameReceiverV2()
+    decoded = []
+    for offset in range(0, len(stream), 19):
+        chunk = stream[offset:offset + 19]
+        decoded.extend(receiver.feed(chunk))
+        assert recorder.write_frame(chunk, host_timestamp_ns=offset + 1)
+    recorder.stop()
+    assert [record.values for record in decoded] == [expected for _, expected in _rf_vectors()]
+    sdb = DataImporter.open_sdb(path)
+    assert [record for _, record in sdb.iter_timed_records()] == decoded
+    assert sdb.quality["complete"]

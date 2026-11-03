@@ -1,0 +1,47 @@
+{
+  "schema": "satellite.server-release-verification-evidence/v1",
+  "checked_at": "2026-11-03T12:10:09+08:00",
+  "instance": {
+    "id": "i-2zec7150rri51esjj28f",
+    "region": "cn-beijing",
+    "public_ip": "60.205.157.141"
+  },
+  "deployment": {
+    "script_sha256": "52e94d20c4a6bdd7ffeb59a85ea292058ff00d8d40df35ff1300db9d70e72919",
+    "service_sha256": "d86daedf9cabb0d8b6f2c3fadf9e4e645f33e890b107b37bab4c7a49e988c641",
+    "path_sha256": "7d314bac602ede46856810ab00476116e12e7f277f7296999ffb2aab17f31c41",
+    "path_enabled": true,
+    "path_active": true,
+    "last_service_result": "success",
+    "last_service_exit_status": 0
+  },
+  "permissions": {
+    "receipts": "drwxrws--T root satellite_metadata",
+    "requests": "drwxr-s--- satellite_publish satellite_metadata",
+    "results": "drwxr-s--- root satellite_metadata",
+    "archive": "drwxr-s--- root satellite_metadata",
+    "publisher_can_read_results": true,
+    "publisher_can_write_results": false,
+    "publisher_force_command": "internal-sftp -d /srv/satellite-updates",
+    "publisher_shell_tty_forwarding": false
+  },
+  "full_file_verification": {
+    "target": "targets/packages/ops/windows/x86_64/1.9.1/2f5ee632f7c1923391abdc7ccbc9a86f27b90c7d47b4ae855d72bc977cff50fa.satellite_terminal_manager-ops-windows-x86_64-v1.9.1.7z",
+    "size": 217338488,
+    "sha256": "2f5ee632f7c1923391abdc7ccbc9a86f27b90c7d47b4ae855d72bc977cff50fa",
+    "state": "verified",
+    "automatic_path_trigger": "PASS",
+    "formal_sftp_request_result": "PASS"
+  },
+  "https_range_comparison": [
+    {"start": 0, "end": 4095, "sha256": "cb677a6f0d530dc95e97faee2616b707e6a7d7f2a4584086388b1ee2688046ef", "matches_server": true},
+    {"start": 108667196, "end": 108671291, "sha256": "0488a0df97fa3204a3b1c14500fb24f27620bf65f42d768c92a2b1d6482ae76f", "matches_server": true},
+    {"start": 217334392, "end": 217338487, "sha256": "f1cad44b8e14117437dbadce1c8e0e86d9598dd02c23fb8535f17bd978269481", "matches_server": true}
+  ],
+  "current_queue": {
+    "requests": 0,
+    "results": 4,
+    "archive": 4
+  },
+  "acceptance_boundary": "Server and HTTPS byte identity only; not Windows/macOS installation, device, RF, or field acceptance."
+}

@@ -1196,8 +1196,10 @@ class EndpointSessionRuntime(QObject):
         if state is None:
             return None
         normalized_kind = SessionRecorderKind(kind)
+        if self._recorders:
+            return None
         if (
-            normalized_kind is SessionRecorderKind.CUSTOMER_FULL_CAPTURE
+            normalized_kind is SessionRecorderKind.CUSTOMER_RECORDING
             and capability.facet != "customer"
         ):
             return None
@@ -1207,14 +1209,8 @@ class EndpointSessionRuntime(QObject):
         ):
             return None
         gate = self.operation_gate
-        if normalized_kind is SessionRecorderKind.CUSTOMER_FULL_CAPTURE:
-            scope = self._identity_authorization_scope
-            if (
-                not capability.wire_send_allowed
-                or scope is None
-                or state.promoted_scope != scope
-                or gate.state is not RuntimeOperationGateState.IDLE
-            ):
+        if normalized_kind is SessionRecorderKind.CUSTOMER_RECORDING:
+            if gate.state is not RuntimeOperationGateState.IDLE:
                 return None
         elif normalized_kind is SessionRecorderKind.PRODUCTION_EVIDENCE:
             if (
@@ -1264,7 +1260,7 @@ class EndpointSessionRuntime(QObject):
         ):
             return False
         if production_freeze and any(
-            recorder.kind is SessionRecorderKind.CUSTOMER_FULL_CAPTURE
+            recorder.kind is SessionRecorderKind.CUSTOMER_RECORDING
             or (
                 recorder.kind is SessionRecorderKind.PRODUCTION_EVIDENCE
                 and recorder.capability_token != capability.token
@@ -1273,7 +1269,7 @@ class EndpointSessionRuntime(QObject):
         ):
             return False
         if not production_freeze and any(
-            recorder.kind is SessionRecorderKind.CUSTOMER_FULL_CAPTURE
+            recorder.kind is SessionRecorderKind.CUSTOMER_RECORDING
             and not (
                 recorder.capability_token == capability.token
                 and _owners_equal(recorder.owner, owner)

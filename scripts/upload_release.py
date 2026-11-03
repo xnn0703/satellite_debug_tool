@@ -177,7 +177,7 @@ def _upload_candidate(sftp, receipt_path: Path, release_id: str, owner: bytes) -
         files.append((path, row["size"], row["sha256"]))
     archives = [name for name in names if name.endswith(".7z" if identity["platform"] == "win" else ".zip")
                 and name != "delta.zip"]
-    if len(archives) != 1 or (identity["platform"] == "win" and "payload-manifest.json" not in names):
+    if len(archives) != 1 or (identity["edition"] == "ops" and "payload-manifest.json" not in names):
         raise ValueError("candidate requires a complete platform package and its manifest")
     directory = candidate_directory(release_id, identity)
     ensure_directory(sftp, directory)

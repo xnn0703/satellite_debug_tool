@@ -58,6 +58,32 @@ def test_fixture_attitude_plot_uses_one_shared_degree_axis_and_hides_unmapped_cu
     plot.close()
 
 
+def test_fixture_trajectory_editor_exposes_only_qualified_sample_periods(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.core.production import FixtureControlLease, FixtureProfileStore
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    profile_store = FixtureProfileStore(tmp_path / "profiles-qualified-period")
+    profile_store.save(_profile())
+    workspace = FixtureDebugWorkspace(
+        _settings(tmp_path, monkeypatch),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        session_root=tmp_path / "sessions-qualified-period",
+        controller_factory=_controller_factory(),
+        motion_only=True,
+    )
+
+    assert workspace._sample_period.minimum() == 50
+    assert workspace._sample_period.value() == 50
+
+    workspace.shutdown()
+    workspace.close()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -351,6 +377,15 @@ def test_trajectory_completion_records_execution_statistics(
         "sent_points": 3999,
         "skipped_points": 1,
         "maximum_lateness_ms": 20.4,
+        "maximum_send_interval_ms": 0.0,
+        "p95_send_interval_ms": 0.0,
+        "p99_send_interval_ms": 0.0,
+        "control_gap_count": 0,
+        "timing_fault": False,
+        "command_duration_ms": 0,
+            "soft_center_requested": False,
+            "fade_points": 0,
+            "center_confirmed": False,
     }
     workspace.shutdown()
     workspace.close()
@@ -376,6 +411,18 @@ def test_registered_model_installation_configuration_keeps_internal_id_read_only
         for axis in ("roll", "pitch", "yaw")
     ) == (-1, 1, -1)
     dialog.close()
+
+
+def test_fixture_plot_projection_has_fixed_point_budget() -> None:
+    from satellite_debug_tool.core.production import TimedAttitude
+    from satellite_debug_tool.ui.fixture_debug_workspace import _bounded_plot_samples
+
+    samples = tuple(TimedAttitude(index, float(index), 0.0, 0.0) for index in range(10000))
+    projected = _bounded_plot_samples(samples, point_budget=2400)
+
+    assert len(projected) == 2400
+    assert projected[0] == samples[0]
+    assert projected[-1] == samples[-1]
 
 
 def test_customer_mode_hides_maintenance_and_keeps_daily_pose_controls(
@@ -420,7 +467,7 @@ def test_customer_mode_hides_maintenance_and_keeps_daily_pose_controls(
     assert workspace._session_start.text() == "开始控制会话"
     assert workspace._trajectory_group.title() == "组合连续摇摆"
     assert workspace._trajectory_start.text() == "开始组合摇摆"
-    assert workspace._stop.text() == "受控停止"
+    assert workspace._stop.text() == "缓停并回正"
     for axis, (enabled, amplitude, frequency, phase) in workspace._trajectory_axes.items():
         enabled.setChecked(True)
         amplitude.setValue({"roll": 2.0, "pitch": 1.5, "yaw": 1.0}[axis])

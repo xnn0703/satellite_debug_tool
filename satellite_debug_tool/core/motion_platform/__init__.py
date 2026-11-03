@@ -23,9 +23,14 @@ from .models import (
     PlatformPose,
 )
 from .trajectory import (
+    CompiledTrajectory,
+    CompiledTrajectoryPoint,
     MotionTrajectoryRunner,
+    QUALIFIED_CONTINUOUS_SAMPLE_PERIOD_MS,
     SineAxis,
     SineTrajectory,
+    SoftCenterPhase,
+    TrajectoryPreflightResult,
     TrajectoryResult,
     validate_sine_trajectory,
 )
@@ -33,6 +38,8 @@ from .trajectory import (
 __all__ = [
     "ActuatorTargets",
     "ControllerFeedback",
+    "CompiledTrajectory",
+    "CompiledTrajectoryPoint",
     "DatagramTransport",
     "DirectMotionPlatformController",
     "HOME_FRAME",
@@ -46,10 +53,13 @@ __all__ = [
     "MotionPlatformSnapshot",
     "MotionPlatformState",
     "MotionTrajectoryRunner",
+    "QUALIFIED_CONTINUOUS_SAMPLE_PERIOD_MS",
     "PlatformGeometry",
     "PlatformPose",
     "SineAxis",
     "SineTrajectory",
+    "SoftCenterPhase",
+    "TrajectoryPreflightResult",
     "TrajectoryResult",
     "build_position_frame",
     "parse_feedback_frame",

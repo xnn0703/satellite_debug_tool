@@ -1,0 +1,135 @@
+{
+  "schema": "satellite.release-validation/v1",
+  "version": "1.9.1",
+  "source_commit": "3f89817f6e9b31dbc77c798b2f63e9d58697e244",
+  "tag": "v1.9.1",
+  "release_state": "published",
+  "ci": {
+    "master_run_id": 41449643670,
+    "release_run_id": 41449699594,
+    "release_url": "https://github.com/xnn0703/satellite_debug_tool/actions/runs/41449699594",
+    "windows_user": "success",
+    "windows_ops": "success",
+    "candidate_upload": "success"
+  },
+  "source_tests": {
+    "local": {
+      "passed": 2238,
+      "seconds": 279.57
+    },
+    "macos_release_environment": {
+      "passed": 2238,
+      "seconds": 275.91
+    },
+    "m54_tracking_criteria": {
+      "passed": 113,
+      "seconds": 5.5
+    },
+    "translation_messages": 1505,
+    "compileall": "PASS",
+    "source_user_smoke": "PASS",
+    "source_ops_smoke": "PASS"
+  },
+  "artifacts": [
+    {
+      "edition": "user",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "name": "satellite_terminal_manager-windows-x86_64-v1.9.1.7z",
+      "size": 56936410,
+      "sha256": "ad335e3fba0c8805f8519d645fb0c876397a2ac0fbb04fcee138f82c63a452ca",
+      "system_signature": "unsigned",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "download_url": "https://60.205.157.141/downloads/v1.9.1/satellite_terminal_manager-windows-x86_64-v1.9.1.7z?build=3f89817f6e9b31dbc77c798b2f63e9d58697e244"
+    },
+    {
+      "edition": "ops",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "name": "satellite_terminal_manager-ops-windows-x86_64-v1.9.1.7z",
+      "size": 217338488,
+      "sha256": "2f5ee632f7c1923391abdc7ccbc9a86f27b90c7d47b4ae855d72bc977cff50fa",
+      "system_signature": "unsigned",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "download_url": "https://60.205.157.141/downloads/v1.9.1/satellite_terminal_manager-ops-windows-x86_64-v1.9.1.7z?build=3f89817f6e9b31dbc77c798b2f63e9d58697e244"
+    },
+    {
+      "edition": "user",
+      "platform": "macos",
+      "architecture": "arm64",
+      "name": "satellite_terminal_manager-macos-arm64-v1.9.1.zip",
+      "size": 70552412,
+      "sha256": "82a2a39dbf4408bf552d0febc74500513ad77a89725d05c89c9458bf94690709",
+      "system_signature": "adhoc-verified",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "download_url": "https://60.205.157.141/downloads/v1.9.1/satellite_terminal_manager-macos-arm64-v1.9.1.zip?build=3f89817f6e9b31dbc77c798b2f63e9d58697e244"
+    },
+    {
+      "edition": "ops",
+      "platform": "macos",
+      "architecture": "arm64",
+      "name": "satellite_terminal_manager-ops-macos-arm64-v1.9.1.zip",
+      "size": 284306901,
+      "sha256": "aed5b64873476699edd1d7051d6060bebef527c37cbe7992ebdf719a6f2f60b4",
+      "system_signature": "adhoc-verified",
+      "archive_crc": "PASS",
+      "archive_identity": "PASS",
+      "download_url": "https://60.205.157.141/downloads/v1.9.1/satellite_terminal_manager-ops-macos-arm64-v1.9.1.zip?build=3f89817f6e9b31dbc77c798b2f63e9d58697e244"
+    }
+  ],
+  "trusted_repository": {
+    "url": "https://60.205.157.141/v1/apps/satellite-terminal-tool/",
+    "fresh_client_verification": "PASS",
+    "macos": {
+      "catalog_sha256": "8bff66bffc1514cb13e841a0cdc40d070af0faa6b1c2da3566eb0eb57536e701",
+      "installation_mode": "manual",
+      "delta_count": 0,
+      "package_full_https_sha256": "PASS"
+    },
+    "windows": {
+      "catalog_sha256": "d780e1a52697a144845b9ae4b7fec9d89a2d710ca6b4bd1128a0b949ba282b8d",
+      "installation_mode": "automatic",
+      "delta_count": 0,
+      "package_full_https_sha256": "PASS"
+    },
+    "publications": {
+      "macos_package": {
+        "bundle_id": "8e120d47924df2720cf54835d1040b0c0fdd17a1a56fb170c9a84d5eec946549",
+        "timestamp_sha256": "f0d962a9ad7086e2e04f0bca2fdcdbc20337524901c1d1178005eff1bc95bfbe"
+      },
+      "windows": {
+        "bundle_id": "30ee4c1b8dbe0a654fc20dd67a9ebd4e1f693f06a2f60db050d640599c094995",
+        "timestamp_sha256": "b0ca23661cc0fb048c00dfa2fa8c423fff694b6fee60ecec530c0e9032fcbb5c",
+        "recovery": "resume_after_full_public_probe_and_server_sha_inventory"
+      },
+      "corrected_macos_notes": {
+        "bundle_id": "cc9d4fe19610d134869895e7b9295a0bfe4294519668bfa741c1eb4ad0a58a8f",
+        "timestamp_sha256": "8b5e554c4aee6d243d177d4c779098e937aeb29b4cf27f6b087af3c148232bcb",
+        "reused_verified_package": true
+      }
+    }
+  },
+  "public_downloads": {
+    "release_index": "https://60.205.157.141/downloads/v1.9.1/release.json",
+    "sha256sums": "https://60.205.157.141/downloads/v1.9.1/SHA256SUMS.txt",
+    "server_sha256": "PASS",
+    "first_middle_last_range_checks": "PASS",
+    "ops_aliases": "hard links to verified TUF targets"
+  },
+  "download_incident": {
+    "observed": "macOS updater resumed 9.25 MiB then three TLS handshakes exceeded 8 seconds",
+    "concurrent_condition": "formal full-package public verification saturated the 3 Mbps ECS egress",
+    "after_publication": "10 of 10 TLS range probes passed in 0.12 to 0.20 seconds",
+    "client_resume": "existing .part remains bound to the trusted size and SHA-256"
+  },
+  "acceptance_boundaries": {
+    "windows_physical_upgrade_and_recovery": "pending separate real-machine acceptance",
+    "physical_devices_rf_and_fixtures": "pending separate bench acceptance",
+    "windows_system_signature": "unsigned; TUF signature is a separate update contract",
+    "macos_system_signature": "ad-hoc verified; Apple notarization not performed",
+    "delta_delivery": "capability implemented; v1.9.1 candidate contains no delta.zip and publishes complete packages only"
+  }
+}

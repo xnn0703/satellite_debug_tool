@@ -61,23 +61,27 @@ def create_build_identity(*, edition: Edition, version: str, platform: str,
             "platform": platform, "architecture": architecture, "build_id": build_id}
 
 
-def validate_payload_identity(root: Path, edition: Edition, version: str = "") -> None:
+def validate_payload_identity(root: Path, edition: Edition, version: str = "", *, platform: str | None = None) -> None:
     """在替换旧安装前验证唯一载荷中的构建身份。"""
     from satellite_debug_tool.versioning import compare_versions
 
-    path = root / "_internal" / "satellite_debug_tool" / "build_identity.json"
+    from satellite_debug_tool.updater.install_platform import identity_path, installation_platform, validate_macos_bundle
+    selected = installation_platform(root) if platform is None else platform
+    path = identity_path(root, selected)
     if not path.exists():
         # 已发布的全量包截至 1.7.0 使用固定 ops 合同。
-        if edition is Edition.OPS and version and compare_versions(version, "1.7.0") <= 0:
+        if selected == "windows" and edition is Edition.OPS and version and compare_versions(version, "1.7.0") <= 0:
             return
         raise ValueError("update payload requires a build identity")
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in ("edition", "version", "platform")):
         raise ValueError("update payload requires a complete build identity")
-    # 当前自动安装载荷合同是 Windows onedir；macOS 通过独立签名 app 分发。
-    if data["platform"] != "win":
-        raise ValueError("update payload platform differs from the Windows installer")
+    expected = "mac" if selected == "macos" else "win"
+    if data["platform"] != expected:
+        raise ValueError("update payload platform differs from the installer")
     if Edition(data["edition"]) is not edition:
         raise ValueError("update payload edition differs from the installed edition")
     if version and compare_versions(str(data["version"]), version) != 0:
         raise ValueError("update payload version differs from the requested release")
+    if expected == "mac":
+        validate_macos_bundle(root, version=version)

@@ -10,6 +10,7 @@ from satellite_debug_tool.core.production import (
     PlatformPose,
     WorkstationFixtureProfile,
 )
+from satellite_debug_tool.core.motion_platform import SineAxis, SineTrajectory
 from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
 
 
@@ -83,6 +84,41 @@ def test_stop_drops_queued_requests_without_claiming_emergency_stop(
     assert _wait_until(qapp, lambda: worker.controller.snapshot.ready)
     worker.stop_sequence()
     assert commands == []
+    worker.shutdown()
+    assert worker.wait(2000)
+
+
+def test_active_trajectory_soft_centers_without_ending_control_session(
+    qapplication_session,
+) -> None:
+    qapp = qapplication_session
+    commands = []
+    results = []
+    worker = FixtureControlWorker(_profile(), controller_factory=_factory(commands))
+    worker.confirm_preflight()
+    worker.request_finished.connect(lambda _request_id, result: results.append(result))
+    worker.start()
+    assert _wait_until(qapp, lambda: worker.controller.snapshot.ready)
+    trajectory = SineTrajectory(
+        sample_period_ms=50,
+        ramp_in_s=0.0,
+        steady_duration_s=2.0,
+        ramp_out_s=0.2,
+        roll=SineAxis(2.0, 0.2),
+        pitch=SineAxis(0.0, 0.0, enabled=False),
+        yaw=SineAxis(0.0, 0.0, enabled=False),
+    )
+
+    worker.submit_trajectory(trajectory)
+    assert _wait_until(qapp, lambda: len(commands) >= 3)
+    worker.request_soft_center()
+    assert _wait_until(qapp, lambda: len(results) == 1)
+
+    assert results[0].soft_center_requested
+    assert results[0].fade_points == 4
+    assert results[0].center_confirmed
+    assert worker.controller.snapshot.ready
+
     worker.shutdown()
     assert worker.wait(2000)
 

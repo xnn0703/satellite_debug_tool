@@ -12,12 +12,13 @@
 | TUF 仓库 | `/srv/satellite-updates/public/v1/apps/satellite-terminal-tool` |
 | 低权在线密钥目录 | `/etc/satellite-updates/online-keys` |
 | 续签与 SFTP 晋升共用锁 | `/srv/satellite-updates/receipts/satellite-terminal-tool.publication.lock` |
+| 发布校验请求/回执/归档 | `/srv/satellite-updates/receipts/verification/{requests,results,archive}` |
 
 部署前准备 `satellite_meta` 用户/组。该用户需读取工具、公开元数据及自己的 timestamp/snapshot 密钥，写入仓库续签路径、`publish.lock` 和 receipts 目录。root/targets 私钥保持离线；服务器工具 bundle 排除 GUI、客户记录和全部私钥。代码目录由 root 管理，服务用户只读。
 
-app 根保持发布 owner 管理的 0755；部署者预创建可由 `satellite_meta` 读写的 `app/publish.lock`。metadata 目录使用共享组与 2775，receipts 目录使用共享组与 2770；服务 sandbox 只开放这两个目录和现有 publish.lock。公开元数据的服务 UMask 为 0022，确保 Nginx 可读新文件；在线密钥独立保持目录 0700、文件 0600，不受公开元数据 UMask 改变。
+app 根保持发布 owner 管理的 0755；部署者预创建可由 `satellite_meta` 读写的 `app/publish.lock`。metadata 目录使用共享组与 2775，receipts 目录使用共享组、sticky bit 与 3770；服务 sandbox 只开放必要目录和现有 publish.lock。`verification/requests` 由 `satellite_publish:satellite_metadata` 管理，`results/archive` 由 `root:satellite_metadata` 管理，正式发布身份对回执只读。公开元数据的服务 UMask 为 0022，确保 Nginx 可读新文件；在线密钥独立保持目录 0700、文件 0600，不受公开元数据 UMask 改变。
 
-将本目录的 `health_check.py`、`renew_certificate.sh` 和 `renewed_reload_nginx.sh` 一并放入工具 bundle 的 `deploy/updates/`，将 `.service`/`.timer` 复制到 `/etc/systemd/system/`。将 `certbot.env.example` 配置后安装为 `/etc/satellite-updates/certbot.env`，`root:root 0600`；`CERTBOT_CERT_NAME` 必须是 `certbot certificates` 显示的更新站证书名称。renew 只操作该证书，沿用首次申请保存的 webroot 配置。
+将本目录的 `health_check.py`、`renew_certificate.sh` 和 `renewed_reload_nginx.sh` 一并放入工具 bundle 的 `deploy/updates/`，将 `.service`/`.timer`/`.path` 复制到 `/etc/systemd/system/`。`verify_publication_server.py` 安装到工具 bundle 的 `scripts/`，启用 `satellite-updates-verify-publication.path`；新请求触发 oneshot 本机完整 SHA-256，处理后请求进入 root 归档。将 `certbot.env.example` 配置后安装为 `/etc/satellite-updates/certbot.env`，`root:root 0600`；`CERTBOT_CERT_NAME` 必须是 `certbot certificates` 显示的更新站证书名称。renew 只操作该证书，沿用首次申请保存的 webroot 配置。
 
 | Timer | 调度 UTC | 操作账号 |
 | --- | --- | --- |

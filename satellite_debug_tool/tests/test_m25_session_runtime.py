@@ -39,6 +39,7 @@ from satellite_debug_tool.core.session import (
     RuntimeLeaseError,
     RuntimePresencePhase,
     SessionOperationClass,
+    SessionRecorderKind,
 )
 
 
@@ -337,16 +338,24 @@ def test_customer_capture_controller_holds_recorder_and_gate_until_restore(
     runtime.feed_datagram(
         _datagram(endpoint, _meta_info("AFD01-RECORDING"), monotonic_s=1.0)
     )
+    recorder_owner = object()
+    customer_gateway = customer.new_operation_gateway()
+    recorder_lease = customer_gateway.acquire_recorder(
+        recorder_owner,
+        kind=SessionRecorderKind.CUSTOMER_RECORDING,
+    )
+    assert recorder_lease is not None
     capture = CaptureProfileController(
         runtime.core,
-        operation_gateway=customer.new_operation_gateway(),
+        operation_gateway=customer_gateway,
+        operation_owner=recorder_owner,
     )
 
     assert capture.request(True)
     prepare_id = capture.pending_request_id
     assert prepare_id is not None
     capture.feed_response(_capture_response(prepare_id))
-    assert capture.recording_lease_active
+    assert not capture.recording_lease_active
     assert runtime.recorder_count == 1
     assert runtime.operation_gate.state is RuntimeOperationGateState.MUTATING
 
@@ -370,9 +379,10 @@ def test_customer_capture_controller_holds_recorder_and_gate_until_restore(
     restore_id = capture.pending_request_id
     assert restore_id is not None
     capture.feed_response(_capture_response(restore_id))
-    assert not capture.recording_lease_active
-    assert runtime.recorder_count == 0
+    assert runtime.recorder_count == 1
     assert runtime.operation_gate.state is RuntimeOperationGateState.IDLE
+    assert recorder_lease.release()
+    assert runtime.recorder_count == 0
     assert production_gateway.try_acquire_operation(
         production_owner,
         purpose="production-batch",

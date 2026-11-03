@@ -37,6 +37,15 @@ def test_continuous_motion_requires_owner_and_preserves_operating_limits():
     assert controller.commands == []
 
 
+def test_continuous_motion_compiles_one_bounded_repeat_program():
+    controller = ConfirmedMotionController(_profile().to_motion_config())
+    checked = MotionTrajectoryRunner(controller).preflight(_continuous())
+
+    assert checked.compiled.finite_points == ()
+    assert len(checked.compiled.prefix_points) == 1
+    assert len(checked.compiled.periodic_points) == 50
+
+
 def test_finite_engineering_trajectory_keeps_full_path_and_arrival():
     clock = _Clock()
     controller = ConfirmedMotionController(_profile().to_motion_config())

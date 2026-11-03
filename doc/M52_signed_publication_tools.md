@@ -79,7 +79,7 @@ Mac 版按已确认的最低 macOS 版本设置 `--min-os`；其安装方式仍�
   --bundle /absolute/publications/RELEASE_ID/publication.json
 ```
 
-提交持有服务器排他锁，先确认 timestamp 仍与 prepare 时一致，再上传摘要命名的目标文件和编号元数据。逐文件 SFTP 校验之后，再从实际 HTTPS 地址流式回读，校验长度和 SHA-256；全部完成后，通过 OpenSSH `posix-rename` 原子替换 timestamp，最后推进本地正式账本。未支持原子替换的 SFTP 服务明确失败。包缺失、权限错误、公开 URL 错误、HTTP 降级或摘要不一致都不推进渠道。
+提交持有服务器排他锁，先确认 timestamp 仍与 prepare 时一致，再上传摘要命名的目标文件和编号元数据。M56 起，发布机通过纯 SFTP 投递与 bundle ID 绑定的规范校验请求；ECS `satellite-updates-verify-publication.path/service` 在本机对 Nginx public 文件计算完整长度和 SHA-256，由 root 写入发布账号只读的回执。发布机校验回执的 request/bundle/文件数/总字节，再从实际 HTTPS 地址对每个目标做首/中/尾最多 4 KiB Range 对比；全部完成后，通过 OpenSSH `posix-rename` 原子替换 timestamp，最后推进本地正式账本。未支持原子替换的 SFTP 服务明确失败。包缺失、服务器回执缺失/不匹配、权限错误、公开 URL 错误、HTTP 降级或 Range 不一致都不推进渠道。该改动不给发布账号开放 shell/TTY/转发，root/targets 私钥仍只留在发布机。
 
 正常失败会释放锁，原 bundle 可重试；已经提交的同 bundle 返回 `reused`，并补齐可能因本地异常而尚未更新的账本。另一发布或服务器续签改变了 timestamp 时明确拒绝；重新 prepare 到新目录获取新状态。更新服务器续签与正式提交共用排他锁，避免互相覆盖。
 

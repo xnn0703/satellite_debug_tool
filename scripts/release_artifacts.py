@@ -60,7 +60,7 @@ def package(payload: Path, destination: Path, *, commit: str, version: str,
     if bool(base_root) != bool(base_manifest):
         raise ValueError("delta requires both baseline tree and its manifest")
     if base_root and (identity["edition"] != "ops" or identity["platform"] != "win"):
-        raise ValueError("file delta supports Windows operations edition")
+        raise ValueError("file delta currently supports Windows operations edition")
     if destination.exists() and any(destination.iterdir()):
         raise ValueError("candidate output already exists; upload the existing receipt to retry")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +92,8 @@ def package(payload: Path, destination: Path, *, commit: str, version: str,
             with zipfile.ZipFile(staging / name) as archive:
                 if archive.testzip() is not None:
                     raise ValueError("candidate ZIP CRC verification failed")
+            tree = build_manifest(payload, identity)
+            write_manifest(staging / "payload-manifest.json", tree)
         artifacts = [{"name": path.name, "size": path.stat().st_size, "sha256": sha256_file(path)}
                      for path in sorted(staging.iterdir())]
         receipt = {"schema": "satellite.release-candidate/v1", "identity": identity,

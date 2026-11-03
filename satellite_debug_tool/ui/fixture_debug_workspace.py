@@ -44,9 +44,14 @@ from satellite_debug_tool.core.motion_platform import (
     MotionActionResult,
     MotionPlatformSnapshot,
     MotionPlatformState,
+    SoftCenterPhase,
+    TrajectoryPreflightResult,
     TrajectoryResult,
 )
-from satellite_debug_tool.core.production.fixture_control import ControllerFactory
+from satellite_debug_tool.core.production.fixture_control import (
+    ControllerFactory,
+    FixtureControlRequestType,
+)
 from satellite_debug_tool.core.production import (
     CALIBRATION_REFERENCE_STABILITY_LIMIT_DEG,
     BoundedAttitudeOuterLoop,
@@ -91,7 +96,6 @@ from satellite_debug_tool.core.production import (
     compute_dynamic_metrics,
     compute_static_metrics,
     fixture_model_presets,
-    validate_sine_profile,
 )
 from satellite_debug_tool.i18n import register_translatable, tr, tr_source
 from satellite_debug_tool.ui import styles as S
@@ -104,6 +108,24 @@ def _settlement_result(result: object) -> Optional[MotionActionResult]:
     if isinstance(result, TrajectoryResult):
         return result.arrival
     return None
+
+
+FIXTURE_PLOT_POINT_BUDGET = 2400
+
+
+def _bounded_plot_samples(
+    samples: tuple[TimedAttitude, ...],
+    *,
+    point_budget: int = FIXTURE_PLOT_POINT_BUDGET,
+) -> tuple[TimedAttitude, ...]:
+    """按固定显示预算投影历史，避免采集时长增加 UI/GIL 工作量。"""
+    if point_budget < 2:
+        raise ValueError("plot point budget must be at least two")
+    if len(samples) <= point_budget:
+        return samples
+    last = len(samples) - 1
+    indices = tuple(round(index * last / (point_budget - 1)) for index in range(point_budget))
+    return tuple(samples[index] for index in indices)
 
 
 class FixtureProfileDialog(QDialog):
@@ -694,6 +716,8 @@ class FixtureDebugWorkspace(QWidget):
         self._qualification_start_pending = False
         self._guided_calibration: Optional[GuidedFixtureCalibration] = None
         self._outer_loop = BoundedAttitudeOuterLoop()
+        self._trajectory_preflight: Optional[TrajectoryPreflightResult] = None
+        self._active_control_request_type = ""
         self._calibration_capture_enabled = False
         self._view_active = False
         self._build_ui()
@@ -737,7 +761,7 @@ class FixtureDebugWorkspace(QWidget):
         self._trajectory_group.setTitle(tr("Combined continuous rocking"))
         self._preview_button.setText(tr("Preview and validate"))
         self._trajectory_start.setText(tr("Start combined rocking"))
-        self._stop.setText(tr("Controlled stop"))
+        self._stop.setText(tr("Soft stop and center"))
         self._qualification_group.hide()
         self._calibration_group.hide()
         self._reset.hide()
@@ -1016,11 +1040,12 @@ class FixtureDebugWorkspace(QWidget):
         self._steady.setValue(60)
         self._steady.setSuffix(" s")
         self._ramp_out = QDoubleSpinBox()
-        self._ramp_out.setRange(0, 600)
+        self._ramp_out.setRange(0.1, 600)
         self._ramp_out.setValue(10)
         self._ramp_out.setSuffix(" s")
         self._sample_period = QSpinBox()
-        self._sample_period.setRange(10, 10000)
+        # 连续轨迹当前只资格确认到 50 ms；界面不提供尚未通过现场验收的周期。
+        self._sample_period.setRange(50, 10000)
         self._sample_period.setValue(50)
         self._sample_period.setSuffix(" ms")
         self._trajectory_labels = {
@@ -1574,6 +1599,8 @@ class FixtureDebugWorkspace(QWidget):
             )
             control.confirm_preflight()
             control.send_result.connect(self._on_platform_send)
+            control.request_started.connect(self._on_control_started)
+            control.soft_center_phase_changed.connect(self._on_soft_center_phase)
             control.request_finished.connect(self._on_control_finished)
             control.request_failed.connect(self._on_control_failed)
             control.evidence_failed.connect(self._fail_evidence)
@@ -1627,12 +1654,12 @@ class FixtureDebugWorkspace(QWidget):
         for widget in (
             self._move,
             self._center,
-            self._stop,
             self._reset,
             self._trajectory_start,
             self._calibration_start,
         ):
             widget.setEnabled(enabled and not qualification_active)
+        self._stop.setEnabled(False)
         qualification_ready = (
             not self._motion_only
             and self._profile is not None
@@ -1888,12 +1915,19 @@ class FixtureDebugWorkspace(QWidget):
         self._outer_loop.stop()
         control = self._control
         if control is not None:
-            control.stop_sequence()
+            try:
+                control.request_soft_center()
+            except MotionPlatformError as exc:
+                self._show_error(str(exc))
+                return
+            self._stop.setEnabled(False)
+            self._stop.setText(tr("Soft stopping..."))
             self._append_event(
                 tr(
-                    "Controlled stop requested; no further trajectory points will be sent. "
+                    "Soft stop requested; amplitude will fade before feedback-confirmed centering. "
                     "Use the physical emergency stop for an unsafe motion."
-                )
+                ),
+                event_type="soft_center_requested",
             )
 
     def _send_reset(self) -> None:
@@ -1941,10 +1975,12 @@ class FixtureDebugWorkspace(QWidget):
             return None
         profile = self._trajectory_profile()
         try:
-            validate_sine_profile(self._profile.to_motion_config(), profile)
+            preflight = self._require_control().preflight_trajectory(profile)
         except MotionPlatformError as exc:
+            self._trajectory_preflight = None
             self._show_error(str(exc))
             return None
+        self._trajectory_preflight = preflight
         count = min(1200, profile.sample_count)
         times = np.linspace(0.0, profile.total_duration_s, count)
         poses = [profile.pose_at(float(value)) for value in times]
@@ -1952,9 +1988,13 @@ class FixtureDebugWorkspace(QWidget):
             curve.setData(times, [getattr(pose, f"{axis}_deg") for pose in poses])
         self._append_event(
             tr(
-                "Trajectory validated: {points} command points, {duration:.1f} s.",
+                "Trajectory validated: {points} command points, {duration:.1f} s; "
+                "axis {axis} minimum extension {margin:.2f} mm. "
+                "Single-axis limits do not guarantee combined-pose reachability.",
                 points=profile.sample_count,
                 duration=profile.total_duration_s,
+                axis=preflight.limiting_axis,
+                margin=preflight.minimum_extension_mm,
             )
         )
         return profile
@@ -1964,7 +2004,10 @@ class FixtureDebugWorkspace(QWidget):
         if profile is None:
             return
         try:
-            self._require_control().submit_trajectory(profile)
+            self._require_control().submit_trajectory(
+                profile,
+                preflight=self._trajectory_preflight,
+            )
         except MotionPlatformError as exc:
             self._show_error(str(exc))
 
@@ -2024,11 +2067,15 @@ class FixtureDebugWorkspace(QWidget):
             self._append_event(
                 tr(
                     "Trajectory executed: sent {sent}/{intended}, skipped {skipped}; "
-                    "maximum scheduler lateness {lateness:.2f} ms.",
+                    "maximum scheduler lateness {lateness:.2f} ms, maximum send interval "
+                    "{interval:.2f} ms, control gaps {gaps}, timing fault {fault}.",
                     sent=result.sent_points,
                     intended=result.intended_points,
                     skipped=result.skipped_points,
                     lateness=result.maximum_lateness_ms,
+                    interval=result.maximum_send_interval_ms,
+                    gaps=result.control_gap_count,
+                    fault="YES" if result.timing_fault else "NO",
                 ),
                 event_type="trajectory_execution_completed",
                 details={
@@ -2036,6 +2083,15 @@ class FixtureDebugWorkspace(QWidget):
                     "sent_points": result.sent_points,
                     "skipped_points": result.skipped_points,
                     "maximum_lateness_ms": result.maximum_lateness_ms,
+                    "maximum_send_interval_ms": result.maximum_send_interval_ms,
+                    "p95_send_interval_ms": result.p95_send_interval_ms,
+                    "p99_send_interval_ms": result.p99_send_interval_ms,
+                    "control_gap_count": result.control_gap_count,
+                    "timing_fault": result.timing_fault,
+                    "command_duration_ms": result.command_duration_ms,
+                    "soft_center_requested": result.soft_center_requested,
+                    "fade_points": result.fade_points,
+                    "center_confirmed": result.center_confirmed,
                 },
             )
         settlement = _settlement_result(result)
@@ -2159,6 +2215,27 @@ class FixtureDebugWorkspace(QWidget):
         ):
             qualification.motion_failed(details)
 
+    def _on_control_started(self, _request_id: str, request_type: str) -> None:
+        self._active_control_request_type = str(request_type)
+        if request_type == FixtureControlRequestType.TRAJECTORY.value:
+            self._stop.setText(tr("Soft stop and center"))
+            self._stop.setEnabled(self.session_active and self._evidence_ready)
+
+    def _on_soft_center_phase(self, phase_value: str) -> None:
+        phase = SoftCenterPhase(str(phase_value))
+        text = {
+            SoftCenterPhase.FADING: tr("Fading motion..."),
+            SoftCenterPhase.CENTERING: tr("Centering..."),
+            SoftCenterPhase.CENTER_CONFIRMED: tr("Centered"),
+            SoftCenterPhase.CENTER_FAILED: tr("Center failed"),
+        }[phase]
+        self._stop.setText(text)
+        self._append_event(
+            tr("Soft-center phase: {phase}.", phase=text),
+            event_type="soft_center_phase",
+            details={"phase": phase.value},
+        )
+
     def _on_control_busy(self, busy: bool) -> None:
         ready = self.session_active and self._evidence_ready
         self._set_trajectory_parameters_enabled(not busy)
@@ -2169,7 +2246,14 @@ class FixtureDebugWorkspace(QWidget):
         self._center.setEnabled(ready and not busy)
         self._reset.setEnabled(ready and not busy)
         self._trajectory_start.setEnabled(ready and not busy)
-        self._stop.setEnabled(ready)
+        if not busy:
+            self._active_control_request_type = ""
+            self._stop.setText(tr("Soft stop and center"))
+        self._stop.setEnabled(
+            ready
+            and busy
+            and self._active_control_request_type == FixtureControlRequestType.TRAJECTORY.value
+        )
         if qualification_active:
             for widget in (
                 self._move,
@@ -2427,9 +2511,9 @@ class FixtureDebugWorkspace(QWidget):
         )
         errors = tuple(sample for sample in self._errors if sample.monotonic_ns >= cutoff_ns)
         self._attitude_plot.set_data(
-            targets,
-            measurements,
-            errors,
+            _bounded_plot_samples(targets),
+            _bounded_plot_samples(measurements),
+            _bounded_plot_samples(errors),
             origin_ns=self._session_origin_ns,
         )
 
@@ -2723,9 +2807,7 @@ class FixtureDebugWorkspace(QWidget):
         self._trajectory_labels["sample"].setText(tr("Sample period"))
         self._move.setText(tr("Send absolute target"))
         self._center.setText(tr("Center"))
-        self._stop.setText(
-            tr("Controlled stop") if self._customer_mode else tr("Stop sequence")
-        )
+        self._stop.setText(tr("Soft stop and center"))
         self._reset.setText(tr("Home..."))
         self._preview_button.setText(tr("Preview and validate"))
         self._trajectory_start.setText(

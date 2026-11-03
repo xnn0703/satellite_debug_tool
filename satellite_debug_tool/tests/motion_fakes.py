@@ -16,13 +16,14 @@ from satellite_debug_tool.core.motion_platform import (
 
 
 class ConfirmedMotionController:
-    def __init__(self, config, commands: list | None = None) -> None:
+    def __init__(self, config, commands: list | None = None, *, clock_ns=None) -> None:
         self.config = config
         self.commands = commands if commands is not None else []
+        self._clock_ns = clock_ns or time.monotonic_ns
         self.snapshot = MotionPlatformSnapshot(
             MotionPlatformState.READY,
             1,
-            feedback_monotonic_ns=time.monotonic_ns(),
+            feedback_monotonic_ns=self._clock_ns(),
             feedback_age_ms=0.0,
             actual_pulses=(0,) * 6,
             servo_error_codes=(0,) * 6,
@@ -47,7 +48,7 @@ class ConfirmedMotionController:
     def move_to(self, pose, *, duration_ms: int, action: str = "move"):
         targets = solve_actuator_targets(self.config, pose).pulses
         frame = build_position_frame(duration_ms, targets)
-        now = time.monotonic_ns()
+        now = self._clock_ns()
         event = MotionCommandEvent(
             action=action,
             raw_command=frame,
@@ -68,7 +69,7 @@ class ConfirmedMotionController:
             target_guard_passed=True,
             generation=1,
             started_monotonic_ns=now,
-            settled_monotonic_ns=time.monotonic_ns(),
+            settled_monotonic_ns=self._clock_ns(),
             target_pose=pose,
             target_pulses=targets,
             final_pulses=targets,
@@ -83,7 +84,7 @@ class ConfirmedMotionController:
         return self.move_to(self.config.center_pose, duration_ms=duration_ms, action="recover_to_center")
 
     def home(self):
-        now = time.monotonic_ns()
+        now = self._clock_ns()
         return MotionActionResult(
             action="home",
             sent=True,
@@ -110,11 +111,40 @@ class ConfirmedMotionController:
         self.snapshot = MotionPlatformSnapshot(MotionPlatformState.READY, 1)
 
     def send_trajectory_point(self, pose, *, duration_ms: int):
-        return self.move_to(pose, duration_ms=duration_ms, action="trajectory_point")
+        targets = solve_actuator_targets(self.config, pose).pulses
+        frame = build_position_frame(duration_ms, targets)
+        return self.send_compiled_trajectory_point(
+            pose,
+            target_pulses=targets,
+            frame=frame,
+            duration_ms=duration_ms,
+        )
+
+    def send_compiled_trajectory_point(
+        self,
+        pose,
+        *,
+        target_pulses,
+        frame: bytes,
+        duration_ms: int,
+    ):
+        event = MotionCommandEvent(
+            action="trajectory_point",
+            raw_command=frame,
+            target_pose=pose,
+            target_pulses=tuple(target_pulses),
+            duration_ms=duration_ms,
+            monotonic_ns=self._clock_ns(),
+            generation=1,
+        )
+        self.commands.append((frame, (self.config.controller_ipv4, self.config.command_port)))
+        for callback in self._command_callbacks:
+            callback(event)
+        return event
 
     def wait_for_target(self, pose, *, timeout_ms=None, action="trajectory"):
         targets = solve_actuator_targets(self.config, pose).pulses
-        now = time.monotonic_ns()
+        now = self._clock_ns()
         return MotionActionResult(
             action=action,
             sent=True,

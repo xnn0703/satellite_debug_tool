@@ -12,7 +12,9 @@ import shutil
 import stat
 import sys
 import tempfile
-from threading import Event
+import time
+import urllib.request
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,11 +23,15 @@ from tuf.api.metadata import Metadata, TargetFile
 from scripts.upload_release import CANDIDATE_ROOT, _attributes, _local_digest, upload_file
 from satellite_debug_tool.updater.payload import canonical_bytes
 from satellite_debug_tool.updater.publishing import _write_bytes, load_signers, publish_candidate
-from satellite_debug_tool.updater.repository import HttpsFetcher, https_base, repository_lock, safe_component, target_path
+from satellite_debug_tool.updater.repository import https_base, repository_lock, safe_component, target_path
+from scripts.verify_publication_server import REQUEST_SCHEMA, RESULT_SCHEMA
 
 PUBLIC_ROOT = "/srv/satellite-updates/public/v1/apps"
 STATE_ROOT = "/srv/satellite-updates/receipts"
+VERIFY_REQUEST_ROOT = STATE_ROOT + "/verification/requests"
+VERIFY_RESULT_ROOT = STATE_ROOT + "/verification/results"
 MAX_METADATA = 64 * 1024**2
+RANGE_BLOCK = 4096
 
 
 def _read(sftp, path: str, limit: int = MAX_METADATA) -> bytes | None:
@@ -283,19 +289,113 @@ def _remote_lock(sftp, path: str, bundle_id: str, recover: bool):
             sftp.remove(path)
 
 
-def _probe_public(document: dict, fetcher=None) -> None:
-    fetcher = fetcher or HttpsFetcher(20, Event())
-    for row in document["files"]:
-        if row["path"] in ("metadata/timestamp.json", "metadata/root.json"):
+class PublicRangeFetcher:
+    """Read one exact HTTPS range; a server that ignores Range is not accepted."""
+
+    def __init__(self, timeout: float = 10.0):
+        self.timeout = timeout
+
+    def fetch_range(self, url: str, start: int, end: int) -> bytes:
+        request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            if getattr(response, "status", None) != 206:
+                raise ValueError("public publication range request was not honored")
+            expected = f"bytes {start}-{end}/"
+            if not response.headers.get("Content-Range", "").startswith(expected):
+                raise ValueError("public publication Content-Range differs")
+            data = response.read(end - start + 2)
+        if len(data) != end - start + 1:
+            raise ValueError("public publication range length differs")
+        return data
+
+
+def _immutable_rows(document: dict) -> list[dict]:
+    return [row for row in document["files"]
+            if row["path"] not in ("metadata/timestamp.json", "metadata/root.json")]
+
+
+def _verification_request(document: dict, bundle_id: str) -> tuple[dict, bytes]:
+    files = [{"path": row["path"], "size": row["size"], "sha256": row["sha256"]}
+             for row in _immutable_rows(document)]
+    request = {
+        "schema": REQUEST_SCHEMA,
+        "request_id": uuid.uuid4().hex + uuid.uuid4().hex,
+        "bundle_id": bundle_id,
+        "app_id": document["app_id"],
+        "file_count": len(files),
+        "total_bytes": sum(row["size"] for row in files),
+        "files": files,
+    }
+    return request, canonical_bytes(request)
+
+
+def _require_remote_directory(sftp, path: str) -> None:
+    info = _attributes(sftp, path)
+    if info is None or not stat.S_ISDIR(info.st_mode):
+        raise ValueError("server verification directory is unavailable")
+
+
+def _request_server_verification(sftp, document: dict, bundle_id: str, *, timeout: float = 120.0) -> dict:
+    """Submit a small request through SFTP and consume the root-owned server result."""
+    _require_remote_directory(sftp, VERIFY_REQUEST_ROOT)
+    _require_remote_directory(sftp, VERIFY_RESULT_ROOT)
+    request, raw = _verification_request(document, bundle_id)
+    request_digest = hashlib.sha256(raw).hexdigest()
+    destination = VERIFY_REQUEST_ROOT + "/" + request["request_id"] + ".json"
+    temporary = destination + ".submission-" + bundle_id
+    with sftp.open(temporary, "wx") as stream:
+        stream.write(raw)
+        stream.flush()
+    sftp.posix_rename(temporary, destination)
+    result_path = VERIFY_RESULT_ROOT + "/" + request["request_id"] + ".json"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result_raw = _read(sftp, result_path, 1024**2)
+        if result_raw is None:
+            time.sleep(0.2)
             continue
-        digest, size = hashlib.sha256(), 0
-        for block in fetcher.fetch(document["public_base_url"] + row["path"]):
-            size += len(block)
-            if size > row["size"]:
-                raise ValueError("public publication file exceeds signed bundle length")
-            digest.update(block)
-        if (size, digest.hexdigest()) != (row["size"], row["sha256"]):
-            raise ValueError("public publication file differs from signed bundle bytes")
+        result = json.loads(result_raw)
+        if result_raw != canonical_bytes(result) or result.get("schema") != RESULT_SCHEMA:
+            raise ValueError("server verification result is unsupported")
+        expected = {
+            "request_id": request["request_id"],
+            "request_sha256": request_digest,
+            "bundle_id": bundle_id,
+            "app_id": document["app_id"],
+        }
+        if any(result.get(key) != value for key, value in expected.items()):
+            raise ValueError("server verification result differs from this request")
+        if result.get("state") != "verified":
+            raise ValueError("server publication verification failed: " + str(result.get("error", "unknown error")))
+        if (result.get("file_count"), result.get("total_bytes")) != (
+                request["file_count"], request["total_bytes"]):
+            raise ValueError("server verification result totals differ")
+        return result
+    raise TimeoutError("server publication verification result timed out")
+
+
+def _probe_public_samples(document: dict, repository: Path, fetcher=None) -> None:
+    """Prove Nginx maps each target to the locally signed bytes without a full public download."""
+    fetcher = fetcher or PublicRangeFetcher()
+    for row in _immutable_rows(document):
+        size = row["size"]
+        if size == 0:
+            continue
+        starts = sorted({0, max(0, (size - RANGE_BLOCK) // 2), max(0, size - RANGE_BLOCK)})
+        source = repository / row["path"]
+        with source.open("rb") as stream:
+            for start in starts:
+                end = min(size, start + RANGE_BLOCK) - 1
+                stream.seek(start)
+                expected = stream.read(end - start + 1)
+                if hasattr(fetcher, "fetch_range"):
+                    actual = fetcher.fetch_range(document["public_base_url"] + row["path"], start, end)
+                else:
+                    # Test-only compatibility for the historical FetcherInterface substitute.
+                    entire = b"".join(fetcher.fetch(document["public_base_url"] + row["path"]))
+                    actual = entire[start:end + 1]
+                if actual != expected:
+                    raise ValueError("public publication range differs from signed bundle bytes")
 
 
 def _record_local_commit(document: dict, manifest: Path) -> None:
@@ -323,7 +423,7 @@ def _record_local_commit(document: dict, manifest: Path) -> None:
 
 
 def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = False) -> dict:
-    """只上传公开签名数据；实际 HTTPS 回读成功后最后原子切换 timestamp。"""
+    """只上传公开签名数据；ECS 完整校验与 HTTPS 分段探测成功后切换 timestamp。"""
     manifest = Path(manifest).resolve(strict=True)
     with repository_lock(manifest.parent / "commit.lock"):
         document, identity = _load_bundle(manifest)
@@ -348,7 +448,8 @@ def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = Fa
                 _ensure_directory(sftp, str(PurePosixPath(destination).parent), PUBLIC_ROOT)
                 upload_file(sftp, manifest.parent / "repository" / row["path"], destination,
                             size=row["size"], sha256=row["sha256"])
-            _probe_public(document, fetcher)
+            verification = _request_server_verification(sftp, document, identity)
+            _probe_public_samples(document, manifest.parent / "repository", fetcher)
             # timestamp 最后提交；root.json 是供在线低权续签读取的公开根指针。
             for name in ("metadata/root.json", "metadata/timestamp.json"):
                 row = next(row for row in document["files"] if row["path"] == name)
@@ -360,7 +461,8 @@ def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = Fa
                 # OpenSSH posix-rename 提供同文件系统原子替换；不支持时明确失败。
                 sftp.posix_rename(temporary, destination)
             _record_local_commit(document, manifest)
-            return {"state": "published", "bundle_id": identity, "timestamp_sha256": document["timestamp_sha256"], "reused": False}
+            return {"state": "published", "bundle_id": identity, "timestamp_sha256": document["timestamp_sha256"],
+                    "verification_request_id": verification["request_id"], "reused": False}
 
 
 def _connect(args):

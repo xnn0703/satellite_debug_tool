@@ -100,6 +100,7 @@ class DataRecorder:
         self._reservation: Optional[RecordingReservation] = None
         self._stop_requested = False
         self._stop_sentinel_queued = False
+        self._summary_facts: dict = {}
 
     # ---- 生命周期 ----
 
@@ -235,6 +236,12 @@ class DataRecorder:
             self._dropped += 1
             self._pending_gap += 1
             return False
+
+    def set_summary_facts(self, facts: dict) -> None:
+        """在停止前设置领域收尾事实；原始写入完整性仍由 recorder 独占计算。"""
+        if self._stop_requested:
+            raise RuntimeError("recording summary is already finalizing")
+        self._summary_facts = dict(facts)
 
     def request_stop(self) -> bool:
         if (
@@ -383,6 +390,7 @@ class DataRecorder:
                         "records": self._written_records,
                         "dropped_chunks": self._dropped,
                         "pending_gap_chunks": self._pending_gap,
+                        "session_facts": self._summary_facts,
                     },
                     ensure_ascii=False,
                     separators=(",", ":"),

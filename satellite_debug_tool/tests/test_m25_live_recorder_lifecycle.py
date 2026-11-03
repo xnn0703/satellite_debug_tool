@@ -233,8 +233,11 @@ def test_bundle_shutdown_releases_capture_owner_without_persistent_recovery(
     runtime.feed_datagram(_meta("AFD01-CAPTURE", monotonic_s=1.0))
 
     live = bundle.live
-    live._customer_recording_path = tmp_path / "customer-capture.sdb"
-    live._set_customer_recording_state(CustomerRecordingState.PREPARING)
+    assert live._start_recording(
+        format_version=3,
+        customer=True,
+        filepath=tmp_path / "customer-capture.sdb",
+    )
     assert live._capture_profile_controller.request(True)
     request_id = live._capture_profile_controller.pending_request_id
     assert request_id is not None
@@ -270,8 +273,11 @@ def test_restore_timeout_releases_runtime_owner_and_marks_local_resync(
     runtime.feed_datagram(_meta("AFD01-RESTORE", monotonic_s=1.0))
 
     live = bundle.live
-    live._customer_recording_path = tmp_path / "customer-restore.sdb"
-    live._set_customer_recording_state(CustomerRecordingState.PREPARING)
+    assert live._start_recording(
+        format_version=3,
+        customer=True,
+        filepath=tmp_path / "customer-restore.sdb",
+    )
     assert live._capture_profile_controller.request(True)
     request_id = live._capture_profile_controller.pending_request_id
     assert request_id is not None

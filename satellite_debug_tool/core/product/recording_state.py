@@ -7,7 +7,16 @@ from enum import Enum
 
 class CustomerRecordingState(str, Enum):
     IDLE = "idle"
-    ARMED = "armed"
-    PREPARING = "preparing"
     ACTIVE = "active"
+    RESTORING = "restoring"
+
+
+class CustomerCaptureStage(str, Enum):
+    """录制期间设备采集档位的独立事实。"""
+
+    IDLE = "idle"
+    WAITING_DEVICE = "waiting_device"
+    NEGOTIATING_FULL = "negotiating_full"
+    FULL = "full"
+    PASSIVE = "passive"
     RESTORING = "restoring"

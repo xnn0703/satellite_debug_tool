@@ -1483,12 +1483,14 @@ def decode_ins_trace(data: bytes) -> InsTraceRecord:
     if len(data) < header.size:
         raise CodecError("INS_TRACE header truncated")
     schema, kind, source, health, seq, source_seq, timestamp_us, received_us, flags = header.unpack_from(data)
-    lengths = {1: 68, 2: 100, 3: 196, 4: 80, 5: 192}
-    masks = {1: 1, 2: 15, 3: 15, 4: 3, 5: 15}
+    lengths = {1: 68, 2: 100, 3: 196, 4: 80, 5: 192, 6: 120, 7: 56, 8: 76, 9: 96}
+    masks = {1: 1, 2: 15, 3: 15, 4: 3, 5: 15, 6: 255, 7: 63, 8: 3, 9: 15}
     if schema != 1 or kind not in lengths:
         raise CodecError("INS_TRACE unsupported schema or kind")
     if len(data) != lengths[kind] or flags & ~masks[kind]:
         raise CodecError("INS_TRACE invalid length or flags")
+    if kind >= 6 and (source != 0 or health != 0 or (kind != 9 and source_seq != 0)):
+        raise CodecError("INS_TRACE invalid RF diagnostic identity")
     values: dict[str, object] = {}
     if kind == 1:
         mode, time_quality, mount, dt, temperature, *axes = struct.unpack_from("<BBH8f", data, 32)
@@ -1534,7 +1536,7 @@ def decode_ins_trace(data: bytes) -> InsTraceRecord:
                  "snr_db", "internal_shadow_correction_sequence")
         values = {"target_generation": target, "authority_epoch": epoch, "rf_measurement_timestamp_ms": rf_time_ms, "source_command_seq": source_seq,
                   "type": obs_type, "state_ownership": ownership, "reject": reject, **dict(zip(names, items))}
-    else:
+    elif kind == 5:
         groups = []
         for index, name in enumerate(("horizontal_position", "vertical_position", "horizontal_velocity", "vertical_velocity")):
             time_ms, nis, residual, std, updates, rejects, status, recovery, group_source, reserved = struct.unpack_from("<I3f2I4B", data, 32 + 28 * index)
@@ -1552,4 +1554,36 @@ def decode_ins_trace(data: bytes) -> InsTraceRecord:
         names = ("last_measurement", "last_update_status", "last_zaru_update_status", "last_numeric_reason")
         values.update(zip(names, struct.unpack_from("<4B", data, 184)))
         values["yaw_correction_seq"] = struct.unpack_from("<I", data, 188)[0]
+    elif kind == 6:
+        names = ("pose_arrival_ms", "target_timestamp_ms", "target_sequence", "target_id", "pose_authority_epoch",
+                 "internal_shadow_timestamp_ms", "relative_yaw_timestamp_ms")
+        values.update(zip(names, struct.unpack_from("<7I", data, 32)))
+        names = ("heading_deg", "pitch_deg", "roll_deg", "gyro_x_dps", "gyro_y_dps", "gyro_z_dps",
+                 "relative_yaw_deg", "internal_shadow_roll_deg", "internal_shadow_pitch_deg",
+                 "internal_shadow_rp_std_deg", "target_azimuth_deg", "target_elevation_deg")
+        values.update(zip(names, struct.unpack_from("<12f", data, 60)))
+        correction, correction_sum, motion, reserved = struct.unpack_from("<IfB3s", data, 108)
+        if reserved != bytes(3):
+            raise CodecError("INS_TRACE invalid geometry reserved bytes")
+        values.update(correction_sequence=correction, correction_sum_deg=correction_sum, motion_state=motion)
+    elif kind == 7:
+        names = ("owner_timestamp_ms", "raw_snr_db", "normalized_snr_db", "scan_loss_db",
+                 "tracking_metric_db", "trace_dropped_records")
+        values.update(zip(names, struct.unpack_from("<I4fI", data, 32)))
+    elif kind == 8:
+        names = ("epoch", "source_pose_timestamp_ms", "source_pose_sequence", "source_target_timestamp_ms",
+                 "source_target_sequence", "azimuth_deg", "second_angle_deg", "offaxis_deg",
+                 "probe_azimuth_deg", "probe_second_angle_deg", "probe_phase", "reserved")
+        values.update(zip(names, struct.unpack_from("<5I5fB3s", data, 32)))
+        if values.pop("reserved") != bytes(3):
+            raise CodecError("INS_TRACE invalid action reserved bytes")
+    elif kind == 9:
+        names = ("command_timestamp", "command_source_timestamp", "command_imu_timestamp", "command_rx_ms",
+                 "tracking_epoch", "coalesced_count", "rx_send_start_ms", "rx_send_done_ms",
+                 "tx_send_start_ms", "tx_send_done_ms", "source", "beam_type", "tracking_probe_phase", "evidence",
+                 "command_scan_loss_db", "tracking_probe_az_deg", "rx_angle")
+        items = struct.unpack_from("<10I4B5f", data, 32)
+        values.update(zip(names, (*items[:16], tuple(items[16:]))))
+        if values["evidence"] not in (0, 1):
+            raise CodecError("INS_TRACE invalid beam evidence")
     return InsTraceRecord(schema, kind, source, health, seq, source_seq, timestamp_us, received_us, flags, values)

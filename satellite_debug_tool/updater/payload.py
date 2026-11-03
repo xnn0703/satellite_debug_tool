@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -66,8 +67,8 @@ def _identity(value: Any) -> dict:
     fields = ("app_id", "edition", "platform", "architecture", "version", "build_id")
     if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] for k in fields):
         raise PayloadError("payload identity requires app, edition, platform, architecture, version and build")
-    if value["edition"] not in {"user", "ops"} or value["platform"] != "windows":
-        raise PayloadError("file-tree payload requires a Windows edition")
+    if value["edition"] not in {"user", "ops"} or value["platform"] not in {"windows", "macos"}:
+        raise PayloadError("file-tree payload requires a supported application platform")
     if value["architecture"] not in {"x86_64", "arm64"}:
         raise PayloadError("unsupported payload architecture")
     return value
@@ -89,7 +90,24 @@ def validate_manifest(manifest: Mapping[str, Any]) -> dict[str, dict]:
             raise PayloadError("invalid file-tree entry")
         name = safe_path(row.get("path"))
         size = row.get("size")
-        if row.get("kind") != "file" or type(size) is not int or size < 0 or not _HASH.fullmatch(str(row.get("sha256", ""))):
+        kind = row.get("kind")
+        if kind == "file":
+            if type(size) is not int or size < 0 or not _HASH.fullmatch(str(row.get("sha256", ""))):
+                raise PayloadError(f"invalid file metadata: {name}")
+        elif kind == "symlink" and manifest["identity"]["platform"] == "macos":
+            target = row.get("target")
+            if (not isinstance(target, str) or not target or PurePosixPath(target).is_absolute()
+                    or "\x00" in target):
+                raise PayloadError(f"invalid symbolic link metadata: {name}")
+            resolved = PurePosixPath(name).parent.joinpath(target)
+            depth = 0
+            for part in resolved.parts:
+                depth += -1 if part == ".." else (0 if part == "." else 1)
+                if depth < 0:
+                    raise PayloadError(f"symbolic link escapes payload: {name}")
+            if set(row) != {"path", "kind", "target"}:
+                raise PayloadError(f"invalid symbolic link fields: {name}")
+        else:
             raise PayloadError(f"invalid file metadata: {name}")
         key = name.casefold()
         if key in folded:
@@ -99,7 +117,8 @@ def validate_manifest(manifest: Mapping[str, Any]) -> dict[str, dict]:
             if str(parent) != ".":
                 directories.add(str(parent).casefold())
         index[name] = row
-        total += size
+        if kind == "file":
+            total += size
     if folded & directories or total > MAX_TREE_BYTES:
         raise PayloadError("conflicting paths or excessive expanded payload size")
     return index
@@ -121,7 +140,7 @@ def write_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
     Path(path).write_bytes(canonical_bytes(manifest))
 
 
-def _files(root: Path) -> dict[str, Path]:
+def _files(root: Path, *, allow_symlinks: bool = False) -> dict[str, Path]:
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
         raise PayloadError("payload root must be a directory")
@@ -129,7 +148,15 @@ def _files(root: Path) -> dict[str, Path]:
     for p in root.rglob("*"):
         info = p.lstat()
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-            raise PayloadError(f"payload link is unsupported: {p.name}")
+            if not allow_symlinks:
+                raise PayloadError(f"payload link is unsupported: {p.name}")
+            name = safe_path(p.relative_to(root).as_posix())
+            target = os.readlink(p)
+            resolved = (p.parent / target).resolve()
+            if resolved != root.resolve() and root.resolve() not in resolved.parents:
+                raise PayloadError(f"payload link escapes root: {name}")
+            result[name] = p
+            continue
         if stat.S_ISDIR(info.st_mode):
             continue
         if not stat.S_ISREG(info.st_mode):
@@ -143,11 +170,16 @@ def _files(root: Path) -> dict[str, Path]:
 
 def build_manifest(root: Path, identity: Mapping[str, Any], cancel_event: Event | None = None) -> dict:
     identity = dict(identity)
-    identity["platform"] = {"win": "windows"}.get(identity.get("platform"), identity.get("platform"))
+    identity["platform"] = {"win": "windows", "mac": "macos"}.get(
+        identity.get("platform"), identity.get("platform"))
     rows = []
-    for name, path in sorted(_files(Path(root)).items()):
+    macos = identity.get("platform") == "macos"
+    for name, path in sorted(_files(Path(root), allow_symlinks=macos).items()):
         _cancel(cancel_event)
-        rows.append({"path": name, "kind": "file", "size": path.stat().st_size, "sha256": sha256_file(path, cancel_event)})
+        if path.is_symlink():
+            rows.append({"path": name, "kind": "symlink", "target": os.readlink(path)})
+        else:
+            rows.append({"path": name, "kind": "file", "size": path.stat().st_size, "sha256": sha256_file(path, cancel_event)})
     manifest = {"schema": TREE_SCHEMA, "identity": identity, "files": rows}
     validate_manifest(manifest)
     return manifest
@@ -155,13 +187,16 @@ def build_manifest(root: Path, identity: Mapping[str, Any], cancel_event: Event 
 
 def verify_tree(root: Path, manifest: Mapping[str, Any], cancel_event: Event | None = None) -> None:
     expected = validate_manifest(manifest)
-    actual = _files(Path(root))
+    actual = _files(Path(root), allow_symlinks=manifest["identity"]["platform"] == "macos")
     if set(actual) != set(expected):
         raise PayloadError("payload file set differs from the trusted manifest")
     for name, row in expected.items():
         _cancel(cancel_event)
         p = actual[name]
-        if p.stat().st_size != row["size"] or sha256_file(p, cancel_event) != row["sha256"]:
+        if row["kind"] == "symlink":
+            if not p.is_symlink() or os.readlink(p) != row["target"]:
+                raise PayloadError(f"payload link differs from the trusted manifest: {name}")
+        elif p.is_symlink() or p.stat().st_size != row["size"] or sha256_file(p, cancel_event) != row["sha256"]:
             raise PayloadError(f"payload file differs from the trusted manifest: {name}")
 
 

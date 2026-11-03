@@ -282,16 +282,20 @@ def test_daily_renewal_does_not_extend_expired_targets(repository):
                                 now=datetime.now(timezone.utc) + timedelta(days=91))
 
 
-def candidate_fixture(repository, *, edition="ops", version="2.0.0", commit="a" * 40, delta_base=None):
+def candidate_fixture(repository, *, edition="ops", version="2.0.0", commit="a" * 40,
+                      delta_base=None, platform="win"):
     """此夹具验证发布合同；归档内容由冻结构建专项独立验证。"""
     from satellite_debug_tool.edition import create_build_identity
     from satellite_debug_tool.updater.payload import canonical_bytes
-    identity = create_build_identity(edition=edition, version=version, platform="win", architecture="x86_64", build_id=commit)
-    candidate = repository["tmp"] / f"candidate-{edition}-{version}"
+    architecture = "arm64" if platform == "mac" else "x86_64"
+    identity = create_build_identity(edition=edition, version=version, platform=platform,
+                                     architecture=architecture, build_id=commit)
+    candidate = repository["tmp"] / f"candidate-{edition}-{platform}-{version}"
     candidate.mkdir()
-    (candidate / "complete.7z").write_bytes(b"archive bytes verified by packaging test" * 100)
-    tree = {"schema": "satellite.update-tree/v1", "identity": {**identity, "platform": "windows"},
-            "files": [{"path": "SatelliteTerminalManager.exe", "kind": "file", "size": 3,
+    suffix = ".zip" if platform == "mac" else ".7z"
+    (candidate / ("complete" + suffix)).write_bytes(b"archive bytes verified by packaging test" * 100)
+    tree = {"schema": "satellite.update-tree/v1", "identity": {**identity, "platform": "macos" if platform == "mac" else "windows"},
+            "files": [{"path": "Contents/MacOS/SatelliteTerminalManagerOps" if platform == "mac" else "SatelliteTerminalManager.exe", "kind": "file", "size": 3,
                        "sha256": hashlib.sha256(b"exe").hexdigest()}]}
     (candidate / "payload-manifest.json").write_bytes(canonical_bytes(tree))
     if delta_base:
@@ -300,7 +304,8 @@ def candidate_fixture(repository, *, edition="ops", version="2.0.0", commit="a" 
                 "base_manifest_sha256": delta_base, "target_manifest_sha256": hashlib.sha256(canonical_bytes(tree)).hexdigest(), "changed": []}))
     artifacts = [{"name": p.name, "size": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in candidate.iterdir()]
     write_json(candidate / "receipt.json", {"schema": "satellite.release-candidate/v1", "identity": identity,
-        "source_commit": commit, "system_signature": "unsigned", "artifacts": artifacts, "environment": {}})
+        "source_commit": commit, "system_signature": "adhoc-verified" if platform == "mac" else "unsigned",
+        "artifacts": artifacts, "environment": {}})
     return candidate
 
 
@@ -317,6 +322,19 @@ def test_candidate_receipt_publishes_full_then_previous_baseline_delta(repositor
     assert second.deltas[0].base_build_id == "a" * 40
     assert second.deltas[0].base_manifest.sha256 == first.tree_manifest.sha256
     assert second.tree_manifest.name != second.deltas[0].base_manifest.name
+
+
+def test_macos_ops_candidate_publishes_automatic_app_tree(repository):
+    candidate = candidate_fixture(repository, platform="mac")
+    publish_candidate(repository["path"], candidate, repository["signers"], expected_commit="a" * 40,
+                      min_os="14.0", precommit_probe=lambda targets: None)
+    checker = ReleaseChecker(repository["config"], cache_dir=repository["tmp"] / "mac-cache",
+                             platform="mac", architecture="arm64", os_version="14.0",
+                             fetcher=repository["fetcher"])
+    release = checker.fetch_latest()
+    assert release.installation_mode == "automatic"
+    assert release.tree_manifest is not None
+    assert release.identity["platform"] == "macos"
 
 
 def test_manual_candidate_keeps_online_metadata_unchanged(repository):

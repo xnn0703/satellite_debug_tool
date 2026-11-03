@@ -743,12 +743,6 @@ class CustomerOverviewView(QWidget):
         if state == CustomerRecordingState.ACTIVE or recording is True:
             text = tr("Stop recording")
             enabled = True
-        elif state in {
-            CustomerRecordingState.ARMED,
-            CustomerRecordingState.PREPARING,
-        }:
-            text = tr("Cancel recording")
-            enabled = True
         elif state == CustomerRecordingState.RESTORING:
             text = tr("Restoring...")
             enabled = False

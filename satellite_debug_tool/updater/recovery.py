@@ -11,10 +11,11 @@ import re
 import shutil
 import subprocess
 import sys
+import plistlib
 import threading
 from typing import Any
 
-from satellite_debug_tool.package_names import WINDOWS_EXECUTABLE
+from satellite_debug_tool.updater.install_platform import main_executable
 from satellite_debug_tool.updater.handoff import sha256_file
 from satellite_debug_tool.updater.status import sync_file, write_atomic_json
 
@@ -32,6 +33,13 @@ class RecoveryError(RuntimeError):
 def journal_pointer_path(install_dir: Path) -> Path:
     install = Path(install_dir).resolve()
     return install.parent / f".{install.name}.update-journal.json"
+
+
+def staging_path(install_dir: Path, transaction_id: str) -> Path:
+    install = Path(install_dir).resolve()
+    if install.suffix == ".app":
+        return install.parent / f".staging.{transaction_id}.{install.name}"
+    return install.parent / f".{install.name}.staging.{transaction_id}"
 
 
 def pending_journal(install_dir: Path) -> "InstallJournal | None":
@@ -148,9 +156,26 @@ def recovery_command(executable, journal_path) -> str:
 
 
 def register_login_recovery(executable: Path, journal_path: Path, install_dir: Path) -> None:
-    """HKCU Run 保持到事务终态，避免 RunOnce 在执行前删除造成恢复缺口。"""
-    if sys.platform != "win32":
+    """注册到事务终态都存在的当前用户登录恢复入口。"""
+    if sys.platform == "darwin":
+        executable = Path(executable).resolve()
+        journal_path = Path(journal_path).resolve()
+        if not executable.is_file() or not journal_path.is_file() or Path(install_dir).resolve() in executable.parents:
+            raise RecoveryError("persistent recovery executable and journal are required")
+        target = Path.home() / "Library/LaunchAgents" / (recovery_name(install_dir) + ".plist")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"Label": recovery_name(install_dir), "ProgramArguments":
+                   [str(executable), "--recover", str(journal_path)], "RunAtLoad": True}
+        temporary = target.with_suffix(".plist.tmp")
+        with temporary.open("xb") as stream:
+            stream.write(plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, target)
         return
+    if sys.platform != "win32":
+        raise RecoveryError("login recovery requires Windows or macOS")
     import winreg
     executable = Path(executable).resolve()
     journal_path = Path(journal_path).resolve()
@@ -169,6 +194,9 @@ def register_login_recovery(executable: Path, journal_path: Path, install_dir: P
 
 
 def remove_login_recovery(install_dir: Path) -> None:
+    if sys.platform == "darwin":
+        (Path.home() / "Library/LaunchAgents" / (recovery_name(install_dir) + ".plist")).unlink(missing_ok=True)
+        return
     if sys.platform != "win32":
         return
     import winreg
@@ -221,7 +249,7 @@ class InstallJournal:
         expected = {
             "backup_dir": install.parent / f"{install.name}.bak.{token}",
             "failed_dir": install.parent / f"{install.name}.failed.{token}",
-            "staging_dir": install.parent / f".{install.name}.staging.{token}",
+            "staging_dir": staging_path(install, token),
         }
         for key, value in expected.items():
             if Path(d[key]).resolve() != value:
@@ -310,7 +338,7 @@ class InstallJournal:
             return
         from satellite_debug_tool.updater.health import HEALTH_ENV, StartupHealthContext, validate_health_message
         import psutil
-        expected = self.install_dir / WINDOWS_EXECUTABLE
+        expected = main_executable(self.install_dir)
         health_path = self.path.parent / "health-request.json"
 
         def stop_identity(pid, created) -> None:
@@ -378,7 +406,7 @@ class InstallJournal:
         try:
             process = psutil.Process(int(pid))
             if (abs(process.create_time() - float(created)) > 0.01
-                    or Path(process.exe()).resolve() != self.install_dir / WINDOWS_EXECUTABLE
+                    or Path(process.exe()).resolve() != main_executable(self.install_dir)
                     or not process.is_running() or process.status() == psutil.STATUS_ZOMBIE):
                 return "closed"
         except psutil.NoSuchProcess:
