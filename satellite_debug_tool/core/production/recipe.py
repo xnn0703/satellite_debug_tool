@@ -10,6 +10,7 @@ import re
 from typing import Any, Mapping, Tuple
 
 from satellite_debug_tool.core.product import production_recipe_product_policy
+from satellite_debug_tool.core.motion_platform import CONTINUOUS_TRAJECTORY_PERIOD_MS
 from satellite_debug_tool.core.production.tracking_criteria import TrackingCriteriaPolicy
 
 
@@ -396,8 +397,10 @@ def _validate_motion_platform(platform: Any, errors: list[str], *, schema: int) 
     if not isinstance(profile.get("profile_id"), str) or not profile["profile_id"].strip():
         errors.append("motion profile profile_id must be a non-empty string")
     sample_period = profile.get("sample_period_ms")
-    if isinstance(sample_period, bool) or not isinstance(sample_period, int) or sample_period <= 0:
-        errors.append("motion profile sample_period_ms must be a positive integer")
+    if sample_period != CONTINUOUS_TRAJECTORY_PERIOD_MS:
+        errors.append(
+            "motion profile sample_period_ms must equal the fixed 20 ms contract"
+        )
     if schema == 2:
         if profile.get("execution_mode") != "until_observation_complete":
             errors.append("motion profile execution_mode must be 'until_observation_complete'")

@@ -16,7 +16,7 @@ from satellite_debug_tool.tests.test_production_recipe import valid_recipe
 
 
 def _continuous() -> SineTrajectory:
-    return SineTrajectory(100, .1, None, 0, SineAxis(1, .2),
+    return SineTrajectory(.1, None, 0, SineAxis(1, .2),
                           SineAxis(0, 0, enabled=False), SineAxis(0, 0, enabled=False))
 
 
@@ -42,8 +42,8 @@ def test_continuous_motion_compiles_one_bounded_repeat_program():
     checked = MotionTrajectoryRunner(controller).preflight(_continuous())
 
     assert checked.compiled.finite_points == ()
-    assert len(checked.compiled.prefix_points) == 1
-    assert len(checked.compiled.periodic_points) == 50
+    assert len(checked.compiled.prefix_points) == 5
+    assert len(checked.compiled.periodic_points) == 250
 
 
 def test_finite_engineering_trajectory_keeps_full_path_and_arrival():
@@ -51,8 +51,8 @@ def test_finite_engineering_trajectory_keeps_full_path_and_arrival():
     controller = ConfirmedMotionController(_profile().to_motion_config())
     trajectory = replace(_continuous(), steady_duration_s=.2, ramp_out_s=.1)
     result = MotionTrajectoryRunner(controller, clock_ns=lambda: clock.ns, sleep=clock.sleep).run(trajectory)
-    assert result.intended_points == trajectory.sample_count == 4
-    assert result.sent_points == 4
+    assert result.intended_points == trajectory.sample_count == 20
+    assert result.sent_points == 20
     assert result.arrival.successful
     assert result.stopped is False
 
@@ -118,7 +118,7 @@ def test_automatic_motion_runs_through_delayed_observation_then_controlled_cente
     )
     assert clock.ns / 1e9 == pytest.approx(3.0)
     assert result.intended_points is None
-    assert result.sent_points == 30
+    assert result.sent_points == 150
     assert result.stopped
     assert execution.completed == []
     hardware._finished("motion", result)

@@ -339,7 +339,7 @@ class ProductionExecutionHardware(QObject):
                 phase_deg=float(raw.get("phase_deg", 0)), enabled=raw.get("enabled", True),
             )
         return SineTrajectory(
-            sample_period_ms=int(config["sample_period_ms"]), ramp_in_s=self._ramp_in_s,
+            ramp_in_s=self._ramp_in_s,
             # 工况观察拥有唯一结束时刻；上电和参考恢复耗时不消耗运动时长。
             steady_duration_s=None,
             ramp_out_s=0,

@@ -268,7 +268,7 @@ class WorkstationFixtureProfile:
     yaw_sign: int = 1
     z_min_mm: float = 0.0
     z_max_mm: float = 100.0
-    minimum_duration_ms: int = 50
+    minimum_duration_ms: int = 20
     model_id: str = "custom"
     schema: str = FIXTURE_PROFILE_SCHEMA
     schema_version: int = FIXTURE_PROFILE_SCHEMA_VERSION

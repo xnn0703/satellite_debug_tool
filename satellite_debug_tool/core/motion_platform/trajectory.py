@@ -1,4 +1,4 @@
-"""运动平台轨迹预检和绝对单调时钟调度。"""
+"""运动平台轨迹预检和单调时钟调度。"""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from .lingjing_protocol import build_position_frame, solve_actuator_targets
 from .models import MotionActionResult, MotionPlatformError, PlatformPose
 
 
-# 厂家单次动作最短时间不是连续轨迹资格。20 ms 保持待现场独立验收。
-QUALIFIED_CONTINUOUS_SAMPLE_PERIOD_MS = 50
+# 厂家原生上位机和控制器位置命令共同使用的唯一连续轨迹周期。
+CONTINUOUS_TRAJECTORY_PERIOD_MS = 20
 
 
 class SoftCenterPhase(str, Enum):
@@ -46,7 +46,6 @@ class SineAxis:
 
 @dataclass(frozen=True)
 class SineTrajectory:
-    sample_period_ms: int
     ramp_in_s: float
     steady_duration_s: float | None
     ramp_out_s: float
@@ -55,6 +54,10 @@ class SineTrajectory:
     yaw: SineAxis
     work_z_mm: float = 100.0
     profile_id: str = "trajectory"
+
+    @property
+    def sample_period_ms(self) -> int:
+        return CONTINUOUS_TRAJECTORY_PERIOD_MS
 
     @property
     def total_duration_s(self) -> float | None:
@@ -68,8 +71,6 @@ class SineTrajectory:
         return None if duration is None else int(math.ceil(duration * 1000.0 / self.sample_period_ms))
 
     def validate(self) -> None:
-        if self.sample_period_ms <= 0:
-            raise MotionPlatformError("trajectory sample period must be positive")
         if (not all(math.isfinite(value) and value >= 0 for value in (self.ramp_in_s, self.ramp_out_s))
                 or (self.steady_duration_s is not None
                     and (not math.isfinite(self.steady_duration_s) or self.steady_duration_s <= 0))):
@@ -223,14 +224,10 @@ class MotionTrajectoryRunner:
                     limiting_axis = axis
                     limiting_pose = point
                 minimum_remaining = min(minimum_remaining, maximum_extension - extension)
-        qualified_period_ms = max(
-            self._controller.config.minimum_duration_ms,
-            QUALIFIED_CONTINUOUS_SAMPLE_PERIOD_MS,
-        )
-        if trajectory.sample_period_ms < qualified_period_ms:
+        if self._controller.config.minimum_duration_ms > CONTINUOUS_TRAJECTORY_PERIOD_MS:
             raise MotionPlatformError(
-                f"continuous trajectory sample period must be at least {qualified_period_ms} ms; "
-                "20 ms continuous control is not yet qualified"
+                "motion platform minimum command time exceeds the fixed 20 ms "
+                "continuous trajectory contract"
             )
         fingerprint = _preflight_fingerprint(self._controller.config, trajectory)
         command_duration_ms = _command_duration_ms(self._controller.config, trajectory)
@@ -642,10 +639,12 @@ class MotionTrajectoryRunner:
 
 
 def _command_duration_ms(config, trajectory: SineTrajectory) -> int:
-    return max(
-        config.minimum_duration_ms,
-        math.ceil(trajectory.sample_period_ms * 1.2),
-    )
+    if config.minimum_duration_ms > CONTINUOUS_TRAJECTORY_PERIOD_MS:
+        raise MotionPlatformError(
+            "motion platform minimum command time exceeds the fixed 20 ms "
+            "continuous trajectory contract"
+        )
+    return CONTINUOUS_TRAJECTORY_PERIOD_MS
 
 
 def _compile_point(
@@ -761,7 +760,9 @@ def _percentile_ms(values_ns: list[int], quantile: float) -> float:
 
 
 def _preflight_fingerprint(config, trajectory: SineTrajectory) -> str:
-    payload = {"trajectory": asdict(trajectory), "config": asdict(config)}
+    trajectory_payload = asdict(trajectory)
+    trajectory_payload["sample_period_ms"] = CONTINUOUS_TRAJECTORY_PERIOD_MS
+    payload = {"trajectory": trajectory_payload, "config": asdict(config)}
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -794,7 +795,7 @@ __all__ = [
     "CompiledTrajectory",
     "CompiledTrajectoryPoint",
     "MotionTrajectoryRunner",
-    "QUALIFIED_CONTINUOUS_SAMPLE_PERIOD_MS",
+    "CONTINUOUS_TRAJECTORY_PERIOD_MS",
     "SineAxis",
     "SineTrajectory",
     "SoftCenterPhase",

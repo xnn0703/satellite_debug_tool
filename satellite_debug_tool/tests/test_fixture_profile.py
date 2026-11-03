@@ -50,7 +50,6 @@ def _profile(**overrides) -> WorkstationFixtureProfile:
 def _trajectory(**overrides) -> CombinedSineProfile:
     values = {
         "profile_id": "wave",
-        "sample_period_ms": 100,
         "ramp_in_s": 1.0,
         "steady_duration_s": 5.0,
         "ramp_out_s": 1.0,
@@ -253,7 +252,6 @@ def test_exclusive_lease_rejects_batch_and_debug_overlap() -> None:
 
 def test_multi_hour_trajectory_uses_constant_time_motion_envelope_gate() -> None:
     profile = _trajectory(
-        sample_period_ms=50,
         ramp_in_s=60.0,
         steady_duration_s=21600.0,
         ramp_out_s=60.0,
@@ -264,4 +262,4 @@ def test_multi_hour_trajectory_uses_constant_time_motion_envelope_gate() -> None
 
     validate_sine_profile(_profile().to_motion_config(), profile)
 
-    assert profile.sample_count > 400_000
+    assert profile.sample_count > 1_000_000

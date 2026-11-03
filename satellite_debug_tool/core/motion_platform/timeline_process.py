@@ -8,6 +8,9 @@ import time
 from typing import Sequence
 
 
+_DEADLINE_GUARD_NS = 1_000_000
+
+
 def run_timeline_process(
     transport: socket.socket,
     endpoint: tuple[str, int],
@@ -34,13 +37,21 @@ def run_timeline_process(
         while True:
             deadline_ns = next_deadline_ns
             while True:
-                remaining_s = (deadline_ns - time.monotonic_ns()) / 1_000_000_000.0
-                if remaining_s <= 0:
+                remaining_ns = deadline_ns - time.monotonic_ns()
+                if remaining_ns <= 0:
                     break
                 try:
-                    command = command_queue.get(timeout=remaining_s)
+                    if remaining_ns > _DEADLINE_GUARD_NS:
+                        command = command_queue.get(
+                            timeout=(remaining_ns - _DEADLINE_GUARD_NS)
+                            / 1_000_000_000.0
+                        )
+                    else:
+                        command = command_queue.get_nowait()
                 except queue.Empty:
-                    break
+                    # macOS的Queue超时通常会多睡约1 ms；最后1 ms保持命令轮询，
+                    # 让20 ms时间线不系统性退化为约21 ms。
+                    continue
                 action = command[0]
                 if action == "stop":
                     event_queue.put(("stopped", normal_index, fade_index))

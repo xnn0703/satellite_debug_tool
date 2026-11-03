@@ -100,7 +100,6 @@ def test_active_trajectory_soft_centers_without_ending_control_session(
     worker.start()
     assert _wait_until(qapp, lambda: worker.controller.snapshot.ready)
     trajectory = SineTrajectory(
-        sample_period_ms=50,
         ramp_in_s=0.0,
         steady_duration_s=2.0,
         ramp_out_s=0.2,
@@ -115,7 +114,7 @@ def test_active_trajectory_soft_centers_without_ending_control_session(
     assert _wait_until(qapp, lambda: len(results) == 1)
 
     assert results[0].soft_center_requested
-    assert results[0].fade_points == 4
+    assert results[0].fade_points == 10
     assert results[0].center_confirmed
     assert worker.controller.snapshot.ready
 

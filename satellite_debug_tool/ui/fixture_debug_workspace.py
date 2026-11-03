@@ -40,6 +40,7 @@ from serial.tools import list_ports
 
 from satellite_debug_tool.core.config import Settings
 from satellite_debug_tool.core.motion_platform import (
+    CONTINUOUS_TRAJECTORY_PERIOD_MS,
     DirectMotionPlatformController,
     MotionActionResult,
     MotionPlatformSnapshot,
@@ -718,6 +719,8 @@ class FixtureDebugWorkspace(QWidget):
         self._outer_loop = BoundedAttitudeOuterLoop()
         self._trajectory_preflight: Optional[TrajectoryPreflightResult] = None
         self._active_control_request_type = ""
+        self._control_busy = False
+        self._soft_center_requested = False
         self._calibration_capture_enabled = False
         self._view_active = False
         self._build_ui()
@@ -964,12 +967,9 @@ class FixtureDebugWorkspace(QWidget):
         self._move.clicked.connect(self._send_axis_move)
         self._center = QPushButton(tr("Center"))
         self._center.clicked.connect(self._send_center)
-        self._stop = QPushButton(tr("Stop sequence"))
-        self._stop.setProperty("variant", "danger")
-        self._stop.clicked.connect(self._stop_sequence)
         self._reset = QPushButton(tr("Home..."))
         self._reset.clicked.connect(self._send_reset)
-        for button in (self._move, self._center, self._stop, self._reset):
+        for button in (self._move, self._center, self._reset):
             button.setMinimumWidth(0)
             button.setSizePolicy(
                 QSizePolicy.Policy.Ignored,
@@ -989,8 +989,7 @@ class FixtureDebugWorkspace(QWidget):
         layout.addWidget(self._duration, 3, 1)
         layout.addWidget(self._closed_loop, 4, 0, 1, 2)
         layout.addWidget(self._move, 5, 0, 1, 2)
-        layout.addWidget(self._center, 6, 0)
-        layout.addWidget(self._stop, 6, 1)
+        layout.addWidget(self._center, 6, 0, 1, 2)
         layout.addWidget(self._reset, 7, 0, 1, 2)
         return group
 
@@ -1043,16 +1042,10 @@ class FixtureDebugWorkspace(QWidget):
         self._ramp_out.setRange(0.1, 600)
         self._ramp_out.setValue(10)
         self._ramp_out.setSuffix(" s")
-        self._sample_period = QSpinBox()
-        # 连续轨迹当前只资格确认到 50 ms；界面不提供尚未通过现场验收的周期。
-        self._sample_period.setRange(50, 10000)
-        self._sample_period.setValue(50)
-        self._sample_period.setSuffix(" ms")
         self._trajectory_labels = {
             "ramp_in": QLabel(tr("Ramp in")),
             "steady": QLabel(tr("Steady")),
             "ramp_out": QLabel(tr("Ramp out")),
-            "sample": QLabel(tr("Sample period")),
         }
         layout.addWidget(self._trajectory_labels["ramp_in"], 4, 0)
         layout.addWidget(self._ramp_in, 4, 1)
@@ -1060,8 +1053,6 @@ class FixtureDebugWorkspace(QWidget):
         layout.addWidget(self._steady, 5, 1)
         layout.addWidget(self._trajectory_labels["ramp_out"], 6, 0)
         layout.addWidget(self._ramp_out, 6, 1)
-        layout.addWidget(self._trajectory_labels["sample"], 7, 0)
-        layout.addWidget(self._sample_period, 7, 1)
         self._preview = pg.PlotWidget()
         self._preview.setMinimumHeight(100)
         self._preview.setMouseEnabled(x=False, y=False)
@@ -1072,14 +1063,25 @@ class FixtureDebugWorkspace(QWidget):
             "pitch": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["pitch"])),
             "yaw": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["yaw"])),
         }
-        layout.addWidget(self._preview, 8, 0, 1, 4)
+        layout.addWidget(self._preview, 7, 0, 1, 4)
         self._preview_button = QPushButton(tr("Preview and validate"))
         self._preview_button.clicked.connect(self._preview_trajectory)
         self._trajectory_start = QPushButton(tr("Start trajectory"))
         self._trajectory_start.setProperty("variant", "primary")
         self._trajectory_start.clicked.connect(self._start_trajectory)
-        layout.addWidget(self._preview_button, 9, 0, 1, 2)
-        layout.addWidget(self._trajectory_start, 9, 2, 1, 2)
+        self._stop = QPushButton(tr("Soft stop and center"))
+        self._stop.setProperty("variant", "danger")
+        self._stop.setEnabled(False)
+        self._stop.clicked.connect(self._stop_sequence)
+        for button in (self._trajectory_start, self._stop):
+            button.setMinimumWidth(0)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Ignored,
+                QSizePolicy.Policy.Fixed,
+            )
+        layout.addWidget(self._preview_button, 8, 0)
+        layout.addWidget(self._trajectory_start, 8, 1, 1, 2)
+        layout.addWidget(self._stop, 8, 3)
         return group
 
     def _build_calibration_group(self) -> QGroupBox:
@@ -1538,7 +1540,7 @@ class FixtureDebugWorkspace(QWidget):
                 calibration=self._calibration,
                 max_target_gap_s=max(
                     0.5,
-                    self._sample_period.value() / 1000.0 * 3.0,
+                    CONTINUOUS_TRAJECTORY_PERIOD_MS / 1000.0 * 3.0,
                 ),
             )
             if comparison:
@@ -1659,7 +1661,7 @@ class FixtureDebugWorkspace(QWidget):
             self._calibration_start,
         ):
             widget.setEnabled(enabled and not qualification_active)
-        self._stop.setEnabled(False)
+        self._update_soft_center_action()
         qualification_ready = (
             not self._motion_only
             and self._profile is not None
@@ -1920,7 +1922,8 @@ class FixtureDebugWorkspace(QWidget):
             except MotionPlatformError as exc:
                 self._show_error(str(exc))
                 return
-            self._stop.setEnabled(False)
+            self._soft_center_requested = True
+            self._update_soft_center_action()
             self._stop.setText(tr("Soft stopping..."))
             self._append_event(
                 tr(
@@ -1959,7 +1962,6 @@ class FixtureDebugWorkspace(QWidget):
             )
         return CombinedSineProfile(
             profile_id=f"fixture-ui-{int(time.time())}",
-            sample_period_ms=self._sample_period.value(),
             ramp_in_s=self._ramp_in.value(),
             steady_duration_s=self._steady.value(),
             ramp_out_s=self._ramp_out.value(),
@@ -2217,9 +2219,10 @@ class FixtureDebugWorkspace(QWidget):
 
     def _on_control_started(self, _request_id: str, request_type: str) -> None:
         self._active_control_request_type = str(request_type)
+        self._soft_center_requested = False
         if request_type == FixtureControlRequestType.TRAJECTORY.value:
             self._stop.setText(tr("Soft stop and center"))
-            self._stop.setEnabled(self.session_active and self._evidence_ready)
+        self._update_soft_center_action()
 
     def _on_soft_center_phase(self, phase_value: str) -> None:
         phase = SoftCenterPhase(str(phase_value))
@@ -2237,6 +2240,7 @@ class FixtureDebugWorkspace(QWidget):
         )
 
     def _on_control_busy(self, busy: bool) -> None:
+        self._control_busy = bool(busy)
         ready = self.session_active and self._evidence_ready
         self._set_trajectory_parameters_enabled(not busy)
         qualification_active = bool(
@@ -2248,12 +2252,9 @@ class FixtureDebugWorkspace(QWidget):
         self._trajectory_start.setEnabled(ready and not busy)
         if not busy:
             self._active_control_request_type = ""
+            self._soft_center_requested = False
             self._stop.setText(tr("Soft stop and center"))
-        self._stop.setEnabled(
-            ready
-            and busy
-            and self._active_control_request_type == FixtureControlRequestType.TRAJECTORY.value
-        )
+        self._update_soft_center_action()
         if qualification_active:
             for widget in (
                 self._move,
@@ -2267,6 +2268,20 @@ class FixtureDebugWorkspace(QWidget):
             qualification_active or (ready and self._ms_connected and not busy)
         )
 
+    def _update_soft_center_action(self) -> None:
+        qualification_active = bool(
+            self._qualification is not None and self._qualification.active
+        )
+        self._stop.setEnabled(
+            self.session_active
+            and self._evidence_ready
+            and self._control_busy
+            and self._active_control_request_type
+            == FixtureControlRequestType.TRAJECTORY.value
+            and not self._soft_center_requested
+            and not qualification_active
+        )
+
     def _set_trajectory_parameters_enabled(self, enabled: bool) -> None:
         for axis_widgets in self._trajectory_axes.values():
             for widget in axis_widgets:
@@ -2275,7 +2290,6 @@ class FixtureDebugWorkspace(QWidget):
             self._ramp_in,
             self._steady,
             self._ramp_out,
-            self._sample_period,
             self._preview_button,
         ):
             widget.setEnabled(enabled)
@@ -2566,7 +2580,7 @@ class FixtureDebugWorkspace(QWidget):
                 self._calibration,
                 max(
                     0.5,
-                    self._sample_period.value() / 1000.0 * 3.0,
+                    CONTINUOUS_TRAJECTORY_PERIOD_MS / 1000.0 * 3.0,
                 ),
                 tuple(self._run_summaries),
                 asdict(self._latest_ms_stats) if self._latest_ms_stats else None,
@@ -2804,7 +2818,6 @@ class FixtureDebugWorkspace(QWidget):
         self._trajectory_labels["ramp_in"].setText(tr("Ramp in"))
         self._trajectory_labels["steady"].setText(tr("Steady"))
         self._trajectory_labels["ramp_out"].setText(tr("Ramp out"))
-        self._trajectory_labels["sample"].setText(tr("Sample period"))
         self._move.setText(tr("Send absolute target"))
         self._center.setText(tr("Center"))
         self._stop.setText(tr("Soft stop and center"))

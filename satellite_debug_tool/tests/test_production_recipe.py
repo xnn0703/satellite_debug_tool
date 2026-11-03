@@ -44,7 +44,7 @@ def valid_recipe(*, duration_s: int = 3600) -> dict:
                 },
                 "profile": {
                     "profile_id": "marine-v1",
-                    "sample_period_ms": 100,
+                    "sample_period_ms": 20,
                     "steady_duration_s": duration_s,
                     "roll": {
                         "amplitude_deg": 15,
@@ -201,6 +201,12 @@ def test_motion_amplitude_cannot_exceed_fixture_limit() -> None:
                 convergence_is_outside_observation=False
             ),
             "convergence_is_outside_observation",
+        ),
+        (
+            lambda data: data["fixtures"]["motion_platform"]["profile"].update(
+                sample_period_ms=50
+            ),
+            "fixed 20 ms contract",
         ),
     ],
 )

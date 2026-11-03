@@ -58,7 +58,7 @@ def test_fixture_attitude_plot_uses_one_shared_degree_axis_and_hides_unmapped_cu
     plot.close()
 
 
-def test_fixture_trajectory_editor_exposes_only_qualified_sample_periods(
+def test_fixture_trajectory_editor_uses_fixed_20ms_period_without_an_editor(
     qapp,
     tmp_path: Path,
     monkeypatch,
@@ -77,8 +77,8 @@ def test_fixture_trajectory_editor_exposes_only_qualified_sample_periods(
         motion_only=True,
     )
 
-    assert workspace._sample_period.minimum() == 50
-    assert workspace._sample_period.value() == 50
+    assert not hasattr(workspace, "_sample_period")
+    assert workspace._trajectory_profile().sample_period_ms == 20
 
     workspace.shutdown()
     workspace.close()
@@ -433,6 +433,7 @@ def test_customer_mode_hides_maintenance_and_keeps_daily_pose_controls(
     from satellite_debug_tool.core.production import (
         FixtureCalibrationStore,
         FixtureControlLease,
+        FixtureControlRequestType,
         FixtureProfileStore,
         Ms6222ControlLease,
         Ms6222FrameEnvelope,
@@ -468,6 +469,7 @@ def test_customer_mode_hides_maintenance_and_keeps_daily_pose_controls(
     assert workspace._trajectory_group.title() == "组合连续摇摆"
     assert workspace._trajectory_start.text() == "开始组合摇摆"
     assert workspace._stop.text() == "缓停并回正"
+    assert workspace._stop.parentWidget() is workspace._trajectory_group
     for axis, (enabled, amplitude, frequency, phase) in workspace._trajectory_axes.items():
         enabled.setChecked(True)
         amplitude.setValue({"roll": 2.0, "pitch": 1.5, "yaw": 1.0}[axis])
@@ -476,6 +478,18 @@ def test_customer_mode_hides_maintenance_and_keeps_daily_pose_controls(
     trajectory = workspace._trajectory_profile()
     assert trajectory.roll.enabled and trajectory.pitch.enabled and trajectory.yaw.enabled
     assert trajectory.total_duration_s == pytest.approx(80.0)
+    session_active_property = FixtureDebugWorkspace.session_active
+    monkeypatch.setattr(
+        FixtureDebugWorkspace,
+        "session_active",
+        property(lambda _workspace: True),
+    )
+    soft_center_requests = []
+    workspace._control = type(
+        "SoftCenterControl",
+        (),
+        {"request_soft_center": lambda _control: soft_center_requests.append(True)},
+    )()
     workspace._on_control_busy(True)
     assert not workspace._preview_button.isEnabled()
     assert all(
@@ -483,8 +497,26 @@ def test_customer_mode_hides_maintenance_and_keeps_daily_pose_controls(
         for widgets in workspace._trajectory_axes.values()
         for widget in widgets
     )
+    workspace._on_control_started(
+        "trajectory-request",
+        FixtureControlRequestType.TRAJECTORY.value,
+    )
+    assert workspace._stop.isEnabled()
+    # 高频平台状态刷新会禁用普通动作，但不能覆盖活动轨迹的缓停入口。
+    workspace._set_motion_controls_enabled(False)
+    assert workspace._stop.isEnabled()
+    workspace._stop.click()
+    assert soft_center_requests == [True]
+    assert not workspace._stop.isEnabled()
     workspace._on_control_busy(False)
     assert workspace._preview_button.isEnabled()
+    assert not workspace._stop.isEnabled()
+    workspace._control = None
+    monkeypatch.setattr(
+        FixtureDebugWorkspace,
+        "session_active",
+        session_active_property,
+    )
     invalid_record = Ms6222InsRecord(
         gps_week=0,
         gps_ms=0,

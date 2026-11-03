@@ -154,7 +154,7 @@ flowchart LR
       "limits": {"roll_abs_deg": 15, "pitch_abs_deg": 15, "yaw_abs_deg": 30},
       "profile": {
         "profile_id": "afd01_marine_combined_v1",
-        "sample_period_ms": 100,
+        "sample_period_ms": 20,
         "ramp_in_s": 10,
         "steady_duration_s": 3600,
         "ramp_out_s": 10,

@@ -13,7 +13,7 @@ import re
 from typing import Any, Mapping, Optional
 
 from satellite_debug_tool import __version__
-from satellite_debug_tool.core.motion_platform import QUALIFIED_CONTINUOUS_SAMPLE_PERIOD_MS
+from satellite_debug_tool.core.motion_platform import CONTINUOUS_TRAJECTORY_PERIOD_MS
 from satellite_debug_tool.core.product import production_recipe_product_policy
 from satellite_debug_tool.core.production.fixture_analysis import (
     FixtureAnalysisError,
@@ -598,11 +598,6 @@ class ResolvedProductionConfiguration:
         snapshot = self.to_snapshot()
         motion = self.motion_profile
         tests, duration_policy = resolve_test_plan(template.tests, template.duration_policy)
-        # 连续轨迹资格独立于单次动作最短时间；20 ms 尚未完成现场资格验收。
-        sample_period_ms = max(
-            QUALIFIED_CONTINUOUS_SAMPLE_PERIOD_MS,
-            int(motion.minimum_duration_ms),
-        )
         motion_contract = {
             "driver": "lingjing_udp_v1",
             "command_family": "binary_position_feedback",
@@ -622,7 +617,7 @@ class ResolvedProductionConfiguration:
             },
             "profile": {
                 "profile_id": motion.profile_id,
-                "sample_period_ms": sample_period_ms,
+                "sample_period_ms": CONTINUOUS_TRAJECTORY_PERIOD_MS,
                 "execution_mode": "until_observation_complete",
                 "ramp_in_s": 5,
                 "ramp_out_s": 0,

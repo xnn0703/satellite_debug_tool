@@ -6,6 +6,7 @@ from dataclasses import replace
 import errno
 import hashlib
 import json
+import math
 import queue
 import socket
 import struct
@@ -470,7 +471,6 @@ def test_trajectory_preflight_rejects_entire_invalid_path_before_send() -> None:
     transport = _FakeSocket()
     controller = DirectMotionPlatformController(_config(), socket_factory=lambda: transport)
     trajectory = SineTrajectory(
-        sample_period_ms=20,
         ramp_in_s=0.1,
         steady_duration_s=0.1,
         ramp_out_s=0.1,
@@ -493,7 +493,6 @@ def test_combined_pose_preflight_matches_field_14_and_15_degree_boundary() -> No
 
     def trajectory(amplitude: float) -> SineTrajectory:
         return SineTrajectory(
-            sample_period_ms=50,
             ramp_in_s=5.0,
             steady_duration_s=20.0,
             ramp_out_s=5.0,
@@ -528,14 +527,13 @@ def test_trajectory_minor_timing_gap_is_recorded_without_stopping_motion() -> No
         sleep_count += 1
         now_ns += round(seconds * 1_000_000_000)
         if sleep_count == 1:
-            now_ns += 30_000_000
+            now_ns += 10_000_000
 
     controller = ConfirmedMotionController(
         fixture_model_presets()[0].create_profile().to_motion_config(),
         clock_ns=clock_ns,
     )
     trajectory = SineTrajectory(
-        sample_period_ms=50,
         ramp_in_s=0.0,
         steady_duration_s=0.15,
         ramp_out_s=0.0,
@@ -551,8 +549,8 @@ def test_trajectory_minor_timing_gap_is_recorded_without_stopping_motion() -> No
 
     assert not result.timing_fault
     assert result.control_gap_count == 1
-    assert result.maximum_send_interval_ms == pytest.approx(80.0)
-    assert result.sent_points == 3
+    assert result.maximum_send_interval_ms == pytest.approx(30.0)
+    assert result.sent_points == 8
     assert result.arrival is not None
 
 
@@ -571,14 +569,13 @@ def test_trajectory_missing_a_complete_slot_resynchronizes_without_skipping() ->
         sleep_count += 1
         now_ns += round(seconds * 1_000_000_000)
         if sleep_count == 1:
-            now_ns += 55_000_000
+            now_ns += 25_000_000
 
     controller = ConfirmedMotionController(
         fixture_model_presets()[0].create_profile().to_motion_config(),
         clock_ns=clock_ns,
     )
     trajectory = SineTrajectory(
-        sample_period_ms=50,
         ramp_in_s=0.0,
         steady_duration_s=0.15,
         ramp_out_s=0.0,
@@ -596,8 +593,8 @@ def test_trajectory_missing_a_complete_slot_resynchronizes_without_skipping() ->
     assert result.timing_fault
     assert result.skipped_points == 0
     assert result.control_gap_count == 1
-    assert result.maximum_send_interval_ms == pytest.approx(105.0)
-    assert result.sent_points == 3
+    assert result.maximum_send_interval_ms == pytest.approx(45.0)
+    assert result.sent_points == 8
     assert result.arrival is not None
 
 
@@ -612,7 +609,7 @@ def test_isolated_timeline_reports_late_slot_and_keeps_sending() -> None:
 
         def get(self, *, timeout: float):
             self.wait_count += 1
-            time.sleep(timeout + (0.025 if self.wait_count == 2 else 0.0))
+            time.sleep(timeout + (0.045 if self.wait_count == 2 else 0.0))
             raise queue.Empty
 
         def get_nowait(self):
@@ -641,7 +638,7 @@ def test_isolated_timeline_reports_late_slot_and_keeps_sending() -> None:
         (),
         (),
         len(frames),
-        10_000_000,
+        20_000_000,
         object(),
         object(),
         12,
@@ -677,7 +674,6 @@ def test_finite_trajectory_execution_uses_precompiled_frames(monkeypatch) -> Non
         clock_ns=clock_ns,
     )
     trajectory = SineTrajectory(
-        sample_period_ms=50,
         ramp_in_s=0.0,
         steady_duration_s=0.15,
         ramp_out_s=0.0,
@@ -688,8 +684,9 @@ def test_finite_trajectory_execution_uses_precompiled_frames(monkeypatch) -> Non
     runner = MotionTrajectoryRunner(controller, clock_ns=clock_ns, sleep=sleep)
     checked = runner.preflight(trajectory)
 
-    assert len(checked.compiled.finite_points) == trajectory.sample_count == 3
+    assert len(checked.compiled.finite_points) == trajectory.sample_count == 8
     assert all(point.frame.startswith(b"\xAA\x55\x00\x1b\xC0") for point in checked.compiled.finite_points)
+    assert all(point.frame[5:7] == b"\x00\x14" for point in checked.compiled.finite_points)
 
     monkeypatch.setattr(
         trajectory_module,
@@ -698,7 +695,7 @@ def test_finite_trajectory_execution_uses_precompiled_frames(monkeypatch) -> Non
     )
     result = runner.run(trajectory, preflight=checked)
 
-    assert result.sent_points == 3
+    assert result.sent_points == 8
     assert result.arrival is not None and result.arrival.successful
 
     changed = replace(trajectory, roll=SineAxis(1.1, 0.1))
@@ -732,7 +729,6 @@ def test_soft_center_fades_from_current_phase_and_confirms_center() -> None:
     )
     controller.add_command_callback(events.append)
     trajectory = SineTrajectory(
-        sample_period_ms=100,
         ramp_in_s=0.0,
         steady_duration_s=2.0,
         ramp_out_s=0.2,
@@ -752,7 +748,7 @@ def test_soft_center_fades_from_current_phase_and_confirms_center() -> None:
     )
 
     assert result.soft_center_requested
-    assert result.fade_points == 2
+    assert result.fade_points == 10
     assert result.center_confirmed
     assert result.arrival is not None and result.arrival.successful
     assert result.stopped
@@ -796,7 +792,6 @@ def test_soft_center_failure_keeps_an_explicit_failed_phase() -> None:
         clock_ns=clock_ns,
     )
     trajectory = SineTrajectory(
-        sample_period_ms=100,
         ramp_in_s=0.0,
         steady_duration_s=1.0,
         ramp_out_s=0.1,
@@ -863,15 +858,14 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
             )
             for callback in self._command_callbacks:
                 callback(event)
-            # 父进程即使处理UI/证据较慢，也不能拖慢子进程的UDP时间线。
-            time.sleep(0.08)
+            # 父进程即使处理UI/证据慢于20 ms，也不能拖慢子进程的UDP时间线。
+            time.sleep(0.03)
             return event
 
     controller = ProcessController(config)
     trajectory = SineTrajectory(
-        sample_period_ms=50,
         ramp_in_s=0.0,
-        steady_duration_s=0.5,
+        steady_duration_s=2.0,
         ramp_out_s=0.0,
         roll=SineAxis(1.0, 0.1),
         pitch=SineAxis(0.0, 0.0, enabled=False),
@@ -898,7 +892,7 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
 
         control_thread = threading.Thread(target=execute)
         control_thread.start()
-        control_thread.join(timeout=3.0)
+        control_thread.join(timeout=5.0)
         assert not control_thread.is_alive()
         assert run_errors == []
         result = run_results[0]
@@ -954,16 +948,17 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
         receiver.close()
         sender.close()
 
-    assert result.sent_points == trajectory.sample_count == 10
+    assert result.sent_points == trajectory.sample_count == 100
     assert not result.timing_fault
-    assert len(received_at) == 10
+    assert len(received_at) == 100
     intervals_ms = [
         (current - previous) / 1_000_000.0
         for previous, current in zip(received_at, received_at[1:])
     ]
+    assert sorted(intervals_ms)[math.ceil(len(intervals_ms) * 0.95) - 1] < 25.0
     assert max(intervals_ms) < 100.0
     assert soft_result.center_confirmed
-    assert soft_result.fade_points == 4
+    assert soft_result.fade_points == 10
     assert len(soft_received_at) == soft_result.sent_points
     assert [phase.value for phase in phases] == [
         "fading",
