@@ -1485,9 +1485,12 @@ def decode_ins_trace(data: bytes) -> InsTraceRecord:
     schema, kind, source, health, seq, source_seq, timestamp_us, received_us, flags = header.unpack_from(data)
     lengths = {1: 68, 2: 100, 3: 196, 4: 80, 5: 192, 6: 120, 7: 56, 8: 76, 9: 96}
     masks = {1: 1, 2: 15, 3: 15, 4: 3, 5: 15, 6: 255, 7: 63, 8: 3, 9: 15}
-    if kind not in lengths or not (schema == 1 or (schema == 2 and kind == 1)):
+    if kind not in lengths or not (schema == 1 or (schema == 2 and kind in (1, 2))):
         raise CodecError("INS_TRACE unsupported schema or kind")
-    expected_length = 88 if schema == 2 else lengths[kind]
+    if schema == 2:
+        expected_length = 88 if kind == 1 else 164
+    else:
+        expected_length = lengths[kind]
     if len(data) != expected_length or flags & ~masks[kind]:
         raise CodecError("INS_TRACE invalid length or flags")
     if kind >= 6 and (source != 0 or health != 0 or (kind != 9 and source_seq != 0)):
@@ -1513,6 +1516,25 @@ def decode_ins_trace(data: bytes) -> InsTraceRecord:
                  "vel_d_ms", "speed_ms", "vel_h_std_ms", "vel_v_std_ms", "cog_rad", "cog_std_rad",
                  "fix_class", "raw_fix_type", "raw_fix_flags", "num_svs")
         values = {"lat_deg": lat, "lon_deg": lon, **dict(zip(names, items))}
+        if schema == 2:
+            (gnss_source_seq, driver_received_us, gps_week, time_quality, processing_stage, gps_tow_s,
+             velocity_type, velocity_latency_s, pre_filter_state_us, pv_result_flags,
+             filter_time_reject_count, timeline_reject, pv_reject, attempted_mask, accepted_mask,
+             hp_status, vp_status, hv_status, vv_status, processing_complete_us) = struct.unpack_from(
+                "<IQHBBdIfQIIBBBB4BQ", data, 100)
+            if processing_stage > 3:
+                raise CodecError("INS_TRACE invalid GNSS processing stage")
+            if gnss_source_seq != source_seq:
+                raise CodecError("INS_TRACE GNSS source_seq mismatch")
+            values.update(
+                driver_received_timestamp_us=driver_received_us, gps_week=gps_week,
+                gps_tow_s=gps_tow_s, time_quality=time_quality, processing_stage=processing_stage,
+                velocity_type=velocity_type, velocity_latency_s=velocity_latency_s,
+                pre_filter_state_us=pre_filter_state_us, pv_result_flags=pv_result_flags,
+                filter_time_reject_count=filter_time_reject_count, timeline_reject=timeline_reject,
+                pv_reject=pv_reject, group_attempted_mask=attempted_mask, group_accepted_mask=accepted_mask,
+                group_status=(hp_status, vp_status, hv_status, vv_status),
+                processing_complete_us=processing_complete_us)
     elif kind == 3:
         floats = struct.unpack_from("<23f", data, 32)
         values = {"q_body_to_nav": tuple(floats[:4]), "att_std_deg": tuple(floats[4:7]),

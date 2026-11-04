@@ -69,7 +69,7 @@ def test_imu_schema2_invalid_contract_is_rejected():
     for invalid in invalid_payloads:
         with pytest.raises(CodecError):
             decode_ins_trace(invalid)
-    for kind, length in ((2, 100), (3, 196), (4, 80), (5, 192), (6, 120), (7, 56), (8, 76), (9, 96)):
+    for kind, length in ((3, 196), (4, 80), (5, 192), (6, 120), (7, 56), (8, 76), (9, 96)):
         with pytest.raises(CodecError, match="unsupported schema or kind"):
             decode_ins_trace(b"\2" + _header(kind)[1:] + bytes(length - 32))
 
@@ -83,6 +83,40 @@ def test_gnss_float64_and_invalid_edge_are_preserved():
     assert record.flags == 4
     assert record.values["vel_n_ms"] == 4
     assert record.values["num_svs"] == 18
+
+
+def test_gnss_schema2_keeps_epoch_identity_and_per_packet_fusion_result():
+    """GNSS schema2(164B)：名义融合时间、包身份与逐包准入/融合结果按冻结布局解出。"""
+    legacy = _header(2, 4) + struct.pack("<dd12f4B", 31.1234567890123, 121.234567890123,
+        *range(12), 2, 3, 4, 18)
+    header = bytearray(legacy)
+    struct.pack_into("<I", header, 8, 7)  # schema2 头部 source_seq 与新增段一致
+    tail = struct.pack("<IQHBBdIfQIIBBBB4BQ", 7, 1517000, 2400, 1, 3, 100.5, 8, -0.004241,
+                       1499000, 0b1011011111, 3, 0, 0, 0x05, 0x05, 1, 2, 3, 4, 1700000)
+    payload = b"\2" + bytes(header[1:]) + tail
+    assert len(payload) == 164
+    original = decode_ins_trace(legacy)
+    record = decode_ins_trace(payload)
+    assert record.schema == 2 and record.source_seq == 7
+    assert record.values["lat_deg"] == original.values["lat_deg"]
+    assert record.values["driver_received_timestamp_us"] == 1517000
+    assert record.values["gps_week"] == 2400
+    assert record.values["gps_tow_s"] == pytest.approx(100.5)
+    assert record.values["time_quality"] == 1
+    assert record.values["processing_stage"] == 3
+    assert record.values["velocity_type"] == 8
+    assert record.values["velocity_latency_s"] == pytest.approx(-0.004241)
+    assert record.values["pre_filter_state_us"] == 1499000
+    assert record.values["pv_result_flags"] == 0b1011011111
+    assert record.values["filter_time_reject_count"] == 3
+    assert record.values["group_attempted_mask"] == 0x05
+    assert record.values["group_accepted_mask"] == 0x05
+    assert record.values["group_status"] == (1, 2, 3, 4)
+    assert record.values["processing_complete_us"] == 1700000
+    for invalid in (payload[:-1], payload + b"\0", payload[:115] + b"\4" + payload[116:],
+                    payload[:100] + struct.pack("<I", 9) + payload[104:]):
+        with pytest.raises(CodecError):
+            decode_ins_trace(invalid)
 
 
 def test_filter_and_assisted_direction_have_separate_time():
