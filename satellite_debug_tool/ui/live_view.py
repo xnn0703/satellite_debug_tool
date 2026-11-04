@@ -829,6 +829,14 @@ class LiveView(QWidget):
         self._record_btn.clicked.connect(self._on_record_clicked)
         self._toolbar.addWidget(self._record_btn)
 
+        self._gnss_fusion_btn = QPushButton(tr("GNSS data"))
+        self._gnss_fusion_btn.setMinimumSize(90, 29)
+        self._gnss_fusion_btn.setToolTip(
+            tr("Live GNSS measurements (position, velocity, COG) with fusion summary (requires Debug + full capture)")
+        )
+        self._gnss_fusion_btn.clicked.connect(self._on_gnss_fusion_clicked)
+        self._toolbar.addWidget(self._gnss_fusion_btn)
+
         self._import_btn = QPushButton(tr("Import"))
         self._import_btn.setMinimumSize(84, 29)
         self._import_btn.setToolTip(
@@ -2184,6 +2192,22 @@ class LiveView(QWidget):
             )
             return
         self._start_recording(format_version=SDB_VERSION_V3, customer=False)
+
+    def _on_gnss_fusion_clicked(self):
+        """打开/复用 GNSS 融合实时诊断窗；只读 frame_received，不改会话状态。"""
+        from satellite_debug_tool.ui.gnss_fusion_diagnostics_window import GnssFusionDiagnosticsWindow
+
+        window = getattr(self, "_gnss_fusion_window", None)
+        if window is None:
+            window = GnssFusionDiagnosticsWindow(parent=self)
+            self.frame_received.connect(window.feed_record)
+            self._gnss_fusion_window = window
+        if window.isMinimized():
+            window.showNormal()
+        else:
+            window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _set_customer_recording_state(
         self, state: CustomerRecordingState
