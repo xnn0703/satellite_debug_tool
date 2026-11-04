@@ -362,6 +362,12 @@ class CustomerOverviewView(QWidget):
         self._gnss_btn.setEnabled(False)
         self._gnss_btn.clicked.connect(self._live.show_gnss_details)
         self._connection_layout.addWidget(self._gnss_btn)
+        self._gnss_data_btn = QPushButton(tr("GNSS data"))
+        self._gnss_data_btn.setEnabled(False)
+        self._gnss_data_btn.setToolTip(
+            tr("Live GNSS measurements (position, velocity, COG) with fusion summary (requires Debug + full capture)"))
+        self._gnss_data_btn.clicked.connect(self._live.show_gnss_fusion_window)
+        self._connection_layout.addWidget(self._gnss_data_btn)
         self._orbit_btn = QPushButton("Orbit/TLE")
         self._orbit_btn.setEnabled(False)
         self._orbit_btn.clicked.connect(getattr(self._live, "show_orbit_details", lambda: None))
@@ -1094,6 +1100,7 @@ class CustomerOverviewView(QWidget):
             ),
         )
         self._gnss_btn.setEnabled(self._live.gnss_store().has_data())
+        self._gnss_data_btn.setEnabled(self._live.is_device_online())
         orbit_store_getter = getattr(self._live, "orbit_store", None)
         self._orbit_btn.setEnabled(
             bool(orbit_store_getter is not None and orbit_store_getter().available)

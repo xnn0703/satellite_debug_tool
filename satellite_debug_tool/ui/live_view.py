@@ -2194,7 +2194,12 @@ class LiveView(QWidget):
         self._start_recording(format_version=SDB_VERSION_V3, customer=False)
 
     def _on_gnss_fusion_clicked(self):
-        """打开/复用 GNSS 融合实时诊断窗；只读 frame_received，不改会话状态。"""
+        self.show_gnss_fusion_window()
+
+    def show_gnss_fusion_window(self):
+        """打开/复用 GNSS 实时数据窗；只读 frame_received，不改会话状态。
+
+        工程工具栏与客户总览页共用本入口，窗口按 LiveView 实例唯一。"""
         from satellite_debug_tool.ui.gnss_fusion_diagnostics_window import GnssFusionDiagnosticsWindow
 
         window = getattr(self, "_gnss_fusion_window", None)

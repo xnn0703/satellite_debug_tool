@@ -121,6 +121,12 @@ class _LiveDouble(QObject):
     def show_gnss_details(self):
         return None
 
+    def show_gnss_fusion_window(self):
+        return None
+
+    def is_device_online(self):
+        return self.connected
+
     def set_orbit_sky_consumer(self, name: str, active: bool):
         self.sky_consumers.append((name, active))
 
