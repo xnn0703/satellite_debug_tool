@@ -4,7 +4,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import time
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
@@ -15,7 +15,7 @@ from satellite_debug_tool.core.session.command_sender import SessionOperationCla
 from .fleet import DeviceSession, FleetController
 from .models import AttemptPhase, AttemptStatus
 from .recipe import ProductionRecipe
-from .result_store import ProductionResultStore
+from .result_store import ProductionResultStore, ResultStoreError
 from .tracking_criteria import TrackingCriteriaPolicy, TrackingEvaluator
 from .run_coordinator import (
     DeviceStepResult, ProductionRunCoordinator, ProductionRunState, ProductionStepRequest,
@@ -73,14 +73,22 @@ class ProductionExecution(QObject):
     def __init__(self, store: ProductionResultStore, batch_id: str,
                  recipe: ProductionRecipe, fleet: FleetController,
                  participants: Sequence[DeviceSession], *,
-                 clock: Callable[[], float] = time.monotonic, parent=None) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 fixture_telemetry=None, parent=None) -> None:
         super().__init__(parent)
         self.store, self.batch_id, self.recipe = store, batch_id, recipe
         self.fleet = fleet
+        self.fixture_telemetry = fixture_telemetry
         self.sessions = {session.serial_number: session for session in participants}
         enabled = {item["test_id"] for item in store.list_attempts(batch_id)
                    if item["status"] == AttemptStatus.PENDING.value}
-        steps = [test for test in ProductionRunCoordinator.FIRST_FLOW_TEST_IDS if test in enabled]
+        flow_pool = (
+            ProductionRunCoordinator.VEHICLE_TEST_IDS
+            if all(test in ProductionRunCoordinator.VEHICLE_TEST_IDS for test in enabled)
+            and enabled
+            else ProductionRunCoordinator.FIRST_FLOW_TEST_IDS
+        )
+        steps = [test for test in flow_pool if test in enabled]
         self.run = ProductionRunCoordinator(
             store, batch_id, test_ids=steps, parent=self, clock=clock,
         )
@@ -101,6 +109,7 @@ class ProductionExecution(QObject):
         self._finishing_observation = False
         self._power_cycle_pending = False
         self._power_cycle_started_at = 0.0
+        self._component_temperatures_start: dict[str, dict[str, float]] = {}
         self._pending_start_evidence: dict | None = None
         self._motion_requested = False
         self.fixture_ready: Callable[[], tuple[bool, str]] = lambda: (False, "Waiting for fixture preparation and start confirmation")
@@ -153,7 +162,8 @@ class ProductionExecution(QObject):
         self._power_cycle_pending = False
         self._pending_start_evidence = None
         self._motion_requested = False
-        if request.test_id in {"static_acquisition", "locked_rocking", "power_on_rocking"}:
+        if request.test_id in {"static_acquisition", "locked_rocking", "power_on_rocking",
+                               "locked_drive", "power_on_drive"}:
             self.run.set_observation_duration(self.recipe.duration_for(request.test_id))
         if request.test_id == "locked_rocking":
             for serial in self.sessions:
@@ -199,7 +209,8 @@ class ProductionExecution(QObject):
             return
         if serial not in self.sessions:
             raise ValueError("tracking sample requires a frozen participant")
-        if received_at > self.run.observation_deadline:
+        deadline = self.run.observation_deadline
+        if deadline is not None and received_at > deadline:
             return
         state_mask = (1 << 1) | (1 << 2) | (1 << 11)
         phase = tracking_phase_from_wire(record.tracking_phase)
@@ -207,8 +218,15 @@ class ProductionExecution(QObject):
         evaluator = self._evaluators[serial]
         previous_acquired = evaluator.acquired
         previous_failures = evaluator.failure_reasons
+        gnss_fixed = bool(
+            record.valid_mask & (1 << 4) and record.gnss_fix in self._GNSS_FIXED_CODES
+        )
+        modem_online = self._modem_online(serial)
+        attitude_error = self._attitude_error_deg(record, received_at, evaluator)
         evaluator.observe(received_at, phase is TrackingPhase.LOCKED, record.locked,
-                          float(record.snr_db), state_valid)
+                          float(record.snr_db), state_valid,
+                          gnss_fixed=gnss_fixed, modem_online=modem_online,
+                          attitude_error_deg=attitude_error)
         if evaluator.acquired and not previous_acquired:
             self.store.record_event(self.batch_id, "scenario_acquired", {
                 "test_id": self.run.current_test_id, "serial_number": serial,
@@ -220,6 +238,66 @@ class ProductionExecution(QObject):
                 "test_id": self.run.current_test_id, "serial_number": serial,
                 "host_monotonic_s": received_at, "reasons": list(evaluator.failure_reasons),
             })
+
+    _COMPONENT_KEYS = ("converter", "tx_array", "rx_array")
+
+    def _component_temperatures(self, serial: str) -> dict[str, float]:
+        """三组件当前温度；只记录遥测已确认的有效值。"""
+
+        session = self.sessions.get(serial)
+        if session is None:
+            return {}
+        readings: dict[str, float] = {}
+        try:
+            snapshot = session.core.product_store.snapshot()
+        except (AttributeError, RuntimeError):
+            return readings
+        for key in self._COMPONENT_KEYS:
+            health = getattr(snapshot, key, None)
+            value = getattr(health, "temperature_c", None) if health is not None else None
+            if value is not None and value.availability is Availability.VALID \
+                    and math.isfinite(float(value.value)):
+                readings[key] = float(value.value)
+        return readings
+
+    def _modem_online(self, serial: str) -> Optional[bool]:
+        """modem 在线来自 Product 遥测快照；不可用时保持未观察事实。"""
+
+        session = self.sessions.get(serial)
+        if session is None:
+            return None
+        try:
+            online = session.core.product_store.snapshot().operation.modem_online
+        except (AttributeError, RuntimeError):
+            return None
+        if online.availability is not Availability.VALID:
+            return None
+        return bool(online.value)
+
+    def _attitude_error_deg(
+        self, record: ServiceFastState, received_at: float, evaluator: TrackingEvaluator
+    ) -> Optional[float]:
+        """姿态模式误差：设备 INS 姿态相对 MS-6222 参考的三轴最大绝对差。"""
+
+        if not evaluator.attitude_mode or self.fixture_telemetry is None:
+            return None
+        attitude_mask = (1 << 6) | (1 << 7) | (1 << 8)
+        if record.valid_mask & attitude_mask != attitude_mask:
+            return None
+        readout = self.fixture_telemetry.reference_readout(
+            now_ns=int(received_at * 1_000_000_000)
+        )
+        angles = getattr(readout, "angles", None)
+        if angles is None:
+            return None
+        device = (record.roll_deg, record.pitch_deg, record.yaw_deg)
+        worst = 0.0
+        for actual, reference in zip(device, angles):
+            delta = abs(float(actual) - float(reference))
+            if delta > 180.0:
+                delta = 360.0 - delta
+            worst = max(worst, delta)
+        return worst
 
     def device_phase(self, serial: str) -> AttemptPhase:
         if not self._hardware_ready:
@@ -244,21 +322,40 @@ class ProductionExecution(QObject):
             return
         self._start_window(test_id, evidence)
 
+    _VEHICLE_TEST_IDS = frozenset({"locked_drive", "power_on_drive"})
+    _GNSS_FIXED_CODES = frozenset({1, 2, 3, 4, 5})
+
+    def _power_on_anchor(self, test_id: str, evidence: Mapping[str, object]) -> float:
+        """上电计时锚点：上电工况用恢复供电回执，其余工况为窗口起点。"""
+
+        if test_id in ("power_on_rocking", "power_on_drive"):
+            restored_ns = int(evidence.get("power_restored_monotonic_ns", 0) or 0)
+            if restored_ns > 0:
+                return restored_ns / 1_000_000_000.0
+        return self.run.observation_started_at
+
     def _start_window(self, test_id: str, evidence: Mapping[str, object]) -> None:
         self._last_device_timestamp.clear()
         duration = float(self.run.progress.remaining_s)
         self.run.confirm_started(evidence={**evidence, "tracking_criteria": self.policy.to_payload()})
         started = self.run.observation_started_at
+        attitude_mode = test_id in self._VEHICLE_TEST_IDS
+        power_on_s = self._power_on_anchor(test_id, evidence)
         self._evaluators = {serial: TrackingEvaluator(
-            self.policy, duration, acquisition_required=test_id != "locked_rocking")
+            self.policy, duration, acquisition_required=test_id != "locked_rocking",
+            attitude_mode=attitude_mode)
             for serial in self.sessions}
         for evaluator in self._evaluators.values():
-            evaluator.start(started)
+            evaluator.start(started, power_on_monotonic_s=power_on_s)
+        self._component_temperatures_start = {
+            serial: self._component_temperatures(serial) for serial in self.sessions
+        }
         self._hardware_ready = True
 
     def prepare_power_cycle(self) -> None:
-        """在已ARMED的摇摆上电项准备一次供电循环；不宣称已测得物理重启。"""
-        if self.run.current_test_id != "power_on_rocking" or self.run.state is not ProductionRunState.ARMED:
+        """在已ARMED的上电工况准备一次供电循环；不宣称已测得物理重启。"""
+        if (self.run.current_test_id not in {"power_on_rocking", "power_on_drive"}
+                or self.run.state is not ProductionRunState.ARMED):
             raise RuntimeError("power cycle preparation requires armed power-on test")
         self._power_cycle_pending = True
         self._power_cycle_started_at = self.clock()
@@ -296,6 +393,10 @@ class ProductionExecution(QObject):
                 "criteria": "tracking_criteria_v1", "tracking_criteria": outcome.metrics,
                 "performance_verdict": outcome.performance_verdict,
                 "data_quality": outcome.data_quality, "fixture_finish": dict(evidence),
+                "component_temperatures": {
+                    "start": self._component_temperatures_start.get(serial, {}),
+                    "end": self._component_temperatures(serial),
+                },
             }, incomplete=outcome.incomplete)
         self.run.complete_step(results)
 
@@ -338,16 +439,16 @@ class ProductionExecution(QObject):
 
     def _tick(self) -> None:
         if self.run.state is ProductionRunState.COMPLETE:
+            # 车辆待测项保留 PENDING，由批次挂起流程接管；其余未执行项明确 INCOMPLETE。
             for attempt in self.store.list_attempts(self.batch_id):
                 if attempt["status"] != AttemptStatus.PENDING.value:
                     continue
-                test_id = attempt["test_id"]
-                reason = ("Vehicle scenario requires operator start and driving evidence"
-                          if test_id in {"locked_drive", "power_on_drive"}
-                          else "Navigation summary requires navigation analysis criteria")
+                if attempt["test_id"] in self._VEHICLE_TEST_IDS:
+                    continue
                 self.store.transition_attempt(attempt["attempt_id"], AttemptStatus.WAITING_PREREQUISITE)
                 self.store.transition_attempt(attempt["attempt_id"], AttemptStatus.INCOMPLETE,
-                                              result={"reason": reason, "verdict": "incomplete"})
+                                              result={"reason": "Navigation summary requires navigation analysis criteria",
+                                                      "verdict": "incomplete"})
             self.stop()
             self.finished.emit()
             return
@@ -411,12 +512,23 @@ class ProductionExecution(QObject):
         self._instant_start()
         self.run.complete_step(results)
 
+    _PER_DEVICE_FACTS = {"ip": "endpoint_ip", "string": "serial_number"}
+
+    def _per_device_expected(self, serial: str, rule: Mapping[str, object]) -> str:
+        """逐设备期望值取自该设备的注册事实，而不是配方常量。"""
+
+        fact = self._PER_DEVICE_FACTS.get(str(rule.get("type")))
+        if fact is None:
+            return ""
+        try:
+            device = self.store.get_device(self.batch_id, serial)
+        except ResultStoreError:
+            return ""
+        return str(device.get(fact) or "").strip()
+
     def _parameters(self) -> None:
         rules = {key: value for key, value in self.recipe.payload["expected"]["parameters"].items()
                  if not value.get("ignore", False)}
-        if any(rule.get("per_device", False) for rule in rules.values()):
-            self.run.explain_wait("Recipe requires per-device parameter expectations")
-            return
         for serial, session in self.sessions.items():
             if rules and serial not in self._queries:
                 self._queries.add(serial)
@@ -431,10 +543,23 @@ class ProductionExecution(QObject):
         for serial in self.sessions:
             table = self._tables.get(serial)
             actual = {} if table is None else {entry.name: entry.value for entry in table.params}
-            matches = {name: name in actual and compare_parameter(actual[name], rule)
-                       for name, rule in rules.items()}
+            matches = {}
+            expected_per_device = {}
+            for name, rule in rules.items():
+                effective = rule
+                if rule.get("per_device", False):
+                    expected_value = self._per_device_expected(serial, rule)
+                    if not expected_value:
+                        matches[name] = False
+                        expected_per_device[name] = "registered value is missing"
+                        continue
+                    effective = dict(rule)
+                    effective["value"] = expected_value
+                    expected_per_device[name] = expected_value
+                matches[name] = name in actual and compare_parameter(actual[name], effective)
             results[serial] = DeviceStepResult(all(matches.values()), {
-                "parameters": actual, "matches": matches, "required_count": len(rules), "expected": rules,
+                "parameters": actual, "matches": matches, "required_count": len(rules),
+                "expected": rules, "expected_per_device": expected_per_device,
                 "reason": "Parameter expectations are not configured" if not rules else "",
             }, skipped=not rules)
         self._instant_start()

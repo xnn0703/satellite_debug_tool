@@ -35,6 +35,7 @@ _TRACKING_REASON_LABELS = {
     "tracking_sample_gap": "采样间隔超过允许值",
     "acquisition_evidence_incomplete": "搜星阶段证据不完整",
     "acquisition_timeout": "超过搜星时限仍未建立稳定锁定",
+    "attitude_reference_missing": "MS-6222 姿态参考缺失或过期",
     "interruption_count_exceeded": "中断次数超过允许值",
     "interruption_duration_exceeded": "单次中断时长超过允许值",
     "interruption_ratio_exceeded": "累计中断时间占比超过允许值",

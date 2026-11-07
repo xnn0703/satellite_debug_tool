@@ -19,6 +19,7 @@ python3 -m satellite_debug_tool.main --production   # 打开自动化测试工�
 
 # 测试（无 editable install 时需要 PYTHONPATH；conftest 已设 offscreen + 静默更新）
 PYTHONPATH=. pytest satellite_debug_tool/tests
+PYTHONPATH=. .venv/bin/python -m pytest satellite_debug_tool/tests -q   # 本机 .venv 全量回归（dev_log 口径）
 pytest satellite_debug_tool/tests/test_frame_v2.py -v      # 单文件
 pytest satellite_debug_tool/tests -k "crc"                 # 按 pattern
 pytest satellite_debug_tool/tests -k "production"          # 仅试产相关
@@ -102,7 +103,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/production/fixture_runtime.py` — **M19-A.13** 进程级摇摆台/MS-6222 所有权根；Customer 弹窗与 Production 共用唯一租约、夹具档案和坐标标定 Store
 - `core/production/fixture_telemetry.py` — **M19-A.15** 进程级夹具姿态事实总线；平台已发送目标、MS-6222 标定后相对 FRD 与真实航向保持独立来源，活动 SDB v3 recorder 各自订阅并保存
 - `core/production/ms6222_debug.py` — **M19-A.5/M19-A9** MS-6222 独立串口租约与工程证据会话；独立 MS 页面只采集参考，摇摆台自动资格测试显式获取摇摆台与 MS 两项所有权并生成联合诊断包
-- `core/motion_platform/` — **M19-A.11** 可复用运动平台直接控制组件；独占本机 `192.168.15.101:8410` 反馈端点并向控制器 `192.168.15.201:7408` 发送二进制帧，统一拥有严格逆运动学、连接代际、反馈闭环完成、回原点、轨迹调度和证据模型
+- `core/motion_platform/` — **M19-A.11** 可复用运动平台直接控制组件；独占本机 `192.168.15.101:8410` 反馈端点并向控制器 `192.168.15.201:7408` 发送二进制帧，统一拥有严格逆运动学、连接代际、反馈闭环完成、回原点、轨迹调度和证据模型；**M59–M61** `trajectory.py` 启动前编译 `CompiledTrajectory`（FRD 姿态、六缸逆解与 `0xC0` 帧全量预编译，热路径只做单调时钟调度与发送），`timeline_process.py` 以 spawn 子进程独占真实 socket 的轨迹帧发送时间线（父进程不执行轨迹 `sendto`），缓停回正状态机与固定 20 ms 周期常量归此模块所有
 - `core/production/fixture_profile.py` — **M19-A.11** 摇摆台型号模板、v4 工作站档案、运行包线和控制租约；型号预置直接控制端点与运动学参数，旧 `192.168.15.101:9800` 厂家服务端点不解释为控制器地址，现场只确认轴符号并由引导标定生成真实 calibration ID
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 AES-256-GCM 认证解密（`firmware_package.py`）
@@ -119,6 +120,16 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 ### 关键约定
 
+- **M58–M61 摇摆台轨迹合同**：连续轨迹周期是唯一 20 ms 常量——领域构造、界面和正式执行不存在可变周期入口，工程摇摆台页面无采样周期控件，非 20 ms 生产配方不能进入当前正式执行。轨迹启动前完成编译与预检，UI 预览与 worker 启动共用同一不可变预检结果，参数变化使旧结果失效；严格逆运动学整条拒绝，无逐缸钳位或自动缩角路径。完整槽位迟到保存单一 timing-fault 事实，合同为不跳点、不终止、不追赶，并从真实发送时刻重建周期；轨迹结果保存实际相邻发送间隔 max/P95/P99、控制空洞与跳点数量。缓停回正是 `RUNNING → FADING → CENTERING → CENTER_CONFIRMED / CENTER_FAILED` 单一状态机：从最后已发送点的实际相位渐出（不重置相位）、发送精确型号中心目标，`CENTER_CONFIRMED` 必须由新鲜反馈证明；物理急停保持独立事实，软件缓停不承担急停语义。见 `doc/M58_*` ~ `doc/M61_*`。
+
+- **M58 预录制可靠性**：设备离线时点击预录制立即建立一个 Runtime recorder 并进入 `RECORDING + WAITING_DEVICE`；首个上线 UDP 数据写入同一 SDB 且时间早于完整采集请求回执。首次完整采集发送失败、超时、拒绝或能力待确认时 recorder 保持活动并保存明确采集阶段；新在线代际基于新身份与能力证据发起一次新协商，同一代际不做定时盲重试。
+
+- **M62 采集覆盖单调时钟与缓停入口**：`LiveView` 的录制开始/停止与 FULL 进入/离开边沿统一消费 `time.monotonic_ns()`；SDB summary 使用 `support_full_intervals_monotonic_ns`，覆盖值继续为 `support_full_coverage_ns`。Windows 墙钟分辨率曾使 v1.9.2 tag CI 覆盖为 0——这是跨平台时钟合同错误，不以重跑处理。缓停按钮装配在连续摇摆区域（与开始按钮并列，无第二个动作 owner），单一投影函数只在“会话可控制 + 当前轨迹运行 + 尚未请求缓停”时启用；高频平台反馈、busy 与请求信号消费同一状态，不再互相覆盖按钮。见 `doc/M62_*`。
+
+- **M63 按需轨迹预览**：组合连续摇摆区域无常驻预览图；`TrajectoryPreviewDialog` 仅在用户点击“预览并校验”且预检成功后创建，最多绘制 1200 个目标点并复用 Roll/Pitch/Yaw 主题色。`_validate_trajectory()` 是预览和启动共用的唯一预检入口；“开始组合摇摆”预检通过后直接提交，不创建或显示预览窗口。见 `doc/M63_*`。
+
+- **GNSS 实时数据窗**：工程 Live 与客户总览入口打开 `ui/gnss_fusion_diagnostics_window.py` 只读窗口，消费 `LiveView.frame_received` 分发的 INS TRACE kind2 记录；窗口只读展示，不发送命令、不修改会话状态，设备处于 Debug + 完整采集模式才有工程流。kind2 schema1（100B）只更新实测 P/V/COG；schema2（164B，前 100B 与 schema1 兼容）额外提供 GPS week/TOW、`processing_stage`（0 未处理 / 1 健康失效 / 2 时间线拒绝 / 3 已执行准入）、速度类型与 latency、滤波/时间线/PV 拒绝及 HP/VP/HV/VV 四组 attempted/accepted/status。`source_seq` 与头部不一致或 `processing_stage > 3` 拒绝解码；零/未知/未处理语义由 stage 区分，不解释为物理零。
+
 - **M51 型号预置、保存与报告**：`core/production/configuration.py:builtin_product_templates()` 提供 AFD01B2/C/D 的六项只读预置：12 V 均为 9 A，24 V 的 B2 为 8 A、C/D 为 5 A（M54 预置 R2）；内置项通过“复制为定制”编辑，配置修改保留完整 payload 和未知字段。`core/production/storage.py:resolve_production_storage()` 独占路径解析：默认 `follow_recording` 保存到 `paths.recording_dir/自动化测试/YYYY-MM-DD`，已有显式自定义目录迁入 `custom_root`；批次创建后冻结绝对输出目录。准备页“开始测试”完成创建与启动，正常终态自动收尾并生成报告，“下一批次”清理终态。PASS/FAIL/INCOMPLETE/ABORTED 均可生成 V01，报告结论与执行结论分别保存；`reporting.py` 以实际 SDB、解析错误及可分析遥测帧数形成 `analysis/data_quality.json`，执行 PASS 在这些证据缺失时形成报告 INCOMPLETE；批次写入 `batch_summary.json`，证据收集全部夹具 session。数据质量 COMPLETE 只表示这些已实现检查通过，设备性能、INS 精度、真实供电及物理验收仍需独立证据。见 `doc/M51_automation_presets_workflow_reports_*.md`。
 
 - **M50 自动化完整采集**：`core/production/fleet.py` 复用 `CaptureProfileController`，通过设备能力、精确 `SET_CAPTURE_PROFILE=support_full` 响应及实际分析帧共同确认采集 READY；单纯提高 Product 快状态订阅频率或创建 SDB 文件不能证明完整采集。生产 recorder 保持唯一 owner，连接/遥测代际变化重新建立准入。正常收尾先通过同一生产会话恢复 `customer_live`，确认恢复结果后再结束录制和断电；连接故障保留明确证据。见 `doc/M50_automation_full_capture_*.md`。
@@ -127,7 +138,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **M48 批次布局**：曲线按目标数量及冻结真实参与槽位呈现，独立等待卡不绑定设备；冻结后刷新设置目录保持已创建批次的配方和夹具事实。`core/production/presentation.py` 统一启用节点、夹具相关性和槽位投影；进度/夹具组件只消费执行快照、ResultStore 与 FixtureRuntime，工况时间保持 M47 唯一 owner。横向节点、大号倒计时和红/绿/灰夹具条位于曲线上方；配置详情和事件可折叠，窄窗内容/曲线滚动且底部操作固定。配色沿用用户页共享主题。见 `doc/M48_production_layout_*.md`。
 
-- **M47/M54 批次执行与判据**：正式启动通过 `ProductionStartPreparation` 先准备电源，再等待数量、身份和完整采集准入。`ProductionExecution` / `ProductionRunCoordinator` 拥有执行与固定工况计时；`tracking_criteria.py:TrackingEvaluator` 是逐设备跟踪判定唯一 owner。新批次 schema 2 冻结每项 duration_s 与完整策略；初始搜星计入总时长，默认连续 LOCKED、locked=true、有限正 SNR 达 5 秒确认，搜星上限 300 秒。正式观察单次中断≤2秒、每30分钟≤5次（按工况时长比例向上取整）、累计≤正式观察时长0.5%，连续健康3秒确认恢复；失锁但正SNR仍是中断，数据缺口与非有限值独立形成质量结果，最大采样间隔2秒。锁定后摇摆在运动前逐帧确认稳定，运动观察阶段立即执行中断规则。普通性能失败继续后续项；共享故障和主动中止保留已确认性能失败。执行节点尊重配方显式启用；optional固件/空参数规则记录SKIPPED，导航判据尚未实现时明确INCOMPLETE。报告独立保存性能、执行完整性及采集质量，质量不足不能人工批准PASS。上述参数为2026-11-02确认的工程试行值，现场遮挡门限另验收。MS精度仍只记录提示，运行需有效新鲜姿态；共享供电的摇摆上电由PowerOnRockingPhase管理预期断电、平台反馈、恢复供电及本次新参考帧。见 `doc/M54_tracking_criteria_{plan,acceptance,dev_log}.md`，历史M47判据不重写已归档结果。
+- **M47/M54 批次执行与判据**：正式启动通过 `ProductionStartPreparation` 先准备电源，再等待数量、身份和完整采集准入。`ProductionExecution` / `ProductionRunCoordinator` 拥有执行与固定工况计时；`tracking_criteria.py:TrackingEvaluator` 是逐设备跟踪判定唯一 owner。新批次 schema 2 冻结每项 duration_s 与完整策略；初始搜星计入总时长，默认连续 LOCKED、locked=true、有限正 SNR 达 5 秒确认，搜星上限 300 秒。正式观察单次中断≤2秒、每30分钟≤5次（按工况时长比例向上取整）、累计≤正式观察时长0.5%，连续健康3秒确认恢复；失锁但正SNR仍是中断，数据缺口与非有限值独立形成质量结果，最大采样间隔2秒。锁定后摇摆在运动前逐帧确认稳定，运动观察阶段立即执行中断规则。普通性能失败继续后续项；共享故障和主动中止保留已确认性能失败。执行节点尊重配方显式启用；optional固件/空参数规则记录SKIPPED，导航判据尚未实现时明确INCOMPLETE。报告独立保存性能、执行完整性及采集质量，质量不足不能人工批准PASS。上述参数为2026-11-02确认的工程试行值，现场遮挡门限另验收。MS精度仍只记录提示，运行需有效新鲜姿态；共享供电的摇摆上电由PowerOnRockingPhase管理预期断电、平台反馈、恢复供电及本次新参考帧。**M64 判据扩展（2026-11-06）**：`TrackingEvaluator` 支持 `attitude_mode`——健康事实唯一为设备姿态相对 MS-6222 参考的三轴最大误差 ≤ `attitude_error_max_deg`（试行 3°），SNR/锁定仅记录不参与判定，参考缺失记质量原因 `attitude_reference_missing`，遮挡导致的 SNR 掉 0 天然豁免；上电计时锚点为上电工况的恢复供电回执、其余工况为窗口起点，metrics 输出 `lock_elapsed_s / gnss_lock_elapsed_s / modem_online_elapsed_s`（GNSS=fast state bit4 且 fix∈2D/3D/RTK/DGNSS/RTK_FLOAT，modem=Product 遥测 `operation.modem_online`）。姿态引擎已接 `ProductionExecution` 喂样与报告呈现；**M65 两阶段批次（2026-11-06）**：台架段完成且配方含车辆项时批次自动 `SUSPENDED`（崩溃恢复只扫 RUNNING 不误杀、关软件保留）；"继续批次…"按钮扫描批次存储列出挂起批次，`adopt_suspended` 接续并回读配方与配置快照（`ResolvedProductionConfiguration.from_snapshot`），恢复后按冻结 SN/UID 逐台身份续验，全部一致才允许操作员门禁"开始行驶记录"（`resume_vehicle_phase` SUSPENDED→RUNNING，execution 按 PENDING 自动选车辆 flow，窗口为配方冻结时长+姿态主判据）。报告只在全部终态后生成一份 DOCX，attempt 结果带执行日期（时钟对齐偏移换算）。车载/台架同工装同 MS-6222，4 台并行；4 设备数据流为有界保护（300s×20Hz SNR deque、峰值降采样、250ms 判定 tick、定时器驱动呈现、隐藏页停刷）。参数核验 `per_device` 规则期望值取自该设备注册事实（ip→endpoint_ip、string→serial_number），配方校验拒绝 per_device 自带比较目标。见 `doc/M54_tracking_criteria_{plan,acceptance,dev_log}.md`，历史M47判据不重写已归档结果。
 
 - **M54 观察与运动时序**：`ProductionRunCoordinator.observation_started_at/observation_deadline` 是窗口时间源，判定器与倒计时消费相同起止。自动摇摆在新配方中声明 `execution_mode=until_observation_complete`，通过既有 `MotionTrajectoryRunner` 的持续轨迹合同（`steady_duration_s=None` 且显式stop owner）运行，观察结束后停止并反馈确认回中；工程有限轨迹保持有限时长及全路径预检。锁定后摇摆从首个已发送运动与新鲜移动反馈开始窗口，渐入期纳入评价；ARMED期间持续逐帧预锁，提交轨迹前重验。共享供电重启先等待新DUT代际、完整分析采集及新参考数据，准备阶段与评价窗口分开；300秒准备超时保存INCOMPLETE，迟到ready不撤销超时。前置搜星失败通过complete_preparation保存结果，保持硬件尚未启动的事实。
 
@@ -206,7 +217,8 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **CI**：`.github/workflows/build.yml` 用 Windows Runner 构建 user/ops。tag/dispatch 精确解析并 checkout 标签 SHA，测试与冻结 smoke 后生成不可变候选；两版成功后通过受保护的 `release-candidate` environment 上传 ECS 暂存区。普通分支/PR 只产出 artifact。工作流不创建 GitHub Release，不持有正式签名密钥。
 - **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、树清单、冻结 smoke 并上传候选；M57 后 ops 支持事务自动安装，user 保持人工完整包。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
 - **v1.9.0 发行证据**：四包均来自不可变标签 SHA `a867cfed9da78186db33d67b4a389279e2d8dfa7`，Mac 双版及 Windows Actions 双版完成构建/冻结/归档验证；四份完整包已公开至阿里云，ops 两平台通过独立新缓存 TUF 验证。逐包 SHA、平台签名边界、真实硬件及 Windows 实机升级边界见 `doc/M53_release_validation.json`。后续文档和发布CLI保活修复保持这四包字节与标签不变。
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.1`，发布状态以 M55 验证记录为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **v1.9.2 / v1.9.3 发行证据**：v1.9.2 tag 的 Windows user 源码回归失败（墙钟分辨率使 `support_full_coverage_ns` 为 0），该版未晋升；单调时钟修复后 v1.9.3（提交 `57f6b1f` / 标签 `v1.9.3`）四包经 ECS 本机完整 SHA-256 与公网 Range 抽样原子发布至 `/downloads/v1.9.3/`，两平台 fresh `ReleaseChecker` 均返回 v1.9.3 + `automatic`，本版目录 `delta_count=0`（完整包）。机器可读证据 `doc/M62_release_validation.json`；Windows 实机自动更新/回滚、Apple notarization 与真机现场验收仍是独立边界。
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.3`，发布状态以 `doc/M62_release_validation.json` 为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；Mac 本地使用 Python 3.11 调用 `scripts/release_macos.py` 构建并上传候选；四包校验后 ops 签名晋升 stable，user 公开完整包
 - **签名晋升连接**：`scripts/promote_release.py` 的唯一 SSH Transport 仅通过纯 SFTP 上传公开字节、投递 ECS 校验请求并读取 root 回执；回执绑定 bundle/request/文件数/总字节，实际 HTTPS 只做每文件首/中/尾最多 4 KiB Range。完整摘要和 Range 均通过后才原子提交 timestamp。恢复同一 bundle 的遗留锁前，先确认旧发布进程已经停止并核对远端版本围栏。
 - **`release.config.json`** 配 `app_id/repo_id/channel`、HTTPS metadata/target 入口和内嵌 TUF 公钥 root；未配置时明确等待部署，不回退 GitHub。私钥和上传凭据保存在仓库外。
@@ -219,6 +231,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - `satellite_debug_tool.spec` — 主程序双版 spec；ops 保留全量 Qt/WebEngine 与运维依赖，user 使用 Qt hooks 和明确模块白名单裁剪；两版保留 pyqtgraph/OpenGL、翻译、图标与模型，`tests` 子模块不进发行包。运维包过滤掉 Designer/Assistant/Linguist.app，保留其地图需要的 QtWebEngineProcess.app。
 - `updater.spec` — 单文件 updater 二进制
+- 轨迹发送时间线是 spawn 子进程（M60）：`main.py` / `main_user.py` 入口的 `multiprocessing.freeze_support()` 必须保留，冻结程序才能启动发送进程
 - 新依赖若 PyInstaller 找不到：`hiddenimports` 加一行；常见坑：GLU 子模块（`collect_all("OpenGL")` 已覆盖）
 
 ## 关键文档（按重要性）
@@ -245,6 +258,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M52_*` — 双平台候选构建、ECS 上传、TUF 可信更新与签名晋升。
 - `doc/M56_server_release_verification_*` — ECS 本机完整摘要、root 回执、公网有界 Range 与服务器现场证据。
 - `doc/M57_macos_automatic_update_*` — macOS ops 自动退出、app 事务替换、健康确认、登录恢复与失败回滚。
+- `doc/M58_*` ~ `doc/M63_*` — 摇摆台预录制可靠性/组合包线、轨迹编译与缓停回正、独立发送时间线、固定 20 ms 轨迹、v1.9.2/v1.9.3 发布（含 `M62_release_validation.json`）、采集覆盖单调时钟与按需轨迹预览的 plan/acceptance/dev_log。
 - `doc/M53_manager_naming_release_*.md`、`doc/M53_release_validation.json` — Manager 命名与 v1.9.0 四包发行计划、验收、逐包摘要和实际发布状态。
 - `doc/M45_shell_terminal_throughput_*.md` — Shell 有界消费与按帧投影计划、验收与开发记录；含三轮评审合同修订与两次 P0 投影升级的实测依据（头删 O(文档) 归因、maximumBlockCount 接管、16 KiB 帧预算）。
 - `doc/M44_snr_time_axis_recovery_*.md` — 客户 SNR/温度历史的同连接采集代际恢复、u32/乱序准入、事务授权与回放断点证据。

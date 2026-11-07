@@ -16,6 +16,7 @@ from satellite_debug_tool.core.customer.device_directory import (
 from satellite_debug_tool.core.customer.session_binding import (
     CustomerEndpointSessionBinding,
 )
+from satellite_debug_tool.i18n import tr
 from satellite_debug_tool.ui.customer_maintenance_view import CustomerMaintenanceView
 from satellite_debug_tool.ui.customer_overview_view import CustomerOverviewView
 from satellite_debug_tool.ui.customer_rf_control_view import CustomerRfControlView
@@ -133,6 +134,7 @@ class CustomerEndpointSessionBundle:
         self._resync_facts_slot = None
         if status_sink is not None:
             self.live.status_message.connect(status_sink)
+            self.binding.attachment_failed.connect(self._report_detach_refusal)
         if facts_changed is not None:
             self._recording_facts_slot = (
                 lambda _active, _path: facts_changed(self.endpoint)
@@ -264,6 +266,18 @@ class CustomerEndpointSessionBundle:
             iperf=profile,
         )
         self._iperf_profile = dict(profile)
+
+    def _report_detach_refusal(self, reason: str) -> None:
+        if self._status_sink is None:
+            return
+        text = str(reason).strip()
+        if text == "stop endpoint recording before disconnecting":
+            message = tr("Stop endpoint recording before disconnecting")
+        elif text == "finish the endpoint operation before disconnecting":
+            message = tr("Finish the endpoint operation before disconnecting")
+        else:
+            message = text
+        self._status_sink(message, 4000)
 
     def set_customer_active(self, active: bool) -> None:
         self._customer_active = bool(active)
@@ -675,11 +689,6 @@ class CustomerEndpointSessionBundleFactory(QObject):
                     (
                         bundle._iperf_controller is not None
                         and bundle._iperf_controller.active
-                    )
-                    or (
-                        bundle._external_power_store is not None
-                        and bundle._external_power_store.snapshot.sample is not None
-                        and bundle._external_power_store.snapshot.sample.output_enabled
                     )
                     or (
                         bundle._power_monitor is not None

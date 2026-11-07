@@ -114,6 +114,9 @@ class BatchCoordinator(QObject):
         operator: str,
         output_dir: Path,
         notes: str = "",
+        weather: str = "",
+        ambient_temperature_c: float | None = None,
+        ambient_humidity_percent: float | None = None,
     ) -> dict:
         if self._batch is not None:
             raise ResultStoreError("a batch is already active in this workspace")
@@ -126,6 +129,9 @@ class BatchCoordinator(QObject):
                 operator=operator,
                 output_dir=output,
                 notes=notes,
+                weather=weather,
+                ambient_temperature_c=ambient_temperature_c,
+                ambient_humidity_percent=ambient_humidity_percent,
             )
         except Exception:
             store.close()
@@ -196,13 +202,52 @@ class BatchCoordinator(QObject):
         self.changed.emit(dict(updated))
         return dict(updated)
 
+    _VEHICLE_TEST_IDS = frozenset({"locked_drive", "power_on_drive"})
+
+    def suspend(self) -> dict:
+        """台架段完成且车辆项待操作员门禁时挂起批次；报告归档被终态门禁拒绝。"""
+
+        store, batch = self._require_batch(BatchStatus.RUNNING)
+        pending = [
+            attempt
+            for attempt in store.list_attempts(batch["batch_id"])
+            if attempt["status"] == AttemptStatus.PENDING.value
+        ]
+        non_vehicle = [
+            attempt for attempt in pending
+            if attempt["test_id"] not in self._VEHICLE_TEST_IDS
+        ]
+        if non_vehicle:
+            raise ResultStoreError(
+                "only vehicle items may stay pending at suspension: "
+                + ", ".join(sorted({item["test_id"] for item in non_vehicle}))
+            )
+        if not pending:
+            return self.complete()
+        updated = store.transition_batch(batch["batch_id"], BatchStatus.SUSPENDED)
+        self._batch = updated
+        self.changed.emit(dict(updated))
+        return dict(updated)
+
     def complete(self) -> dict:
-        """Commit a completed batch after every attempt reached a final result."""
+        """Commit a completed batch after every attempt reached a final result.
+
+        待测项全部为车辆工况时批次转为挂起，等待操作员门禁的车载段。
+        """
 
         store, batch = self._require_batch(BatchStatus.RUNNING)
         attempts = store.list_attempts(batch["batch_id"])
         if not attempts:
             raise ResultStoreError("a completed batch requires test attempts")
+        pending = [
+            attempt
+            for attempt in attempts
+            if attempt["status"] == AttemptStatus.PENDING.value
+        ]
+        if pending and all(
+            attempt["test_id"] in self._VEHICLE_TEST_IDS for attempt in pending
+        ):
+            return self.suspend()
         active = [
             attempt
             for attempt in attempts
@@ -276,6 +321,29 @@ class BatchCoordinator(QObject):
         )
         self.changed.emit(self.batch)
         return updated
+
+    def adopt_suspended(self, *, store, batch_id: str, output_dir: Path) -> dict:
+        """接续一个挂起批次：重绑存储与批次事实，状态保持 SUSPENDED。"""
+
+        if self._batch is not None:
+            raise ResultStoreError("a batch is already active in this workspace")
+        batch = store.get_batch(str(batch_id))
+        if batch["status"] != BatchStatus.SUSPENDED.value:
+            raise ResultStoreError("resume requires a suspended batch")
+        self._store = store
+        self._batch = batch
+        self._output_dir = Path(output_dir)
+        self.changed.emit(dict(batch))
+        return dict(batch)
+
+    def resume_vehicle_phase(self) -> dict:
+        """操作员门禁开始车载段：挂起批次回到运行态。"""
+
+        store, batch = self._require_batch(BatchStatus.SUSPENDED)
+        updated = store.transition_batch(batch["batch_id"], BatchStatus.RUNNING)
+        self._batch = updated
+        self.changed.emit(dict(updated))
+        return dict(updated)
 
     def close(self) -> None:
         self.mark_incomplete()

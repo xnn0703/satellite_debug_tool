@@ -84,6 +84,68 @@ def test_fixture_trajectory_editor_uses_fixed_20ms_period_without_an_editor(
     workspace.close()
 
 
+def test_fixture_trajectory_preview_is_opened_only_on_demand(
+    qapp,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from satellite_debug_tool.core.production import FixtureControlLease, FixtureProfileStore
+    from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
+
+    profile_store = FixtureProfileStore(tmp_path / "profiles-on-demand-preview")
+    profile_store.save(_profile())
+    workspace = FixtureDebugWorkspace(
+        _settings(tmp_path, monkeypatch),
+        FixtureControlLease(),
+        profile_store=profile_store,
+        session_root=tmp_path / "sessions-on-demand-preview",
+        controller_factory=_controller_factory(),
+        motion_only=True,
+    )
+    trajectory = workspace._trajectory_profile()
+
+    assert not hasattr(workspace, "_preview")
+    assert workspace._trajectory_preview_dialog is None
+
+    monkeypatch.setattr(workspace, "_validate_trajectory", lambda: None)
+    workspace._show_trajectory_preview()
+    assert workspace._trajectory_preview_dialog is None
+
+    monkeypatch.setattr(workspace, "_validate_trajectory", lambda: trajectory)
+    workspace._show_trajectory_preview()
+    qapp.processEvents()
+    dialog = workspace._trajectory_preview_dialog
+    assert dialog is not None
+    assert dialog.isVisible()
+    for curve in dialog._curves.values():
+        x_values, y_values = curve.getData()
+        assert len(x_values) == 1200
+        assert len(y_values) == 1200
+
+    dialog.close()
+    qapp.processEvents()
+    submitted = []
+    monkeypatch.setattr(
+        workspace,
+        "_require_control",
+        lambda: type(
+            "TrajectoryControl",
+            (),
+            {
+                "submit_trajectory": lambda _control, profile, *, preflight: submitted.append(
+                    (profile, preflight)
+                )
+            },
+        )(),
+    )
+    workspace._start_trajectory()
+    assert submitted == [(trajectory, None)]
+    assert not dialog.isVisible()
+
+    workspace.shutdown()
+    workspace.close()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

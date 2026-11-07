@@ -174,3 +174,31 @@ def test_progress_error_still_requests_power_off_and_closes_motion(qapplication_
     until(qapplication_session, lambda: bool(completed))
     assert closed == [True]
     assert completed[0][0] is False and 'attempt store' in completed[0][1]
+
+
+def test_cleanup_worker_forwards_progress_and_keeps_result(qapplication_session):
+    """归档 worker 将 cleanup 的进度回调经 progress 信号转发，结果完整保留。"""
+
+    from satellite_debug_tool.core.production.abort_coordinator import (
+        ProductionCleanupWorker,
+    )
+
+    received = []
+
+    def archive(progress):
+        progress("analyzing")
+        progress("packaging")
+        return "artifacts"
+
+    worker = ProductionCleanupWorker(
+        archive, report_progress=True
+    )
+    worker.progress.connect(received.append)
+    worker.start()
+    until(qapplication_session, lambda: not worker.isRunning())
+    qapplication_session.processEvents()
+
+    assert worker.error == ""
+    assert worker.result == "artifacts"
+    assert received == [("analyzing",), ("packaging",)]
+    worker.deleteLater()

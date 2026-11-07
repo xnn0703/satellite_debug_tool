@@ -380,3 +380,32 @@ def test_legacy_global_sample_broadcast_is_removed(
 def test_identity_accepts_real_psw80_27_model_without_space() -> None:
     assert normalize_power_identity_field("PSW80-27") == "PSW8027"
     assert normalize_power_identity_field("PSW 80-27") == "PSW8027"
+
+
+def test_power_output_enabled_alone_is_not_an_endpoint_operation(
+    qapplication_session,
+) -> None:
+    """输出开启是稳态事实；operation_busy 只表达进行中的端点操作。"""
+
+    factory = CustomerEndpointSessionBundleFactory(
+        settings=object(),
+        session_directory=object(),
+    )
+    store = ExternalPowerStore()
+    store.apply_sample(_sample(1))
+    assert store.snapshot.sample is not None
+    assert store.snapshot.sample.output_enabled
+    factory._bundles = {
+        ("192.168.1.12", 4004): SimpleNamespace(
+            live=SimpleNamespace(capture_profile_resync_required=False),
+            recording_active=False,
+            _iperf_controller=None,
+            _external_power_store=store,
+            _power_monitor=None,
+        ),
+    }
+
+    facts = factory.facts(("192.168.1.12", 4004), None)
+
+    assert facts.recording_active is False
+    assert facts.operation_busy is False

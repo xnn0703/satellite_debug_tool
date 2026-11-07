@@ -11,7 +11,7 @@ from statistics import median
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 
 from satellite_debug_tool.core.profile import (
@@ -21,7 +21,7 @@ from satellite_debug_tool.core.profile import (
     CHANNEL_ROLE_YAW,
     ProfileStore,
 )
-from satellite_debug_tool.core.protocol import DataReport, ServiceFastState
+from satellite_debug_tool.core.protocol import DataReport, InsTraceRecord, ServiceFastState, ServiceSlowState
 from satellite_debug_tool.io.data_importer import DataImporter, SdbFormatError
 
 
@@ -102,6 +102,12 @@ def build_report_analysis(
     legacy: dict[str, list[tuple[int, float]]] = {role: [] for role in _ROLES}
     sources: list[dict[str, Any]] = []
     errors: list[str] = []
+    final_imu_bias: dict[str, Any] | None = None
+    gps_points: list[tuple[float, float]] = []
+    speeds: list[float] = []
+    yaw_rates: list[float] = []
+    last_yaw: float | None = None
+    last_yaw_ns: int | None = None
     for path in sdb_paths:
         try:
             sdb = DataImporter.open_sdb(path)
@@ -109,7 +115,40 @@ def build_report_analysis(
             product_count = 0
             legacy_count = 0
             for host_ns, record in sdb.iter_timed_records():
-                if isinstance(record, ServiceFastState):
+                if isinstance(record, ServiceSlowState):
+                    mask = record.valid_mask
+                    if mask & 0b11 == 0b11 and math.isfinite(record.latitude_deg) \
+                            and math.isfinite(record.longitude_deg) \
+                            and (record.latitude_deg or record.longitude_deg):
+                        gps_points.append((float(record.longitude_deg), float(record.latitude_deg)))
+                elif isinstance(record, InsTraceRecord) and record.kind == 2:
+                    values2 = dict(record.values)
+                    speed = values2.get("speed_ms")
+                    if speed is not None and math.isfinite(float(speed)):
+                        speeds.append(float(speed))
+                    yaw = values2.get("yaw_deg")
+                    if yaw is not None and math.isfinite(float(yaw)):
+                        if last_yaw is not None and record.timestamp_us and last_yaw_ns:
+                            dt_s = (int(record.timestamp_us) - int(last_yaw_ns)) / 1e6
+                            if dt_s > 0:
+                                delta = (float(yaw) - last_yaw + 540.0) % 360.0 - 180.0
+                                yaw_rates.append(abs(delta / dt_s))
+                        last_yaw = float(yaw)
+                        last_yaw_ns = int(record.timestamp_us)
+                elif isinstance(record, InsTraceRecord) and record.kind == 3:
+                    values = dict(record.values)
+                    bias = values.get("gyro_bias_dps")
+                    accel = values.get("accel_bias_m_s2")
+                    if bias is not None and accel is not None:
+                        final_imu_bias = {
+                            "host_timestamp_ns": int(host_ns),
+                            "gyro_bias_dps": tuple(float(item) for item in bias),
+                            "gyro_bias_std_dps": tuple(
+                                float(item) for item in values.get("bg_std_dps", ())
+                            ),
+                            "accel_bias_m_s2": tuple(float(item) for item in accel),
+                        }
+                elif isinstance(record, ServiceFastState):
                     fields = (
                         (6, CHANNEL_ROLE_ROLL, record.roll_deg),
                         (7, CHANNEL_ROLE_PITCH, record.pitch_deg),
@@ -228,8 +267,64 @@ def build_report_analysis(
         ],
         "missing_series": missing,
         "ms6222_comparison_available": bool(fixture),
+        "final_imu_bias": final_imu_bias,
+        "gps_track": {
+            "points": gps_points[:4000],
+            "point_count": len(gps_points),
+        },
+        "vehicle_dynamics": {
+            "max_speed_ms": max(speeds) if speeds else None,
+            "max_yaw_rate_deg_s": max(yaw_rates) if yaw_rates else None,
+        },
         "summary": _overall_summary(frozen_series, stage_rows, bool(fixture)),
     }
+
+
+def _render_vehicle_track(track: Mapping[str, Any]) -> bytes | None:
+    """纯轨迹图（经度/纬度，起点/终点标注）；离线环境不依赖底图 tile。"""
+
+    points = list(track.get("points") or ())
+    if len(points) < 2:
+        return None
+    width, height, margin = 1600, 1000, 80
+    image = QImage(width, height, QImage.Format.Format_ARGB32)
+    image.fill(QColor("white"))
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    lons = [float(point[0]) for point in points]
+    lats = [float(point[1]) for point in points]
+    lon_span = max(max(lons) - min(lons), 1e-5)
+    lat_span = max(max(lats) - min(lats), 1e-5)
+    span = max(lon_span, lat_span * 1.4)
+    center_lon = (max(lons) + min(lons)) / 2.0
+    center_lat = (max(lats) + min(lats)) / 2.0
+
+    def project(lon: float, lat: float) -> QPointF:
+        x = margin + (lon - center_lon) / span * (width - 2 * margin) + (width - 2 * margin) / 2
+        y = height - margin - (lat - center_lat) / span * (height - 2 * margin) - (height - 2 * margin) / 2
+        return QPointF(x, y)
+
+    pen = QPen(QColor("#1565C0"))
+    pen.setWidth(3)
+    painter.setPen(pen)
+    previous = project(*points[0])
+    for point in points[1:]:
+        current = project(*point)
+        painter.drawLine(previous, current)
+        previous = current
+    painter.setBrush(QColor("#1B7A43"))
+    painter.setPen(QPen(Qt.PenStyle.NoPen))
+    painter.drawEllipse(project(lons[0], lats[0]), 10, 10)
+    painter.setBrush(QColor("#C62828"))
+    painter.drawEllipse(project(lons[-1], lats[-1]), 10, 10)
+    painter.setPen(QColor("black"))
+    painter.drawText(20, 28, f"GPS track  ({len(points)} fixes)  green=start  red=end")
+    painter.end()
+    byte_array = QByteArray()
+    buffer = QBuffer(byte_array)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    return bytes(byte_array)
 
 
 def render_report_charts(analysis: Mapping[str, Any]) -> dict[str, bytes]:
@@ -237,6 +332,9 @@ def render_report_charts(analysis: Mapping[str, Any]) -> dict[str, bytes]:
 
     series = analysis.get("series", {})
     charts: dict[str, bytes] = {}
+    track_payload = _render_vehicle_track(analysis.get("gps_track", {}))
+    if track_payload:
+        charts["analysis/vehicle_track.png"] = track_payload
     snr_roles = [role for role in (CHANNEL_ROLE_SNR, "locked") if series.get(role, {}).get("points")]
     if snr_roles:
         charts["analysis/snr_timeline.png"] = _render_chart(

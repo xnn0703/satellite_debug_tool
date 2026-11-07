@@ -73,6 +73,11 @@ class ProductionRunCoordinator(QObject):
         "power_on_rocking",
     )
 
+    VEHICLE_TEST_IDS = (
+        "locked_drive",
+        "power_on_drive",
+    )
+
     def __init__(
         self,
         store: ProductionResultStore,
@@ -87,7 +92,10 @@ class ProductionRunCoordinator(QObject):
         self._store = store
         self._batch_id = str(batch_id)
         requested = tuple(str(value) for value in test_ids)
-        unknown = tuple(value for value in requested if value not in self.FIRST_FLOW_TEST_IDS)
+        unknown = tuple(
+            value for value in requested
+            if value not in (*self.FIRST_FLOW_TEST_IDS, *self.VEHICLE_TEST_IDS)
+        )
         if unknown:
             raise ValueError("unsupported automatic test: " + ", ".join(unknown))
         if len(set(requested)) != len(requested):
@@ -122,7 +130,10 @@ class ProductionRunCoordinator(QObject):
     @property
     def progress(self) -> ProductionProgress:
         now = self._clock() if self._step_finished_at is None else self._step_finished_at
-        timed = self.current_test_id in {"static_acquisition", "locked_rocking", "power_on_rocking"}
+        timed = self.current_test_id in {
+            "static_acquisition", "locked_rocking", "power_on_rocking",
+            "locked_drive", "power_on_drive",
+        }
         remaining = None
         if timed and self._observation_s is not None:
             deadline = self.observation_deadline

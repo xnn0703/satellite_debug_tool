@@ -555,6 +555,35 @@ class ResolvedProductionConfiguration:
     def product(self) -> str:
         return self.product_template.product
 
+    @classmethod
+    def from_snapshot(cls, payload: Mapping[str, Any]) -> "ResolvedProductionConfiguration":
+        """从批次冻结的配置快照重建；恢复挂起批次时夹具与供电原样回读。"""
+
+        def strip_hash(section: Mapping[str, Any]) -> dict[str, Any]:
+            return {key: value for key, value in section.items() if key != "sha256"}
+
+        product = ProductTestTemplate.from_mapping(strip_hash(payload["product_template"]))
+        power = PowerSupplyProfile.from_mapping(strip_hash(payload["power_profile"]))
+        station = StationProfile.from_mapping(strip_hash(payload["station_profile"]))
+        motion = WorkstationFixtureProfile.from_mapping(
+            strip_hash(payload["motion_profile"]), verify_hash=False
+        )
+        reference = ReferenceSensorProfile.from_mapping(strip_hash(payload["reference_profile"]))
+        calibration = FixtureCalibration.from_mapping(strip_hash(payload["fixture_calibration"]))
+        device_count = payload["device_count"]
+        total = payload["total_current_a"]
+        resolved = cls(
+            product_template=product,
+            power_profile=power,
+            station_profile=station,
+            motion_profile=motion,
+            reference_profile=reference,
+            fixture_calibration=calibration,
+            device_count=int(device_count),
+            total_current_a=float(total),
+        )
+        return resolved
+
     def to_snapshot(self) -> dict[str, Any]:
         return {
             "schema": "satellite-debug-tool/production-batch-configuration",

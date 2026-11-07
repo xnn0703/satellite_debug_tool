@@ -11,6 +11,7 @@ class BatchStatus(str, Enum):
     DRAFT = "draft"
     READY = "ready"
     RUNNING = "running"
+    SUSPENDED = "suspended"
     COMPLETED = "completed"
     ABORTED = "aborted"
     INCOMPLETE = "incomplete"
@@ -71,7 +72,10 @@ BATCH_TRANSITIONS = {
     BatchStatus.DRAFT: frozenset({BatchStatus.READY, BatchStatus.ABORTED}),
     BatchStatus.READY: frozenset({BatchStatus.RUNNING, BatchStatus.ABORTED}),
     BatchStatus.RUNNING: frozenset(
-        {BatchStatus.COMPLETED, BatchStatus.ABORTED, BatchStatus.INCOMPLETE}
+        {BatchStatus.SUSPENDED, BatchStatus.COMPLETED, BatchStatus.ABORTED, BatchStatus.INCOMPLETE}
+    ),
+    BatchStatus.SUSPENDED: frozenset(
+        {BatchStatus.RUNNING, BatchStatus.ABORTED, BatchStatus.INCOMPLETE}
     ),
     BatchStatus.COMPLETED: frozenset(),
     BatchStatus.ABORTED: frozenset(),

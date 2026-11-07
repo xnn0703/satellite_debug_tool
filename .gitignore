@@ -27,3 +27,4 @@ env/
 # 会话工具目录（ZCode/Codex 等本地生成，不入库）
 .zcode/
 .codex/
+report_review/

@@ -32,6 +32,12 @@ from PySide6.QtWidgets import (
     QToolButton,
     QStackedWidget,
     QSizePolicy,
+    QDialogButtonBox,
+    QAbstractItemView,
+    QHeaderView,
+    QTableWidget,
+    QCheckBox,
+    QDoubleSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -154,6 +160,8 @@ class ProductionWorkspace(QWidget):
         self._abort_coordinator.changed.connect(self._render_abort)
         self._abort_coordinator.settled.connect(self._on_abort_settled)
         self._abort_archive = None
+        self._archive_worker: Optional[ProductionCleanupWorker] = None
+        self._complete_source = ""
         self._execution = None
         self._execution_hardware = None
         self._preparation = ProductionStartPreparation(self._evaluate_start_gate, parent=self)
@@ -328,6 +336,27 @@ class ProductionWorkspace(QWidget):
         self._recipe_edit.hide()
         self._recipe_button.hide()
 
+        self._environment_check = QCheckBox(tr("Record today's environment"))
+        self._environment_check.setObjectName("productionEnvironmentCheck")
+        self._environment_check.toggled.connect(self._on_environment_toggled)
+        self._weather_label = QLabel(tr("Weather"))
+        self._weather_combo = QComboBox()
+        self._weather_combo.addItem(tr("Sunny"), "Sunny")
+        self._weather_combo.addItem(tr("Cloudy"), "Cloudy")
+        self._weather_combo.addItem(tr("Overcast"), "Overcast")
+        self._weather_combo.addItem(tr("Rain"), "Rain")
+        self._weather_combo.addItem(tr("Snow"), "Snow")
+        self._weather_combo.addItem(tr("Fog"), "Fog")
+        self._ambient_temperature_label = QLabel(tr("Ambient temperature (°C)"))
+        self._ambient_temperature_spin = QDoubleSpinBox()
+        self._ambient_temperature_spin.setRange(-40.0, 60.0)
+        self._ambient_temperature_spin.setDecimals(1)
+        self._ambient_humidity_label = QLabel(tr("Ambient humidity (%RH)"))
+        self._ambient_humidity_spin = QDoubleSpinBox()
+        self._ambient_humidity_spin.setRange(0.0, 100.0)
+        self._ambient_humidity_spin.setDecimals(0)
+        self._set_environment_inputs_enabled(False)
+
         self._product_template_label = QLabel(tr("Device model and power"))
         self._product_template_combo = QComboBox()
         self._product_template_combo.currentIndexChanged.connect(
@@ -368,6 +397,17 @@ class ProductionWorkspace(QWidget):
         setup.addWidget(self._batch_id_edit, 0, 1, 1, 2)
         setup.addWidget(self._operator_label, 0, 3)
         setup.addWidget(self._operator_edit, 0, 4, 1, 2)
+
+        environment_row = QHBoxLayout()
+        environment_row.addWidget(self._environment_check)
+        environment_row.addWidget(self._weather_label)
+        environment_row.addWidget(self._weather_combo)
+        environment_row.addWidget(self._ambient_temperature_label)
+        environment_row.addWidget(self._ambient_temperature_spin)
+        environment_row.addWidget(self._ambient_humidity_label)
+        environment_row.addWidget(self._ambient_humidity_spin)
+        environment_row.addStretch(1)
+        setup.addLayout(environment_row, 1, 0, 1, 8)
         setup.addWidget(self._create_button, 0, 6)
         setup.addWidget(self._product_template_label, 1, 0)
         setup.addWidget(self._product_template_combo, 1, 1, 1, 2)
@@ -461,12 +501,22 @@ class ProductionWorkspace(QWidget):
         self._review_button = QPushButton(tr("Review report..."))
         self._review_button.setEnabled(False)
         self._review_button.clicked.connect(self._on_review_report)
+        self._resume_button = QPushButton(tr("Resume batch..."))
+        self._resume_button.setObjectName("productionResumeBatch")
+        self._resume_button.clicked.connect(self._on_resume_batch)
+        self._resume_button.hide()
+        self._vehicle_gate_button = QPushButton(tr("Start driving record"))
+        self._vehicle_gate_button.setObjectName("productionVehicleGate")
+        self._vehicle_gate_button.clicked.connect(self._on_vehicle_gate)
+        self._vehicle_gate_button.hide()
         self._next_batch_button = QPushButton(tr("Next batch"))
         self._next_batch_button.hide()
         self._next_batch_button.clicked.connect(self._prepare_next_batch)
         footer.addWidget(self._footer_status, 1)
         footer.addWidget(self._review_button)
         footer.addWidget(self._complete_button)
+        footer.addWidget(self._vehicle_gate_button)
+        footer.addWidget(self._resume_button)
         footer.addWidget(self._next_batch_button)
         footer.addWidget(self._start_button)
         footer.addWidget(self._abort_button)
@@ -1200,10 +1250,12 @@ class ProductionWorkspace(QWidget):
                     + "\n",
                     encoding="utf-8",
                 )
+            environment = self._batch_environment()
             batch = self._batch_coordinator.create(
                 batch_id=batch_id,
                 recipe=self._recipe,
                 operator=operator,
+                **environment,
                 output_dir=batch_output,
             )
         except Exception:
@@ -1289,6 +1341,7 @@ class ProductionWorkspace(QWidget):
         self._latest_event.setToolTip(line)
 
     def _on_session_updated(self, session: DeviceSession) -> None:
+        self._maybe_confirm_vehicle_power_cycle()
         if self._view_active:
             self._reflow_device_charts()
         state_result = {
@@ -1457,6 +1510,24 @@ class ProductionWorkspace(QWidget):
             session.mac_address,
             session.mac_source,
         )
+        if getattr(self, "_identity_checks", None) and session.serial_number in self._identity_checks:
+            expected_uid, expected_mac = self._frozen_identities.get(
+                session.serial_number, ("", "")
+            )
+            matches = (
+                (not expected_uid or session.device_uid == expected_uid)
+                and (not expected_mac or session.mac_address == expected_mac)
+            )
+            self._identity_checks[session.serial_number] = (
+                "consistent" if matches else "mismatched"
+            )
+            state = tr("identity consistent") if matches else tr("identity mismatch")
+            self.append_event(tr(
+                "Participant identity check: {details}",
+                details=f"{session.serial_number}: {state}",
+            ))
+            self._update_start_gate()
+            return
         if session.serial_number in self._registered_serials:
             if self._registered_hardware_identity.get(session.serial_number) == hardware_identity:
                 return
@@ -1679,10 +1750,23 @@ class ProductionWorkspace(QWidget):
             )
             self._start_button.setToolTip(tr("Batch participants are frozen."))
             return
+        suspended = (
+            self._batch is not None
+            and self._batch.get("status") == BatchStatus.SUSPENDED.value
+        )
+        self._resume_button.setVisible(self._batch is None)
+        self._vehicle_gate_button.setVisible(suspended)
+        self._vehicle_gate_button.setEnabled(
+            suspended
+            and bool(self._identity_checks)
+            and all(state == "consistent" for state in self._identity_checks.values())
+            and len(self._identity_checks) >= len(self._registered_serials)
+        )
         if self._batch is not None and self._batch.get("status") in {
             BatchStatus.ABORTED.value,
             BatchStatus.COMPLETED.value,
             BatchStatus.INCOMPLETE.value,
+            BatchStatus.SUSPENDED.value,
         }:
             self._start_button.setEnabled(False)
             self._abort_button.setEnabled(False)
@@ -1889,14 +1973,20 @@ class ProductionWorkspace(QWidget):
                 return
             self._on_production_power_failed(str(exc), (), worker.action_id)
 
-    def _start_execution(self, participants) -> None:
+    def _start_execution(self, participants, *, vehicle_phase: bool = False) -> None:
         execution = ProductionExecution(self._store, self._batch["batch_id"], self._recipe,
-                                        self._fleet, participants, parent=self)
+                                        self._fleet, participants,
+                                        fixture_telemetry=self._fixture_runtime.telemetry,
+                                        parent=self)
         self._execution = execution
         execution.changed.connect(self._render_execution)
         execution.failed.connect(self._execution_failed)
         execution.finished.connect(self._execution_finished)
-        if self._production_power_worker is not None:
+        if vehicle_phase:
+            # 车载段无摇摆台动作：工位就绪由操作员门禁给出，启动确认走车辆路径。
+            execution.fixture_ready = lambda: (True, "")
+            execution.hardware_requested.connect(self._on_vehicle_hardware_requested)
+        elif self._production_power_worker is not None:
             self._execution_hardware = ProductionExecutionHardware(
                 execution, self._fixture_runtime, self._resolved_configuration,
                 self._production_power_worker, self._batch_output_dir, parent=self,
@@ -2015,11 +2105,15 @@ class ProductionWorkspace(QWidget):
         self._batch_coordinator.mark_incomplete()
         if self._fleet is not None:
             self._fleet.finalize_recordings(wait_for_capture_restore=False)
-        try:
-            self._archive_terminal_batch()
-        except (ResultStoreError, OSError, ValueError) as exc:
-            self.append_event(tr("Evidence archive failed: {details}", details=str(exc)))
         self._batch_state.setText(tr("Batch incomplete"))
+        if self._batch is not None:
+            self._start_archive_worker(
+                {
+                    "batch_id": self._batch["batch_id"],
+                    "service": self._report_service(),
+                    "batch_status": self._batch["status"],
+                }
+            )
         self._show_execution_message(self._footer_status.text(), title_source=tr_source("Batch incomplete"))
         self._render_steps()
         self._update_start_gate()
@@ -2037,20 +2131,9 @@ class ProductionWorkspace(QWidget):
         self.append_event(self._execution_summary.text())
         # complete_batch owns the affirmative normal shutdown order:
         # capture restore + recorder close, verified power off, terminal batch,
-        # then report freeze. Power must not be removed before capture restore.
-        try:
-            artifacts = self.complete_batch()
-        except (ResultStoreError, RuntimeError, OSError, ValueError) as exc:
-            message = tr("Batch finalization requires attention: {details}", details=str(exc))
-            self._footer_status.setText(message)
-            self.append_event(message)
-            self._batch_state.setText(tr("Archive retry required"))
-            self._show_execution_message(message, title_source=tr_source("Archive retry required"))
-        else:
-            message = tr("Batch completed; generated {count} device archive(s).", count=len(artifacts))
-            self._footer_status.setText(message)
-            self.append_event(message)
-        self._update_start_gate()
+        # then the background report freeze. Power must not be removed before
+        # capture restore.
+        self._begin_complete_batch(source="auto")
 
     def _stop_execution(self) -> None:
         self._preparation.stop()
@@ -2245,24 +2328,201 @@ class ProductionWorkspace(QWidget):
             self.append_event(message)
             self._update_start_gate()
 
-    def _on_complete_batch(self) -> None:
+    def _on_environment_toggled(self, checked: bool) -> None:
+        self._set_environment_inputs_enabled(bool(checked))
+
+    def _set_environment_inputs_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self._weather_label, self._weather_combo,
+            self._ambient_temperature_label, self._ambient_temperature_spin,
+            self._ambient_humidity_label, self._ambient_humidity_spin,
+        ):
+            widget.setEnabled(enabled)
+
+    def _batch_environment(self) -> dict:
+        if not self._environment_check.isChecked():
+            return {"weather": "", "ambient_temperature_c": None,
+                    "ambient_humidity_percent": None}
+        return {
+            "weather": str(self._weather_combo.currentData() or ""),
+            "ambient_temperature_c": float(self._ambient_temperature_spin.value()),
+            "ambient_humidity_percent": float(self._ambient_humidity_spin.value()),
+        }
+
+    def _on_resume_batch(self) -> None:
+        from satellite_debug_tool.core.production.result_store import scan_suspended_batches
+
+        storage_root = str(self._settings.get("paths.production_dir") or "")
+        if not storage_root:
+            self._footer_status.setText(tr("Select a production output folder first"))
+            return
+        candidates = scan_suspended_batches(storage_root)
+        if not candidates:
+            QMessageBox.information(
+                self, tr("Resume batch"), tr("No suspended batch is waiting.")
+            )
+            return
+        chosen = _SuspendedBatchDialog(candidates, parent=self).choose()
+        if chosen is None:
+            return
         try:
-            artifacts = self.complete_batch()
-        except (ResultStoreError, RuntimeError, OSError, ValueError) as exc:
-            message = tr("Cannot complete batch: {details}", details=str(exc))
+            self.resume_batch(Path(chosen["output_dir"]), chosen["batch_id"])
+        except (ResultStoreError, RecipeValidationError, OSError, ValueError) as exc:
+            message = tr("Cannot resume batch: {details}", details=str(exc))
+            self._footer_status.setText(message)
+            self.status_message.emit(message, 8000)
+
+    def resume_batch(self, output_dir: Path, batch_id: str) -> None:
+        """接续挂起批次：读回批次事实、配方与工位配置，进入车载段。"""
+
+        store = ProductionResultStore(output_dir / "batch.sqlite3")
+        batch = self._batch_coordinator.adopt_suspended(
+            store=store, batch_id=batch_id, output_dir=output_dir
+        )
+        try:
+            self._recipe = ProductionRecipe.from_mapping(batch["recipe_json"])
+            configuration_file = output_dir / "production_configuration.json"
+            if configuration_file.is_file():
+                snapshot = json.loads(configuration_file.read_text(encoding="utf-8"))
+                self._resolved_configuration = ResolvedProductionConfiguration.from_snapshot(snapshot)
+        except Exception:
+            self._batch_coordinator.close()
+            self._recipe = None
+            self._resolved_configuration = None
+            raise
+        self._registered_serials = {
+            item["serial_number"] for item in store.list_devices(batch_id)
+        }
+        self._registered_hardware_identity = {}
+        frozen = {
+            item["serial_number"]: (item.get("device_uid") or "", item.get("mac_address") or "")
+            for item in store.list_devices(batch_id)
+        }
+        self._frozen_identities = frozen
+        self._identity_checks = {serial: "pending" for serial in frozen}
+        self._batch_state.setText(tr("Bench phase finished; batch suspended for vehicle tests"))
+        self._render_batch_identity_checks()
+        self._update_start_gate()
+        message = tr(
+            "Resumed batch {batch_id}; connect the frozen participants to verify identity",
+            batch_id=batch_id,
+        )
+        self._footer_status.setText(message)
+        self.append_event(message)
+
+    def _on_vehicle_hardware_requested(self, request) -> None:
+        """车辆工况启动确认：行驶项立即确认；动态上电项等待离线→回在线。"""
+
+        execution = self._execution
+        if execution is None:
+            return
+        test_id = str(request.test_id)
+        if test_id == "locked_drive":
+            execution.confirm_hardware(test_id, {"vehicle_start": "operator_gate"})
+            return
+        if test_id != "power_on_drive":
+            return
+        execution.prepare_power_cycle()
+        self._vehicle_power_await_off = True
+        self._vehicle_power_await_on = False
+        self.append_event(tr(
+            "Power the device off, start driving, then power it on; waiting for power cycle"
+        ))
+
+    def _maybe_confirm_vehicle_power_cycle(self) -> None:
+        execution = self._execution
+        if execution is None or not getattr(execution, "_power_cycle_pending", False):
+            return
+        sessions = list(execution.sessions.values())
+        if not sessions:
+            return
+        all_online = all(session.is_online() for session in sessions)
+        all_offline = all(not session.is_online() for session in sessions)
+        if getattr(self, "_vehicle_power_await_off", False) and all_offline:
+            self._vehicle_power_await_off = False
+            self._vehicle_power_await_on = True
+            return
+        if getattr(self, "_vehicle_power_await_on", False) and all_online:
+            self._vehicle_power_await_on = False
+            execution.confirm_hardware(execution.run.current_test_id, {
+                "power_off": "operator",
+                "output": "operator",
+                "power_restored_monotonic_ns": time.monotonic_ns(),
+            })
+
+    def _on_vehicle_gate(self) -> None:
+        """操作员门禁：身份续验通过后启动车载段（固定时长姿态窗口）。"""
+
+        try:
+            self._batch_coordinator.resume_vehicle_phase()
+        except ResultStoreError as exc:
+            message = tr("Cannot start vehicle tests: {details}", details=str(exc))
             self._footer_status.setText(message)
             self.status_message.emit(message, 8000)
             return
-        message = tr("Batch completed; generated {count} device archive(s).", count=len(artifacts))
+        participants = [
+            session for session in (self._fleet.sessions() if self._fleet else ())
+            if session.serial_number in self._registered_serials
+        ]
+        self._vehicle_gate_button.hide()
+        self._vehicle_power_await_off = False
+        self._vehicle_power_await_on = False
+        self._start_execution(participants, vehicle_phase=True)
+        message = tr("Vehicle phase started; window runs the frozen recipe duration")
         self._footer_status.setText(message)
         self.append_event(message)
-        self.status_message.emit(message, 6000)
+
+    def _render_batch_identity_checks(self) -> None:
+        checks = getattr(self, "_identity_checks", {})
+        if not checks:
+            return
+        detail = "；".join(f"{serial}：{state}" for serial, state in sorted(checks.items()))
+        self.append_event(tr("Participant identity check: {details}", details=detail))
+
+    def _on_complete_batch(self) -> None:
+        self._begin_complete_batch(source="manual")
+
+    def _begin_complete_batch(self, *, source: str) -> None:
+        """Run the synchronous shutdown segment, then archive reports in the background."""
+
+        try:
+            context = self.complete_batch()
+        except (ResultStoreError, RuntimeError, OSError, ValueError) as exc:
+            if source == "manual":
+                message = tr("Cannot complete batch: {details}", details=str(exc))
+                self._footer_status.setText(message)
+                self.status_message.emit(message, 8000)
+            else:
+                message = tr("Batch finalization requires attention: {details}", details=str(exc))
+                self._footer_status.setText(message)
+                self.append_event(message)
+                self._batch_state.setText(tr("Archive retry required"))
+                self._show_execution_message(message, title_source=tr_source("Archive retry required"))
+            return
+        self._complete_source = source
+        if context["batch_status"] == BatchStatus.SUSPENDED.value:
+            message = tr(
+                "Bench phase finished; batch suspended for vehicle tests"
+            )
+            self._footer_status.setText(message)
+            self.append_event(message)
+            if source == "manual":
+                self.status_message.emit(message, 8000)
+            self._update_start_gate()
+            return
+        self._start_archive_worker(context)
 
     def complete_batch(self):
-        """Finalize evidence, commit the terminal state, and generate device V1 reports."""
+        """Finalize recordings, stop power, and commit the terminal batch state.
+
+        The heavy report archive runs in a background worker started by the
+        caller; this method only owns the affirmative shutdown order.
+        """
 
         if self._execution is not None and self._execution.active:
             raise ResultStoreError("automatic execution is active")
+        if self._archive_worker is not None and self._archive_worker.isRunning():
+            raise ResultStoreError("report generation is already running")
         if self._fleet is not None:
             self._fleet.finalize_recordings()
             pending = [
@@ -2281,16 +2541,20 @@ class ProductionWorkspace(QWidget):
                 raise ResultStoreError("production power did not stop within 10 seconds")
             self._release_production_power_worker()
         batch = self._batch_coordinator.complete()
-        artifacts = self._archive_terminal_batch()
-        self._batch_state.setText(
-            tr("Batch completed")
-            if batch["status"] == BatchStatus.COMPLETED.value
-            else tr("Batch incomplete")
-        )
+        if batch["status"] == BatchStatus.SUSPENDED.value:
+            self._batch_state.setText(tr("Bench phase finished; batch suspended for vehicle tests"))
+        elif batch["status"] == BatchStatus.COMPLETED.value:
+            self._batch_state.setText(tr("Batch completed"))
+        else:
+            self._batch_state.setText(tr("Batch incomplete"))
         self._fixture_page_button.setEnabled(True)
         self._power_page_button.setEnabled(True)
         self._update_start_gate()
-        return artifacts
+        return {
+            "batch_id": batch["batch_id"],
+            "service": self._report_service(),
+            "batch_status": batch["status"],
+        }
 
     def _report_service(self) -> ProductionReportService:
         if self._store is None or self._batch_output_dir is None:
@@ -2309,36 +2573,102 @@ class ProductionWorkspace(QWidget):
             branding=branding,
         )
 
-    def _archive_terminal_batch(self):
+    def _start_archive_worker(self, context: dict) -> None:
+        """Archive device reports in a background thread with typed progress."""
+
+        service = context["service"]
+        batch_id = context["batch_id"]
+        worker = ProductionCleanupWorker(
+            lambda progress: service.archive_batch(batch_id, progress=progress),
+            parent=self,
+            report_progress=True,
+        )
+        worker.progress.connect(self._on_archive_progress)
+        worker.finished.connect(lambda: self._on_archive_finished(worker))
+        worker.batch_status = context.get("batch_status", "")
+        worker.manual_source = self._complete_source == "manual"
+        self._archive_worker = worker
+        self._complete_button.setEnabled(False)
+        self._footer_status.setText(tr("Generating device reports..."))
+        worker.start()
+
+    @Slot(object)
+    def _on_archive_progress(self, item: object) -> None:
+        done, total, serial, stage = item
+        self._footer_status.setText(
+            tr(
+                "Generating device report {serial} ({done}/{total}): {stage}",
+                serial=str(serial),
+                done=int(done),
+                total=int(total),
+                stage=self._archive_stage_text(str(stage)),
+            )
+        )
+
+    @staticmethod
+    def _archive_stage_text(stage: str) -> str:
+        return {
+            "analyzing": tr("Analyzing recordings"),
+            "packaging": tr("Packaging evidence"),
+            "document": tr("Writing report document"),
+        }.get(stage, stage)
+
+    def _on_archive_finished(self, worker: ProductionCleanupWorker) -> None:
+        if self._archive_worker is worker:
+            self._archive_worker = None
+        worker.deleteLater()
+        error = worker.error
+        if error:
+            message = tr("Evidence archive failed: {details}", details=error)
+            self._footer_status.setText(message)
+            self.append_event(message)
+            self.status_message.emit(message, 8000)
+            self._update_start_gate()
+            return
+        artifacts = list(worker.result or [])
+        self._write_batch_summary(artifacts)
+        if worker.batch_status == BatchStatus.COMPLETED.value:
+            message = tr(
+                "Batch completed; generated {count} device archive(s).", count=len(artifacts)
+            )
+        else:
+            message = tr("Device report archives are ready.")
+        self._footer_status.setText(message)
+        self.append_event(message)
+        if worker.manual_source:
+            self.status_message.emit(message, 6000)
+        self._complete_source = ""
+        self._update_start_gate()
+
+    def _write_batch_summary(self, artifacts) -> None:
         if self._batch is None:
             raise ResultStoreError("no batch is active")
-        artifacts = self._report_service().archive_batch(self._batch["batch_id"])
-        if self._batch_output_dir is not None:
-            summary = {
-                "schema": "satellite-debug-tool/production-batch-summary",
-                "schema_version": 1,
-                "batch_id": self._batch["batch_id"],
-                "status": self._batch["status"],
-                "reports": [
-                    {
-                        "serial_number": item.serial_number,
-                        "automatic_verdict": item.automatic_verdict,
-                        "final_verdict": item.final_verdict,
-                        "document_path": "" if item.document_path is None else str(item.document_path),
-                        "evidence_path": str(item.evidence_path),
-                        "manifest_path": str(item.manifest_path),
-                    }
-                    for item in artifacts
-                ],
-            }
-            target = self._batch_output_dir / "batch_summary.json"
-            temporary = target.with_name(f".{target.name}.tmp")
-            temporary.write_text(
-                json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            temporary.replace(target)
-        return artifacts
+        if self._batch_output_dir is None:
+            return
+        summary = {
+            "schema": "satellite-debug-tool/production-batch-summary",
+            "schema_version": 1,
+            "batch_id": self._batch["batch_id"],
+            "status": self._batch["status"],
+            "reports": [
+                {
+                    "serial_number": item.serial_number,
+                    "automatic_verdict": item.automatic_verdict,
+                    "final_verdict": item.final_verdict,
+                    "document_path": "" if item.document_path is None else str(item.document_path),
+                    "evidence_path": str(item.evidence_path),
+                    "manifest_path": str(item.manifest_path),
+                }
+                for item in artifacts
+            ],
+        }
+        target = self._batch_output_dir / "batch_summary.json"
+        temporary = target.with_name(f".{target.name}.tmp")
+        temporary.write_text(
+            json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
 
     def _on_review_report(self) -> None:
         if self._store is None or self._batch is None:
@@ -2515,6 +2845,8 @@ class ProductionWorkspace(QWidget):
     def shutdown(self) -> bool:
         if self._abort_coordinator.active or (self._abort_archive is not None and self._abort_archive.isRunning()):
             return False
+        if self._archive_worker is not None and self._archive_worker.isRunning():
+            return False
         if self._production_power_worker is not None:
             self._production_power_worker.request_verified_off()
         self._stop_execution()
@@ -2538,6 +2870,9 @@ class ProductionWorkspace(QWidget):
     def confirm_shutdown(self) -> bool:
         if self._abort_coordinator.active or (self._abort_archive is not None and self._abort_archive.isRunning()):
             self._footer_status.setText(tr("Batch cleanup is active; waiting for evidence finalization."))
+            return False
+        if self._archive_worker is not None and self._archive_worker.isRunning():
+            self._footer_status.setText(tr("Device report generation is running; retry exit after it completes"))
             return False
         if (
             self._fixture_debug is not None
@@ -2678,3 +3013,50 @@ class ProductionWorkspace(QWidget):
             event.ignore()
             return
         super().closeEvent(event)
+
+
+class _SuspendedBatchDialog(QDialog):
+    """列出所有挂起批次；选中后由工作区执行恢复。"""
+
+    def __init__(self, candidates: list[dict], *, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("Resume batch"))
+        self.setMinimumSize(680, 280)
+        layout = QVBoxLayout(self)
+        self._table = QTableWidget(len(candidates), 5, self)
+        self._table.setHorizontalHeaderLabels([
+            tr("Batch ID"), tr("Suspended at"), tr("Operator"),
+            tr("Devices"), tr("Pending tests"),
+        ])
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        for row, item in enumerate(candidates):
+            values = (
+                item["batch_id"],
+                str(item.get("finished_utc") or ""),
+                str(item.get("operator") or ""),
+                "、".join(item.get("serials", ())),
+                "、".join(item.get("pending_tests", ())),
+            )
+            for column, value in enumerate(values):
+                self._table.setItem(row, column, QTableWidgetItem(str(value)))
+        layout.addWidget(self._table)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("Resume"))
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._candidates = candidates
+
+    def choose(self) -> Optional[dict]:
+        if not self.exec():
+            return None
+        row = self._table.currentRow()
+        if row < 0 or row >= len(self._candidates):
+            return None
+        return self._candidates[row]

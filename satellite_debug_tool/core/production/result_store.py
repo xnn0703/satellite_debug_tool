@@ -29,7 +29,7 @@ from .models import (
 from .recipe import ProductionRecipe
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _ACTIVE_ATTEMPT_STATUSES = (
     AttemptStatus.WAITING_PREREQUISITE.value,
     AttemptStatus.ARMED.value,
@@ -89,6 +89,9 @@ class ProductionResultStore:
         operator: str,
         output_dir: str | Path,
         notes: str = "",
+        weather: str = "",
+        ambient_temperature_c: float | None = None,
+        ambient_humidity_percent: float | None = None,
     ) -> dict[str, Any]:
         batch_id = _required_text(batch_id, "batch_id", 96)
         operator = _required_text(operator, "operator", 128)
@@ -101,8 +104,9 @@ class ProductionResultStore:
                     INSERT INTO batches(
                         batch_id, recipe_id, recipe_sha256, recipe_json,
                         engineering_only, operator, output_dir, status,
-                        created_utc, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        created_utc, notes, weather,
+                        ambient_temperature_c, ambient_humidity_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         batch_id,
@@ -115,6 +119,9 @@ class ProductionResultStore:
                         BatchStatus.READY.value,
                         now,
                         str(notes),
+                        _required_text(weather, "weather", 32) if str(weather).strip() else "",
+                        None if ambient_temperature_c is None else float(ambient_temperature_c),
+                        None if ambient_humidity_percent is None else float(ambient_humidity_percent),
                     ),
                 )
                 self._insert_event(
@@ -1170,7 +1177,10 @@ class ProductionResultStore:
             created_utc TEXT NOT NULL,
             started_utc TEXT,
             finished_utc TEXT,
-            notes TEXT NOT NULL DEFAULT ''
+            notes TEXT NOT NULL DEFAULT '',
+            weather TEXT NOT NULL DEFAULT '',
+            ambient_temperature_c REAL,
+            ambient_humidity_percent REAL
         );
         CREATE TABLE IF NOT EXISTS devices(
             batch_id TEXT NOT NULL REFERENCES batches(batch_id) ON DELETE CASCADE,
@@ -1316,6 +1326,22 @@ class ProductionResultStore:
                     "UPDATE schema_info SET value = ? WHERE key = 'schema_version'",
                     (str(_SCHEMA_VERSION),),
                 )
+                existing = {"value": str(_SCHEMA_VERSION)}
+            if int(existing["value"]) == 3:
+                self._connection.execute(
+                    "ALTER TABLE batches ADD COLUMN weather TEXT NOT NULL DEFAULT ''"
+                )
+                self._connection.execute(
+                    "ALTER TABLE batches ADD COLUMN ambient_temperature_c REAL"
+                )
+                self._connection.execute(
+                    "ALTER TABLE batches ADD COLUMN ambient_humidity_percent REAL"
+                )
+                self._connection.execute(
+                    "UPDATE schema_info SET value = ? WHERE key = 'schema_version'",
+                    (str(_SCHEMA_VERSION),),
+                )
+                existing = {"value": str(_SCHEMA_VERSION)}
             elif int(existing["value"]) != _SCHEMA_VERSION:
                 raise ResultStoreError(
                     f"unsupported result-store schema: {existing['value']}"
@@ -1372,6 +1398,45 @@ class ProductionResultStore:
     ) -> list[sqlite3.Row]:
         with self._lock:
             return list(self._connection.execute(sql, tuple(parameters)).fetchall())
+
+
+def scan_suspended_batches(storage_root: str | Path) -> list[dict[str, Any]]:
+    """扫描批次存储根下的挂起批次；批次目录是唯一事实源，无需手工登记。"""
+
+    root = Path(storage_root).expanduser()
+    if not root.is_dir():
+        return []
+    found: list[dict[str, Any]] = []
+    for database in sorted(root.glob("*/*/batch.sqlite3")):
+        try:
+            store = ProductionResultStore(database)
+        except (OSError, ResultStoreError, sqlite3.Error):
+            continue
+        try:
+            for row in store._fetchall(
+                "SELECT * FROM batches WHERE status = ? ORDER BY finished_utc DESC",
+                (BatchStatus.SUSPENDED.value,),
+            ):
+                batch = _row_dict(row)
+                devices = store.list_devices(batch["batch_id"])
+                pending = [
+                    item["test_id"]
+                    for item in store.list_attempts(batch["batch_id"])
+                    if item["status"] == AttemptStatus.PENDING.value
+                ]
+                found.append({
+                    "batch_id": batch["batch_id"],
+                    "finished_utc": batch.get("finished_utc") or batch.get("created_utc"),
+                    "operator": batch.get("operator", ""),
+                    "output_dir": str(database.parent),
+                    "serials": [item["serial_number"] for item in devices],
+                    "pending_tests": pending,
+                })
+        except (ResultStoreError, sqlite3.Error):
+            continue
+        finally:
+            store.close()
+    return found
 
 
 def _required_text(value: Any, name: str, maximum: int) -> str:

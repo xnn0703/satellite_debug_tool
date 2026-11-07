@@ -40,7 +40,7 @@ def test_defaults_and_mapping_round_trip():
         'acquisition_stable_s': 5.0, 'acquisition_timeout_s': 300.0,
         'interruption_max_s': 2.0, 'interruptions_per_30min': 5,
         'interruption_ratio_max': 0.005, 'recovery_stable_s': 3.0,
-        'maximum_sample_gap_s': 2.0,
+        'maximum_sample_gap_s': 2.0, 'attitude_error_max_deg': 3.0,
     }
     assert TrackingCriteriaPolicy.from_mapping(default.to_payload()) == default
 
@@ -307,3 +307,32 @@ def test_current_healthy_duration_resets_after_acquisition_and_tick_does_not_inv
     assert value.healthy_duration_s == 1
     value.tick(5.6)
     assert value.healthy_duration_s == 0
+
+
+def test_power_on_anchor_drives_elapsed_metrics():
+    """耗时指标以上电锚点起算：锁定/GNSS/modem 各自独立记录。"""
+
+    policy = replace(
+        TrackingCriteriaPolicy(), acquisition_timeout_s=30.0, recovery_stable_s=3.0,
+    )
+    evaluator = TrackingEvaluator(policy, 60.0)
+    evaluator.start(10.0, power_on_monotonic_s=4.0)
+    assert evaluator.power_on_monotonic_s == 4.0
+
+    # 帧距不超过最大采样间隔；连续健康 5 秒确认锁定。
+    for at in (12.0, 14.0, 16.0, 18.0):
+        evaluator.observe(at, True, True, 10.0, True,
+                          gnss_fixed=True, modem_online=True)
+    assert evaluator.acquired_at == pytest.approx(18.0)
+    metrics = evaluator.metrics()
+    assert metrics['lock_elapsed_s'] == pytest.approx(14.0)
+    assert metrics['gnss_lock_elapsed_s'] == pytest.approx(8.0)
+    assert metrics['modem_online_elapsed_s'] == pytest.approx(8.0)
+
+    # GNSS 与 modem 未观察时保持未记录事实，不推断为零。
+    pending = TrackingEvaluator(policy, 60.0)
+    pending.start(10.0, power_on_monotonic_s=4.0)
+    pending.observe(12.0, True, True, 10.0, True)
+    pending_metrics = pending.metrics()
+    assert pending_metrics['gnss_lock_elapsed_s'] is None
+    assert pending_metrics['modem_online_elapsed_s'] is None

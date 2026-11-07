@@ -7,14 +7,30 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 
 class ProductionCleanupWorker(QThread):
-    def __init__(self, cleanup: Callable[[], object], *, parent=None) -> None:
+    progress = Signal(object)
+
+    def __init__(
+        self,
+        cleanup: Callable[[], object],
+        *,
+        parent=None,
+        report_progress: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._cleanup = cleanup
+        self._report_progress = bool(report_progress)
+        self.result: object = None
         self.error = ""
 
     def run(self) -> None:
         try:
-            self._cleanup()
+            if self._report_progress:
+                def emit_progress(*args) -> None:
+                    self.progress.emit(args)
+
+                self.result = self._cleanup(emit_progress)
+            else:
+                self.result = self._cleanup()
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
 

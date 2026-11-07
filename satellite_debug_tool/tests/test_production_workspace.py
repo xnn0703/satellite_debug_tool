@@ -1043,3 +1043,97 @@ def test_hidden_production_workspace_toggles_without_changing_engineering_tabs(
     window.close()
     window.deleteLater()
     qapp.processEvents()
+
+
+def test_complete_batch_archives_reports_in_background(
+    qapp, settings, tmp_path: Path
+) -> None:
+    """完成收尾立即返回；报告归档在后台 worker 完成，期间入口被守卫。"""
+
+    from PySide6.QtCore import QCoreApplication
+
+    from satellite_debug_tool.core.production import (
+        AttemptStatus,
+        BatchStatus,
+        ProductionRecipe,
+        ProductionResultStore,
+        ResultStoreError,
+    )
+    from satellite_debug_tool.i18n import tr
+    from satellite_debug_tool.ui.production_workspace import ProductionWorkspace
+
+    output = tmp_path / "raw" / "BATCH-BG"
+    output.mkdir(parents=True)
+    store = ProductionResultStore(output / "batch.sqlite3")
+    store.create_batch(
+        "BATCH-BG",
+        ProductionRecipe.from_mapping(valid_recipe()),
+        operator="测试员甲",
+        output_dir=output,
+    )
+    serial = "AFD01C-20260919-001"
+    store.register_device(
+        "BATCH-BG",
+        serial_number=serial,
+        slot=1,
+        endpoint_ip="192.168.1.12",
+        endpoint_port=4004,
+        hardware_type="AFD01C",
+        device_uid="111111112222222233333333",
+        mac_address="02:00:00:00:00:01",
+        metadata={"main_firmware": "1.2.3"},
+    )
+    store.start_batch("BATCH-BG", (serial,), ("static_acquisition",))
+    attempt = store.list_attempts("BATCH-BG")[0]
+    for status in (
+        AttemptStatus.WAITING_PREREQUISITE,
+        AttemptStatus.ARMED,
+        AttemptStatus.RUNNING,
+        AttemptStatus.ANALYZING,
+        AttemptStatus.PASS,
+    ):
+        store.transition_attempt(
+            int(attempt["attempt_id"]),
+            status,
+            result={"reason": "sample result"} if status is AttemptStatus.PASS else None,
+        )
+    evidence_dir = output / "devices" / serial / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "capture.sdb").write_bytes(b"SDB3-example")
+
+    workspace = ProductionWorkspace(settings)
+    workspace._batch_coordinator._store = store
+    workspace._batch_coordinator._output_dir = output
+    workspace._batch_coordinator._batch = store.get_batch("BATCH-BG")
+    try:
+        workspace._begin_complete_batch(source="manual")
+
+        assert workspace._archive_worker is not None
+        assert workspace._archive_worker.isRunning()
+        with pytest.raises(ResultStoreError):
+            workspace.complete_batch()
+
+        deadline = __import__("time").monotonic() + 10
+        while (
+            workspace._archive_worker is not None
+            and __import__("time").monotonic() < deadline
+        ):
+            QCoreApplication.processEvents()
+        assert workspace._archive_worker is None
+        from PySide6.QtCore import QEvent
+        for _ in range(3):
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            QCoreApplication.processEvents()
+
+        expected = tr(
+            "Batch completed; generated {count} device archive(s).", count=1
+        )
+        assert workspace._footer_status.text() == expected
+        summary = json.loads((output / "batch_summary.json").read_text(encoding="utf-8"))
+        assert summary["batch_id"] == "BATCH-BG"
+        assert summary["status"] == BatchStatus.COMPLETED.value
+        assert summary["reports"][0]["serial_number"] == serial
+        assert summary["reports"][0]["document_path"].endswith(".docx")
+    finally:
+        # 先摘除并关闭批次存储；此后排队的 fleet 状态事件走空存储守卫。
+        workspace._batch_coordinator.close()

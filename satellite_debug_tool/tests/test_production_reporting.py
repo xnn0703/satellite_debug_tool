@@ -60,6 +60,9 @@ def _terminal_batch(
     *,
     test_ids: tuple[str, ...] | None = None,
     result_payloads: tuple[dict[str, object], ...] | None = None,
+    weather: str = "",
+    ambient_temperature_c: float | None = None,
+    ambient_humidity_percent: float | None = None,
 ) -> tuple[ProductionResultStore, Path, str]:
     output = tmp_path / "raw" / "BATCH-01"
     output.mkdir(parents=True)
@@ -70,6 +73,9 @@ def _terminal_batch(
         recipe,
         operator="测试员甲",
         output_dir=output,
+        weather=weather,
+        ambient_temperature_c=ambient_temperature_c,
+        ambient_humidity_percent=ambient_humidity_percent,
     )
     serial = "AFD01C-20260919-001"
     store.register_device(
@@ -343,8 +349,8 @@ def test_valid_process_recording_is_embedded_in_docx_and_evidence(tmp_path: Path
         assert artifact.document_path is not None
         document = Document(artifact.document_path)
         assert len(document.inline_shapes) >= 3
-        assert "三、过程曲线与阶段分析" in _document_text(artifact.document_path)
-        assert "静态工况" in _document_text(artifact.document_path)
+        assert "二、测试结果" in _document_text(artifact.document_path)
+        assert "工况：静置对星" in _document_text(artifact.document_path)
         assert "车载动态工况" not in _document_text(artifact.document_path)
         with zipfile.ZipFile(artifact.evidence_path) as archive:
             names = set(archive.namelist())
@@ -365,7 +371,7 @@ def test_pass_generates_v1_self_contained_zip_and_valid_manifest(tmp_path: Path)
             store,
             batch_output_dir=output,
             report_root=tmp_path / "reports",
-            branding=ReportBranding(company_name="客户公司", tester_role="测试员"),
+            branding=ReportBranding(),
         )
         artifact = service.archive_device("BATCH-01", serial)
 
@@ -398,15 +404,9 @@ def test_pass_generates_v1_self_contained_zip_and_valid_manifest(tmp_path: Path)
         assert "卫星通信相控阵设备自动化测试" in text
         assert "产品名称" in text
         assert "AFD01C 卫星通信相控阵终端" in text
-        assert "编写" in text and "审核" in text and "批准" in text
-        assert "测试环境" in text
-        assert "测试软件\n卫通终端管理工具 " in text
-        assert "生产测试实验室" in text
-        assert "环境温度" in text and "23.5 °C" in text
-        assert "相对湿度" in text and "48 %RH" in text
-        assert "操作系统" in text
-        assert "一、测试摘要" in text
-        assert "技术附录" in text
+        assert "测试结论" in text
+        assert "自动生成" in text
+        assert "附录 B  配置明细" in text
         assert serial in text
     finally:
         store.close()
@@ -674,9 +674,7 @@ def test_two_devices_receive_separate_self_contained_archives(tmp_path: Path) ->
                 )
             assert artifact.document_path is not None
             report_text = _document_text(artifact.document_path)
-            assert "测试环境" in report_text
-            assert "测试地点\n未配置" in report_text
-            assert "环境温度\n未记录" in report_text
+            assert "自动生成" in report_text
     finally:
         store.close()
 
@@ -705,5 +703,134 @@ def test_docx_failure_records_generation_failure_without_changing_verdict(
         artifact = store.get_report_artifact("BATCH-01", serial, 1)
         assert artifact["status"] == "generation_failed"
         assert "simulated docx failure" in artifact["error"]
+    finally:
+        store.close()
+
+
+def test_document_name_uses_model_serial_and_finished_time(tmp_path: Path) -> None:
+    """V1 交付文档按 型号_SN_测试报告_批次结束时间 命名；V2 在其后追加 _V02。"""
+
+    store, output, serial = _terminal_batch(tmp_path, (AttemptStatus.PASS,))
+    try:
+        service = ProductionReportService(
+            store,
+            batch_output_dir=output,
+            report_root=tmp_path / "reports",
+        )
+        artifact = service.archive_device("BATCH-01", serial)
+
+        assert artifact.document_path is not None
+        batch = store.get_batch("BATCH-01")
+        finished = datetime.fromisoformat(batch["finished_utc"]).astimezone()
+        expected_stamp = finished.strftime("%Y%m%d%H%M")
+        assert artifact.document_path.name == (
+            f"AFD01C_{serial}_测试报告_{expected_stamp}.docx"
+        )
+    finally:
+        store.close()
+
+    fail_store, fail_output, fail_serial = _terminal_batch(
+        tmp_path / "fail-case", (AttemptStatus.FAIL,), test_ids=("locked_rocking",)
+    )
+    try:
+        service = ProductionReportService(
+            fail_store,
+            batch_output_dir=fail_output,
+            report_root=tmp_path / "reports-fail",
+        )
+        service.archive_device("BATCH-01", fail_serial)
+        service.review(
+            "BATCH-01",
+            fail_serial,
+            reviewer="审核员乙",
+            final_verdict="FAIL",
+            reason="复核确认失败",
+        )
+        records = fail_store.list_report_artifacts("BATCH-01", fail_serial)
+        v2_paths = [
+            item["document_path"] for item in records if item["version"] == 2
+        ]
+        finished = datetime.fromisoformat(
+            fail_store.get_batch("BATCH-01")["finished_utc"]
+        ).astimezone()
+        expected_stamp = finished.strftime("%Y%m%d%H%M")
+        assert v2_paths and v2_paths[0].endswith(
+            f"AFD01C_{fail_serial}_测试报告_{expected_stamp}_V02.docx"
+        )
+    finally:
+        fail_store.close()
+
+
+def test_archive_batch_reports_per_device_stage_progress(tmp_path: Path) -> None:
+    """归档按设备与阶段回调进度：序号单调、阶段齐备、串号一致。"""
+
+    store, output, serial = _terminal_batch(tmp_path, (AttemptStatus.PASS,))
+    try:
+        service = ProductionReportService(
+            store,
+            batch_output_dir=output,
+            report_root=tmp_path / "reports",
+        )
+        events: list[tuple[int, int, str, str]] = []
+        artifacts = service.archive_batch(
+            "BATCH-01",
+            progress=lambda done, total, current, stage: events.append(
+                (done, total, current, stage)
+            ),
+        )
+
+        assert len(artifacts) == 1
+        assert events
+        assert all(item[1] == 1 for item in events)
+        assert all(item[0] == 1 for item in events)
+        assert {item[2] for item in events} == {serial}
+        assert {item[3] for item in events} >= {"analyzing", "packaging", "document"}
+    finally:
+        store.close()
+
+
+def test_report_renders_conditions_temperatures_bias_and_environment(tmp_path: Path) -> None:
+    """报告呈现：每项测试条件表、起止组件温度、出厂零偏、批次天气实测优先。"""
+    store, output, serial = _terminal_batch(tmp_path, (AttemptStatus.PASS,), test_ids=("locked_rocking",))
+    try:
+        service = ProductionReportService(
+            store,
+            batch_output_dir=output,
+            report_root=tmp_path / "reports",
+        )
+        artifact = service.archive_device("BATCH-01", serial)
+        assert artifact.document_path is not None
+        text = _document_text(artifact.document_path)
+        # 条件表：冻结配方的三轴幅值与供电设定
+        assert "测试时天气" in text
+        assert "幅值 15° / 频率 0.25 Hz" in text
+        assert "轨迹采样周期" in text
+        # 环境实测缺省时回退工位静态值
+        assert "测试时天气" in text and "未记录" in text
+    finally:
+        store.close()
+
+
+def test_batch_weather_overrides_station_environment_in_report(tmp_path: Path) -> None:
+    """批次创建时录入的当天天气/温湿度优先于工位档案静态环境。"""
+    store, output, serial = _terminal_batch(
+        tmp_path,
+        (AttemptStatus.PASS,),
+        test_ids=("locked_rocking",),
+        weather="Sunny",
+        ambient_temperature_c=24.0,
+        ambient_humidity_percent=40,
+    )
+    try:
+        service = ProductionReportService(
+            store,
+            batch_output_dir=output,
+            report_root=tmp_path / "reports",
+        )
+        artifact = service.archive_device("BATCH-01", serial)
+        assert artifact.document_path is not None
+        text = _document_text(artifact.document_path)
+        assert "晴 / 24.0 °C" in text
+        assert "23.5 °C" not in text
     finally:
         store.close()

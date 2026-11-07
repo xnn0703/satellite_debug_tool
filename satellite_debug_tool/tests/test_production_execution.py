@@ -6,7 +6,13 @@ from PySide6.QtCore import QObject, Signal
 import pytest
 
 from satellite_debug_tool.core.product import Availability, ProductSnapshot, ProductValue, TrackingPhase
-from satellite_debug_tool.core.production import ProductionRecipe, ProductionRunCoordinator, ProductionRunState
+from satellite_debug_tool.core.production import (
+    AttemptStatus,
+    ProductionRecipe,
+    ProductionRunCoordinator,
+    ProductionRunState,
+    RecipeValidationError,
+)
 from satellite_debug_tool.core.production.execution import ProductionExecution, compare_parameter
 from satellite_debug_tool.core.production.tracking_criteria import TrackingCriteriaPolicy
 from satellite_debug_tool.core.protocol import ParaEntry, ParaTableReport, ServiceFastState
@@ -767,6 +773,160 @@ def test_same_scope_power_cycle_opens_fresh_observation_timestamps(
             session.core.record_received.emit(tracking_sample(12, timestamp=new_ms))
             assert service._last_device_timestamp[serial] == new_ms
         assert service.run.progress.remaining_s == pytest.approx(2)
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_per_device_parameters_match_registered_facts(qapplication_session, tmp_path):
+    """per_device 参数以该设备注册事实为期望：两台设备注册 IP 不同、回读各自
+    等于注册 IP 时 PASS；偏离注册 IP 的设备 FAIL，不受另一台影响。"""
+    clock = [0.0]
+    service, store, sent = execution(tmp_path, 'parameter_verification', clock)
+    payload = valid_recipe(duration_s=2)
+    payload['expected'] = {
+        'main_firmware': {'match': 'optional'},
+        'parameters': {'ip': {'type': 'ip', 'per_device': True}},
+    }
+    service.recipe = ProductionRecipe.from_mapping(payload)
+    store.update_device_endpoint('BATCH-AUTO', 'AFD01C-A', endpoint_ip='192.168.1.12', endpoint_port=4004)
+    store.update_device_endpoint('BATCH-AUTO', 'AFD01C-B', endpoint_ip='192.168.1.13', endpoint_port=4004)
+
+    def para_table(value):
+        return ParaTableReport(
+            table_ver=1,
+            params=[ParaEntry(name='ip', para_type=0, flags=0, value=value)],
+        )
+    try:
+        service.start()
+        assert sent, 'per-device verification must request the parameter table'
+        for serial, value in (('AFD01C-A', '192.168.1.12'), ('AFD01C-B', '192.168.1.13')):
+            service._record(serial, para_table(value))
+        service.tick()
+        assert service.run.state is ProductionRunState.COMPLETE
+        attempts = {
+            row['serial_number']: row for row in store.list_attempts('BATCH-AUTO')
+        }
+        assert attempts['AFD01C-A']['status'] == AttemptStatus.PASS.value
+        assert attempts['AFD01C-B']['status'] == AttemptStatus.PASS.value
+        assert attempts['AFD01C-A']['result_json']['expected_per_device'] == {
+            'ip': '192.168.1.12'
+        }
+
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_per_device_recipe_rules_are_constrained_to_device_facts() -> None:
+    """per_device 规则只能依赖注册事实：非法类型或自带比较目标在配方校验拒绝。"""
+    base = valid_recipe()
+    base['expected']['parameters'] = {
+        'ip': {'type': 'ip', 'per_device': True},
+    }
+    assert ProductionRecipe.from_mapping(base).payload['expected']['parameters']['ip']['per_device']
+
+    for bad in (
+        {'type': 'ip', 'per_device': True, 'value': '192.168.1.1'},
+        {'type': 'float', 'per_device': True},
+    ):
+        payload = valid_recipe()
+        payload['expected']['parameters'] = {'bad': bad}
+        with pytest.raises(RecipeValidationError):
+            ProductionRecipe.from_mapping(payload)
+
+
+def _vehicle_recorder(service, *, reference_angles=(0.0, 0.0, 0.0)):
+    """把执行器置为姿态模式窗口，返回供喂样的跟踪判据。"""
+    from satellite_debug_tool.core.production.tracking_criteria import (
+        TrackingCriteriaPolicy,
+        TrackingEvaluator,
+    )
+
+    policy = replace(
+        TrackingCriteriaPolicy(), acquisition_stable_s=.05, acquisition_timeout_s=1,
+        recovery_stable_s=.1, interruption_max_s=.25, interruption_ratio_max=.25,
+    )
+    evaluator = TrackingEvaluator(policy, 30.0, attitude_mode=True)
+    evaluator.start(0.0)
+    service._request = SimpleNamespace(test_id='locked_drive')
+    service._hardware_ready = True
+    service._evaluators['AFD01C-A'] = evaluator
+    service._last_device_timestamp.clear()
+    service.fixture_telemetry = SimpleNamespace(
+        reference_readout=lambda now_ns=None: SimpleNamespace(
+            status='valid', angles=reference_angles),
+    )
+    return evaluator
+
+
+def test_vehicle_mode_judges_attitude_and_exempts_snr(qapplication_session, tmp_path):
+    """姿态模式：SNR 掉 0 与失锁不构成中断或失败；姿态误差是唯一健康事实。"""
+    from satellite_debug_tool.core.production import AttemptStatus
+
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'static_acquisition', clock)
+    evaluator = _vehicle_recorder(service)
+    try:
+        # 遮挡期：SNR 0 + 失锁，但姿态误差 1° ≤ 3° —— 健康，稳定确认后 acquired。
+        for offset, timestamp in ((0.0, 1), (0.03, 2), (0.06, 3), (0.09, 4)):
+            clock[0] = offset
+            session = service.sessions['AFD01C-A']
+            session.core.record_received.emit(
+                ServiceFastState(1, timestamp, 0xfff, 0, 3, False, 3, 3, True,
+                                 1.0, 0., 0., 0., 0., 0.0))
+        assert evaluator.acquired
+        assert evaluator.attitude_mode
+        assert not evaluator.failure_reasons
+        clock[0] = 0.12
+        service.sessions['AFD01C-A'].core.record_received.emit(
+            ServiceFastState(1, 5, 0xfff, 0, 3, False, 3, 3, True,
+                             1.0, 0., 0., 0., 0., 0.0))
+        assert evaluator.failure_reasons == ()
+        assert evaluator.metrics()['attitude_error_max_deg'] == pytest.approx(1.0)
+        assert evaluator.metrics()['attitude_error_limit_deg'] == 3.0
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_vehicle_attitude_excess_and_missing_reference_are_typed(qapplication_session, tmp_path):
+    """姿态超限形成中断与失败；参考缺失是质量原因，不推断失败。"""
+    clock = [0.0]
+    service, store, _ = execution(tmp_path, 'static_acquisition', clock)
+    evaluator = _vehicle_recorder(service)
+    try:
+        # 参考缺失：质量原因，不是性能失败。
+        service.fixture_telemetry = SimpleNamespace(
+            reference_readout=lambda now_ns=None: SimpleNamespace(
+                status='stale', angles=None),
+        )
+        clock[0] = 0.0
+        service.sessions['AFD01C-A'].core.record_received.emit(
+            tracking_sample(12, timestamp=1))
+        assert 'attitude_reference_missing' in evaluator.quality_reasons
+        assert evaluator.failure_reasons == ()
+
+        # 参考恢复：姿态 1° 健康帧完成稳定确认，进入正式跟踪阶段。
+        service.fixture_telemetry = SimpleNamespace(
+            reference_readout=lambda now_ns=None: SimpleNamespace(
+                status='valid', angles=(0.0, 0.0, 0.0)),
+        )
+        for offset, timestamp in ((0.05, 2), (0.08, 3), (0.11, 4), (0.14, 5)):
+            clock[0] = offset
+            service.sessions['AFD01C-A'].core.record_received.emit(
+                ServiceFastState(1, timestamp, 0xfff, 0, 3, False, 3, 3, True,
+                                 1.0, 0., 0., 0., 0., 0.0))
+        assert evaluator.acquired
+
+        # 已进入跟踪阶段后姿态超限 5° > 3°：形成中断事实。
+        clock[0] = 0.3
+        service.sessions['AFD01C-A'].core.record_received.emit(
+            ServiceFastState(1, 6, 0xfff, 0, 3, True, 3, 3, True,
+                             5.0, 0., 0., 0., 0., 12.0))
+        metrics = evaluator.metrics()
+        assert metrics['attitude_error_max_deg'] == pytest.approx(5.0)
+        assert metrics['interruption_count'] >= 1
     finally:
         service.stop()
         store.close()

@@ -293,6 +293,16 @@ def _validate_expected(expected: dict[str, Any], errors: list[str]) -> None:
         per_device = rule.get("per_device", False)
         if not isinstance(per_device, bool):
             errors.append(f"{prefix}.per_device must be boolean")
+        if per_device:
+            # 逐设备期望来自该设备注册事实；配方不得自带比较目标。
+            if value_type not in {"ip", "string"}:
+                errors.append(f"{prefix}.per_device requires type 'ip' or 'string'")
+            for comparator in ("value", "range", "one_of", "abs_tol"):
+                if comparator in rule:
+                    errors.append(
+                        f"{prefix}.per_device must not define {comparator}; "
+                        "the expectation comes from the registered device facts"
+                    )
         ignore = rule.get("ignore", False)
         if not isinstance(ignore, bool):
             errors.append(f"{prefix}.ignore must be boolean")

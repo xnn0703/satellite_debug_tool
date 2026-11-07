@@ -129,6 +129,69 @@ def _bounded_plot_samples(
     return tuple(samples[index] for index in indices)
 
 
+class TrajectoryPreviewDialog(QDialog):
+    """按需呈现已经通过预检的三轴目标轨迹。"""
+
+    MAX_POINTS = 1200
+
+    def __init__(
+        self,
+        *,
+        theme: str = "dark",
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.resize(900, 560)
+
+        layout = QVBoxLayout(self)
+        self._plot = pg.PlotWidget()
+        self._plot.setMouseEnabled(x=True, y=True)
+        self._plot.setMenuEnabled(False)
+        self._plot.showGrid(x=True, y=True, alpha=0.15)
+        self._plot.addLegend()
+        self._curves = {
+            "roll": self._plot.plot([], [], name="ROLL"),
+            "pitch": self._plot.plot([], [], name="PITCH"),
+            "yaw": self._plot.plot([], [], name="YAW"),
+        }
+        layout.addWidget(self._plot, 1)
+
+        self._buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self._buttons.rejected.connect(self.close)
+        layout.addWidget(self._buttons)
+
+        self.set_theme(theme)
+        self.retranslate_ui()
+        register_translatable(self)
+
+    def set_profile(self, profile: CombinedSineProfile) -> None:
+        count = min(self.MAX_POINTS, max(2, profile.sample_count))
+        times = np.linspace(0.0, profile.total_duration_s, count)
+        poses = [profile.pose_at(float(value)) for value in times]
+        for axis, curve in self._curves.items():
+            curve.setData(
+                times,
+                [getattr(pose, f"{axis}_deg") for pose in poses],
+            )
+        self._plot.enableAutoRange()
+
+    def set_theme(self, theme: str) -> None:
+        palette = S.palette(theme)
+        self._plot.setBackground(palette["panel"])
+        for axis_name, curve in self._curves.items():
+            curve.setPen(pg.mkPen(S.chart_color(S.ATTITUDE_COLORS[axis_name], theme)))
+        for axis_name in ("left", "bottom"):
+            axis = self._plot.getAxis(axis_name)
+            axis.setPen(pg.mkPen(palette["border_2"]))
+            axis.setTextPen(pg.mkPen(palette["text_2"]))
+
+    def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("Trajectory preview"))
+        self._plot.setLabel("bottom", tr("Time"), units="s")
+        self._plot.setLabel("left", tr("Attitude"), units="deg")
+
+
 class FixtureProfileDialog(QDialog):
     def __init__(
         self,
@@ -718,6 +781,7 @@ class FixtureDebugWorkspace(QWidget):
         self._guided_calibration: Optional[GuidedFixtureCalibration] = None
         self._outer_loop = BoundedAttitudeOuterLoop()
         self._trajectory_preflight: Optional[TrajectoryPreflightResult] = None
+        self._trajectory_preview_dialog: Optional[TrajectoryPreviewDialog] = None
         self._active_control_request_type = ""
         self._control_busy = False
         self._soft_center_requested = False
@@ -1053,19 +1117,8 @@ class FixtureDebugWorkspace(QWidget):
         layout.addWidget(self._steady, 5, 1)
         layout.addWidget(self._trajectory_labels["ramp_out"], 6, 0)
         layout.addWidget(self._ramp_out, 6, 1)
-        self._preview = pg.PlotWidget()
-        self._preview.setMinimumHeight(100)
-        self._preview.setMouseEnabled(x=False, y=False)
-        self._preview.setMenuEnabled(False)
-        self._preview.showGrid(x=True, y=True, alpha=0.15)
-        self._preview_curves = {
-            "roll": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["roll"])),
-            "pitch": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["pitch"])),
-            "yaw": self._preview.plot([], [], pen=pg.mkPen(S.ATTITUDE_COLORS["yaw"])),
-        }
-        layout.addWidget(self._preview, 7, 0, 1, 4)
         self._preview_button = QPushButton(tr("Preview and validate"))
-        self._preview_button.clicked.connect(self._preview_trajectory)
+        self._preview_button.clicked.connect(self._show_trajectory_preview)
         self._trajectory_start = QPushButton(tr("Start trajectory"))
         self._trajectory_start.setProperty("variant", "primary")
         self._trajectory_start.clicked.connect(self._start_trajectory)
@@ -1079,9 +1132,9 @@ class FixtureDebugWorkspace(QWidget):
                 QSizePolicy.Policy.Ignored,
                 QSizePolicy.Policy.Fixed,
             )
-        layout.addWidget(self._preview_button, 8, 0)
-        layout.addWidget(self._trajectory_start, 8, 1, 1, 2)
-        layout.addWidget(self._stop, 8, 3)
+        layout.addWidget(self._preview_button, 7, 0)
+        layout.addWidget(self._trajectory_start, 7, 1, 1, 2)
+        layout.addWidget(self._stop, 7, 3)
         return group
 
     def _build_calibration_group(self) -> QGroupBox:
@@ -1971,7 +2024,7 @@ class FixtureDebugWorkspace(QWidget):
             work_z_mm=100.0 if self._profile is None else self._profile.center_pose.z_mm,
         )
 
-    def _preview_trajectory(self) -> Optional[CombinedSineProfile]:
+    def _validate_trajectory(self) -> Optional[CombinedSineProfile]:
         if self._profile is None:
             self._show_error(tr("Select a valid fixture profile first."))
             return None
@@ -1983,11 +2036,6 @@ class FixtureDebugWorkspace(QWidget):
             self._show_error(str(exc))
             return None
         self._trajectory_preflight = preflight
-        count = min(1200, profile.sample_count)
-        times = np.linspace(0.0, profile.total_duration_s, count)
-        poses = [profile.pose_at(float(value)) for value in times]
-        for axis, curve in self._preview_curves.items():
-            curve.setData(times, [getattr(pose, f"{axis}_deg") for pose in poses])
         self._append_event(
             tr(
                 "Trajectory validated: {points} command points, {duration:.1f} s; "
@@ -2001,8 +2049,21 @@ class FixtureDebugWorkspace(QWidget):
         )
         return profile
 
+    def _show_trajectory_preview(self) -> None:
+        profile = self._validate_trajectory()
+        if profile is None:
+            return
+        dialog = self._trajectory_preview_dialog
+        if dialog is None:
+            dialog = TrajectoryPreviewDialog(theme=self._theme, parent=self)
+            self._trajectory_preview_dialog = dialog
+        dialog.set_profile(profile)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def _start_trajectory(self) -> None:
-        profile = self._preview_trajectory()
+        profile = self._validate_trajectory()
         if profile is None:
             return
         try:
@@ -2761,13 +2822,8 @@ class FixtureDebugWorkspace(QWidget):
             f"#fixtureProfileError {{ color: {palette['err']}; }}"
         )
         self._attitude_plot.set_theme(theme)
-        self._preview.setBackground(palette["panel"])
-        for axis_name, curve in self._preview_curves.items():
-            curve.setPen(pg.mkPen(S.chart_color(S.ATTITUDE_COLORS[axis_name], theme)))
-        for axis_name in ("left", "bottom"):
-            axis = self._preview.getAxis(axis_name)
-            axis.setPen(pg.mkPen(palette["border_2"]))
-            axis.setTextPen(pg.mkPen(palette["text_2"]))
+        if self._trajectory_preview_dialog is not None:
+            self._trajectory_preview_dialog.set_theme(theme)
 
     def retranslate_ui(self) -> None:
         if self._customer_mode:
