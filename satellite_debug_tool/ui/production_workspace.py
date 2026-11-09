@@ -2483,6 +2483,47 @@ class ProductionWorkspace(QWidget):
         detail = "；".join(f"{serial}：{state}" for serial, state in sorted(checks.items()))
         self.append_event(tr("Participant identity check: {details}", details=detail))
 
+    def _configure_post_batch_ip(self, batch) -> None:
+        """批次完成后按参数表统一下发 IP（M66：测试期间不改，收尾才配置）。"""
+        recipe = batch.get("recipe_json", {})
+        parameters = recipe.get("expected", {}).get("parameters", {})
+        ip_name = next(
+            (name for name, rule in parameters.items()
+             if rule.get("type") == "ip" and not rule.get("ignore")),
+            None,
+        )
+        if ip_name is None or self._fleet is None:
+            return
+        explicit = parameters.get(ip_name, {}).get("value")
+        configured = 0
+        for session in self._fleet.sessions():
+            if session.serial_number not in self._registered_serials:
+                continue
+            target = explicit
+            if not target:
+                try:
+                    device = self._store.get_device(batch["batch_id"], session.serial_number)
+                except ResultStoreError:
+                    device = {}
+                target = device.get("endpoint_ip") or ""
+            if not target:
+                continue
+            from satellite_debug_tool.core.protocol import build_para_set
+            from satellite_debug_tool.core.session import SessionOperationClass
+            sent = self._fleet.send(
+                session.endpoint, build_para_set(ip_name, str(target)),
+                operation=SessionOperationClass.MUTATING,
+            )
+            configured += 1 if sent else 0
+            self._record_batch_event("post_batch_ip_configured", {
+                "serial_number": session.serial_number,
+                "parameter": ip_name, "target": str(target), "sent": bool(sent),
+            })
+        if configured:
+            self.append_event(tr(
+                "Post-batch IP configuration sent to {count} device(s).", count=configured,
+            ))
+
     def _on_complete_batch(self) -> None:
         self._begin_complete_batch(source="manual")
 
@@ -2545,6 +2586,8 @@ class ProductionWorkspace(QWidget):
                 raise ResultStoreError("production power did not stop within 10 seconds")
             self._release_production_power_worker()
         batch = self._batch_coordinator.complete()
+        if batch["status"] == BatchStatus.COMPLETED.value:
+            self._configure_post_batch_ip(batch)
         if batch["status"] == BatchStatus.SUSPENDED.value:
             self._batch_state.setText(tr("Bench phase finished; batch suspended for vehicle tests"))
         elif batch["status"] == BatchStatus.COMPLETED.value:

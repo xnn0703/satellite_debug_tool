@@ -930,3 +930,87 @@ def test_vehicle_attitude_excess_and_missing_reference_are_typed(qapplication_se
     finally:
         service.stop()
         store.close()
+
+
+def test_parameter_auto_correction_sends_para_set_then_repasses(qapplication_session, tmp_path):
+    """M66 自动修正：首次不一致时下发 PARA_SET（IP 除外）并等待新回读；
+    回读一致转 PASS 且记录 auto_corrected；IP 项不自动修正。"""
+    clock = [0.0]
+    service, store, sent = execution(tmp_path, 'parameter_verification', clock)
+    payload = valid_recipe(duration_s=2)
+    payload['expected'] = {
+        'main_firmware': {'match': 'optional'},
+        'parameters': {
+            'modem_baud': {'type': 'int', 'value': 921600},
+            'ip': {'type': 'ip', 'per_device': True},
+        },
+    }
+    service.recipe = ProductionRecipe.from_mapping(payload)
+    store.update_device_endpoint('BATCH-AUTO', 'AFD01C-A', endpoint_ip='192.168.1.12', endpoint_port=4004)
+    store.update_device_endpoint('BATCH-AUTO', 'AFD01C-B', endpoint_ip='192.168.1.13', endpoint_port=4004)
+
+    def table(ip, baud):
+        return ParaTableReport(table_ver=1, params=[
+            ParaEntry(name='ip', para_type=0, flags=0, value=ip),
+            ParaEntry(name='modem_baud', para_type=0, flags=0, value=baud),
+        ])
+    try:
+        service.start()
+        service._record('AFD01C-A', table('192.168.1.12', '921600'))
+        service._record('AFD01C-B', table('192.168.1.13', '115200'))
+        service.tick()
+        # modem_baud 不一致：已下发 PARA_SET 并请求新回读，结果尚未形成。
+        para_sets = [frame for _, frame in sent if b'modem_baud' in frame]
+        assert para_sets, 'auto correction must send PARA_SET for the mismatched parameter'
+        assert service._param_corrected['AFD01C-B'] == {'modem_baud': '921600'}
+        assert 'AFD01C-A' not in service._param_corrected
+        assert service.run.state is ProductionRunState.WAITING_PREREQUISITE
+
+        # 修正后回读一致 → PASS，IP 项按注册事实各自通过。
+        service._record('AFD01C-B', table('192.168.1.13', '921600'))
+        service.tick()
+        assert service.run.state is ProductionRunState.COMPLETE
+        attempts = {row['serial_number']: row for row in store.list_attempts('BATCH-AUTO')}
+        assert attempts['AFD01C-A']['status'] == AttemptStatus.PASS.value
+        assert attempts['AFD01C-B']['status'] == AttemptStatus.PASS.value
+        assert attempts['AFD01C-B']['result_json']['auto_corrected'] == {'modem_baud': '921600'}
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_parameter_auto_correction_runs_only_once_then_fails(qapplication_session, tmp_path):
+    """一次修正机会：修正后回读仍不一致 → FAIL，不再循环下发。"""
+    clock = [0.0]
+    service, store, sent = execution(tmp_path, 'parameter_verification', clock)
+    payload = valid_recipe(duration_s=2)
+    payload['expected'] = {
+        'main_firmware': {'match': 'optional'},
+        'parameters': {'modem_baud': {'type': 'int', 'value': 921600}},
+    }
+    service.recipe = ProductionRecipe.from_mapping(payload)
+
+    def table(baud):
+        return ParaTableReport(table_ver=1, params=[
+            ParaEntry(name='modem_baud', para_type=0, flags=0, value=baud),
+        ])
+    try:
+        service.start()
+        for session in service.sessions.values():
+            session.core.record_received.emit(table('115200'))
+        service.tick()
+        first_sets = [frame for _, frame in sent if b'modem_baud' in frame]
+        assert first_sets
+        for session in service.sessions.values():
+            session.core.record_received.emit(table('115200'))
+        service.tick()
+        assert service.run.state is ProductionRunState.COMPLETE
+        assert all(
+            row['status'] == AttemptStatus.FAIL.value
+            for row in store.list_attempts('BATCH-AUTO')
+        )
+        sets_after_fail = [frame for _, frame in sent if b'modem_baud' in frame]
+        assert len(sets_after_fail) == len(first_sets), 'must not loop PARA_SET after FAIL'
+    finally:
+        service.stop()
+        store.close()

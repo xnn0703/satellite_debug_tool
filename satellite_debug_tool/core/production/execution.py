@@ -10,7 +10,9 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from satellite_debug_tool.core.product import Availability, TrackingPhase
 from satellite_debug_tool.core.product.models import tracking_phase_from_wire
-from satellite_debug_tool.core.protocol import ParaTableReport, ServiceFastState, build_request_para_table
+from satellite_debug_tool.core.protocol import (
+    ParaTableReport, ServiceFastState, build_para_set, build_request_para_table,
+)
 from satellite_debug_tool.core.session.command_sender import SessionOperationClass
 from .fleet import DeviceSession, FleetController
 from .models import AttemptPhase, AttemptStatus
@@ -100,6 +102,7 @@ class ProductionExecution(QObject):
         self._request = None
         self._tables: dict[str, ParaTableReport] = {}
         self._queries: set[str] = set()
+        self._param_corrected: dict[str, dict[str, str]] = {}
         self._evaluators: dict[str, TrackingEvaluator] = {}
         self._prelock_evaluators: dict[str, TrackingEvaluator] = {}
         self._preparation_started_at = self.clock()
@@ -539,6 +542,7 @@ class ProductionExecution(QObject):
         if rules and set(self._tables) != set(self.sessions):
             self.run.explain_wait("Waiting for parameter table readback")
             return
+        corrections: dict[str, dict[str, str]] = {}
         results = {}
         for serial in self.sessions:
             table = self._tables.get(serial)
@@ -556,12 +560,42 @@ class ProductionExecution(QObject):
                     effective = dict(rule)
                     effective["value"] = expected_value
                     expected_per_device[name] = expected_value
-                matches[name] = name in actual and compare_parameter(actual[name], effective)
+                ok = name in actual and compare_parameter(actual[name], effective)
+                matches[name] = ok
+                # M66 自动修正：显式期望值、非 IP、每台一次机会；IP 留待批次收尾。
+                if not ok and serial not in self._param_corrected:
+                    target = effective.get("value") if isinstance(effective, dict) else None
+                    if target is not None and str(rule.get("type")) != "ip":
+                        corrections.setdefault(serial, {})[name] = str(target)
+            if corrections.get(serial):
+                continue  # 修正后等新回读，再形成最终结果。
             results[serial] = DeviceStepResult(all(matches.values()), {
                 "parameters": actual, "matches": matches, "required_count": len(rules),
                 "expected": rules, "expected_per_device": expected_per_device,
+                "auto_corrected": dict(self._param_corrected.get(serial, {})),
                 "reason": "Parameter expectations are not configured" if not rules else "",
             }, skipped=not rules)
+        if corrections:
+            for serial, name_values in corrections.items():
+                self._param_corrected[serial] = dict(name_values)
+                session = self.sessions[serial]
+                for name, value in name_values.items():
+                    if not self.fleet.send(session.endpoint, build_para_set(name, value),
+                                           operation=SessionOperationClass.MUTATING):
+                        self.fail("Parameter auto-correction could not be sent: " + serial)
+                        return
+                self._tables.pop(serial, None)
+                self.fleet.send(session.endpoint, build_request_para_table(),
+                                operation=SessionOperationClass.READ_ONLY_QUERY)
+                self.run.explain_wait(
+                    "Auto-correcting parameters: "
+                    + ", ".join(
+                        f"{serial}:{name}={value}"
+                        for serial, name_values in corrections.items()
+                        for name, value in name_values.items()
+                    )
+                )
+            return
         self._instant_start()
         self.run.complete_step(results)
 

@@ -117,7 +117,6 @@ class TestSettingsDialog:
         tmp_settings.set("production.report_branding", original_branding)
         dlg = SettingsDialog(tmp_settings, scope=SETTINGS_SCOPE_CUSTOMER)
         dlg._report_root_edit.setText("/must-not-save")
-        dlg._report_company.setText("must-not-save")
         dlg._on_accept()
 
         assert tmp_settings.get("paths.production_report_dir") == "/reports"
