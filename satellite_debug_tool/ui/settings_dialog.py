@@ -253,38 +253,6 @@ class SettingsDialog(QDialog):
             self._settings.get("paths.production_report_dir", ""),
             "report",
         )
-        branding = self._settings.get("production.report_branding", {})
-        if not isinstance(branding, dict):
-            branding = {}
-        self._report_company = QLineEdit(str(branding.get("company_name", "")))
-        self._report_logo = QLineEdit(str(branding.get("logo_path", "")))
-        self._report_header = QLineEdit(str(branding.get("header", "")))
-        self._report_footer = QLineEdit(str(branding.get("footer", "")))
-        self._report_tester_role = QLineEdit(str(branding.get("tester_role", "")))
-        self._report_reviewer_role = QLineEdit(str(branding.get("reviewer_role", "")))
-        for label_text, editor in (
-            (tr("Company name:"), self._report_company),
-            (tr("Report header:"), self._report_header),
-            (tr("Report footer:"), self._report_footer),
-            (tr("Tester role:"), self._report_tester_role),
-            (tr("Reviewer role:"), self._report_reviewer_role),
-        ):
-            row = QHBoxLayout()
-            label = QLabel(label_text)
-            label.setMinimumWidth(120)
-            row.addWidget(label)
-            row.addWidget(editor, 1)
-            production_layout.addLayout(row)
-        logo_row = QHBoxLayout()
-        logo_label = QLabel(tr("Report logo:"))
-        logo_label.setMinimumWidth(120)
-        logo_button = QPushButton(tr("Browse..."))
-        logo_button.setFixedWidth(80)
-        logo_button.clicked.connect(self._on_browse_report_logo)
-        logo_row.addWidget(logo_label)
-        logo_row.addWidget(self._report_logo, 1)
-        logo_row.addWidget(logo_button)
-        production_layout.addLayout(logo_row)
         self._production_section.setVisible(
             self._scope == SETTINGS_SCOPE_PRODUCTION
         )
@@ -393,15 +361,6 @@ class SettingsDialog(QDialog):
             "report": tr("Select production report folder"),
         }[title_id]
 
-    def _on_browse_report_logo(self) -> None:
-        filename, _selected = QFileDialog.getOpenFileName(
-            self,
-            tr("Select report logo"),
-            self._report_logo.text().strip(),
-            tr("Image files (*.png *.jpg *.jpeg);;All files (*)"),
-        )
-        if filename:
-            self._report_logo.setText(filename)
 
     def _on_browse(self, edit: QLineEdit, title_id: str) -> None:
         current = edit.text().strip() or ""
@@ -419,17 +378,6 @@ class SettingsDialog(QDialog):
         if self._scope == SETTINGS_SCOPE_PRODUCTION:
             self._settings.set(
                 "paths.production_report_dir", self._report_root_edit.text().strip()
-            )
-            self._settings.set(
-                "production.report_branding",
-                {
-                    "company_name": self._report_company.text().strip(),
-                    "logo_path": self._report_logo.text().strip(),
-                    "header": self._report_header.text().strip(),
-                    "footer": self._report_footer.text().strip(),
-                    "tester_role": self._report_tester_role.text().strip(),
-                    "reviewer_role": self._report_reviewer_role.text().strip(),
-                },
             )
         # 地图 token
         self._settings.set("map.tianditu_token", self._tianditu_edit.text().strip())

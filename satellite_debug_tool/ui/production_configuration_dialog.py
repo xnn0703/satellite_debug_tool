@@ -384,16 +384,6 @@ class ProductionConfigurationDialog(QDialog):
         self._branch_count = QSpinBox()
         self._branch_count.setRange(1, 4)
         self._branch_current = self._double_spin(0.001, 100.0, " A")
-        self._report_company = QLineEdit()
-        self._report_logo = QLineEdit()
-        self._report_logo.setReadOnly(True)
-        self._report_logo_button = QPushButton(tr("Browse..."))
-        self._report_logo_button.clicked.connect(self._choose_station_logo)
-        self._report_header = QLineEdit()
-        self._report_footer = QLineEdit()
-        self._report_tester_role = QLineEdit()
-        self._report_reviewer_role = QLineEdit()
-        self._station_logo_base64 = ""
         for label, widget in (
             ("Station profile ID", self._station_id),
             ("Revision", self._station_revision),
@@ -403,19 +393,8 @@ class ProductionConfigurationDialog(QDialog):
             ("Reference profile ID", self._station_reference),
             ("Power branch count", self._branch_count),
             ("Per-branch current", self._branch_current),
-            ("Report company", self._report_company),
-            ("Report header", self._report_header),
-            ("Report footer", self._report_footer),
-            ("Tester role", self._report_tester_role),
-            ("Reviewer role", self._report_reviewer_role),
         ):
             self._add_form_row(form, label, widget)
-        logo_row = QHBoxLayout()
-        logo_row.addWidget(self._report_logo, 1)
-        logo_row.addWidget(self._report_logo_button)
-        logo_widget = QWidget()
-        logo_widget.setLayout(logo_row)
-        self._add_form_row(form, "Report logo", logo_widget)
         root.addLayout(form)
         root.addStretch(1)
         actions = QHBoxLayout()
@@ -1095,15 +1074,6 @@ class ProductionConfigurationDialog(QDialog):
         )
         self._branch_count.setValue(item.branch_count)
         self._branch_current.setValue(item.branch_current_a)
-        branding = item.report_branding
-        self._report_company.setText(branding.get("company_name", ""))
-        self._report_logo.setText(branding.get("logo_filename", ""))
-        self._station_logo_base64 = branding.get("logo_base64", "")
-        self._report_header.setText(branding.get("header", ""))
-        self._report_footer.setText(branding.get("footer", ""))
-        self._report_tester_role.setText(branding.get("tester_role", ""))
-        self._report_reviewer_role.setText(branding.get("reviewer_role", ""))
-
     def _new_station(self) -> None:
         self._station_select.setCurrentIndex(-1)
         self._station_id.clear()
@@ -1114,39 +1084,6 @@ class ProductionConfigurationDialog(QDialog):
         self._station_reference.setCurrentIndex(0)
         self._branch_count.setValue(1)
         self._branch_current.setValue(1.0)
-        self._report_company.clear()
-        self._report_logo.clear()
-        self._station_logo_base64 = ""
-        self._report_header.clear()
-        self._report_footer.clear()
-        self._report_tester_role.clear()
-        self._report_reviewer_role.clear()
-
-    def _choose_station_logo(self) -> None:
-        filename, _selected = QFileDialog.getOpenFileName(
-            self,
-            tr("Select report logo"),
-            "",
-            tr("Image files (*.png *.jpg *.jpeg);;All files (*)"),
-        )
-        if not filename:
-            return
-        path = Path(filename)
-        try:
-            data = path.read_bytes()
-        except OSError as exc:
-            QMessageBox.critical(self, tr("Production configurations"), str(exc))
-            return
-        if len(data) > 3 * 1024 * 1024:
-            QMessageBox.critical(
-                self,
-                tr("Production configurations"),
-                tr("Report logo must not exceed 3 MiB."),
-            )
-            return
-        self._station_logo_base64 = base64.b64encode(data).decode("ascii")
-        self._report_logo.setText(path.name)
-
     def _save_station(self) -> None:
         item = StationProfile(
             station_profile_id=self._station_id.text().strip(),
@@ -1157,15 +1094,6 @@ class ProductionConfigurationDialog(QDialog):
             reference_profile_id=str(self._station_reference.currentData() or ""),
             branch_count=self._branch_count.value(),
             branch_current_a=self._branch_current.value(),
-            report_branding={
-                "company_name": self._report_company.text().strip(),
-                "logo_base64": self._station_logo_base64,
-                "logo_filename": self._report_logo.text().strip(),
-                "header": self._report_header.text().strip(),
-                "footer": self._report_footer.text().strip(),
-                "tester_role": self._report_tester_role.text().strip(),
-                "reviewer_role": self._report_reviewer_role.text().strip(),
-            },
         )
         self._replace(self._stations, item, "station_profile_id")
 
