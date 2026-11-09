@@ -79,7 +79,7 @@ BATCH_TRANSITIONS = {
     ),
     BatchStatus.COMPLETED: frozenset(),
     BatchStatus.ABORTED: frozenset(),
-    BatchStatus.INCOMPLETE: frozenset(),
+    BatchStatus.INCOMPLETE: frozenset({BatchStatus.RUNNING}),
 }
 
 

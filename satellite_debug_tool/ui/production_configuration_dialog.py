@@ -222,6 +222,10 @@ class ProductionConfigurationDialog(QDialog):
         self._product_voltage = self._double_spin(0.001, 80.0, " V")
         self._product_current = self._double_spin(0.001, 100.0, " A")
         self._firmware_value = QLineEdit()
+        self._import_firmware_button = QPushButton(tr("Import firmware bin..."))
+        self._import_firmware_button.clicked.connect(self._import_firmware_bin)
+        self._import_parameters_button = QPushButton(tr("Import parameter CSV..."))
+        self._import_parameters_button.clicked.connect(self._import_parameter_csv)
         self._add_form_row(form, "Template ID", self._product_id)
         self._add_form_row(form, "Revision", self._product_revision)
         self._add_form_row(form, "Display name", self._product_name)
@@ -229,6 +233,11 @@ class ProductionConfigurationDialog(QDialog):
         self._add_form_row(form, "Per-device voltage", self._product_voltage)
         self._add_form_row(form, "Per-device current limit", self._product_current)
         self._add_form_row(form, "Expected firmware (optional)", self._firmware_value)
+        imports_row = QHBoxLayout()
+        imports_row.addWidget(self._import_firmware_button)
+        imports_row.addWidget(self._import_parameters_button)
+        imports_row.addStretch(1)
+        root.addLayout(imports_row)
         root.addLayout(form)
         self._test_checks: dict[str, QCheckBox] = {}
         self._test_durations: dict[str, QSpinBox] = {}
@@ -711,6 +720,73 @@ class ProductionConfigurationDialog(QDialog):
         index = self._product_select.findData(copied.template_id)
         self._product_select.setCurrentIndex(index)
 
+    def _import_firmware_bin(self) -> None:
+        """从 bin 文件名解析固件版本并写入模板期望（M66 自动升级依据）。"""
+        filename, _selected = QFileDialog.getOpenFileName(
+            self, tr("Import firmware bin"), "",
+            tr("Firmware files (*.bin);;All files (*)"),
+        )
+        if not filename:
+            return
+        import re as _re
+        match = _re.search(
+            r"app_(\d+\.\d+\.\d+)_(beta|release)\.bin$", Path(filename).name
+        )
+        if not match:
+            QMessageBox.critical(
+                self, tr("Production configurations"),
+                tr("Firmware bin name must match app_X.Y.Z_(beta|release).bin"),
+            )
+            return
+        version = f"{match.group(1)} {match.group(2)}"
+        self._firmware_value.setText(version)
+        self._pending_firmware_bin = filename
+        QMessageBox.information(
+            self, tr("Production configurations"),
+            tr("Firmware version {version} imported from bin name.", version=version),
+        )
+
+    def _import_parameter_csv(self) -> None:
+        """导入参数 CSV（name,value,type,description）写入模板参数规则。"""
+        filename, _selected = QFileDialog.getOpenFileName(
+            self, tr("Import parameter CSV"), "",
+            tr("CSV files (*.csv);;All files (*)"),
+        )
+        if not filename:
+            return
+        import csv as _csv
+        parameters = dict(self._product_expected.get("parameters", {})) \
+            if hasattr(self, "_product_expected") else {}
+        imported = 0
+        try:
+            with open(filename, newline="", encoding="utf-8-sig") as handle:
+                for row in _csv.reader(handle):
+                    if len(row) < 2 or not str(row[0]).strip():
+                        continue
+                    name = str(row[0]).strip()
+                    value = str(row[1]).strip()
+                    rule_type = str(row[2]).strip() if len(row) > 2 else "string"
+                    if rule_type not in {"bool", "float", "int", "ip", "string", "uint8"}:
+                        rule_type = "string"
+                    rule = {"type": rule_type, "value": value}
+                    if len(row) > 3 and str(row[3]).strip():
+                        rule["description"] = str(row[3]).strip()
+                    parameters[name] = rule
+                    imported += 1
+        except OSError as exc:
+            QMessageBox.critical(self, tr("Production configurations"), str(exc))
+            return
+        if not imported:
+            QMessageBox.critical(self, tr("Production configurations"),
+                                 tr("CSV contains no parameter rows."))
+            return
+        self._product_expected = dict(getattr(self, "_product_expected", {}))
+        self._product_expected["parameters"] = parameters
+        QMessageBox.information(
+            self, tr("Production configurations"),
+            tr("Imported {count} parameters; save the template to apply.", count=imported),
+        )
+
     def _save_product(self) -> None:
         firmware = self._firmware_value.text().strip()
         existing = next(
@@ -722,7 +798,14 @@ class ProductionConfigurationDialog(QDialog):
         expected = {} if existing is None else dict(existing.expected)
         main_firmware = dict(expected.get("main_firmware", {}))
         main_firmware.update({"match": "exact" if firmware else "optional", "value": firmware})
+        main_firmware["value"] = firmware
         expected["main_firmware"] = main_firmware
+        pending_bin = str(getattr(self, "_pending_firmware_bin", "") or "").strip()
+        if pending_bin:
+            expected["firmware_bin"] = pending_bin
+        pending_parameters = getattr(self, "_product_expected", None)
+        if isinstance(pending_parameters, dict) and pending_parameters.get("parameters"):
+            expected["parameters"] = dict(pending_parameters["parameters"])
         expected.setdefault("parameters", {})
         tests = {} if existing is None else {
             test_id: dict(value) if isinstance(value, dict) else value

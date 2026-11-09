@@ -281,3 +281,57 @@ def test_vehicle_power_on_drive_awaits_offline_then_online(qapplication_session,
         execution.stop()
         coordinator.close()
         store.close()
+
+
+def test_retest_verification_replays_failed_item(tmp_path: Path) -> None:
+    """核验补测：INCOMPLETE 批次回到运行态，新建 attempt 完成后批次完成。"""
+    store = ProductionResultStore(tmp_path / "batch.sqlite3")
+    payload = valid_recipe()
+    payload["tests"] = {
+        "parameter_verification": {"enabled": True},
+        "static_acquisition": {"enabled": True, "duration_s": 600},
+    }
+    store.create_batch(
+        "BATCH-RETEST", ProductionRecipe.from_mapping(payload),
+        operator="测试员甲", output_dir=tmp_path / "out",
+    )
+    serial = "AFD01C-001"
+    store.register_device("BATCH-RETEST", serial_number=serial, slot=1)
+    store.start_batch("BATCH-RETEST", (serial,),
+                      ("parameter_verification", "static_acquisition"))
+    for attempt in store.list_attempts("BATCH-RETEST"):
+        verdict = AttemptStatus.FAIL if attempt["test_id"] == "parameter_verification" else AttemptStatus.PASS
+        for status in (
+            AttemptStatus.WAITING_PREREQUISITE, AttemptStatus.ARMED,
+            AttemptStatus.RUNNING, AttemptStatus.ANALYZING, verdict,
+        ):
+            store.transition_attempt(
+                int(attempt["attempt_id"]), status,
+                result={"reason": "sample"} if status is verdict else None,
+            )
+    store.transition_batch("BATCH-RETEST", BatchStatus.INCOMPLETE)
+    coordinator = BatchCoordinator(FixtureControlLease())
+    coordinator._store = store
+    coordinator._batch = store.get_batch("BATCH-RETEST")
+    coordinator._output_dir = tmp_path / "out"
+    try:
+        resumed = coordinator.resume_retest()
+        assert resumed["status"] == BatchStatus.RUNNING.value
+        store.create_attempt("BATCH-RETEST", serial, "parameter_verification")
+        new_attempt = [
+            row for row in store.list_attempts("BATCH-RETEST")
+            if row["test_id"] == "parameter_verification" and row["status"] == AttemptStatus.PENDING.value
+        ][0]
+        for status in (
+            AttemptStatus.WAITING_PREREQUISITE, AttemptStatus.ARMED,
+            AttemptStatus.RUNNING, AttemptStatus.ANALYZING, AttemptStatus.PASS,
+        ):
+            store.transition_attempt(
+                int(new_attempt["attempt_id"]), status,
+                result={"reason": "retest pass"} if status is AttemptStatus.PASS else None,
+            )
+        completed = coordinator.complete()
+        assert completed["status"] == BatchStatus.COMPLETED.value
+    finally:
+        coordinator.close()
+        store.close()

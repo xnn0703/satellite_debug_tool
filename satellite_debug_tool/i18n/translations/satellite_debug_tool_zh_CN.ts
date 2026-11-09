@@ -47,7 +47,7 @@
         <location filename="../../ui/main_window.py" line="405"/>
         <location filename="../../ui/main_window.py" line="811"/>
         <location filename="../../ui/production_workspace.py" line="268"/>
-        <location filename="../../ui/production_workspace.py" line="2954"/>
+        <location filename="../../ui/production_workspace.py" line="3063"/>
         <source>Shell...</source>
         <translation>Shell...</translation>
     </message>
@@ -303,7 +303,7 @@ Log: {log}</source>
         <location filename="../../ui/main_window.py" line="592"/>
         <location filename="../../ui/main_window.py" line="605"/>
         <location filename="../../ui/production_workspace.py" line="298"/>
-        <location filename="../../ui/production_workspace.py" line="2955"/>
+        <location filename="../../ui/production_workspace.py" line="3064"/>
         <source>Automated testing</source>
         <translation>自动化测试</translation>
     </message>
@@ -651,125 +651,180 @@ Configuration file: {path}</source>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="142"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="533"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="555"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="617"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="748"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="849"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="903"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="983"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="1045"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="1127"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="1141"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="1161"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="542"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="564"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="626"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="737"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="745"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="777"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="780"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="786"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="831"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="932"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="986"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1066"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1128"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1210"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1224"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1244"/>
         <source>Production configurations</source>
         <translation>试产配置</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="184"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="534"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="543"/>
         <source>Product templates</source>
         <translation>产品模板列表</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="185"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="535"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="544"/>
         <source>Power profiles</source>
         <translation>电源档案列表</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="186"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="536"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="545"/>
         <source>Motion platform profiles</source>
         <translation>摇摆台档案列表</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="187"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="537"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="546"/>
         <source>MS-6222 profiles</source>
         <translation>MS-6222 档案</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="188"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="538"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="547"/>
         <source>Station profiles</source>
         <translation>工作站档案</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="192"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="539"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="548"/>
         <source>Import configuration package...</source>
         <translation>导入配置包…</translation>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="194"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="540"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="549"/>
         <source>Export configuration package...</source>
         <translation>导出配置包…</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="250"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="542"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="225"/>
+        <source>Import firmware bin...</source>
+        <translation>导入固件 bin…</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="227"/>
+        <source>Import parameter CSV...</source>
+        <translation>导入参数表 CSV…</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="259"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="551"/>
         <source>Enabled tests</source>
         <translation>启用的测试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="277"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="354"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="401"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="451"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="503"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="286"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="363"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="410"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="460"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="512"/>
         <source>New</source>
         <translation>新建</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="280"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="289"/>
         <source>Copy as custom</source>
         <translation>复制为定制</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="285"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="360"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="407"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="509"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="294"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="369"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="416"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="518"/>
         <source>Delete</source>
         <translation>删除</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="707"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="716"/>
         <source>{name} custom</source>
         <translation>{name} 定制</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="857"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="726"/>
+        <source>Import firmware bin</source>
+        <translation>导入固件 bin</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="727"/>
+        <source>Firmware files (*.bin);;All files (*)</source>
+        <translation>固件文件 (*.bin);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="738"/>
+        <source>Firmware bin name must match app_X.Y.Z_(beta|release).bin</source>
+        <translation>固件 bin 文件名须符合 app_X.Y.Z_(beta|release).bin</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="746"/>
+        <source>Firmware version {version} imported from bin name.</source>
+        <translation>已从文件名导入固件版本 {version}。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="752"/>
+        <source>Import parameter CSV</source>
+        <translation>导入参数表 CSV</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="753"/>
+        <source>CSV files (*.csv);;All files (*)</source>
+        <translation>CSV 文件 (*.csv);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="781"/>
+        <source>CSV contains no parameter rows.</source>
+        <translation>CSV 中没有参数行。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="787"/>
+        <source>Imported {count} parameters; save the template to apply.</source>
+        <translation>已导入 {count} 个参数；保存模板后生效。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_configuration_dialog.py" line="940"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="1235"/>
         <source>Connecting...</source>
         <translation>正在连接...</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="904"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="987"/>
         <source>The power profile is referenced by a station profile.</source>
         <translation>该电源档案正被工作站档案引用。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="1046"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1129"/>
         <source>The reference profile is referenced by a station profile.</source>
         <translation>该参考设备档案正被工位档案引用。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="1132"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1215"/>
         <source>Import production configuration package</source>
         <translation>导入试产配置包</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="1134"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="1151"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1217"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1234"/>
         <location filename="../../ui/settings_dialog.py" line="485"/>
         <source>JSON files (*.json);;All files (*)</source>
         <translation>JSON 文件 (*.json);;所有文件 (*)</translation>
     </message>
     <message>
-        <location filename="../../ui/production_configuration_dialog.py" line="1149"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="1232"/>
         <source>Export production configuration package</source>
         <translation>导出试产配置包</translation>
     </message>
@@ -1047,7 +1102,7 @@ Its channels will return to the unassigned list.</source>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="250"/>
-        <location filename="../../ui/production_workspace.py" line="2950"/>
+        <location filename="../../ui/production_workspace.py" line="3059"/>
         <source>Batch test</source>
         <translation>批次测试</translation>
     </message>
@@ -1058,14 +1113,14 @@ Its channels will return to the unassigned list.</source>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="317"/>
-        <location filename="../../ui/production_workspace.py" line="2962"/>
+        <location filename="../../ui/production_workspace.py" line="3071"/>
         <source>Batch setup</source>
         <translation>批次设置</translation>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="323"/>
-        <location filename="../../ui/production_workspace.py" line="2963"/>
-        <location filename="../../ui/production_workspace.py" line="3028"/>
+        <location filename="../../ui/production_workspace.py" line="3072"/>
+        <location filename="../../ui/production_workspace.py" line="3137"/>
         <source>Batch ID</source>
         <translation>批次 ID</translation>
     </message>
@@ -1213,8 +1268,8 @@ Its channels will return to the unassigned list.</source>
         <location filename="../../ui/ms6222_debug_workspace.py" line="263"/>
         <location filename="../../ui/ms6222_debug_workspace.py" line="686"/>
         <location filename="../../ui/production_workspace.py" line="326"/>
-        <location filename="../../ui/production_workspace.py" line="2964"/>
-        <location filename="../../ui/production_workspace.py" line="3028"/>
+        <location filename="../../ui/production_workspace.py" line="3073"/>
+        <location filename="../../ui/production_workspace.py" line="3137"/>
         <source>Operator</source>
         <translation>操作员</translation>
     </message>
@@ -1293,31 +1348,31 @@ Its channels will return to the unassigned list.</source>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="329"/>
-        <location filename="../../ui/production_workspace.py" line="2965"/>
+        <location filename="../../ui/production_workspace.py" line="3074"/>
         <source>Recipe</source>
         <translation>测试配方</translation>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="333"/>
-        <location filename="../../ui/production_workspace.py" line="2970"/>
+        <location filename="../../ui/production_workspace.py" line="3079"/>
         <source>Import recipe...</source>
         <translation>导入配方...</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="365"/>
-        <location filename="../../ui/production_workspace.py" line="2967"/>
+        <location filename="../../ui/production_workspace.py" line="369"/>
+        <location filename="../../ui/production_workspace.py" line="3076"/>
         <source>Device quantity</source>
         <translation>设备数量</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="371"/>
-        <location filename="../../ui/production_workspace.py" line="2968"/>
+        <location filename="../../ui/production_workspace.py" line="375"/>
+        <location filename="../../ui/production_workspace.py" line="3077"/>
         <source>Station profile</source>
         <translation>工作站配置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="383"/>
-        <location filename="../../ui/production_workspace.py" line="2971"/>
+        <location filename="../../ui/production_workspace.py" line="387"/>
+        <location filename="../../ui/production_workspace.py" line="3080"/>
         <location filename="../../ui/settings_dialog.py" line="341"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="510"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="633"/>
@@ -1325,117 +1380,117 @@ Its channels will return to the unassigned list.</source>
         <translation>浏览...</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="389"/>
+        <location filename="../../ui/production_workspace.py" line="393"/>
         <source>No recipe selected</source>
         <translation>未选择配方</translation>
     </message>
     <message>
         <location filename="../../ui/production_progress_widgets.py" line="194"/>
-        <location filename="../../ui/production_workspace.py" line="438"/>
-        <location filename="../../ui/production_workspace.py" line="1181"/>
-        <location filename="../../ui/production_workspace.py" line="3006"/>
+        <location filename="../../ui/production_workspace.py" line="442"/>
+        <location filename="../../ui/production_workspace.py" line="1190"/>
+        <location filename="../../ui/production_workspace.py" line="3115"/>
         <source>Automatic execution has not started.</source>
         <translation>自动执行尚未开始。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="466"/>
-        <location filename="../../ui/production_workspace.py" line="2976"/>
+        <location filename="../../ui/production_workspace.py" line="470"/>
+        <location filename="../../ui/production_workspace.py" line="3085"/>
         <source>Batch events</source>
         <translation>批次事件</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="487"/>
+        <location filename="../../ui/production_workspace.py" line="491"/>
         <source>Configure a recipe to create a batch.</source>
         <translation>配置配方后创建批次。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="489"/>
-        <location filename="../../ui/production_workspace.py" line="2980"/>
+        <location filename="../../ui/production_workspace.py" line="493"/>
+        <location filename="../../ui/production_workspace.py" line="3089"/>
         <source>Start batch</source>
         <translation>开始批次</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="492"/>
+        <location filename="../../ui/production_workspace.py" line="496"/>
         <source>All selected device and fixture gates must be ready.</source>
         <translation>所有选中设备和夹具门禁就绪后才能开始。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="498"/>
-        <location filename="../../ui/production_workspace.py" line="2987"/>
+        <location filename="../../ui/production_workspace.py" line="502"/>
+        <location filename="../../ui/production_workspace.py" line="3096"/>
         <source>Complete and generate reports</source>
         <translation>完成并生成报告</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="501"/>
-        <location filename="../../ui/production_workspace.py" line="2989"/>
+        <location filename="../../ui/production_workspace.py" line="505"/>
+        <location filename="../../ui/production_workspace.py" line="3098"/>
         <source>Review report...</source>
         <translation>审核报告...</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="620"/>
+        <location filename="../../ui/production_workspace.py" line="629"/>
         <source>Finish the fixture engineering session before leaving this page.</source>
         <translation>请先结束夹具工程会话，再离开此页面。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="631"/>
+        <location filename="../../ui/production_workspace.py" line="640"/>
         <source>Disconnect MS-6222 before leaving this page.</source>
         <translation>离开此页面前请断开 MS-6222。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="842"/>
+        <location filename="../../ui/production_workspace.py" line="851"/>
         <source>Production configuration error: {details}</source>
         <translation>试产配置错误：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="878"/>
+        <location filename="../../ui/production_workspace.py" line="887"/>
         <source>Configure product and station profiles in Settings.</source>
         <translation>请在设置中配置产品模板和工作站档案。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="895"/>
+        <location filename="../../ui/production_workspace.py" line="904"/>
         <source>Configuration is not ready: {details}</source>
         <translation>配置尚未就绪：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="794"/>
+        <location filename="../../ui/production_workspace.py" line="803"/>
         <source>Configured</source>
         <translation>已配置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="807"/>
+        <location filename="../../ui/production_workspace.py" line="816"/>
         <source>Manual gate</source>
         <translation>人工门禁</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="914"/>
+        <location filename="../../ui/production_workspace.py" line="923"/>
         <source>Production configuration is ready.</source>
         <translation>试产配置已就绪。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="979"/>
-        <location filename="../../ui/production_workspace.py" line="1583"/>
+        <location filename="../../ui/production_workspace.py" line="988"/>
+        <location filename="../../ui/production_workspace.py" line="1592"/>
         <source>Device UDP settings require recovery before Production can start</source>
         <translation>启动试产前必须恢复设备 UDP 设置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1017"/>
+        <location filename="../../ui/production_workspace.py" line="1026"/>
         <source>Discovering supported devices...</source>
         <translation>正在发现支持的设备...</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="922"/>
-        <location filename="../../ui/production_workspace.py" line="1109"/>
+        <location filename="../../ui/production_workspace.py" line="931"/>
+        <location filename="../../ui/production_workspace.py" line="1118"/>
         <source>Legacy recipe loaded for migration: {recipe_id} | target {count} device(s)</source>
         <translation>已载入待迁移的旧配方：{recipe_id}｜目标 {count} 台设备</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="793"/>
+        <location filename="../../ui/production_workspace.py" line="802"/>
         <source>Needs binding</source>
         <translation>需要绑定</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="419"/>
-        <location filename="../../ui/production_workspace.py" line="682"/>
+        <location filename="../../ui/production_workspace.py" line="423"/>
+        <location filename="../../ui/production_workspace.py" line="691"/>
         <source>Configuration details</source>
         <translation>配置详情</translation>
     </message>
@@ -1450,670 +1505,695 @@ Its channels will return to the unassigned list.</source>
         <translation>天气</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="344"/>
+        <location filename="../../ui/production_workspace.py" line="348"/>
         <source>Sunny</source>
         <translation>晴</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="345"/>
+        <location filename="../../ui/production_workspace.py" line="349"/>
         <source>Cloudy</source>
         <translation>多云</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="346"/>
+        <location filename="../../ui/production_workspace.py" line="350"/>
         <source>Overcast</source>
         <translation>阴</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="347"/>
+        <location filename="../../ui/production_workspace.py" line="351"/>
         <source>Rain</source>
         <translation>雨</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="348"/>
+        <location filename="../../ui/production_workspace.py" line="352"/>
         <source>Snow</source>
         <translation>雪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="349"/>
+        <location filename="../../ui/production_workspace.py" line="353"/>
         <source>Fog</source>
         <translation>雾</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="350"/>
+        <location filename="../../ui/production_workspace.py" line="354"/>
         <source>Ambient temperature (°C)</source>
         <translation>环境温度 (°C)</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="354"/>
+        <location filename="../../ui/production_workspace.py" line="358"/>
         <source>Ambient humidity (%RH)</source>
         <translation>相对湿度 (%RH)</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="360"/>
-        <location filename="../../ui/production_workspace.py" line="2966"/>
+        <location filename="../../ui/production_workspace.py" line="364"/>
+        <location filename="../../ui/production_workspace.py" line="3075"/>
         <source>Device model and power</source>
         <translation>设备型号与供电</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="380"/>
-        <location filename="../../ui/production_workspace.py" line="2969"/>
+        <location filename="../../ui/production_workspace.py" line="384"/>
+        <location filename="../../ui/production_workspace.py" line="3078"/>
         <source>Storage location</source>
         <translation>保存位置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="471"/>
+        <location filename="../../ui/production_workspace.py" line="475"/>
         <source>No batch events</source>
         <translation>暂无批次事件</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="504"/>
+        <location filename="../../ui/production_workspace.py" line="508"/>
         <source>Resume batch...</source>
         <translation>继续批次…</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="508"/>
+        <location filename="../../ui/production_workspace.py" line="512"/>
+        <source>Retest verification</source>
+        <translation>重测核验</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="516"/>
         <source>Start driving record</source>
         <translation>开始行驶记录</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="512"/>
-        <location filename="../../ui/production_workspace.py" line="2988"/>
+        <location filename="../../ui/production_workspace.py" line="520"/>
+        <location filename="../../ui/production_workspace.py" line="3097"/>
         <source>Next batch</source>
         <translation>下一批次</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="677"/>
+        <location filename="../../ui/production_workspace.py" line="686"/>
         <source>Configuration details · {voltage:g} V / {current:g} A · {power:g} W</source>
         <translation>配置详情 · {voltage:g} V / {current:g} A · {power:g} W</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="796"/>
+        <location filename="../../ui/production_workspace.py" line="805"/>
         <location filename="../../ui/tcp_shell_workspace.py" line="1236"/>
         <source>Connected</source>
         <translation>已连接</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="813"/>
+        <location filename="../../ui/production_workspace.py" line="822"/>
         <source>MS precision is advisory for SNR tests. {details}</source>
         <translation>当前 SNR 测试仅提示 MS 精度，不参与通过判定。{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1151"/>
+        <location filename="../../ui/production_workspace.py" line="1160"/>
         <source>Cannot start automatic test: {details}</source>
         <translation>无法开始自动化测试：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1159"/>
+        <location filename="../../ui/production_workspace.py" line="1168"/>
         <source>Cannot prepare next batch: {details}</source>
         <translation>无法准备下一批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1182"/>
+        <location filename="../../ui/production_workspace.py" line="1191"/>
         <source>Ready for next batch</source>
         <translation>下一批次已就绪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1183"/>
+        <location filename="../../ui/production_workspace.py" line="1192"/>
         <source>Review the retained settings, then start the next test.</source>
         <translation>请核对已保留的设置，然后开始下一次测试。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1349"/>
+        <location filename="../../ui/production_workspace.py" line="1358"/>
         <source>Serial number pending</source>
         <translation>序列号待配置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1352"/>
+        <location filename="../../ui/production_workspace.py" line="1361"/>
         <source>Unsupported device</source>
         <translation>不支持的设备</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1390"/>
+        <location filename="../../ui/production_workspace.py" line="1399"/>
         <source>Evidence recording not ready</source>
         <translation>证据录制未就绪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1474"/>
+        <location filename="../../ui/production_workspace.py" line="1483"/>
         <source>Device SNR · {online}/{total} online</source>
         <translation>设备 SNR · {online}/{total} 在线</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1495"/>
+        <location filename="../../ui/production_workspace.py" line="1504"/>
         <source>Device detected after batch start and not added: {serial}</source>
         <translation>批次开始后检测到设备，未加入本批次：{serial}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1524"/>
+        <location filename="../../ui/production_workspace.py" line="1533"/>
         <source>identity consistent</source>
         <translation>身份一致</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1524"/>
+        <location filename="../../ui/production_workspace.py" line="1533"/>
         <source>identity mismatch</source>
         <translation>身份不一致</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1526"/>
-        <location filename="../../ui/production_workspace.py" line="2480"/>
+        <location filename="../../ui/production_workspace.py" line="1535"/>
+        <location filename="../../ui/production_workspace.py" line="2494"/>
         <source>Participant identity check: {details}</source>
         <translation>参与设备身份校验：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1666"/>
+        <location filename="../../ui/production_workspace.py" line="1675"/>
         <source>Exactly {expected} identified {product} device(s) are required; currently ready: {actual}.</source>
         <translation>需要恰好 {expected} 台已识别的 {product} 设备；当前就绪：{actual}。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1694"/>
+        <location filename="../../ui/production_workspace.py" line="1703"/>
         <source>Full analysis capture is not ready for: {devices}</source>
         <translation>以下设备的完整分析采集尚未就绪：{devices}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1729"/>
-        <location filename="../../ui/production_workspace.py" line="1915"/>
+        <location filename="../../ui/production_workspace.py" line="1738"/>
+        <location filename="../../ui/production_workspace.py" line="1929"/>
         <source>Preparing and verifying production power.</source>
         <translation>正在准备并验证试产电源。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1795"/>
+        <location filename="../../ui/production_workspace.py" line="1809"/>
         <source>Start automatic power and fixture preparation; devices may be powered off.</source>
         <translation>开始自动配置电源并准备夹具；设备可以处于断电状态。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1916"/>
-        <location filename="../../ui/production_workspace.py" line="3001"/>
+        <location filename="../../ui/production_workspace.py" line="1930"/>
+        <location filename="../../ui/production_workspace.py" line="3110"/>
         <source>Production power preparation started.</source>
         <translation>试产电源准备已开始。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1944"/>
+        <location filename="../../ui/production_workspace.py" line="1958"/>
         <source>Identity and voltage confirmed</source>
         <translation>身份和电压已确认</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1954"/>
+        <location filename="../../ui/production_workspace.py" line="1968"/>
         <source>Output on confirmed</source>
         <translation>已回读确认输出开启</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1954"/>
-        <location filename="../../ui/production_workspace.py" line="2205"/>
+        <location filename="../../ui/production_workspace.py" line="1968"/>
+        <location filename="../../ui/production_workspace.py" line="2219"/>
         <source>Output off confirmed</source>
         <translation>已回读确认输出关闭</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2000"/>
+        <location filename="../../ui/production_workspace.py" line="2014"/>
         <source>MS-6222 shares the controlled power cycle</source>
         <translation>MS-6222 随设备执行共享电源循环</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2001"/>
+        <location filename="../../ui/production_workspace.py" line="2015"/>
         <source>Waiting for power output-on confirmation</source>
         <translation>等待电源开启回读确认</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2002"/>
+        <location filename="../../ui/production_workspace.py" line="2016"/>
         <source>Waiting for MS-6222 recovery after power-on</source>
         <translation>已恢复供电，等待 MS-6222 采集恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2003"/>
+        <location filename="../../ui/production_workspace.py" line="2017"/>
         <source>Waiting for motion connection</source>
         <translation>等待摇摆台连接</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2004"/>
+        <location filename="../../ui/production_workspace.py" line="2018"/>
         <source>Waiting for platform center confirmation</source>
         <translation>等待平台回中反馈确认</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2005"/>
+        <location filename="../../ui/production_workspace.py" line="2019"/>
         <source>Waiting for power output-off confirmation</source>
         <translation>等待电源关闭回读确认</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2006"/>
+        <location filename="../../ui/production_workspace.py" line="2020"/>
         <source>Waiting for trajectory command send confirmation</source>
         <translation>等待轨迹指令发送确认</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2007"/>
+        <location filename="../../ui/production_workspace.py" line="2021"/>
         <source>Waiting for trajectory steady phase</source>
         <translation>等待摇摆渐入阶段完成</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2008"/>
+        <location filename="../../ui/production_workspace.py" line="2022"/>
         <source>Waiting for motion feedback confirmation</source>
         <translation>等待平台运动反馈确认</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2009"/>
+        <location filename="../../ui/production_workspace.py" line="2023"/>
         <source>Waiting for fresh MS-6222 reference</source>
         <translation>等待新鲜的 MS-6222 参考帧</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2010"/>
+        <location filename="../../ui/production_workspace.py" line="2024"/>
         <source>Waiting for valid MS-6222 reference</source>
         <translation>等待有效的 MS-6222 参考姿态</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2011"/>
+        <location filename="../../ui/production_workspace.py" line="2025"/>
         <source>MS-6222 attitude uncertainty exceeds profile limit</source>
         <translation>MS-6222 姿态标准差超过工位上限</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2012"/>
+        <location filename="../../ui/production_workspace.py" line="2026"/>
         <source>MS-6222 attitude uncertainty contains invalid values</source>
         <translation>MS-6222 姿态标准差含无效值</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2013"/>
+        <location filename="../../ui/production_workspace.py" line="2027"/>
         <source>MS-6222 navigation state is unsuitable for reference</source>
         <translation>MS-6222 导航状态尚未满足参考要求</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2014"/>
+        <location filename="../../ui/production_workspace.py" line="2028"/>
         <source>MS-6222 attitude contains invalid values</source>
         <translation>MS-6222 姿态含无效值</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2015"/>
+        <location filename="../../ui/production_workspace.py" line="2029"/>
         <source>Waiting for prerequisite evidence</source>
         <translation>等待前置证据</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2016"/>
+        <location filename="../../ui/production_workspace.py" line="2030"/>
         <source>Waiting for firmware readback</source>
         <translation>等待固件版本回读</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2017"/>
+        <location filename="../../ui/production_workspace.py" line="2031"/>
         <source>Waiting for parameter table readback</source>
         <translation>等待参数表回读</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2018"/>
+        <location filename="../../ui/production_workspace.py" line="2032"/>
         <source>Recipe requires per-device parameter expectations</source>
         <translation>配方需要逐设备参数期望值</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2019"/>
+        <location filename="../../ui/production_workspace.py" line="2033"/>
         <source>Waiting for fixture preparation and start confirmation</source>
         <translation>等待夹具准备与启动回执</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2429"/>
+        <location filename="../../ui/production_workspace.py" line="2443"/>
         <source>Power the device off, start driving, then power it on; waiting for power cycle</source>
         <translation>请先关闭设备供电，开始行驶后再恢复供电；正在等待供电循环</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="3028"/>
+        <location filename="../../ui/production_workspace.py" line="2525"/>
+        <source>Connect all frozen participants before retesting: {serials}</source>
+        <translation>重测前请先连接全部原参与设备：{serials}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="2538"/>
+        <source>Cannot retest verification: {details}</source>
+        <translation>无法重测核验：{details}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="2544"/>
+        <source>Verification retest started for {test}</source>
+        <translation>核验重测已开始：{test}</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="2586"/>
+        <source>Post-batch IP configuration sent to {count} device(s).</source>
+        <translation>已向 {count} 台设备下发批次后 IP 配置。</translation>
+    </message>
+    <message>
+        <location filename="../../ui/production_workspace.py" line="3137"/>
         <source>Suspended at</source>
         <translation>挂起时间</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="3029"/>
+        <location filename="../../ui/production_workspace.py" line="3138"/>
         <source>Devices</source>
         <translation>设备清单</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="3029"/>
+        <location filename="../../ui/production_workspace.py" line="3138"/>
         <source>Pending tests</source>
         <translation>待测项</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="3050"/>
+        <location filename="../../ui/production_workspace.py" line="3159"/>
         <source>Resume</source>
         <translation>恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1961"/>
-        <location filename="../../ui/production_workspace.py" line="2020"/>
+        <location filename="../../ui/production_workspace.py" line="1975"/>
+        <location filename="../../ui/production_workspace.py" line="2034"/>
         <source>Waiting for online devices</source>
         <translation>等待设备在线</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2024"/>
+        <location filename="../../ui/production_workspace.py" line="2038"/>
         <source>Finishing fixture motion and verifying center</source>
         <translation>正在停止运动并回读确认回中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2025"/>
+        <location filename="../../ui/production_workspace.py" line="2039"/>
         <source>Vehicle scenario requires operator start and driving evidence</source>
         <translation>车辆工况需要操作员启动确认及行驶证据</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2026"/>
+        <location filename="../../ui/production_workspace.py" line="2040"/>
         <source>Navigation summary requires navigation analysis criteria</source>
         <translation>导航汇总需要导航性能分析判据</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2029"/>
+        <location filename="../../ui/production_workspace.py" line="2043"/>
         <source>{reason}: {details}</source>
         <translation>{reason}：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2077"/>
+        <location filename="../../ui/production_workspace.py" line="2091"/>
         <source>Incomplete evidence</source>
         <translation>证据不完整</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2086"/>
+        <location filename="../../ui/production_workspace.py" line="2100"/>
         <source>Positive SNR duration: {duration}</source>
         <translation>SNR 正值时长：{duration}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2092"/>
+        <location filename="../../ui/production_workspace.py" line="2106"/>
         <source>Tests finished; awaiting reports</source>
         <translation>测试已结束，等待生成报告</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2183"/>
+        <location filename="../../ui/production_workspace.py" line="2197"/>
         <source>Production power failed: {details}</source>
         <translation>试产电源失败：{details}</translation>
     </message>
     <message>
         <location filename="../../ui/customer_iperf_view.py" line="55"/>
-        <location filename="../../ui/production_workspace.py" line="799"/>
-        <location filename="../../ui/production_workspace.py" line="2187"/>
+        <location filename="../../ui/production_workspace.py" line="808"/>
+        <location filename="../../ui/production_workspace.py" line="2201"/>
         <source>Failed</source>
         <translation>失败</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2492"/>
+        <location filename="../../ui/production_workspace.py" line="2599"/>
         <source>Cannot complete batch: {details}</source>
         <translation>无法完成批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2632"/>
+        <location filename="../../ui/production_workspace.py" line="2741"/>
         <source>Batch completed; generated {count} device archive(s).</source>
         <translation>批次已完成，已生成 {count} 套设备归档。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2547"/>
+        <location filename="../../ui/production_workspace.py" line="2656"/>
         <source>Batch completed</source>
         <translation>批次已完成</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2108"/>
-        <location filename="../../ui/production_workspace.py" line="2117"/>
-        <location filename="../../ui/production_workspace.py" line="2549"/>
+        <location filename="../../ui/production_workspace.py" line="2122"/>
+        <location filename="../../ui/production_workspace.py" line="2131"/>
+        <location filename="../../ui/production_workspace.py" line="2658"/>
         <source>Batch incomplete</source>
         <translation>批次不完整</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2687"/>
-        <location filename="../../ui/production_workspace.py" line="2710"/>
-        <location filename="../../ui/production_workspace.py" line="2714"/>
+        <location filename="../../ui/production_workspace.py" line="2796"/>
+        <location filename="../../ui/production_workspace.py" line="2819"/>
+        <location filename="../../ui/production_workspace.py" line="2823"/>
         <location filename="../../ui/report_review_dialog.py" line="32"/>
         <location filename="../../ui/report_review_dialog.py" line="83"/>
         <source>Review production report</source>
         <translation>审核试产报告</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2687"/>
+        <location filename="../../ui/production_workspace.py" line="2796"/>
         <source>No V1 report is waiting for review.</source>
         <translation>没有等待审核的 V1 报告。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2715"/>
+        <location filename="../../ui/production_workspace.py" line="2824"/>
         <source>V2 report generated: {path}</source>
         <translation>已生成 V2 报告：{path}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2178"/>
-        <location filename="../../ui/production_workspace.py" line="2622"/>
-        <location filename="../../ui/production_workspace.py" line="2769"/>
+        <location filename="../../ui/production_workspace.py" line="2192"/>
+        <location filename="../../ui/production_workspace.py" line="2731"/>
+        <location filename="../../ui/production_workspace.py" line="2878"/>
         <source>Evidence archive failed: {details}</source>
         <translation>证据归档失败：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2904"/>
+        <location filename="../../ui/production_workspace.py" line="3013"/>
         <source>Production session ownership is still active; finish the operation and retry exit</source>
         <translation>试产会话所有权仍有活动资源；请结束操作后重试退出</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1623"/>
+        <location filename="../../ui/production_workspace.py" line="1632"/>
         <source>Wait for online devices to report complete identities.</source>
         <translation>等待在线设备上报完整身份。</translation>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="253"/>
-        <location filename="../../ui/production_workspace.py" line="2951"/>
+        <location filename="../../ui/production_workspace.py" line="3060"/>
         <source>Motion platform test</source>
         <translation>摇摆台测试</translation>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="255"/>
-        <location filename="../../ui/production_workspace.py" line="2952"/>
+        <location filename="../../ui/production_workspace.py" line="3061"/>
         <source>MS-6222 test</source>
         <translation>MS-6222 测试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="933"/>
+        <location filename="../../ui/production_workspace.py" line="942"/>
         <source>{product} × {count} | per device {voltage:g} V / {single_current:g} A | combined {voltage:g} V / {total_current:g} A / {power_w:g} W | power {power_model} at {host} | motion {motion_host}:{motion_port} | MS-6222 {serial_port} | branches {branches} × {branch_current:g} A | configuration SHA-256 {sha}</source>
         <translation>{product} × {count} | 单台 {voltage:g} V / {single_current:g} A | 合计 {voltage:g} V / {total_current:g} A / {power_w:g} W | 电源 {power_model} @ {host} | 摇摆台 {motion_host}:{motion_port} | MS-6222 {serial_port} | 支路 {branches} × {branch_current:g} A | 配置 SHA-256 {sha}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1634"/>
+        <location filename="../../ui/production_workspace.py" line="1643"/>
         <source>Unsupported online device(s): {devices}</source>
         <translation>存在不支持的在线设备：{devices}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1595"/>
-        <location filename="../../ui/production_workspace.py" line="1638"/>
+        <location filename="../../ui/production_workspace.py" line="1604"/>
+        <location filename="../../ui/production_workspace.py" line="1647"/>
         <source>Select a valid recipe first.</source>
         <translation>请先选择有效配方。</translation>
     </message>
     <message>
         <location filename="../../ui/production_workspace.py" line="309"/>
-        <location filename="../../ui/production_workspace.py" line="2958"/>
+        <location filename="../../ui/production_workspace.py" line="3067"/>
         <source>Formal automation uses the selected station profile. Devices may be powered off when creating a batch. Starting automatically prepares power and fixtures and verifies live preflight evidence.</source>
         <translation>正式自动测试使用所选工位档案。创建批次时设备可以断电；开始后自动配置电源、连接夹具并完成实时预检。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1377"/>
+        <location filename="../../ui/production_workspace.py" line="1386"/>
         <source>Full analysis capture active</source>
         <translation>完整分析采集中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1384"/>
+        <location filename="../../ui/production_workspace.py" line="1393"/>
         <source>Full analysis capture failed: {reason}</source>
         <translation>完整分析采集失败：{reason}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1387"/>
+        <location filename="../../ui/production_workspace.py" line="1396"/>
         <source>Preparing full analysis capture</source>
         <translation>正在准备完整分析采集</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1650"/>
+        <location filename="../../ui/production_workspace.py" line="1659"/>
         <source>Online device product does not match recipe {product}: {devices}</source>
         <translation>在线设备产品与配方 {product} 不匹配：{devices}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1679"/>
+        <location filename="../../ui/production_workspace.py" line="1688"/>
         <source>Evidence recording is not ready for: {devices}</source>
         <translation>以下设备的证据录制未就绪：{devices}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2021"/>
+        <location filename="../../ui/production_workspace.py" line="2035"/>
         <source>Waiting for device restart and analysis capture</source>
         <translation>等待设备重启与完整分析采集就绪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2022"/>
+        <location filename="../../ui/production_workspace.py" line="2036"/>
         <source>Device restart and analysis capture preparation timed out</source>
         <translation>设备重启与完整分析采集准备超时</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2075"/>
+        <location filename="../../ui/production_workspace.py" line="2089"/>
         <source>Tracking criteria failed</source>
         <translation>跟踪判据未通过</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2079"/>
+        <location filename="../../ui/production_workspace.py" line="2093"/>
         <source>Interruptions: {count} | Longest: {longest}s | Total: {total}s</source>
         <translation>中断 {count} 次 | 最长 {longest} 秒 | 累计 {total} 秒</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2084"/>
+        <location filename="../../ui/production_workspace.py" line="2098"/>
         <source>Confirming tracking recovery</source>
         <translation>正在确认跟踪恢复</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2126"/>
+        <location filename="../../ui/production_workspace.py" line="2140"/>
         <source>Automatic steps finished. Restoring capture and archiving evidence.</source>
         <translation>自动测试步骤已完成，正在恢复采集并归档证据。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2127"/>
-        <location filename="../../ui/production_workspace.py" line="2129"/>
+        <location filename="../../ui/production_workspace.py" line="2141"/>
+        <location filename="../../ui/production_workspace.py" line="2143"/>
         <source>Finalizing batch</source>
         <translation>正在收尾</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2357"/>
+        <location filename="../../ui/production_workspace.py" line="2371"/>
         <source>Select a production output folder first</source>
         <translation>请先设置生产输出目录</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2362"/>
-        <location filename="../../ui/production_workspace.py" line="3023"/>
+        <location filename="../../ui/production_workspace.py" line="2376"/>
+        <location filename="../../ui/production_workspace.py" line="3132"/>
         <source>Resume batch</source>
         <translation>恢复批次</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2362"/>
+        <location filename="../../ui/production_workspace.py" line="2376"/>
         <source>No suspended batch is waiting.</source>
         <translation>当前没有等待车载测试的挂起批次。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2371"/>
+        <location filename="../../ui/production_workspace.py" line="2385"/>
         <source>Cannot resume batch: {details}</source>
         <translation>无法接续批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2403"/>
-        <location filename="../../ui/production_workspace.py" line="2505"/>
-        <location filename="../../ui/production_workspace.py" line="2545"/>
+        <location filename="../../ui/production_workspace.py" line="2417"/>
+        <location filename="../../ui/production_workspace.py" line="2612"/>
+        <location filename="../../ui/production_workspace.py" line="2654"/>
         <source>Bench phase finished; batch suspended for vehicle tests</source>
         <translation>台架段完成；批次已挂起，等待车载测试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2407"/>
+        <location filename="../../ui/production_workspace.py" line="2421"/>
         <source>Resumed batch {batch_id}; connect the frozen participants to verify identity</source>
         <translation>已接续批次 {batch_id}；请连接原参与设备以完成身份校验</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2459"/>
+        <location filename="../../ui/production_workspace.py" line="2473"/>
         <source>Cannot start vehicle tests: {details}</source>
         <translation>无法开始车载测试：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2471"/>
+        <location filename="../../ui/production_workspace.py" line="2485"/>
         <source>Vehicle phase started; window runs the frozen recipe duration</source>
         <translation>车载段已开始；窗口按配方冻结时长执行</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2496"/>
+        <location filename="../../ui/production_workspace.py" line="2603"/>
         <source>Batch finalization requires attention: {details}</source>
         <translation>批次收尾需要处理：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2499"/>
-        <location filename="../../ui/production_workspace.py" line="2500"/>
+        <location filename="../../ui/production_workspace.py" line="2606"/>
+        <location filename="../../ui/production_workspace.py" line="2607"/>
         <source>Archive retry required</source>
         <translation>归档待重试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2300"/>
+        <location filename="../../ui/production_workspace.py" line="2314"/>
         <source>Aborting: stopping tests and verifying fixture shutdown...</source>
         <translation>正在中止：停止测试并验证夹具关闭…</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2301"/>
-        <location filename="../../ui/production_workspace.py" line="2303"/>
+        <location filename="../../ui/production_workspace.py" line="2315"/>
+        <location filename="../../ui/production_workspace.py" line="2317"/>
         <source>Aborting</source>
         <translation>正在中止</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2310"/>
         <location filename="../../ui/production_workspace.py" line="2324"/>
+        <location filename="../../ui/production_workspace.py" line="2338"/>
         <source>Abort cleanup failed: {details}</source>
         <translation>中止收尾失败：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2311"/>
-        <location filename="../../ui/production_workspace.py" line="2313"/>
+        <location filename="../../ui/production_workspace.py" line="2325"/>
         <location filename="../../ui/production_workspace.py" line="2327"/>
+        <location filename="../../ui/production_workspace.py" line="2341"/>
         <source>Abort cleanup failed</source>
         <translation>中止收尾失败</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2592"/>
+        <location filename="../../ui/production_workspace.py" line="2701"/>
         <source>Generating device reports...</source>
         <translation>正在生成设备报告…</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2600"/>
+        <location filename="../../ui/production_workspace.py" line="2709"/>
         <source>Generating device report {serial} ({done}/{total}): {stage}</source>
         <translation>正在生成设备报告 {serial}（{done}/{total}）：{stage}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2611"/>
+        <location filename="../../ui/production_workspace.py" line="2720"/>
         <source>Analyzing recordings</source>
         <translation>分析录制曲线</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2612"/>
+        <location filename="../../ui/production_workspace.py" line="2721"/>
         <source>Packaging evidence</source>
         <translation>打包证据</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2613"/>
+        <location filename="../../ui/production_workspace.py" line="2722"/>
         <source>Writing report document</source>
         <translation>写入报告文档</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2635"/>
+        <location filename="../../ui/production_workspace.py" line="2744"/>
         <source>Device report archives are ready.</source>
         <translation>设备报告归档完成。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2823"/>
+        <location filename="../../ui/production_workspace.py" line="2932"/>
         <source>Production evidence recording is still finalizing</source>
         <translation>试产证据录制仍在收尾</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2825"/>
+        <location filename="../../ui/production_workspace.py" line="2934"/>
         <source>Production session ownership is still being released</source>
         <translation>试产会话所有权仍在释放中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2872"/>
+        <location filename="../../ui/production_workspace.py" line="2981"/>
         <source>Batch cleanup is active; waiting for evidence finalization.</source>
         <translation>批次正在收尾，请等待证据保存完成。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2875"/>
+        <location filename="../../ui/production_workspace.py" line="2984"/>
         <source>Device report generation is running; retry exit after it completes</source>
         <translation>设备报告正在生成，完成后请重试退出</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2900"/>
+        <location filename="../../ui/production_workspace.py" line="3009"/>
         <source>Production evidence recording is still finalizing; retry exit after it completes</source>
         <translation>试产证据录制仍在收尾；完成后请重试退出</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2983"/>
+        <location filename="../../ui/production_workspace.py" line="3092"/>
         <source>At least one identified online device with evidence recording ready is required.</source>
         <translation>至少需要一台身份已确认、在线且证据录制就绪的设备。</translation>
     </message>
     <message>
         <location filename="../../ui/production_snr_widget.py" line="73"/>
-        <location filename="../../ui/production_workspace.py" line="1389"/>
+        <location filename="../../ui/production_workspace.py" line="1398"/>
         <source>Batch not created</source>
         <translation>批次尚未创建</translation>
     </message>
@@ -2162,18 +2242,18 @@ Its channels will return to the unassigned list.</source>
         <translation>原始 IMU 静态性能汇总</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="609"/>
+        <location filename="../../ui/production_workspace.py" line="618"/>
         <source>Diagnostics are unavailable while a batch owns fixture control.</source>
         <translation>批次占用夹具控制权期间无法使用调试页面。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="642"/>
+        <location filename="../../ui/production_workspace.py" line="651"/>
         <source>Disconnect the power supply before leaving this page.</source>
         <translation>离开此页面前请先断开电源连接。</translation>
     </message>
     <message>
         <location filename="../../ui/production_progress_widgets.py" line="60"/>
-        <location filename="../../ui/production_workspace.py" line="805"/>
+        <location filename="../../ui/production_workspace.py" line="814"/>
         <source>Not applicable</source>
         <translation>不适用</translation>
     </message>
@@ -2185,136 +2265,136 @@ Its channels will return to the unassigned list.</source>
         <translation>未配置</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="997"/>
+        <location filename="../../ui/production_workspace.py" line="1006"/>
         <source>Discovery configuration is invalid: {details}</source>
         <translation>设备探测配置无效：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1066"/>
+        <location filename="../../ui/production_workspace.py" line="1075"/>
         <source>Import production recipe</source>
         <translation>导入试产配方</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1068"/>
+        <location filename="../../ui/production_workspace.py" line="1077"/>
         <source>Production recipes (*.json);;All files (*)</source>
         <translation>试产配方 (*.json);;所有文件 (*)</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1085"/>
+        <location filename="../../ui/production_workspace.py" line="1094"/>
         <source>Invalid recipe: {details}</source>
         <translation>配方无效：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1088"/>
+        <location filename="../../ui/production_workspace.py" line="1097"/>
         <source>Correct the recipe before creating a batch.</source>
         <translation>修正配方后再创建批次。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1096"/>
+        <location filename="../../ui/production_workspace.py" line="1105"/>
         <source>Engineering only</source>
         <translation>仅限工程调试</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1096"/>
+        <location filename="../../ui/production_workspace.py" line="1105"/>
         <source>Formal production</source>
         <translation>正式试产</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1099"/>
+        <location filename="../../ui/production_workspace.py" line="1108"/>
         <source>Recipe {recipe_id} | SHA-256 {sha} | {scope}</source>
         <translation>配方 {recipe_id} | SHA-256 {sha} | {scope}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1348"/>
-        <location filename="../../ui/production_workspace.py" line="1360"/>
+        <location filename="../../ui/production_workspace.py" line="1357"/>
+        <location filename="../../ui/production_workspace.py" line="1369"/>
         <source>Identifying</source>
         <translation>正在识别</translation>
     </message>
     <message>
         <location filename="../../ui/customer_device_list.py" line="177"/>
-        <location filename="../../ui/production_workspace.py" line="1351"/>
+        <location filename="../../ui/production_workspace.py" line="1360"/>
         <source>Identity conflict</source>
         <translation>设备身份冲突</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1571"/>
+        <location filename="../../ui/production_workspace.py" line="1580"/>
         <source>Device registered: slot {slot}, {serial}</source>
         <translation>设备已登记：机位 {slot}，{serial}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1586"/>
+        <location filename="../../ui/production_workspace.py" line="1595"/>
         <source>Create a batch before starting.</source>
         <translation>请先创建批次再开始测试。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1588"/>
+        <location filename="../../ui/production_workspace.py" line="1597"/>
         <source>The batch is not in the ready state.</source>
         <translation>批次当前不处于就绪状态。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1591"/>
+        <location filename="../../ui/production_workspace.py" line="1600"/>
         <source>Device discovery is unavailable.</source>
         <translation>设备探测不可用。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1704"/>
+        <location filename="../../ui/production_workspace.py" line="1713"/>
         <source>Device identity is not persisted yet: {devices}</source>
         <translation>以下设备的身份尚未持久化：{devices}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1751"/>
+        <location filename="../../ui/production_workspace.py" line="1760"/>
         <source>Batch participants are frozen.</source>
         <translation>批次参与设备已冻结。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1798"/>
+        <location filename="../../ui/production_workspace.py" line="1812"/>
         <source>{count} device(s) ready. Starting will freeze the participant list.</source>
         <translation>{count} 台设备已就绪。开始后将冻结参与设备名单。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1812"/>
+        <location filename="../../ui/production_workspace.py" line="1826"/>
         <source>Cannot start batch: {details}</source>
         <translation>无法开始批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1856"/>
+        <location filename="../../ui/production_workspace.py" line="1870"/>
         <source>Batch running</source>
         <translation>批次运行中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1858"/>
+        <location filename="../../ui/production_workspace.py" line="1872"/>
         <source>Batch started with {count} participant device(s).</source>
         <translation>批次已启动，共 {count} 台参与设备。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1960"/>
+        <location filename="../../ui/production_workspace.py" line="1974"/>
         <source>Power ready. Waiting for device admission: {reason}</source>
         <translation>电源已就绪，等待设备准入：{reason}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2023"/>
+        <location filename="../../ui/production_workspace.py" line="2037"/>
         <source>Waiting for initial acquisition confirmation</source>
         <translation>等待设备确认初始搜星完成</translation>
     </message>
     <message>
         <location filename="../../ui/production_progress_widgets.py" line="54"/>
-        <location filename="../../ui/production_workspace.py" line="2054"/>
-        <location filename="../../ui/production_workspace.py" line="3001"/>
+        <location filename="../../ui/production_workspace.py" line="2068"/>
+        <location filename="../../ui/production_workspace.py" line="3110"/>
         <source>Preparing</source>
         <translation>准备中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2054"/>
+        <location filename="../../ui/production_workspace.py" line="2068"/>
         <source>Converging</source>
         <translation>搜星中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2055"/>
+        <location filename="../../ui/production_workspace.py" line="2069"/>
         <source>Effective observation</source>
         <translation>信号观测中</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2055"/>
+        <location filename="../../ui/production_workspace.py" line="2069"/>
         <source>Finishing</source>
         <translation>收尾中</translation>
     </message>
@@ -2330,14 +2410,14 @@ Its channels will return to the unassigned list.</source>
     </message>
     <message>
         <location filename="../../ui/production_progress_widgets.py" line="59"/>
-        <location filename="../../ui/production_workspace.py" line="2044"/>
+        <location filename="../../ui/production_workspace.py" line="2058"/>
         <source>Incomplete</source>
         <translation>未完成</translation>
     </message>
     <message>
         <location filename="../../ui/production_progress_widgets.py" line="61"/>
-        <location filename="../../ui/production_workspace.py" line="2044"/>
-        <location filename="../../ui/production_workspace.py" line="2759"/>
+        <location filename="../../ui/production_workspace.py" line="2058"/>
+        <location filename="../../ui/production_workspace.py" line="2868"/>
         <source>Aborted</source>
         <translation>已中止</translation>
     </message>
@@ -2357,107 +2437,107 @@ Its channels will return to the unassigned list.</source>
         <translation>第 {step}/{total} 项 · 本项已用 {elapsed}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1972"/>
-        <location filename="../../ui/production_workspace.py" line="2101"/>
+        <location filename="../../ui/production_workspace.py" line="1986"/>
+        <location filename="../../ui/production_workspace.py" line="2115"/>
         <source>Automatic execution stopped: {reason}</source>
         <translation>自动执行已停止：{reason}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2091"/>
+        <location filename="../../ui/production_workspace.py" line="2105"/>
         <source>Automatic steps finished. Remaining report items require analysis evidence.</source>
         <translation>自动台架步骤已结束；其余报告项目需要分析证据。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2281"/>
+        <location filename="../../ui/production_workspace.py" line="2295"/>
         <source>External INS test is not applicable to {serial}: {reason}</source>
         <translation>{serial} 不适用外部 INS 测试：{reason}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2293"/>
+        <location filename="../../ui/production_workspace.py" line="2307"/>
         <source>Cannot abort batch: {details}</source>
         <translation>无法中止批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2306"/>
-        <location filename="../../ui/production_workspace.py" line="2308"/>
-        <location filename="../../ui/production_workspace.py" line="2754"/>
+        <location filename="../../ui/production_workspace.py" line="2320"/>
+        <location filename="../../ui/production_workspace.py" line="2322"/>
+        <location filename="../../ui/production_workspace.py" line="2863"/>
         <source>Batch aborted</source>
         <translation>批次已中止</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2305"/>
-        <location filename="../../ui/production_workspace.py" line="2755"/>
+        <location filename="../../ui/production_workspace.py" line="2319"/>
+        <location filename="../../ui/production_workspace.py" line="2864"/>
         <source>Batch aborted by operator.</source>
         <translation>操作员已中止批次。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1613"/>
-        <location filename="../../ui/production_workspace.py" line="2776"/>
+        <location filename="../../ui/production_workspace.py" line="1622"/>
+        <location filename="../../ui/production_workspace.py" line="2885"/>
         <source>Identity conflict: {details}</source>
         <translation>设备身份冲突：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2788"/>
+        <location filename="../../ui/production_workspace.py" line="2897"/>
         <source>Device endpoint changed: {serial}, {old_endpoint} -&gt; {new_endpoint}</source>
         <translation>设备端点已变更：{serial}，{old_endpoint} -&gt; {new_endpoint}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2811"/>
+        <location filename="../../ui/production_workspace.py" line="2920"/>
         <source>Device capacity exceeded: {endpoint}</source>
         <translation>设备数量超限：{endpoint}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2819"/>
+        <location filename="../../ui/production_workspace.py" line="2928"/>
         <source>Discovering on UDP port {port}</source>
         <translation>正在 UDP 端口 {port} 探测设备</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2821"/>
+        <location filename="../../ui/production_workspace.py" line="2930"/>
         <source>Device discovery stopped</source>
         <translation>设备探测已停止</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2827"/>
+        <location filename="../../ui/production_workspace.py" line="2936"/>
         <source>Device discovery failed</source>
         <translation>设备探测启动失败</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="2833"/>
+        <location filename="../../ui/production_workspace.py" line="2942"/>
         <source>Device discovery error: {details}</source>
         <translation>设备探测错误：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1114"/>
+        <location filename="../../ui/production_workspace.py" line="1123"/>
         <source>Recipe validated: {recipe_id}</source>
         <translation>配方校验通过：{recipe_id}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1122"/>
+        <location filename="../../ui/production_workspace.py" line="1131"/>
         <source>Select production output folder</source>
         <translation>选择试产输出目录</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1139"/>
+        <location filename="../../ui/production_workspace.py" line="1148"/>
         <source>Cannot create batch: {details}</source>
         <translation>无法创建批次：{details}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1270"/>
+        <location filename="../../ui/production_workspace.py" line="1279"/>
         <source>Batch ready</source>
         <translation>批次已就绪</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1272"/>
+        <location filename="../../ui/production_workspace.py" line="1281"/>
         <source>Batch ready. Waiting for devices and fixture checks.</source>
         <translation>批次已就绪，正在等待设备和夹具检查。</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1274"/>
+        <location filename="../../ui/production_workspace.py" line="1283"/>
         <source>Batch created: {batch_id}</source>
         <translation>已创建批次：{batch_id}</translation>
     </message>
     <message>
-        <location filename="../../ui/production_workspace.py" line="1276"/>
+        <location filename="../../ui/production_workspace.py" line="1285"/>
         <source>Batch {batch_id} created</source>
         <translation>批次 {batch_id} 已创建</translation>
     </message>
@@ -3149,7 +3229,7 @@ group_id：{group_id}  flags：0x{flags:02X}
         <location filename="../../ui/customer_iperf_view.py" line="50"/>
         <location filename="../../ui/customer_iperf_view.py" line="60"/>
         <location filename="../../ui/production_progress_widgets.py" line="55"/>
-        <location filename="../../ui/production_workspace.py" line="798"/>
+        <location filename="../../ui/production_workspace.py" line="807"/>
         <source>Running</source>
         <translation>运行中</translation>
     </message>
@@ -3269,8 +3349,8 @@ group_id：{group_id}  flags：0x{flags:02X}
     <message>
         <location filename="../../ui/customer_iperf_view.py" line="175"/>
         <location filename="../../ui/customer_iperf_view.py" line="500"/>
-        <location filename="../../ui/production_workspace.py" line="385"/>
-        <location filename="../../ui/production_workspace.py" line="2972"/>
+        <location filename="../../ui/production_workspace.py" line="389"/>
+        <location filename="../../ui/production_workspace.py" line="3081"/>
         <source>Start test</source>
         <translation>开始测试</translation>
     </message>
@@ -3711,7 +3791,7 @@ group_id：{group_id}  flags：0x{flags:02X}
         <location filename="../../ui/customer_overview_view.py" line="982"/>
         <location filename="../../ui/customer_overview_view.py" line="1084"/>
         <location filename="../../ui/customer_overview_view.py" line="1441"/>
-        <location filename="../../ui/production_workspace.py" line="1363"/>
+        <location filename="../../ui/production_workspace.py" line="1372"/>
         <source>Online</source>
         <translation>在线</translation>
     </message>
@@ -3772,7 +3852,7 @@ group_id：{group_id}  flags：0x{flags:02X}
         <location filename="../../ui/fixture_debug_workspace.py" line="885"/>
         <location filename="../../ui/fixture_debug_workspace.py" line="3009"/>
         <location filename="../../ui/production_snr_widget.py" line="72"/>
-        <location filename="../../ui/production_workspace.py" line="1363"/>
+        <location filename="../../ui/production_workspace.py" line="1372"/>
         <source>Offline</source>
         <translation>离线</translation>
     </message>
@@ -3867,8 +3947,8 @@ group_id：{group_id}  flags：0x{flags:02X}
         <location filename="../../ui/customer_maintenance_view.py" line="316"/>
         <location filename="../../ui/customer_maintenance_view.py" line="1044"/>
         <location filename="../../ui/device_view.py" line="281"/>
-        <location filename="../../ui/production_workspace.py" line="494"/>
-        <location filename="../../ui/production_workspace.py" line="2986"/>
+        <location filename="../../ui/production_workspace.py" line="498"/>
+        <location filename="../../ui/production_workspace.py" line="3095"/>
         <source>Abort</source>
         <translation>中止</translation>
     </message>
@@ -4372,7 +4452,7 @@ A manually adjusted Y axis is shown in orange.</source>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="79"/>
         <location filename="../../ui/fixture_debug_workspace.py" line="3011"/>
-        <location filename="../../ui/production_workspace.py" line="797"/>
+        <location filename="../../ui/production_workspace.py" line="806"/>
         <source>Ready</source>
         <translation>就绪</translation>
     </message>
@@ -4544,7 +4624,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/customer_overview_view.py" line="1488"/>
-        <location filename="../../ui/production_workspace.py" line="795"/>
+        <location filename="../../ui/production_workspace.py" line="804"/>
         <source>Connecting</source>
         <translation>连接中</translation>
     </message>
@@ -5710,7 +5790,7 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/production_configuration_dialog.py" line="202"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="541"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="550"/>
         <location filename="../../ui/update_dialog.py" line="298"/>
         <location filename="../../ui/update_dialog.py" line="386"/>
         <source>Close</source>
@@ -6489,11 +6569,11 @@ Range: {range_km} km · TLE age: {age_days} d</source>
     </message>
     <message>
         <location filename="../../ui/fixture_debug_workspace.py" line="383"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="282"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="357"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="404"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="454"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="506"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="291"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="366"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="413"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="463"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="515"/>
         <source>Save</source>
         <translation>保存</translation>
     </message>
@@ -7636,8 +7716,8 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
         <location filename="../../ui/power_supply_debug_workspace.py" line="193"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="821"/>
         <location filename="../../ui/power_supply_debug_workspace.py" line="878"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="346"/>
-        <location filename="../../ui/production_configuration_dialog.py" line="543"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="355"/>
+        <location filename="../../ui/production_configuration_dialog.py" line="552"/>
         <source>Connect and identify</source>
         <translation>连接并识别</translation>
     </message>
@@ -7853,7 +7933,7 @@ This remains ENGINEERING_ONLY. Confirm and save?</source>
     <message>
         <location filename="../../ui/power_supply_debug_workspace.py" line="737"/>
         <location filename="../../ui/production_workspace.py" line="257"/>
-        <location filename="../../ui/production_workspace.py" line="2953"/>
+        <location filename="../../ui/production_workspace.py" line="3062"/>
         <source>Power supply diagnostics</source>
         <translation>电源调试</translation>
     </message>

@@ -336,6 +336,15 @@ class BatchCoordinator(QObject):
         self.changed.emit(dict(batch))
         return dict(batch)
 
+    def resume_retest(self) -> dict:
+        """核验补测：INCOMPLETE 批次回到运行态，等待新建的补测 attempt。"""
+
+        store, batch = self._require_batch(BatchStatus.INCOMPLETE)
+        updated = store.transition_batch(batch["batch_id"], BatchStatus.RUNNING)
+        self._batch = updated
+        self.changed.emit(dict(updated))
+        return dict(updated)
+
     def resume_vehicle_phase(self) -> dict:
         """操作员门禁开始车载段：挂起批次回到运行态。"""
 

@@ -509,6 +509,10 @@ class ProductionWorkspace(QWidget):
         self._resume_button.setObjectName("productionResumeBatch")
         self._resume_button.clicked.connect(self._on_resume_batch)
         self._resume_button.hide()
+        self._retest_button = QPushButton(tr("Retest verification"))
+        self._retest_button.setObjectName("productionRetestVerification")
+        self._retest_button.clicked.connect(self._on_retest_verification)
+        self._retest_button.hide()
         self._vehicle_gate_button = QPushButton(tr("Start driving record"))
         self._vehicle_gate_button.setObjectName("productionVehicleGate")
         self._vehicle_gate_button.clicked.connect(self._on_vehicle_gate)
@@ -519,6 +523,7 @@ class ProductionWorkspace(QWidget):
         footer.addWidget(self._footer_status, 1)
         footer.addWidget(self._review_button)
         footer.addWidget(self._complete_button)
+        footer.addWidget(self._retest_button)
         footer.addWidget(self._vehicle_gate_button)
         footer.addWidget(self._resume_button)
         footer.addWidget(self._next_batch_button)
@@ -1785,6 +1790,11 @@ class ProductionWorkspace(QWidget):
                     )
                 )
             self._next_batch_button.show()
+            retest_target = self._failed_verification_test_id()
+            self._retest_button.setVisible(
+                self._batch.get("status") == BatchStatus.INCOMPLETE.value
+                and retest_target is not None
+            )
             return
 
         participants, reason = self._evaluate_start_gate(
@@ -2482,6 +2492,58 @@ class ProductionWorkspace(QWidget):
             return
         detail = "；".join(f"{serial}：{state}" for serial, state in sorted(checks.items()))
         self.append_event(tr("Participant identity check: {details}", details=detail))
+
+    _VERIFICATION_TEST_IDS = ("firmware_verification", "parameter_verification")
+
+    def _failed_verification_test_id(self) -> str | None:
+        """核验补测目标：INCOMPLETE 批次里最近一次未通过的固件/参数核验。"""
+        if self._batch is None or self._store is None:
+            return None
+        if self._batch.get("status") != BatchStatus.INCOMPLETE.value:
+            return None
+        failed = [
+            attempt for attempt in self._store.list_attempts(self._batch["batch_id"])
+            if attempt["test_id"] in self._VERIFICATION_TEST_IDS
+            and attempt["status"] in {AttemptStatus.FAIL.value, AttemptStatus.INCOMPLETE.value}
+        ]
+        if not failed:
+            return None
+        return str(sorted(failed, key=lambda item: int(item["attempt_id"]))[0]["test_id"])
+
+    def _on_retest_verification(self) -> None:
+        """核验补测：Shell/维护页手动处理后，重建核验 attempt 并重新执行。"""
+        test_id = self._failed_verification_test_id()
+        if test_id is None:
+            return
+        sessions = [
+            session for session in (self._fleet.sessions() if self._fleet else ())
+            if session.serial_number in self._registered_serials and session.is_online()
+        ]
+        offline = sorted(self._registered_serials - {s.serial_number for s in sessions})
+        if offline or not sessions:
+            message = tr(
+                "Connect all frozen participants before retesting: {serials}",
+                serials="、".join(offline) or "none",
+            )
+            self._footer_status.setText(message)
+            self.status_message.emit(message, 8000)
+            return
+        try:
+            self._batch_coordinator.resume_retest()
+            for session in sessions:
+                self._store.create_attempt(
+                    self._batch["batch_id"], session.serial_number, test_id
+                )
+        except (ResultStoreError, RuntimeError) as exc:
+            message = tr("Cannot retest verification: {details}", details=str(exc))
+            self._footer_status.setText(message)
+            self.status_message.emit(message, 8000)
+            return
+        self._retest_button.hide()
+        self._start_execution(sessions)
+        message = tr("Verification retest started for {test}", test=test_id)
+        self._footer_status.setText(message)
+        self.append_event(message)
 
     def _configure_post_batch_ip(self, batch) -> None:
         """批次完成后按参数表统一下发 IP（M66：测试期间不改，收尾才配置）。"""
