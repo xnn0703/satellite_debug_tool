@@ -341,6 +341,10 @@ class ProductionWorkspace(QWidget):
         self._environment_check.toggled.connect(self._on_environment_toggled)
         self._weather_label = QLabel(tr("Weather"))
         self._weather_combo = QComboBox()
+        self._weather_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self._weather_combo.setMinimumWidth(96)
         self._weather_combo.addItem(tr("Sunny"), "Sunny")
         self._weather_combo.addItem(tr("Cloudy"), "Cloudy")
         self._weather_combo.addItem(tr("Overcast"), "Overcast")
