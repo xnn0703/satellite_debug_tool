@@ -1,5 +1,6 @@
 """M47 执行链路与有效观察计时回归。"""
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtCore import QObject, Signal
@@ -1011,6 +1012,113 @@ def test_parameter_auto_correction_runs_only_once_then_fails(qapplication_sessio
         )
         sets_after_fail = [frame for _, frame in sent if b'modem_baud' in frame]
         assert len(sets_after_fail) == len(first_sets), 'must not loop PARA_SET after FAIL'
+    finally:
+        service.stop()
+        store.close()
+
+
+class _DeferredSignal:
+    """可手动 emit 的假信号，便于测试驱动 OTA 终态。"""
+
+    def __init__(self):
+        self._slots = []
+
+    def connect(self, slot):
+        self._slots.append(slot)
+
+    def emit(self, *args):
+        for slot in self._slots:
+            slot(*args)
+
+
+def test_firmware_auto_upgrade_flow(qapplication_session, tmp_path):
+    """M66 固件自动升级：版本不一致且配置 firmware_bin 时走 OTA 工厂；
+    TARGET 确认后回读新版本判 PASS；失败则 FAIL 且记录事件。"""
+    from satellite_debug_tool.core.production.execution import _FirmwareAutoUpgrade
+
+    clock = [0.0]
+    service, store, _sent = execution(tmp_path, 'firmware_verification', clock)
+    payload = valid_recipe(duration_s=2)
+    payload["expected"] = {
+        "main_firmware": {"match": "exact", "value": "0.0.132 beta"},
+        "parameters": {},
+    }
+    payload["expected"]["firmware_bin"] = str(tmp_path / "app_0.0.132_beta_release.bin")
+    Path(payload["expected"]["firmware_bin"]).write_bytes(b"BIN")
+    service.recipe = ProductionRecipe.from_mapping(payload)
+
+    upgrades = []
+    def fake_factory(session, serial, bin_path, parent=None):
+        holder = SimpleNamespace(
+            finished=_DeferredSignal(),
+            configure_engineering_file=lambda data, name: object(),
+            start=lambda *, pause_debug: True,
+        )
+        upgrades.append((serial, holder))
+        holder.finished.connect(service._on_firmware_upgrade_finished)
+        return holder
+    service._ota_factory = fake_factory
+    try:
+        service.start()
+        service.tick()
+        assert upgrades, 'mismatch with firmware_bin must trigger the upgrade factory'
+        assert service._firmware_upgrade_attempted == {'AFD01C-A', 'AFD01C-B'}
+
+        # 升级成功：设备回读变为期望版本 → PASS。
+        base_snapshot = service.sessions['AFD01C-A'].product_store.snapshot()
+        valid = lambda value: ProductValue(value, Availability.VALID, received_monotonic_s=clock[0])
+        upgraded_snapshot = replace(base_snapshot, identity=replace(base_snapshot.identity, main_firmware=valid("0.0.132 beta")))
+        for session in service.sessions.values():
+            session.product_store.snapshot = lambda snap=upgraded_snapshot: snap
+        for _serial, holder in upgrades:
+            holder.finished.emit(_serial, True, "target_version_confirmed")
+        service.tick()
+        attempts = {row["serial_number"]: row for row in store.list_attempts('BATCH-AUTO')}
+        assert all(row['status'] == AttemptStatus.PASS.value for row in attempts.values())
+        assert attempts['AFD01C-A']['result_json']['auto_upgrade'] is True
+    finally:
+        service.stop()
+        store.close()
+
+
+def test_firmware_auto_upgrade_failure_fails_step(qapplication_session, tmp_path):
+    """升级失败（OTA 终态非 TARGET 确认）→ 该项 FAIL，事件留痕。"""
+    clock = [0.0]
+    service, store, _sent = execution(tmp_path, 'firmware_verification', clock)
+    payload = valid_recipe(duration_s=2)
+    payload["expected"] = {
+        "main_firmware": {"match": "exact", "value": "0.0.132 beta"},
+        "parameters": {},
+    }
+    bin_path = tmp_path / "app_0.0.132_beta_release.bin"
+    payload["expected"]["firmware_bin"] = str(bin_path)
+    bin_path.write_bytes(b"BIN")
+    service.recipe = ProductionRecipe.from_mapping(payload)
+
+    def fake_factory(session, serial, bin_path, parent=None):
+        print("DBG FACTORY CALLED:", serial)
+        holder = SimpleNamespace(
+            finished=_DeferredSignal(),
+            configure_engineering_file=lambda data, name: object(),
+            start=lambda *, pause_debug: True,
+        )
+        holder.finished.connect(service._on_firmware_upgrade_finished)
+        factory_holders.append((serial, holder))
+        return holder
+    service._ota_factory = fake_factory
+    factory_holders = []
+    try:
+        service.start()
+        service.tick()
+        assert service._firmware_upgrade_attempted == {serial for serial, _ in factory_holders}
+        for serial, holder in factory_holders:
+            service._on_firmware_upgrade_finished(serial, False, "begin_timeout")
+        service.tick()
+        attempts = {row["serial_number"]: row for row in store.list_attempts('BATCH-AUTO')}
+        assert all(row['status'] == AttemptStatus.FAIL.value for row in attempts.values())
+        events = [row for row in store.list_events('BATCH-AUTO')
+                  if row["event_type"] == "firmware_auto_upgrade_finished"]
+        assert events and "begin_timeout" in str(events[-1]["payload_json"])
     finally:
         service.stop()
         store.close()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import time
+from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -13,6 +14,7 @@ from satellite_debug_tool.core.product.models import tracking_phase_from_wire
 from satellite_debug_tool.core.protocol import (
     ParaTableReport, ServiceFastState, build_para_set, build_request_para_table,
 )
+from satellite_debug_tool.core.session import OtaController
 from satellite_debug_tool.core.session.command_sender import SessionOperationClass
 from .fleet import DeviceSession, FleetController
 from .models import AttemptPhase, AttemptStatus
@@ -62,6 +64,46 @@ def compare_parameter(actual: str, rule: Mapping[str, object]) -> bool:
         return False
 
 
+class _FirmwareAutoUpgrade(QObject):
+    """M66：核验失败时用配方 bin 自动升级；TARGET_VERSION_CONFIRMED 为唯一成功事实。"""
+
+    finished = Signal(str, bool, str)
+
+    _FAILURE_TERMINALS = frozenset({
+        "begin_send_failed", "begin_rejected", "begin_timeout", "chunk_send_failed",
+        "chunk_rejected", "chunk_timeout", "end_send_failed", "end_rejected",
+        "end_timeout", "reboot_timeout", "target_version_not_confirmed",
+        "return_identity_changed", "return_identity_unconfirmed",
+        "return_firmware_unconfirmed", "application_unconfirmed",
+        "connection_lost", "session_changed", "aborted", "abort_pending",
+        "no_file", "artifact_too_large", "artifact_mismatch",
+        "identity_unavailable", "identity_facts_conflict", "firmware_facts_conflict",
+        "unsupported", "stop_live_data_failed",
+    })
+
+    def __init__(self, session, serial: str, bin_path: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._serial = str(serial)
+        attachment = getattr(session, "attachment", None)
+        gateway = attachment.new_operation_gateway() if attachment is not None else None
+        self._ota = OtaController(session.core, parent=self, operation_gateway=gateway)
+        self._ota.status_changed.connect(self._on_status)
+        data = Path(bin_path).read_bytes()
+        token = self._ota.configure_engineering_file(data, Path(bin_path).name)
+        if token is None:
+            self.finished.emit(self._serial, False, "artifact configuration failed")
+            return
+        if not self._ota.start(pause_debug=True):
+            self.finished.emit(self._serial, False, "OTA start refused")
+
+    def _on_status(self, status: object, payload: object) -> None:
+        token = str(getattr(status, "value", status))
+        if token == "target_version_confirmed":
+            self.finished.emit(self._serial, True, token)
+        elif token in self._FAILURE_TERMINALS:
+            self.finished.emit(self._serial, False, token)
+
+
 class ProductionExecution(QObject):
     """页面生命周期之外持续推进；硬件启动只接受执行 owner 的显式证据。"""
 
@@ -103,6 +145,10 @@ class ProductionExecution(QObject):
         self._tables: dict[str, ParaTableReport] = {}
         self._queries: set[str] = set()
         self._param_corrected: dict[str, dict[str, str]] = {}
+        self._firmware_upgrade_attempted: set[str] = set()
+        self._firmware_upgrades: list = []
+        self._firmware_upgrade_ok: dict[str, bool] = {}
+        self._ota_factory = None
         self._evaluators: dict[str, TrackingEvaluator] = {}
         self._prelock_evaluators: dict[str, TrackingEvaluator] = {}
         self._preparation_started_at = self.clock()
@@ -503,17 +549,59 @@ class ProductionExecution(QObject):
     def _firmware(self) -> None:
         rule = self.recipe.payload["expected"]["main_firmware"]
         results = {}
+        upgrades: dict[str, str] = {}
         for serial, session in self.sessions.items():
             version = session.product_store.snapshot().identity.main_firmware
             if version.availability is not Availability.VALID or not version.value:
                 self.run.explain_wait("Waiting for firmware readback: " + serial)
                 return
             passed = rule["match"] == "optional" or version.value == rule.get("value")
+            if not passed and serial not in self._firmware_upgrade_attempted:
+                bin_path = str(self.recipe.payload["expected"].get("firmware_bin") or "").strip()
+                if bin_path and Path(bin_path).is_file():
+                    upgrades[serial] = bin_path
+                    continue
+            if serial in self._firmware_upgrade_attempted:
+                if serial not in self._firmware_upgrade_ok:
+                    # 升级进行中：等待 OTA 终态，不提前判定。
+                    self.run.explain_wait("Firmware auto-upgrade in progress: " + serial)
+                    continue
+                passed = self._firmware_upgrade_ok[serial] and (
+                    rule["match"] == "optional" or version.value == rule.get("value")
+                )
             results[serial] = DeviceStepResult(passed, {"actual": version.value, "expected": rule,
-                "reason": "Version recorded; exact expectation is not configured" if rule["match"] == "optional" else ""},
+                "reason": "Version recorded; exact expectation is not configured" if rule["match"] == "optional" else "",
+                "auto_upgrade": serial in self._firmware_upgrade_attempted},
                 skipped=rule["match"] == "optional")
+        if upgrades:
+            for serial, bin_path in upgrades.items():
+                self._firmware_upgrade_attempted.add(serial)
+                session = self.sessions[serial]
+                upgrade = self._ota_factory(session, serial, bin_path) if self._ota_factory \
+                    else _FirmwareAutoUpgrade(session, serial, bin_path, parent=self)
+                upgrade.finished.connect(self._on_firmware_upgrade_finished)
+                self._firmware_upgrades.append(upgrade)
+            self.run.explain_wait(
+                "Auto-upgrading firmware: "
+                + ", ".join(f"{serial} ← {Path(p).name}" for serial, p in upgrades.items())
+            )
+            return
+        if len(results) < len(self.sessions):
+            self.run.explain_wait("Firmware auto-upgrade in progress")
+            return
         self._instant_start()
         self.run.complete_step(results)
+
+    def _on_firmware_upgrade_finished(self, serial: str, ok: bool, detail: str) -> None:
+        self._firmware_upgrade_ok[serial] = ok
+        self.store.record_event(self.batch_id, "firmware_auto_upgrade_finished", {
+            "serial_number": serial, "ok": ok, "detail": detail,
+        })
+        if not ok:
+            self.run.explain_wait(
+                f"Firmware auto-upgrade failed: {serial}: {detail}; "
+                "finish the upgrade manually and retest verification"
+            )
 
     _PER_DEVICE_FACTS = {"ip": "endpoint_ip", "string": "serial_number"}
 
