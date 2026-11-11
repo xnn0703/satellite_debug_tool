@@ -1051,11 +1051,13 @@ def test_firmware_auto_upgrade_flow(qapplication_session, tmp_path):
     def fake_factory(session, serial, bin_path, parent=None):
         holder = SimpleNamespace(
             finished=_DeferredSignal(),
+            progress=_DeferredSignal(),
             configure_engineering_file=lambda data, name: object(),
             start=lambda *, pause_debug: True,
         )
         upgrades.append((serial, holder))
         holder.finished.connect(service._on_firmware_upgrade_finished)
+        holder.progress.connect(service._on_firmware_upgrade_progress)
         return holder
     service._ota_factory = fake_factory
     try:
@@ -1063,6 +1065,13 @@ def test_firmware_auto_upgrade_flow(qapplication_session, tmp_path):
         service.tick()
         assert upgrades, 'mismatch with firmware_bin must trigger the upgrade factory'
         assert service._firmware_upgrade_attempted == {'AFD01C-A', 'AFD01C-B'}
+
+        # 升级中：传输进度经 progress 通道进入等待文案。
+        for _serial, holder in upgrades:
+            holder.progress.emit(_serial, 45)
+        service.tick()
+        reason = service.run.progress.reason
+        assert "Auto-upgrading" in reason and "45%" in reason, reason
 
         # 升级成功：设备回读变为期望版本 → PASS。
         base_snapshot = service.sessions['AFD01C-A'].product_store.snapshot()
@@ -1099,10 +1108,12 @@ def test_firmware_auto_upgrade_failure_fails_step(qapplication_session, tmp_path
         print("DBG FACTORY CALLED:", serial)
         holder = SimpleNamespace(
             finished=_DeferredSignal(),
+            progress=_DeferredSignal(),
             configure_engineering_file=lambda data, name: object(),
             start=lambda *, pause_debug: True,
         )
         holder.finished.connect(service._on_firmware_upgrade_finished)
+        holder.progress.connect(service._on_firmware_upgrade_progress)
         factory_holders.append((serial, holder))
         return holder
     service._ota_factory = fake_factory

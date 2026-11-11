@@ -68,6 +68,7 @@ class _FirmwareAutoUpgrade(QObject):
     """M66：核验失败时用配方 bin 自动升级；TARGET_VERSION_CONFIRMED 为唯一成功事实。"""
 
     finished = Signal(str, bool, str)
+    progress = Signal(str, int)
 
     _FAILURE_TERMINALS = frozenset({
         "begin_send_failed", "begin_rejected", "begin_timeout", "chunk_send_failed",
@@ -88,6 +89,9 @@ class _FirmwareAutoUpgrade(QObject):
         gateway = attachment.new_operation_gateway() if attachment is not None else None
         self._ota = OtaController(session.core, parent=self, operation_gateway=gateway)
         self._ota.status_changed.connect(self._on_status)
+        self._ota.progress_changed.connect(
+            lambda percent: self.progress.emit(self._serial, int(percent))
+        )
         data = Path(bin_path).read_bytes()
         token = self._ota.configure_engineering_file(data, Path(bin_path).name)
         if token is None:
@@ -147,6 +151,8 @@ class ProductionExecution(QObject):
         self._param_corrected: dict[str, dict[str, str]] = {}
         self._firmware_upgrade_attempted: set[str] = set()
         self._firmware_upgrades: list = []
+        self._firmware_upgrade_progress: dict[str, int] = {}
+        self._firmware_upgrade_attempted_targets: dict[str, str] = {}
         self._firmware_upgrade_ok: dict[str, bool] = {}
         self._ota_factory = None
         self._evaluators: dict[str, TrackingEvaluator] = {}
@@ -576,24 +582,39 @@ class ProductionExecution(QObject):
         if upgrades:
             for serial, bin_path in upgrades.items():
                 self._firmware_upgrade_attempted.add(serial)
+                self._firmware_upgrade_attempted_targets[serial] = bin_path
                 session = self.sessions[serial]
                 upgrade = self._ota_factory(session, serial, bin_path) if self._ota_factory \
                     else _FirmwareAutoUpgrade(session, serial, bin_path, parent=self)
                 upgrade.finished.connect(self._on_firmware_upgrade_finished)
+                upgrade.progress.connect(self._on_firmware_upgrade_progress)
                 self._firmware_upgrades.append(upgrade)
-            self.run.explain_wait(
-                "Auto-upgrading firmware: "
-                + ", ".join(f"{serial} ← {Path(p).name}" for serial, p in upgrades.items())
-            )
+            self._on_firmware_upgrade_progress_changed()
             return
         if len(results) < len(self.sessions):
-            self.run.explain_wait("Firmware auto-upgrade in progress")
+            self._on_firmware_upgrade_progress_changed()
             return
         self._instant_start()
         self.run.complete_step(results)
 
+    def _on_firmware_upgrade_progress(self, serial: str, percent: int) -> None:
+        self._firmware_upgrade_progress[str(serial)] = int(percent)
+
+    def _on_firmware_upgrade_progress_changed(self) -> None:
+        parts = []
+        for serial, bin_path in self._firmware_upgrade_attempted_targets.items():
+            percent = self._firmware_upgrade_progress.get(serial)
+            name = Path(bin_path).name
+            parts.append(
+                f"{serial} ← {name} {percent}%"
+                if percent is not None else f"{serial} ← {name}"
+            )
+        if parts:
+            self.run.explain_wait("Auto-upgrading firmware: " + ", ".join(parts))
+
     def _on_firmware_upgrade_finished(self, serial: str, ok: bool, detail: str) -> None:
         self._firmware_upgrade_ok[serial] = ok
+        self._firmware_upgrade_progress.pop(str(serial), None)
         self.store.record_event(self.batch_id, "firmware_auto_upgrade_finished", {
             "serial_number": serial, "ok": ok, "detail": detail,
         })
