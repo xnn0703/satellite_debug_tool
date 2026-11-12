@@ -228,13 +228,12 @@ class AttitudeWidget(QWidget):
         self._set_default_camera()
         self._gl_view.setBackgroundColor(0x1E, 0x1E, 0x1E)
 
-        # 安装参考平面：roll=pitch=0 的水平面，固定在机体下方，不随姿态旋转。
-        # 比 z=0 旧网格下移，避免网格线横穿机体形成白色斜纹。
-        self._reference_plane_z = -0.25
-        # pyqtgraph 的 size/spacing 复合参数合同是 QVector3D；tuple 在新版中会被
-        # 当作具备 x()/y()/z() 的对象使用，导致窗口构造阶段失败。
+        # 安装参考平面：roll=pitch=0 的水平面，固定不随姿态旋转。
+        # 位置取模型中心包围球以外（归一化模型最长边 3.6，包围球半径 ≤3.12，
+        # 取 z=-2.6 保证任意姿态下平面都不与机体相交）。
+        self._reference_plane_z = -2.6
         self._grid = GLGridItem(
-            size=QVector3D(5.0, 5.0, 1.0),
+            size=QVector3D(7.0, 7.0, 1.0),
             color=(107, 114, 128, 200),
         )
         self._grid.setSpacing(spacing=QVector3D(0.5, 0.5, 1.0))

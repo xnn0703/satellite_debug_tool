@@ -13,15 +13,17 @@ def test_reference_plane_is_fixed_below_model(qapplication_session) -> None:
     try:
         assert isinstance(widget._grid, GLGridItem)
         assert widget._grid in widget._gl_view.items
-        assert widget._grid.size() == [5.0, 5.0, 1.0]
+        assert widget._grid.size() == [7.0, 7.0, 1.0]
         assert widget._grid.spacing() == [0.5, 0.5, 1.0]
-        # 平面低于默认模型底面 z=-0.08，避免网格横穿机体。
-        assert widget._reference_plane_z < -0.08
+        # 平面在模型中心包围球以外：归一化模型最长边 3.6（半 1.8），
+        # 最坏包围球半径 ≤3.12，平面 z=-2.6 保证任意姿态都不与机体相交。
+        assert widget._reference_plane_z <= -2.5
 
         widget.update_attitude(20.0, -10.0, 30.0, "roll", "pitch", "yaw")
-        # 姿态变化只旋转机体，不改变参考平面本身。
+        # 姿态变化只旋转机体，不改变参考平面本身（含尺寸）。
         assert widget._grid in widget._gl_view.items
-        assert widget._reference_plane_z == -0.25
+        assert widget._reference_plane_z == -2.6
+        assert list(widget._grid.size()) == [7.0, 7.0, 1.0]
     finally:
         widget.close()
         widget.deleteLater()
