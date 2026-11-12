@@ -58,11 +58,12 @@ def test_fixture_attitude_plot_uses_one_shared_degree_axis_and_hides_unmapped_cu
     plot.close()
 
 
-def test_fixture_trajectory_editor_uses_fixed_20ms_period_without_an_editor(
+def test_fixture_trajectory_editor_uses_platform_period_without_an_editor(
     qapp,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from satellite_debug_tool.core.motion_platform import CONTINUOUS_TRAJECTORY_PERIOD_MS
     from satellite_debug_tool.core.production import FixtureControlLease, FixtureProfileStore
     from satellite_debug_tool.ui.fixture_debug_workspace import FixtureDebugWorkspace
 
@@ -78,7 +79,7 @@ def test_fixture_trajectory_editor_uses_fixed_20ms_period_without_an_editor(
     )
 
     assert not hasattr(workspace, "_sample_period")
-    assert workspace._trajectory_profile().sample_period_ms == 20
+    assert workspace._trajectory_profile().sample_period_ms == CONTINUOUS_TRAJECTORY_PERIOD_MS
 
     workspace.shutdown()
     workspace.close()

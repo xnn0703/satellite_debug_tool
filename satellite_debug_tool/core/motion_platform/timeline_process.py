@@ -13,6 +13,19 @@ _DEADLINE_GUARD_NS = 1_000_000
 _TIMELINE_CLOCK_NS = time.perf_counter_ns
 
 
+def _begin_windows_timer_resolution():
+    """为 Windows 50 ms 时间线提供稳定的毫秒级休眠粒度。"""
+
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    winmm = ctypes.WinDLL("winmm")
+    if winmm.timeBeginPeriod(1) != 0:
+        raise OSError("timeBeginPeriod(1) failed")
+    return winmm
+
+
 def run_timeline_process(
     transport: socket.socket,
     endpoint: tuple[str, int],
@@ -35,7 +48,9 @@ def run_timeline_process(
     fade_index = 0
     next_deadline_ns = _TIMELINE_CLOCK_NS()
     last_sent_ns: int | None = None
+    winmm = None
     try:
+        winmm = _begin_windows_timer_resolution()
         while True:
             deadline_ns = next_deadline_ns
             while True:
@@ -45,11 +60,9 @@ def run_timeline_process(
                 try:
                     command = command_queue.get_nowait()
                 except queue.Empty:
-                    # Windows runner 已证明同步对象、Python sleep 和高分辨率
-                    # waitable timer 均可被宿主量化为约 32 ms。轨迹子进程只在运动
-                    # 期间存在，因此 Windows 直接自旋到 deadline；其它平台在最后
-                    # 1 ms 前休眠，统一继续非阻塞轮询停止/缓停命令。
-                    if os.name != "nt" and remaining_ns > _DEADLINE_GUARD_NS:
+                    # 在最后 1 ms 前有界休眠，末段继续非阻塞轮询停止/缓停命令；
+                    # Windows 使用供应商验证的 50 ms 周期，不需要全程忙等待。
+                    if remaining_ns > _DEADLINE_GUARD_NS:
                         time.sleep(
                             (remaining_ns - _DEADLINE_GUARD_NS)
                             / 1_000_000_000.0
@@ -144,6 +157,8 @@ def run_timeline_process(
     except BaseException as exc:
         event_queue.put(("error", f"{type(exc).__name__}: {exc}"))
     finally:
+        if winmm is not None:
+            winmm.timeEndPeriod(1)
         transport.close()
 
 

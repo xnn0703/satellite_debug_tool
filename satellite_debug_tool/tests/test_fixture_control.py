@@ -10,7 +10,11 @@ from satellite_debug_tool.core.production import (
     PlatformPose,
     WorkstationFixtureProfile,
 )
-from satellite_debug_tool.core.motion_platform import SineAxis, SineTrajectory
+from satellite_debug_tool.core.motion_platform import (
+    CONTINUOUS_TRAJECTORY_PERIOD_MS,
+    SineAxis,
+    SineTrajectory,
+)
 from satellite_debug_tool.tests.motion_fakes import ConfirmedMotionController
 
 
@@ -114,7 +118,7 @@ def test_active_trajectory_soft_centers_without_ending_control_session(
     assert _wait_until(qapp, lambda: len(results) == 1)
 
     assert results[0].soft_center_requested
-    assert results[0].fade_points == 10
+    assert results[0].fade_points == 200 // CONTINUOUS_TRAJECTORY_PERIOD_MS
     assert results[0].center_confirmed
     assert worker.controller.snapshot.ready
 

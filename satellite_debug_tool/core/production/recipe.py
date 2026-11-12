@@ -409,7 +409,8 @@ def _validate_motion_platform(platform: Any, errors: list[str], *, schema: int) 
     sample_period = profile.get("sample_period_ms")
     if sample_period != CONTINUOUS_TRAJECTORY_PERIOD_MS:
         errors.append(
-            "motion profile sample_period_ms must equal the fixed 20 ms contract"
+            "motion profile sample_period_ms must equal the fixed "
+            f"{CONTINUOUS_TRAJECTORY_PERIOD_MS} ms platform contract"
         )
     if schema == 2:
         if profile.get("execution_mode") != "until_observation_complete":

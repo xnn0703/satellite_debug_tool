@@ -10,6 +10,7 @@ import json
 import math
 import multiprocessing
 import queue
+import sys
 import threading
 import time
 from typing import Callable
@@ -19,8 +20,21 @@ from .lingjing_protocol import build_position_frame, solve_actuator_targets
 from .models import MotionActionResult, MotionPlatformError, PlatformPose
 
 
-# 厂家原生上位机和控制器位置命令共同使用的唯一连续轨迹周期。
-CONTINUOUS_TRAJECTORY_PERIOD_MS = 20
+# macOS 20 ms 已完成现场验证；Windows 使用供应商上位机验证过的 50 ms。
+MACOS_CONTINUOUS_TRAJECTORY_PERIOD_MS = 20
+WINDOWS_CONTINUOUS_TRAJECTORY_PERIOD_MS = 50
+
+
+def continuous_trajectory_period_ms(platform_name: str | None = None) -> int:
+    """返回当前打包平台唯一的连续轨迹命令周期。"""
+
+    resolved = sys.platform if platform_name is None else str(platform_name)
+    if resolved == "win32":
+        return WINDOWS_CONTINUOUS_TRAJECTORY_PERIOD_MS
+    return MACOS_CONTINUOUS_TRAJECTORY_PERIOD_MS
+
+
+CONTINUOUS_TRAJECTORY_PERIOD_MS = continuous_trajectory_period_ms()
 
 
 class SoftCenterPhase(str, Enum):
@@ -226,8 +240,8 @@ class MotionTrajectoryRunner:
                 minimum_remaining = min(minimum_remaining, maximum_extension - extension)
         if self._controller.config.minimum_duration_ms > CONTINUOUS_TRAJECTORY_PERIOD_MS:
             raise MotionPlatformError(
-                "motion platform minimum command time exceeds the fixed 20 ms "
-                "continuous trajectory contract"
+                "motion platform minimum command time exceeds the fixed "
+                f"{CONTINUOUS_TRAJECTORY_PERIOD_MS} ms continuous trajectory contract"
             )
         fingerprint = _preflight_fingerprint(self._controller.config, trajectory)
         command_duration_ms = _command_duration_ms(self._controller.config, trajectory)
@@ -641,8 +655,8 @@ class MotionTrajectoryRunner:
 def _command_duration_ms(config, trajectory: SineTrajectory) -> int:
     if config.minimum_duration_ms > CONTINUOUS_TRAJECTORY_PERIOD_MS:
         raise MotionPlatformError(
-            "motion platform minimum command time exceeds the fixed 20 ms "
-            "continuous trajectory contract"
+            "motion platform minimum command time exceeds the fixed "
+            f"{CONTINUOUS_TRAJECTORY_PERIOD_MS} ms continuous trajectory contract"
         )
     return CONTINUOUS_TRAJECTORY_PERIOD_MS
 
@@ -796,6 +810,9 @@ __all__ = [
     "CompiledTrajectoryPoint",
     "MotionTrajectoryRunner",
     "CONTINUOUS_TRAJECTORY_PERIOD_MS",
+    "MACOS_CONTINUOUS_TRAJECTORY_PERIOD_MS",
+    "WINDOWS_CONTINUOUS_TRAJECTORY_PERIOD_MS",
+    "continuous_trajectory_period_ms",
     "SineAxis",
     "SineTrajectory",
     "SoftCenterPhase",

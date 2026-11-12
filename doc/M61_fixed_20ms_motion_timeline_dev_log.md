@@ -1,5 +1,7 @@
 # M61 摇摆台固定 20 ms 连续轨迹开发记录
 
+> 历史记录：M68 已纠正供应商抓包归属，macOS 保留 20 ms，Windows 改用供应商验证的 50 ms。
+
 ## 2026-11-03
 
 - `core/motion_platform/trajectory.py` 新增唯一 `CONTINUOUS_TRAJECTORY_PERIOD_MS = 20`；`SineTrajectory` 删除周期构造字段，只保留只读投影。

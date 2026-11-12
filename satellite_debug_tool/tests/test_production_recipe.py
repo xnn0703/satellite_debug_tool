@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from satellite_debug_tool.core.motion_platform import CONTINUOUS_TRAJECTORY_PERIOD_MS
 from satellite_debug_tool.core.production import (
     ProductionRecipe,
     RecipeValidationError,
@@ -44,7 +45,7 @@ def valid_recipe(*, duration_s: int = 3600) -> dict:
                 },
                 "profile": {
                     "profile_id": "marine-v1",
-                    "sample_period_ms": 20,
+                    "sample_period_ms": CONTINUOUS_TRAJECTORY_PERIOD_MS,
                     "steady_duration_s": duration_s,
                     "roll": {
                         "amplitude_deg": 15,
@@ -204,9 +205,9 @@ def test_motion_amplitude_cannot_exceed_fixture_limit() -> None:
         ),
         (
             lambda data: data["fixtures"]["motion_platform"]["profile"].update(
-                sample_period_ms=50
+                sample_period_ms=CONTINUOUS_TRAJECTORY_PERIOD_MS + 1
             ),
-            "fixed 20 ms contract",
+            f"fixed {CONTINUOUS_TRAJECTORY_PERIOD_MS} ms platform contract",
         ),
     ],
 )

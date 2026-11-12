@@ -29,10 +29,17 @@ from satellite_debug_tool.core.motion_platform import (
     SineAxis,
     SineTrajectory,
     MotionTrajectoryRunner,
+    CONTINUOUS_TRAJECTORY_PERIOD_MS,
     build_position_frame,
+    continuous_trajectory_period_ms,
     parse_feedback_frame,
     solve_actuator_targets,
 )
+
+
+def test_continuous_trajectory_period_uses_platform_contract() -> None:
+    assert continuous_trajectory_period_ms("darwin") == 20
+    assert continuous_trajectory_period_ms("win32") == 50
 
 
 def _config(**overrides) -> MotionPlatformConfig:
@@ -749,7 +756,9 @@ def test_soft_center_fades_from_current_phase_and_confirms_center() -> None:
     )
 
     assert result.soft_center_requested
-    assert result.fade_points == 10
+    assert result.fade_points == math.ceil(
+        trajectory.ramp_out_s * 1000.0 / CONTINUOUS_TRAJECTORY_PERIOD_MS
+    )
     assert result.center_confirmed
     assert result.arrival is not None and result.arrival.successful
     assert result.stopped
@@ -859,8 +868,8 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
             )
             for callback in self._command_callbacks:
                 callback(event)
-            # 父进程即使处理UI/证据慢于20 ms，也不能拖慢子进程的UDP时间线。
-            time.sleep(0.03)
+            # 父进程即使处理 UI/证据慢于当前命令周期，也不能拖慢子进程时间线。
+            time.sleep(trajectory.sample_period_ms / 1000.0 * 1.5)
             return event
 
     controller = ProcessController(config)
@@ -949,23 +958,28 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
         receiver.close()
         sender.close()
 
-    assert result.sent_points == trajectory.sample_count == 100
+    expected_points = math.ceil(
+        trajectory.total_duration_s * 1000.0 / trajectory.sample_period_ms
+    )
+    assert result.sent_points == trajectory.sample_count == expected_points
     assert result.skipped_points == 0
-    assert len(received_at) == 100
+    assert len(received_at) == expected_points
     intervals_ms = [
         (current - previous) / 1_000_000.0
         for previous, current in zip(received_at, received_at[1:])
     ]
-    # Windows 可把父进程接收线程批量调度到约 32 ms；发送合同的权威事实是
-    # 子进程在每次 sendto 后记录并回传的单调时间，接收侧只证明包完整到达。
-    assert result.p95_send_interval_ms < 25.0
-    assert max(intervals_ms) < 100.0
+    # 共享 runner 只验证隔离发送、完整到达和迟到留痕；真实平台节拍由工位
+    # pcap 验收。这里拒绝连续突发和两个完整周期以上的无证据空洞。
+    assert result.p95_send_interval_ms >= trajectory.sample_period_ms * 0.5
+    assert result.p95_send_interval_ms < trajectory.sample_period_ms * 2.0
+    assert max(intervals_ms) < trajectory.sample_period_ms * 4.0
     if result.timing_fault:
-        # Windows 调度器可能真实产生一个 >=40 ms 的发送空洞；该事实必须保留为
-        # timing_fault，隔离时间线的回归合同是父进程 30 ms 处理不会系统性拖慢发送。
+        # 调度器可能真实产生完整槽位迟到；该事实必须保留为 timing_fault。
         assert result.maximum_lateness_ms > 0.0
     assert soft_result.center_confirmed
-    assert soft_result.fade_points == 10
+    assert soft_result.fade_points == math.ceil(
+        soft_trajectory.ramp_out_s * 1000.0 / soft_trajectory.sample_period_ms
+    )
     assert len(soft_received_at) == soft_result.sent_points
     assert [phase.value for phase in phases] == [
         "fading",
