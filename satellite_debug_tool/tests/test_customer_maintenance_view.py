@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 from satellite_debug_tool.core.profile import ProfileStore
 from satellite_debug_tool.core.protocol import (
@@ -929,3 +930,24 @@ def test_mount_draft_is_discarded_when_same_endpoint_identity_changes(app) -> No
 
     assert not view._mount_dirty
     assert view._mount_target() == pytest.approx((90.0, 0.0, 0.0))
+
+
+def test_mount_inputs_accept_typed_values_and_drive_preview(app) -> None:
+    """键盘输入实时提交并驱动姿态预览（不再要求回车或失焦）。"""
+
+    live = _LiveDouble()
+    _seed_mount_service(live)
+    view = CustomerMaintenanceView(
+        live,
+        _DeviceDouble(),
+        _SettingsDouble(),
+        encryption_keys={},
+    )
+    view.activate_view()
+    view._mount_yaw.lineEdit().clear()
+    QTest.keyClicks(view._mount_yaw.lineEdit(), "12.5")
+
+    assert view._mount_yaw.value() == pytest.approx(12.5)
+    assert view._mount_yaw.keyboardTracking() is True
+    assert view._mount_preview._yaw_value == pytest.approx(12.5)
+    assert view._mount_preview.updatesEnabled() is True

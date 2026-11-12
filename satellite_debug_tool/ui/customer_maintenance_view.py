@@ -326,7 +326,8 @@ class CustomerMaintenanceView(QWidget):
         field.setSingleStep(0.1)
         field.setRange(minimum, maximum)
         field.setSuffix(" °")
-        field.setKeyboardTracking(False)
+        # 键盘输入实时提交：未提交期间设备读回刷新会把文本重置，导致输入看似无效。
+        field.setKeyboardTracking(True)
         field.valueChanged.connect(self._mark_mount_dirty)
         return field
 
