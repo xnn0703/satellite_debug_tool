@@ -45,3 +45,11 @@
 - 一次真实新版本发版才能验证 GitHub Environment 等待、Mac 正式构建、两个 publication commit 和 fresh 客户端全链路。
 
 Windows/macOS 实机安装与回滚、Apple notarization、真实设备/RF/电源/夹具仍为独立 `NOT_RUN` 边界。
+
+## 首次正式运行复核（2026-11-13）
+
+- `v1.9.4` tag 已不可变地绑定 `442cdaebbcd8be21a612b364445584545eafeb75`；Windows 两个 edition 在候选生成前的源码回归同时失败，没有候选包、TUF stable 或服务器下载目录被晋升。
+- Windows 回归确认三项平台合同问题：发布锁只实现 `fcntl`、Windows 不能用 `os.open` 打开目录执行 fsync、图表布局误用可能被内容最小尺寸撑宽的 workspace 宽度。
+- 发布锁改为 POSIX `flock` / Windows `msvcrt.locking` 单一跨平台 owner；服务器原子发布只在 POSIX fsync 目录，文件 fsync 和原子 rename 保持全平台合同。
+- 图表列数改由批次滚动区实际 viewport 宽度决定；运动平台隔离时间线测试保留 Windows 真实调度空洞的 `timing_fault`，以不跳点、完整收包和 P95 间隔验证父进程慢处理不会系统性拖慢发送。
+- 修正后版本递增为 `v1.9.5`，不移动或复用失败的 `v1.9.4` tag。

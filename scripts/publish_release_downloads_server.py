@@ -273,11 +273,14 @@ def publish_release(request: Mapping[str, Any], *, incoming_root: Path,
                     target.chmod(0o644)
                 else:
                     _copy_immutable(value[0], target, value[1])
-            descriptor = os.open(stage, os.O_RDONLY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+            # POSIX 目录 fsync 保证 rename 前目录项已经落盘；Windows 不允许用
+            # os.open 打开目录，文件本身已在上方逐一 fsync，由 rename 提供原子可见性。
+            if os.name != "nt":
+                descriptor = os.open(stage, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
             try:
                 stage.rename(destination)
             except FileExistsError:

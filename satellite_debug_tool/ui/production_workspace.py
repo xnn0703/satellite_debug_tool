@@ -764,7 +764,14 @@ class ProductionWorkspace(QWidget):
             frozen = tuple(by_serial[serial] for serial in self._participant_serials if serial in by_serial)
         count = self._recipe.target_device_count if self._recipe is not None else self._device_count_spin.value()
         visible = chart_slots(count, tuple(session.slot for session in candidates), frozen)
-        columns = 2 if len(visible) > 1 and self.width() >= 1000 else 1
+        # 外层批次滚动区才是图表真正可用的视口。Windows 下内容的最小尺寸可能
+        # 把 ProductionWorkspace 本身撑宽，使用 self.width() 会在窄窗口仍误判双列。
+        available_width = self.width()
+        if hasattr(self, "_batch_scroll") and self.isVisible():
+            # 显示后以更窄者为准，既能响应外层 viewport，也不会被内容最小尺寸
+            # 反向撑宽；显示前 viewport 仍是 Qt 初始化尺寸，不能参与判定。
+            available_width = min(available_width, self._batch_scroll.viewport().width())
+        columns = 2 if len(visible) > 1 and available_width >= 1000 else 1
         key = (visible, columns)
         if self._chart_layout_key == key:
             return
