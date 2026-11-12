@@ -60,3 +60,4 @@ Windows/macOS 实机安装与回滚、Apple notarization、真实设备/RF/电�
 - `v1.9.7` 快速门禁在约 10 秒内暴露剩余断言仍使用父进程 UDP 接收线程时间；Windows 会批量调度该观察线程到约 32 ms。门禁改为消费时间线子进程在每次 `sendto` 后回传的权威 `p95_send_interval_ms`，同时继续要求全部 UDP 包到达；正式版本递增为 `v1.9.8`。新 tag 前先用 master CI-only 验证 Windows 快速门禁和全量回归。
 - `v1.9.8` 首次 master 快速门禁进一步证明子进程真实发送 P95 仍为 32 ms、99 个控制空洞，父进程观察调度不是根因。Windows 时间线现使用 `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` 创建的 Win32 waitable timer 等待相对 deadline；Python `sleep` 只保留给非 Windows 平台，固定时间线不再依赖 Windows 系统 tick。
 - Windows runner 随后证明高分辨率 waitable timer 仍受宿主量化：P95 继续为 32 ms，最大迟到从 31 ms 降为 12 ms。Windows 专用轨迹子进程最终完全按 QPC 单调时钟自旋到 deadline；非 Windows 保留 sleep + 1 ms guard。代价明确为 Windows 摇摆运行期间独占一个 CPU 核，UI 和证据仍在父进程。
+- 自旋门禁仍得到 32 ms，证明等待器不是剩余根因：Windows Python 3.11 的 `monotonic_ns` 在该 runner 呈约 15.625 ms 观测粒度。时间线调度与发送证据改用跨进程一致的 `perf_counter_ns`（Windows QPC）；业务层仍保存单调纳秒事实，不与墙钟混用。

@@ -10,6 +10,7 @@ from typing import Sequence
 
 
 _DEADLINE_GUARD_NS = 1_000_000
+_TIMELINE_CLOCK_NS = time.perf_counter_ns
 
 
 def run_timeline_process(
@@ -32,13 +33,13 @@ def run_timeline_process(
     fade_points = ()
     normal_index = 0
     fade_index = 0
-    next_deadline_ns = time.monotonic_ns()
+    next_deadline_ns = _TIMELINE_CLOCK_NS()
     last_sent_ns: int | None = None
     try:
         while True:
             deadline_ns = next_deadline_ns
             while True:
-                remaining_ns = deadline_ns - time.monotonic_ns()
+                remaining_ns = deadline_ns - _TIMELINE_CLOCK_NS()
                 if remaining_ns <= 0:
                     break
                 try:
@@ -110,7 +111,7 @@ def run_timeline_process(
                 frame = fade_point.frame
                 point_index = fade_index
 
-            now_ns = time.monotonic_ns()
+            now_ns = _TIMELINE_CLOCK_NS()
             actual_gap_ns = (
                 now_ns - last_sent_ns if last_sent_ns is not None else 0
             )
@@ -122,7 +123,7 @@ def run_timeline_process(
             if size != len(frame):
                 event_queue.put(("error", "controller datagram was not sent completely"))
                 return
-            sent_ns = time.monotonic_ns()
+            sent_ns = _TIMELINE_CLOCK_NS()
             last_sent_ns = sent_ns
             # 迟到后以本次真实发送时刻重建相位，禁止为追赶旧绝对时间轴而连续突发。
             next_deadline_ns = sent_ns + int(period_ns)
