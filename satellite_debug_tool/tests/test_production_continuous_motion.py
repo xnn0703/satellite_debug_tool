@@ -1,6 +1,7 @@
 """自动观察窗口独占摇摆结束时间；准备恢复不缩短实际观察。"""
 
 from dataclasses import replace
+import math
 import threading
 from types import SimpleNamespace
 
@@ -42,8 +43,12 @@ def test_continuous_motion_compiles_one_bounded_repeat_program():
     checked = MotionTrajectoryRunner(controller).preflight(_continuous())
 
     assert checked.compiled.finite_points == ()
-    assert len(checked.compiled.prefix_points) == 5
-    assert len(checked.compiled.periodic_points) == 250
+    assert len(checked.compiled.prefix_points) == math.ceil(
+        checked.trajectory.ramp_in_s * 1000.0 / checked.trajectory.sample_period_ms
+    )
+    assert len(checked.compiled.periodic_points) == round(
+        5.0 * 1000.0 / checked.trajectory.sample_period_ms
+    )
 
 
 def test_finite_engineering_trajectory_keeps_full_path_and_arrival():
@@ -51,8 +56,8 @@ def test_finite_engineering_trajectory_keeps_full_path_and_arrival():
     controller = ConfirmedMotionController(_profile().to_motion_config())
     trajectory = replace(_continuous(), steady_duration_s=.2, ramp_out_s=.1)
     result = MotionTrajectoryRunner(controller, clock_ns=lambda: clock.ns, sleep=clock.sleep).run(trajectory)
-    assert result.intended_points == trajectory.sample_count == 20
-    assert result.sent_points == 20
+    assert result.intended_points == trajectory.sample_count
+    assert result.sent_points == trajectory.sample_count
     assert result.arrival.successful
     assert result.stopped is False
 
@@ -118,7 +123,11 @@ def test_automatic_motion_runs_through_delayed_observation_then_controlled_cente
     )
     assert clock.ns / 1e9 == pytest.approx(3.0)
     assert result.intended_points is None
-    assert result.sent_points == 150
+    assert result.sent_points == round(
+        (observation_start_s + observation_duration_s)
+        * 1000.0
+        / trajectory.sample_period_ms
+    )
     assert result.stopped
     assert execution.completed == []
     hardware._finished("motion", result)

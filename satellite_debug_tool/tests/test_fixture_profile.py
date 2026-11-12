@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -262,4 +263,7 @@ def test_multi_hour_trajectory_uses_constant_time_motion_envelope_gate() -> None
 
     validate_sine_profile(_profile().to_motion_config(), profile)
 
-    assert profile.sample_count > 1_000_000
+    assert profile.sample_count == math.ceil(
+        profile.total_duration_s * 1000.0 / profile.sample_period_ms
+    )
+    assert profile.sample_count > 400_000

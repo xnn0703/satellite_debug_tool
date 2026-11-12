@@ -556,8 +556,10 @@ def test_trajectory_minor_timing_gap_is_recorded_without_stopping_motion() -> No
 
     assert not result.timing_fault
     assert result.control_gap_count == 1
-    assert result.maximum_send_interval_ms == pytest.approx(30.0)
-    assert result.sent_points == 8
+    assert result.maximum_send_interval_ms == pytest.approx(
+        trajectory.sample_period_ms + 10.0
+    )
+    assert result.sent_points == trajectory.sample_count
     assert result.arrival is not None
 
 
@@ -576,7 +578,7 @@ def test_trajectory_missing_a_complete_slot_resynchronizes_without_skipping() ->
         sleep_count += 1
         now_ns += round(seconds * 1_000_000_000)
         if sleep_count == 1:
-            now_ns += 25_000_000
+            now_ns += (CONTINUOUS_TRAJECTORY_PERIOD_MS + 5) * 1_000_000
 
     controller = ConfirmedMotionController(
         fixture_model_presets()[0].create_profile().to_motion_config(),
@@ -600,8 +602,10 @@ def test_trajectory_missing_a_complete_slot_resynchronizes_without_skipping() ->
     assert result.timing_fault
     assert result.skipped_points == 0
     assert result.control_gap_count == 1
-    assert result.maximum_send_interval_ms == pytest.approx(45.0)
-    assert result.sent_points == 8
+    assert result.maximum_send_interval_ms == pytest.approx(
+        2 * trajectory.sample_period_ms + 5.0
+    )
+    assert result.sent_points == trajectory.sample_count
     assert result.arrival is not None
 
 
@@ -692,9 +696,12 @@ def test_finite_trajectory_execution_uses_precompiled_frames(monkeypatch) -> Non
     runner = MotionTrajectoryRunner(controller, clock_ns=clock_ns, sleep=sleep)
     checked = runner.preflight(trajectory)
 
-    assert len(checked.compiled.finite_points) == trajectory.sample_count == 8
+    assert len(checked.compiled.finite_points) == trajectory.sample_count
     assert all(point.frame.startswith(b"\xAA\x55\x00\x1b\xC0") for point in checked.compiled.finite_points)
-    assert all(point.frame[5:7] == b"\x00\x14" for point in checked.compiled.finite_points)
+    assert all(
+        point.frame[5:7] == struct.pack(">H", trajectory.sample_period_ms)
+        for point in checked.compiled.finite_points
+    )
 
     monkeypatch.setattr(
         trajectory_module,
@@ -703,7 +710,7 @@ def test_finite_trajectory_execution_uses_precompiled_frames(monkeypatch) -> Non
     )
     result = runner.run(trajectory, preflight=checked)
 
-    assert result.sent_points == 8
+    assert result.sent_points == trajectory.sample_count
     assert result.arrival is not None and result.arrival.successful
 
     changed = replace(trajectory, roll=SineAxis(1.1, 0.1))
