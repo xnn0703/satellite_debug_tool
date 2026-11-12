@@ -231,7 +231,7 @@ class AttitudeWidget(QWidget):
         # 安装参考平面：roll=pitch=0 的水平面，固定不随姿态旋转。
         # 位置取模型中心包围球以外（归一化模型最长边 3.6，包围球半径 ≤3.12，
         # 取 z=-2.6 保证任意姿态下平面都不与机体相交）。
-        self._reference_plane_z = -2.6
+        self._reference_plane_z = -2.25  # 占位机体包围球初值；加载模型后按半径自适应
         self._grid = GLGridItem(
             size=QVector3D(7.0, 7.0, 1.0),
             color=(107, 114, 128, 200),
@@ -359,6 +359,9 @@ class AttitudeWidget(QWidget):
             [3, 7, 6], [3, 6, 2],
         ], dtype=np.uint32)
 
+        self._update_reference_plane(
+            float(np.max(np.linalg.norm(verts.astype(np.float64), axis=1)))
+        )
         md = MeshData(vertexes=verts, faces=faces)
         mesh = GLMeshItem(
             meshdata=md,
@@ -409,6 +412,20 @@ class AttitudeWidget(QWidget):
         mesh.setColor((0.95, 0.20, 0.20, 0.95))   # 醒目的红
         return mesh
 
+    def _update_reference_plane(self, radius: float) -> None:
+        """按当前机体模型包围球半径放置参考面（球外 0.35 余量）。
+
+        归一化保证半径有上界，但模型尺寸各不相同；参考面跟随半径移动，
+        任意尺寸、任意姿态下平面都不与机体相交。网格尺寸随深度同步缩放。
+        """
+        radius = max(0.0, float(radius))
+        self._reference_plane_z = -(radius + 0.35)
+        size = max(7.0, round((radius + 0.7) * 2.0, 1))
+        self._grid.resetTransform()
+        self._grid.setSize(size=QVector3D(size, size, 1.0))
+        self._grid.setSpacing(spacing=QVector3D(size / 14.0, size / 14.0, 1.0))
+        self._grid.translate(0.0, 0.0, self._reference_plane_z)
+
     def set_body_model(self, mesh_data: MeshData, draw_edges: bool = False) -> None:
         """替换默认长方体为自定义 3D 模型（设备 STL/OBJ 用）。
 
@@ -423,6 +440,11 @@ class AttitudeWidget(QWidget):
             return
         self._device_verts = verts
         self._device_faces = faces
+        finite = verts[np.isfinite(verts).all(axis=1)]
+        if len(finite):
+            self._update_reference_plane(
+                float(np.max(np.linalg.norm(finite, axis=1)))
+            )
         self._rebuild_device_body()
 
     def _body_shade_params(self):
