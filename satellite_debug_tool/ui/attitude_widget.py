@@ -64,7 +64,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QVector3D
-from pyqtgraph.opengl import GLViewWidget, GLLinePlotItem, GLMeshItem, MeshData
+from pyqtgraph.opengl import GLGridItem, GLViewWidget, GLLinePlotItem, GLMeshItem, MeshData
 
 from satellite_debug_tool.i18n import register_translatable, tr
 from satellite_debug_tool.ui import styles as S
@@ -206,10 +206,18 @@ class AttitudeWidget(QWidget):
         self._set_default_camera()
         self._gl_view.setBackgroundColor(0x1E, 0x1E, 0x1E)
 
-        # 地面参考网格已移除：z=0 网格平面会横穿居中的设备模型，网格线在穿出
-        # 模型边缘处显示成白色斜纹（很扎眼），且对姿态判读帮助不大。保留 None
-        # 占位让 _apply_scene_colors 的 grid 分支安全跳过。
-        self._grid = None
+        # 安装参考平面：roll=pitch=0 的水平面，固定在机体下方，不随姿态旋转。
+        # 比 z=0 旧网格下移，避免网格线横穿机体形成白色斜纹。
+        self._reference_plane_z = -0.25
+        # pyqtgraph 的 size/spacing 复合参数合同是 QVector3D；tuple 在新版中会被
+        # 当作具备 x()/y()/z() 的对象使用，导致窗口构造阶段失败。
+        self._grid = GLGridItem(
+            size=QVector3D(5.0, 5.0, 1.0),
+            color=(128, 128, 128, 60),
+        )
+        self._grid.setSpacing(spacing=QVector3D(0.5, 0.5, 1.0))
+        self._grid.translate(0.0, 0.0, self._reference_plane_z)
+        self._gl_view.addItem(self._grid)
 
         # 参考轴（body frame）
         self._axes = self._create_axes()
@@ -274,11 +282,11 @@ class AttitudeWidget(QWidget):
     def _create_axes(self) -> dict:
         """世界系（NWU）参考轴：红 = +X 北 / 绿 = +Y 西 / 蓝 = +Z 上。"""
         x_data = np.array([[0, 0, 0], [3, 0, 0]], dtype=np.float32)  # +X 北
-        x_line = GLLinePlotItem(pos=x_data, color=(1, 0, 0, 1), width=2)
+        x_line = GLLinePlotItem(pos=x_data, color=(1, 0, 0, 1), width=2.5)
         y_data = np.array([[0, 0, 0], [0, 3, 0]], dtype=np.float32)  # +Y 西
-        y_line = GLLinePlotItem(pos=y_data, color=(0, 1, 0, 1), width=2)
+        y_line = GLLinePlotItem(pos=y_data, color=(0, 1, 0, 1), width=2.5)
         z_data = np.array([[0, 0, 0], [0, 0, 3]], dtype=np.float32)  # +Z 上
-        z_line = GLLinePlotItem(pos=z_data, color=(0, 0, 1, 1), width=2)
+        z_line = GLLinePlotItem(pos=z_data, color=(0, 0, 1, 1), width=2.5)
         return {"x": x_line, "y": y_line, "z": z_line}
 
     def _create_aircraft(self) -> GLMeshItem:
@@ -832,11 +840,19 @@ class AttitudeWidget(QWidget):
         grid_color = QColor(p["border"]).getRgbF()
         beam_color = QColor(p["ok"]).getRgbF()
         trail_color = QColor(p["info"]).getRgbF()
-        ax_x = QColor(p["err"]).getRgbF()
-        ax_y = QColor(p["ok"]).getRgbF()
-        ax_z = QColor(p["info"]).getRgbF()
+        if self._theme == "light":
+            # 浅色白底下调色板的浅色轴线几乎不可见，改用深饱和原色。
+            ax_x = QColor("#C62828").getRgbF()
+            ax_y = QColor("#2E7D32").getRgbF()
+            ax_z = QColor("#1565C0").getRgbF()
+        else:
+            ax_x = QColor(p["err"]).getRgbF()
+            ax_y = QColor(p["ok"]).getRgbF()
+            ax_z = QColor(p["info"]).getRgbF()
         if getattr(self, "_grid", None) is not None:
-            self._grid.setColor(grid_color)
+            subtle = QColor(p["border"])
+            subtle.setAlphaF(0.35)
+            self._grid.setColor(subtle)
         self._ant_line.setData(color=beam_color)
         self._trail_line.setData(color=trail_color)
         axes = getattr(self, "_axes", {}) or {}
