@@ -80,6 +80,28 @@ _CAM_DISTANCE = 14.0
 _CAM_ELEVATION = 22.0
 _CAM_AZIMUTH = 45.0
 _CAM_CENTER_Z = 0.9
+_AXIS_LENGTH = 3.0
+
+
+def _axis_transform(axis: str):
+    """参考轴圆柱（沿 +Z，0..length）旋转到目标轴并把基点移到原点。"""
+    import numpy as _np
+    if axis == "x":
+        # Ry(+90°)：+Z → +X，轴向 +X 延伸
+        return _np.array([[0, 0, 1, _AXIS_LENGTH / 2],
+                          [0, 1, 0, 0],
+                          [-1, 0, 0, 0],
+                          [0, 0, 0, 1]], dtype=np.float32)
+    if axis == "y":
+        # Rx(-90°)：+Z → +Y，轴向 +Y 延伸
+        return _np.array([[1, 0, 0, 0],
+                          [0, 0, -1, _AXIS_LENGTH / 2],
+                          [0, 1, 0, 0],
+                          [0, 0, 0, 1]], dtype=np.float32)
+    return _np.array([[1, 0, 0, 0],
+                      [0, 1, 0, 0],
+                      [0, 0, 1, _AXIS_LENGTH / 2],
+                      [0, 0, 0, 1]], dtype=np.float32)
 
 # NED↔NWU 映射（也用于 FRD↔FLU）：Y,Z 翻号，det=+1 保持右手系
 P_NED_NWU = np.diag([1.0, -1.0, -1.0]).astype(np.float64)
@@ -280,14 +302,24 @@ class AttitudeWidget(QWidget):
         self._apply_label_styles()
 
     def _create_axes(self) -> dict:
-        """世界系（NWU）参考轴：红 = +X 北 / 绿 = +Y 西 / 蓝 = +Z 上。"""
-        x_data = np.array([[0, 0, 0], [3, 0, 0]], dtype=np.float32)  # +X 北
-        x_line = GLLinePlotItem(pos=x_data, color=(1, 0, 0, 1), width=2.5)
-        y_data = np.array([[0, 0, 0], [0, 3, 0]], dtype=np.float32)  # +Y 西
-        y_line = GLLinePlotItem(pos=y_data, color=(0, 1, 0, 1), width=2.5)
-        z_data = np.array([[0, 0, 0], [0, 0, 3]], dtype=np.float32)  # +Z 上
-        z_line = GLLinePlotItem(pos=z_data, color=(0, 0, 1, 1), width=2.5)
-        return {"x": x_line, "y": y_line, "z": z_line}
+        """世界系（NWU）参考轴：红 = +X 北 / 绿 = +Y 西 / 蓝 = +Z 上。
+
+        用实体圆柱而不是 GLLinePlotItem：macOS OpenGL 把线宽 >1 截成
+        1px，细线在白底或模型旁几乎不可见；圆柱网格在任何平台都是实心粗轴。
+        """
+        mesh_data = MeshData.cylinder(rows=10, cols=16, radius=[0.05, 0.05], length=3.0)
+        transforms = {
+            "x": _axis_transform("x"),
+            "y": _axis_transform("y"),
+            "z": _axis_transform("z"),
+        }
+        initial = {"x": (1.0, 0.1, 0.1, 1.0), "y": (0.1, 1.0, 0.1, 1.0), "z": (0.1, 0.3, 1.0, 1.0)}
+        axes = {}
+        for key, tr in transforms.items():
+            item = GLMeshItem(meshdata=mesh_data, smooth=True, color=initial[key])
+            item.setTransform(tr)
+            axes[key] = item
+        return axes
 
     def _create_aircraft(self) -> GLMeshItem:
         """默认机体模型：扁平矩形板（相控阵卫通终端外形）。
@@ -858,7 +890,7 @@ class AttitudeWidget(QWidget):
         axes = getattr(self, "_axes", {}) or {}
         for key, col in (("x", ax_x), ("y", ax_y), ("z", ax_z)):
             if key in axes:
-                axes[key].setData(color=col)
+                axes[key].setColor(col)
         # 设备模型明暗按主题重新烘焙（白底压暗 / 黑底提亮）
         if getattr(self, "_device_verts", None) is not None:
             self._rebuild_device_body()
