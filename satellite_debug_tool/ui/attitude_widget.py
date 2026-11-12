@@ -235,7 +235,7 @@ class AttitudeWidget(QWidget):
         # 当作具备 x()/y()/z() 的对象使用，导致窗口构造阶段失败。
         self._grid = GLGridItem(
             size=QVector3D(5.0, 5.0, 1.0),
-            color=(128, 128, 128, 60),
+            color=(107, 114, 128, 200),
         )
         self._grid.setSpacing(spacing=QVector3D(0.5, 0.5, 1.0))
         self._grid.translate(0.0, 0.0, self._reference_plane_z)
@@ -882,9 +882,13 @@ class AttitudeWidget(QWidget):
             ax_y = QColor(p["ok"]).getRgbF()
             ax_z = QColor(p["info"]).getRgbF()
         if getattr(self, "_grid", None) is not None:
-            subtle = QColor(p["border"])
-            subtle.setAlphaF(0.35)
-            self._grid.setColor(subtle)
+            if self._theme == "light":
+                grid_qc = QColor("#6B7280")
+                grid_qc.setAlphaF(0.8)
+            else:
+                grid_qc = QColor(p["border"])
+                grid_qc.setAlphaF(0.55)
+            self._grid.setColor(grid_qc)
         self._ant_line.setData(color=beam_color)
         self._trail_line.setData(color=trail_color)
         axes = getattr(self, "_axes", {}) or {}
