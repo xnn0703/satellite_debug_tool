@@ -200,7 +200,7 @@ def _copy_immutable(source: Path, target: Path, expected: tuple[int, str]) -> No
     linked = False
     # 公开目录不能借由 hard link + chmod 改写 incoming/TUF 源 inode 的权限。
     # 已经公开可读的正式 target 可直接链接；窄权限候选复制为独立公开文件。
-    if source.stat().st_mode & stat.S_IROTH:
+    if os.name != "nt" and source.stat().st_mode & stat.S_IROTH:
         try:
             os.link(source, target)
             linked = True

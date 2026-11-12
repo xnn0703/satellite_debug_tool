@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import socket
 import time
@@ -9,6 +10,18 @@ from typing import Sequence
 
 
 _DEADLINE_GUARD_NS = 1_000_000
+
+
+def _begin_windows_timer_resolution():
+    """让当前 Windows 发送子进程的等待粒度满足固定 20 ms 时间线。"""
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    winmm = ctypes.WinDLL("winmm")
+    if winmm.timeBeginPeriod(1) != 0:
+        raise OSError("timeBeginPeriod(1) failed")
+    return winmm
 
 
 def run_timeline_process(
@@ -33,7 +46,9 @@ def run_timeline_process(
     fade_index = 0
     next_deadline_ns = time.monotonic_ns()
     last_sent_ns: int | None = None
+    winmm = None
     try:
+        winmm = _begin_windows_timer_resolution()
         while True:
             deadline_ns = next_deadline_ns
             while True:
@@ -141,6 +156,8 @@ def run_timeline_process(
     except BaseException as exc:
         event_queue.put(("error", f"{type(exc).__name__}: {exc}"))
     finally:
+        if winmm is not None:
+            winmm.timeEndPeriod(1)
         transport.close()
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import zipfile
@@ -141,11 +142,14 @@ def test_private_candidate_is_copied_without_changing_source_permissions(release
     receipt = json.loads((candidate_path / "receipt.json").read_bytes())
     archive_row = next(row for row in receipt["artifacts"] if row["name"].endswith(".7z"))
     source = candidate_path / archive_row["name"]
+    source_bytes = source.read_bytes()
     source.chmod(0o600)
     publish_release(request, incoming_root=incoming, repository=repository, downloads_root=downloads)
     target = downloads / "v2.0.0" / archive_row["name"]
-    assert source.stat().st_mode & 0o777 == 0o600
-    assert target.stat().st_mode & 0o777 == 0o644
+    assert source.read_bytes() == source_bytes
+    if os.name != "nt":
+        assert source.stat().st_mode & 0o777 == 0o600
+        assert target.stat().st_mode & 0o777 == 0o644
     assert source.stat().st_ino != target.stat().st_ino
 
 

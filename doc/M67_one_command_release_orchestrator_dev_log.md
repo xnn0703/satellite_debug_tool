@@ -53,3 +53,5 @@ Windows/macOS 实机安装与回滚、Apple notarization、真实设备/RF/电�
 - 发布锁改为 POSIX `flock` / Windows `msvcrt.locking` 单一跨平台 owner；服务器原子发布只在 POSIX fsync 目录，文件 fsync 和原子 rename 保持全平台合同。
 - 图表列数改由批次滚动区实际 viewport 宽度决定；运动平台隔离时间线测试保留 Windows 真实调度空洞的 `timing_fault`，以不跳点、完整收包和 P95 间隔验证父进程慢处理不会系统性拖慢发送。
 - 修正后版本递增为 `v1.9.5`，不移动或复用失败的 `v1.9.4` tag。
+- `v1.9.5` Windows 回归进一步证明默认计时粒度使真实 20 ms UDP 时间线 P95 达到 32 ms；发送子进程现于 Windows 生命周期内成对调用 `timeBeginPeriod(1)` / `timeEndPeriod(1)`，不以放宽时序门限掩盖故障。
+- Windows `chmod` 不能表达 POSIX `0600/0644`，服务器工具在 Windows 明确使用独立复制，源字节不变；权限位断言仅属于 POSIX。正式版本继续递增为 `v1.9.6`，两个失败 tag 均保持不可变且没有候选晋升。
