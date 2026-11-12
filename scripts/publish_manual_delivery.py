@@ -67,14 +67,17 @@ def _member(name: str) -> PurePosixPath:
     return path
 
 
-def _archive_identity(archive: Path, identity: dict) -> None:
+def verify_release_archive(archive: Path, identity: dict) -> None:
+    """验证完整发行归档的 CRC、唯一身份和 edition 裁剪边界。"""
     if identity["platform"] == "mac":
         with zipfile.ZipFile(archive) as package:
             entries = package.infolist()
             names = [_member(item.filename).as_posix() for item in entries]
             if len(set(names)) != len(names):
                 raise ValueError("delivery archive contains duplicate paths")
-            if any(PurePosixPath(name).name in ("updater", "updater.exe", "release.config.json") for name in names):
+            if (identity["edition"] == "user"
+                    and any(PurePosixPath(name).name in ("updater", "updater.exe", "release.config.json")
+                            for name in names)):
                 raise ValueError("user archive contains application update files")
             suffix = "/Contents/Resources/satellite_debug_tool/build_identity.json"
             matches = [item for item in entries if item.filename.endswith(suffix)]
@@ -96,7 +99,7 @@ def _archive_identity(archive: Path, identity: dict) -> None:
                 raise ValueError("Windows delivery requires unique regular archive entries")
             if package.testzip() is not None:
                 raise ValueError("delivery 7z CRC verification failed")
-        root = verify_archive(archive, edition="user", version=identity["version"])
+        root = verify_archive(archive, edition=identity["edition"], version=identity["version"])
         member = (root / "_internal/satellite_debug_tool/build_identity.json").as_posix()
         match = [item for item in entries if item.filename == member]
         if len(match) != 1 or match[0].uncompressed > 64 * 1024:
@@ -109,14 +112,9 @@ def _archive_identity(archive: Path, identity: dict) -> None:
         raise ValueError("archive build identity differs from its candidate receipt")
 
 
-def publish_manual_delivery(candidate: Path, *, expected_commit: str, output_root: Path,
-                            public_base_url: str) -> dict:
-    """校验服务器候选后本地复制；所有权根预建，只生成版本子目录和完整包。"""
-    candidate, output_root = _directory(candidate), _directory(output_root)
-    parsed = urlsplit(public_base_url)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.query or parsed.fragment or not public_base_url.endswith("/")):
-        raise ValueError("manual delivery requires an absolute HTTPS base ending in slash")
+def inspect_manual_delivery_candidate(candidate: Path, *, expected_commit: str) -> dict:
+    """只读核验 user 候选，返回后续服务器本地交付所需的权威事实。"""
+    candidate = _directory(candidate)
     receipt_path = candidate / "receipt.json"
     with _open_file(receipt_path) as stream:
         raw = stream.read(1024**2 + 1)
@@ -160,7 +158,22 @@ def publish_manual_delivery(candidate: Path, *, expected_commit: str, output_roo
         raise ValueError("candidate requires exactly one named complete platform archive")
     row = archives[0]
     source = candidate / row["name"]
-    _archive_identity(source, identity)
+    verify_release_archive(source, identity)
+    return {"identity": identity, "source": source, "artifact": row,
+            "receipt_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def publish_manual_delivery(candidate: Path, *, expected_commit: str, output_root: Path,
+                            public_base_url: str) -> dict:
+    """校验服务器候选后本地复制；所有权根预建，只生成版本子目录和完整包。"""
+    candidate, output_root = _directory(candidate), _directory(output_root)
+    parsed = urlsplit(public_base_url)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.query or parsed.fragment or not public_base_url.endswith("/")):
+        raise ValueError("manual delivery requires an absolute HTTPS base ending in slash")
+    inspected = inspect_manual_delivery_candidate(candidate, expected_commit=expected_commit)
+    identity, source, row = inspected["identity"], inspected["source"], inspected["artifact"]
+    version = identity["version"]
     directory = output_root / ("v" + version)
     try:
         directory.mkdir(mode=0o755)

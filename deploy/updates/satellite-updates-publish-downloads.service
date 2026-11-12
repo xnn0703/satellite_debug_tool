@@ -1,0 +1,18 @@
+[Unit]
+Description=Publish Satellite Terminal Manager complete download packages locally
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=satellite_metadata
+UMask=0027
+WorkingDirectory=/opt/satellite-updates/tools
+ExecStart=/opt/satellite-updates/venv/bin/python /opt/satellite-updates/tools/scripts/publish_release_downloads_server.py --requests /srv/satellite-updates/receipts/downloads/requests --results /srv/satellite-updates/receipts/downloads/results --archive /srv/satellite-updates/receipts/downloads/archive --incoming-root /srv/satellite-updates/incoming --repository /srv/satellite-updates/public/v1/apps/satellite-terminal-tool --downloads-root /srv/satellite-updates/public/downloads
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/satellite-updates/incoming /srv/satellite-updates/public/v1/apps/satellite-terminal-tool
+ReadWritePaths=/srv/satellite-updates/public/downloads /srv/satellite-updates/receipts/downloads/requests /srv/satellite-updates/receipts/downloads/results /srv/satellite-updates/receipts/downloads/archive
+RestrictAddressFamilies=AF_UNIX

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Satellite Terminal Manager complete-download publication requests
+
+[Path]
+PathChanged=/srv/satellite-updates/receipts/downloads/requests
+Unit=satellite-updates-publish-downloads.service
+
+[Install]
+WantedBy=multi-user.target
