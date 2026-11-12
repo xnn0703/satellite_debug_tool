@@ -834,7 +834,8 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
 
     receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     receiver.bind(("127.0.0.1", 0))
-    receiver.settimeout(1.0)
+    # Windows spawn 需要重新导入测试进程；冷启动预算与 50 ms 运行期节拍分离。
+    receiver.settimeout(10.0)
     endpoint = receiver.getsockname()
     sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     config = replace(
@@ -882,11 +883,15 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
         yaw=SineAxis(0.0, 0.0, enabled=False),
     )
     received_at = []
+    receive_errors = []
 
     def receive() -> None:
-        while len(received_at) < trajectory.sample_count:
-            receiver.recvfrom(4096)
-            received_at.append(time.monotonic_ns())
+        try:
+            while len(received_at) < trajectory.sample_count:
+                receiver.recvfrom(4096)
+                received_at.append(time.monotonic_ns())
+        except Exception as exc:
+            receive_errors.append(exc)
 
     receive_thread = threading.Thread(target=receive)
     receive_thread.start()
@@ -963,6 +968,7 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
     )
     assert result.sent_points == trajectory.sample_count == expected_points
     assert result.skipped_points == 0
+    assert receive_errors == []
     assert len(received_at) == expected_points
     intervals_ms = [
         (current - previous) / 1_000_000.0
