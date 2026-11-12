@@ -29,6 +29,8 @@ _MODEL_AXES = {
     # AFD01C/D share this enclosure CAD: X=left, Y=thickness/up, +Z=nose.
     "afd01c": DeviceModelAxes(1, 2, 1.0, 1.0),
     "afd01d": DeviceModelAxes(1, 2, 1.0, 1.0),
+    # AFD01B2 enclosure CAD (2026-11 实机 STEP): X=nose, Y=thickness/up, Z=left.
+    "afd01b2": DeviceModelAxes(1, 0, 1.0, 1.0),
 }
 
 

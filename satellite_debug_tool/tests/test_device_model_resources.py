@@ -35,20 +35,42 @@ def test_builtin_models_are_present_and_identical():
     assert _sha256(esa01) == EXPECTED_SHA256
 
 
-def test_afd01d_builtin_model_is_valid_and_has_independent_hash():
-    afd01d = MODELS_DIR / "afd01d.stl"
-    assert afd01d.stat().st_size == 5_268_984
-    assert _sha256(afd01d) == (
-        "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d"
-    )
+_REAL_DEVICE_MODELS = {
+    # 2026-11 实机 STEP（gmsh 网格化导出，二进制 STL）
+    "afd01b2.stl": {
+        "size": 3_795_084,
+        "sha256": "344e230e10584f72edc83a26d0faad625c231ffbb92249990fe670754da51b49",
+        "vertices": 227_700,
+        "faces": 75_900,
+    },
+    "afd01c.stl": {
+        "size": 2_593_784,
+        "sha256": "03cde446036f2f3686fdbcb14bd7586aefd84cf3bd95acaef8867f058837c6d4",
+        "vertices": 155_622,
+        "faces": 51_874,
+    },
+    "afd01d.stl": {
+        "size": 2_584_084,
+        "sha256": "0ef8cb2b7c0cf9fe073c9323c5601c6a36578ed4940aa8c55dd1abca5963c3c9",
+        "vertices": 155_040,
+        "faces": 51_680,
+    },
+}
 
+
+def test_real_device_models_are_independent_builtins():
+    """B2/C/D 各自的实机 STEP 模型：独立 hash、可加载、网格有效。"""
     from satellite_debug_tool.ui.stl_loader import load_stl
 
-    vertices, faces = load_stl(afd01d)
-    assert vertices.shape == (316_134, 3)
-    assert faces.shape == (105_378, 3)
-    assert np.isfinite(vertices).all()
-    assert np.all(np.ptp(vertices, axis=0) > 0.0)
+    for name, spec in _REAL_DEVICE_MODELS.items():
+        path = MODELS_DIR / name
+        assert path.stat().st_size == spec["size"]
+        assert _sha256(path) == spec["sha256"]
+        vertices, faces = load_stl(path)
+        assert vertices.shape == (spec["vertices"], 3)
+        assert faces.shape == (spec["faces"], 3)
+        assert np.isfinite(vertices).all()
+        assert np.all(np.ptp(vertices, axis=0) > 0.0)
 
 
 def test_model_candidates_prefer_user_override(tmp_path):
@@ -119,7 +141,7 @@ def test_afd01c_uses_its_independent_builtin_model(tmp_path):
     )
     assert loaded == (MODELS_DIR / "afd01c.stl", "afd01c.stl")
     assert _sha256(MODELS_DIR / "afd01c.stl") == (
-        "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d"
+        "03cde446036f2f3686fdbcb14bd7586aefd84cf3bd95acaef8867f058837c6d4"
     )
     assert device_model_axes("AFD01C") == device_model_axes("AFD01D")
 
@@ -157,6 +179,7 @@ def test_afd01a_prefers_own_override_then_original_builtin(tmp_path):
 
 
 def test_afd01b2_keeps_independent_model_key(tmp_path):
+    """B2 独立模型键保留（实机模型已内置，不再回退占位/其他型号）。"""
     candidates = device_model_candidates(
         "AFD01B2", home=tmp_path, builtin_dir=MODELS_DIR
     )
@@ -164,9 +187,10 @@ def test_afd01b2_keeps_independent_model_key(tmp_path):
         tmp_path / ".satellite_debug_tool" / "models" / "afd01b2.stl",
         MODELS_DIR / "afd01b2.stl",
     )
-    assert load_first_device_model(
-        "AFD01B2", lambda path: path.read_bytes(), home=tmp_path, builtin_dir=MODELS_DIR
-    ) is None
+    loaded = load_first_device_model(
+        "AFD01B2", lambda path: path.name, home=tmp_path, builtin_dir=MODELS_DIR
+    )
+    assert loaded == (MODELS_DIR / "afd01b2.stl", "afd01b2.stl")
 
 
 def test_afd01d_uses_only_its_independent_model_and_axes(tmp_path):
@@ -257,3 +281,26 @@ def test_model_change_clears_stale_mesh_when_target_has_no_model(
     assert widget._body is not afd01_body
     assert widget._nose_arrow.visible()
     widget.close()
+
+
+def test_afd01b2_has_independent_builtin_model_and_axes(tmp_path):
+    """B2 实机模型独立成档；CAD 机头沿 X，与 C/D（沿 Z）轴向约定不同。"""
+    candidates = device_model_candidates(
+        "AFD01B2",
+        home=tmp_path,
+        builtin_dir=MODELS_DIR,
+    )
+    assert candidates == (
+        tmp_path / ".satellite_debug_tool" / "models" / "afd01b2.stl",
+        MODELS_DIR / "afd01b2.stl",
+    )
+    spec = _REAL_DEVICE_MODELS["afd01b2.stl"]
+    assert _sha256(MODELS_DIR / "afd01b2.stl") == spec["sha256"]
+    from satellite_debug_tool.ui.device_model_resources import device_model_axes
+
+    axes = device_model_axes("afd01b2")
+    assert (axes.up_axis, axes.nose_axis) == (1, 0)
+    assert (axes.up_axis, axes.nose_axis) != (
+        device_model_axes("afd01c").up_axis,
+        device_model_axes("afd01c").nose_axis,
+    )
