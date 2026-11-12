@@ -3,11 +3,36 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from satellite_debug_tool.model_asset_manifest import ModelAssetIdentity
 from scripts import verify_model_assets
+
+
+ROOT = Path(__file__).resolve().parents[2]
+MODELS_DIR = ROOT / "satellite_debug_tool" / "ui" / "assets" / "models"
+
+
+def test_verify_script_resolves_project_package_in_isolated_python() -> None:
+    """Windows 构建入口不依赖调用方预设 PYTHONPATH。"""
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(ROOT / "scripts" / "verify_model_assets.py"),
+            str(MODELS_DIR),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_verify_package_consumes_authoritative_model_identity(

@@ -8,6 +8,9 @@ import hashlib
 from pathlib import Path
 import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 from satellite_debug_tool.model_asset_manifest import BUILTIN_MODEL_ASSETS
 
 EXPECTED_SUFFIX = ("satellite_debug_tool", "ui", "assets", "models")
