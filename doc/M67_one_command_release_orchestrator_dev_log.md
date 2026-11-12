@@ -57,3 +57,4 @@ Windows/macOS 实机安装与回滚、Apple notarization、真实设备/RF/电�
 - Windows `chmod` 不能表达 POSIX `0600/0644`，服务器工具在 Windows 明确使用独立复制，源字节不变；权限位断言仅属于 POSIX。正式版本继续递增为 `v1.9.6`，两个失败 tag 均保持不可变且没有候选晋升。
 - `v1.9.6` 证明 `timeBeginPeriod(1)` 不能改变 `multiprocessing.Queue.get(timeout)` 所用 Windows 同步对象的超时量化，真实 UDP P95 仍为 32 ms。时间线等待改为非阻塞命令轮询、高分辨率 sleep 与最后 1 ms deadline guard；回归测试明确拒绝阻塞队列等待。正式版本递增为 `v1.9.7`。
 - Windows Actions 在全量源码回归前增加平台合同快速门禁，优先执行真实 UDP 时间线、发布互斥和服务器文件语义测试；它不替代后续全量回归，只把平台错误提前到候选构建前数秒暴露。
+- `v1.9.7` 快速门禁在约 10 秒内暴露剩余断言仍使用父进程 UDP 接收线程时间；Windows 会批量调度该观察线程到约 32 ms。门禁改为消费时间线子进程在每次 `sendto` 后回传的权威 `p95_send_interval_ms`，同时继续要求全部 UDP 包到达；正式版本递增为 `v1.9.8`。新 tag 前先用 master CI-only 验证 Windows 快速门禁和全量回归。

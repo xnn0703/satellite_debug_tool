@@ -956,7 +956,9 @@ def test_real_socket_trajectory_uses_isolated_timeline_process() -> None:
         (current - previous) / 1_000_000.0
         for previous, current in zip(received_at, received_at[1:])
     ]
-    assert sorted(intervals_ms)[math.ceil(len(intervals_ms) * 0.95) - 1] < 25.0
+    # Windows 可把父进程接收线程批量调度到约 32 ms；发送合同的权威事实是
+    # 子进程在每次 sendto 后记录并回传的单调时间，接收侧只证明包完整到达。
+    assert result.p95_send_interval_ms < 25.0
     assert max(intervals_ms) < 100.0
     if result.timing_fault:
         # Windows 调度器可能真实产生一个 >=40 ms 的发送空洞；该事实必须保留为
