@@ -12,84 +12,6 @@ from typing import Sequence
 _DEADLINE_GUARD_NS = 1_000_000
 
 
-class _SleepDeadlineWaiter:
-    def wait(self, seconds: float) -> None:
-        time.sleep(seconds)
-
-    def close(self) -> None:
-        pass
-
-
-class _WindowsHighResolutionDeadlineWaiter:
-    """使用 Windows 高分辨率 waitable timer 等待相对 deadline。"""
-
-    _CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002
-    _TIMER_ALL_ACCESS = 0x001F0003
-    _WAIT_OBJECT_0 = 0x00000000
-    _INFINITE = 0xFFFFFFFF
-
-    def __init__(self) -> None:
-        import ctypes
-
-        self._ctypes = ctypes
-        self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        self._kernel32.CreateWaitableTimerExW.argtypes = (
-            ctypes.c_void_p,
-            ctypes.c_wchar_p,
-            ctypes.c_ulong,
-            ctypes.c_ulong,
-        )
-        self._kernel32.CreateWaitableTimerExW.restype = ctypes.c_void_p
-        self._kernel32.SetWaitableTimer.argtypes = (
-            ctypes.c_void_p,
-            ctypes.POINTER(ctypes.c_longlong),
-            ctypes.c_long,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_int,
-        )
-        self._kernel32.SetWaitableTimer.restype = ctypes.c_int
-        self._kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
-        self._kernel32.WaitForSingleObject.restype = ctypes.c_ulong
-        self._kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
-        self._kernel32.CloseHandle.restype = ctypes.c_int
-        self._handle = self._kernel32.CreateWaitableTimerExW(
-            None,
-            None,
-            self._CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-            self._TIMER_ALL_ACCESS,
-        )
-        if not self._handle:
-            raise ctypes.WinError(ctypes.get_last_error())
-
-    def wait(self, seconds: float) -> None:
-        ticks_100ns = max(1, round(seconds * 10_000_000.0))
-        due_time = self._ctypes.c_longlong(-ticks_100ns)
-        if not self._kernel32.SetWaitableTimer(
-            self._handle,
-            self._ctypes.byref(due_time),
-            0,
-            None,
-            None,
-            False,
-        ):
-            raise self._ctypes.WinError(self._ctypes.get_last_error())
-        result = self._kernel32.WaitForSingleObject(self._handle, self._INFINITE)
-        if result != self._WAIT_OBJECT_0:
-            raise OSError(f"WaitForSingleObject failed: {result:#x}")
-
-    def close(self) -> None:
-        if self._handle:
-            self._kernel32.CloseHandle(self._handle)
-            self._handle = None
-
-
-def _create_deadline_waiter():
-    if os.name == "nt":
-        return _WindowsHighResolutionDeadlineWaiter()
-    return _SleepDeadlineWaiter()
-
-
 def run_timeline_process(
     transport: socket.socket,
     endpoint: tuple[str, int],
@@ -112,9 +34,7 @@ def run_timeline_process(
     fade_index = 0
     next_deadline_ns = time.monotonic_ns()
     last_sent_ns: int | None = None
-    deadline_waiter = None
     try:
-        deadline_waiter = _create_deadline_waiter()
         while True:
             deadline_ns = next_deadline_ns
             while True:
@@ -124,11 +44,12 @@ def run_timeline_process(
                 try:
                     command = command_queue.get_nowait()
                 except queue.Empty:
-                    # Windows 的同步对象超时会按系统 tick 量化，20 ms 等待可退化为
-                    # 约 32 ms；命令队列只做非阻塞轮询，剩余时间交给高分辨率 sleep。
-                    # 最后 1 ms 保持命令轮询，避免 sleep 过冲拖慢固定时间线。
-                    if remaining_ns > _DEADLINE_GUARD_NS:
-                        deadline_waiter.wait(
+                    # Windows runner 已证明同步对象、Python sleep 和高分辨率
+                    # waitable timer 均可被宿主量化为约 32 ms。轨迹子进程只在运动
+                    # 期间存在，因此 Windows 直接自旋到 deadline；其它平台在最后
+                    # 1 ms 前休眠，统一继续非阻塞轮询停止/缓停命令。
+                    if os.name != "nt" and remaining_ns > _DEADLINE_GUARD_NS:
+                        time.sleep(
                             (remaining_ns - _DEADLINE_GUARD_NS)
                             / 1_000_000_000.0
                         )
@@ -222,8 +143,6 @@ def run_timeline_process(
     except BaseException as exc:
         event_queue.put(("error", f"{type(exc).__name__}: {exc}"))
     finally:
-        if deadline_waiter is not None:
-            deadline_waiter.close()
         transport.close()
 
 
