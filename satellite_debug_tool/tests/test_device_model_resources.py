@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from pyqtgraph.opengl import MeshData
 
+from satellite_debug_tool.model_asset_manifest import BUILTIN_MODEL_ASSETS
 from satellite_debug_tool.ui.device_model_resources import (
     device_model_axes,
     device_model_candidates,
@@ -19,7 +20,6 @@ from satellite_debug_tool.ui.device_model_resources import (
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = ROOT / "satellite_debug_tool" / "ui" / "assets" / "models"
-EXPECTED_SHA256 = "f58706d3b6fa1ac67f67fea50b8c9c4aa10b50716c8aedab8ef529290f0d5b37"
 
 
 def _sha256(path: Path) -> str:
@@ -31,27 +31,32 @@ def test_builtin_models_are_present_and_identical():
     esa01 = MODELS_DIR / "esa01.stl"
     assert afd01.stat().st_size == 8_066_184
     assert esa01.stat().st_size == 8_066_184
-    assert _sha256(afd01) == EXPECTED_SHA256
-    assert _sha256(esa01) == EXPECTED_SHA256
+    assert _sha256(afd01) == BUILTIN_MODEL_ASSETS["afd01.stl"].sha256
+    assert _sha256(esa01) == BUILTIN_MODEL_ASSETS["esa01.stl"].sha256
+
+
+def test_model_asset_manifest_covers_exact_bundled_files():
+    """发行校验和源码回归必须消费同一份完整内置模型身份清单。"""
+
+    actual_names = {path.name for path in MODELS_DIR.glob("*.stl")}
+    assert actual_names == set(BUILTIN_MODEL_ASSETS)
+    for name, identity in BUILTIN_MODEL_ASSETS.items():
+        path = MODELS_DIR / name
+        assert path.stat().st_size == identity.size
+        assert _sha256(path) == identity.sha256
 
 
 _REAL_DEVICE_MODELS = {
     # 2026-11 实机 STEP（gmsh 网格化导出，二进制 STL）
     "afd01b2.stl": {
-        "size": 3_795_084,
-        "sha256": "344e230e10584f72edc83a26d0faad625c231ffbb92249990fe670754da51b49",
         "vertices": 227_700,
         "faces": 75_900,
     },
     "afd01c.stl": {
-        "size": 2_593_784,
-        "sha256": "03cde446036f2f3686fdbcb14bd7586aefd84cf3bd95acaef8867f058837c6d4",
         "vertices": 155_622,
         "faces": 51_874,
     },
     "afd01d.stl": {
-        "size": 2_584_084,
-        "sha256": "0ef8cb2b7c0cf9fe073c9323c5601c6a36578ed4940aa8c55dd1abca5963c3c9",
         "vertices": 155_040,
         "faces": 51_680,
     },
@@ -64,8 +69,9 @@ def test_real_device_models_are_independent_builtins():
 
     for name, spec in _REAL_DEVICE_MODELS.items():
         path = MODELS_DIR / name
-        assert path.stat().st_size == spec["size"]
-        assert _sha256(path) == spec["sha256"]
+        identity = BUILTIN_MODEL_ASSETS[name]
+        assert path.stat().st_size == identity.size
+        assert _sha256(path) == identity.sha256
         vertices, faces = load_stl(path)
         assert vertices.shape == (spec["vertices"], 3)
         assert faces.shape == (spec["faces"], 3)
@@ -140,8 +146,9 @@ def test_afd01c_uses_its_independent_builtin_model(tmp_path):
         builtin_dir=MODELS_DIR,
     )
     assert loaded == (MODELS_DIR / "afd01c.stl", "afd01c.stl")
-    assert _sha256(MODELS_DIR / "afd01c.stl") == (
-        "03cde446036f2f3686fdbcb14bd7586aefd84cf3bd95acaef8867f058837c6d4"
+    assert (
+        _sha256(MODELS_DIR / "afd01c.stl")
+        == BUILTIN_MODEL_ASSETS["afd01c.stl"].sha256
     )
     assert device_model_axes("AFD01C") == device_model_axes("AFD01D")
 
@@ -294,8 +301,10 @@ def test_afd01b2_has_independent_builtin_model_and_axes(tmp_path):
         tmp_path / ".satellite_debug_tool" / "models" / "afd01b2.stl",
         MODELS_DIR / "afd01b2.stl",
     )
-    spec = _REAL_DEVICE_MODELS["afd01b2.stl"]
-    assert _sha256(MODELS_DIR / "afd01b2.stl") == spec["sha256"]
+    assert (
+        _sha256(MODELS_DIR / "afd01b2.stl")
+        == BUILTIN_MODEL_ASSETS["afd01b2.stl"].sha256
+    )
     from satellite_debug_tool.ui.device_model_resources import device_model_axes
 
     axes = device_model_axes("afd01b2")

@@ -8,13 +8,8 @@ import hashlib
 from pathlib import Path
 import sys
 
+from satellite_debug_tool.model_asset_manifest import BUILTIN_MODEL_ASSETS
 
-EXPECTED_MODELS = {
-    "afd01.stl": "f58706d3b6fa1ac67f67fea50b8c9c4aa10b50716c8aedab8ef529290f0d5b37",
-    "afd01c.stl": "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d",
-    "afd01d.stl": "c75c1062ee34e54c8a28f151aa3855e6c6b0e80854c127c3e1a576755e8f569d",
-    "esa01.stl": "f58706d3b6fa1ac67f67fea50b8c9c4aa10b50716c8aedab8ef529290f0d5b37",
-}
 EXPECTED_SUFFIX = ("satellite_debug_tool", "ui", "assets", "models")
 
 
@@ -37,7 +32,7 @@ def verify_package(package_root: Path) -> list[Path]:
         raise ValueError(f"package root does not exist: {package_root}")
 
     verified: list[Path] = []
-    for filename, expected_hash in EXPECTED_MODELS.items():
+    for filename, identity in BUILTIN_MODEL_ASSETS.items():
         matches = [
             path
             for path in package_root.rglob(filename)
@@ -46,11 +41,17 @@ def verify_package(package_root: Path) -> list[Path]:
         if not matches:
             raise ValueError(f"missing packaged model: {filename}")
         for path in matches:
+            actual_size = path.stat().st_size
+            if actual_size != identity.size:
+                raise ValueError(
+                    f"model size mismatch: {path} "
+                    f"(expected {identity.size}, got {actual_size})"
+                )
             actual_hash = _sha256(path)
-            if actual_hash != expected_hash:
+            if actual_hash != identity.sha256:
                 raise ValueError(
                     f"model hash mismatch: {path} "
-                    f"(expected {expected_hash}, got {actual_hash})"
+                    f"(expected {identity.sha256}, got {actual_hash})"
                 )
             verified.append(path)
     return verified
