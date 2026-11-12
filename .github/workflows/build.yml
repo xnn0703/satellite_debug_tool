@@ -58,6 +58,13 @@ jobs:
           cache-dependency-path: requirements/build-*.txt
       - name: Restore constrained build environment
         run: python -m pip install -r requirements/build-windows.txt
+      - name: Windows platform contracts
+        run: >-
+          python -m pytest
+          satellite_debug_tool/tests/test_motion_platform_component.py::test_real_socket_trajectory_uses_isolated_timeline_process
+          satellite_debug_tool/tests/test_release_orchestrator.py
+          satellite_debug_tool/tests/test_release_downloads_server.py
+          -q -o faulthandler_timeout=120
       - name: Source regression
         run: python -m pytest satellite_debug_tool/tests -q -o faulthandler_timeout=120
       - name: Translation catalog
@@ -157,6 +164,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/build-*.txt
       - run: python -m pip install -r requirements/build-windows.txt
+      - name: Windows platform contracts
+        run: >-
+          python -m pytest
+          satellite_debug_tool/tests/test_motion_platform_component.py::test_real_socket_trajectory_uses_isolated_timeline_process
+          satellite_debug_tool/tests/test_release_orchestrator.py
+          satellite_debug_tool/tests/test_release_downloads_server.py
+          -q -o faulthandler_timeout=120
       - run: python -m pytest satellite_debug_tool/tests -q -o faulthandler_timeout=120
       - run: python scripts/update_translations.py check
       - run: python scripts/build_editions.py ${{ matrix.edition }}

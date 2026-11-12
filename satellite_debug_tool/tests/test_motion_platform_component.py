@@ -605,14 +605,15 @@ def test_isolated_timeline_reports_late_slot_and_keeps_sending() -> None:
 
     class DelayedEmptyQueue:
         def __init__(self) -> None:
-            self.wait_count = 0
+            self.poll_count = 0
 
         def get(self, *, timeout: float):
-            self.wait_count += 1
-            time.sleep(timeout + (0.045 if self.wait_count == 2 else 0.0))
-            raise queue.Empty
+            raise AssertionError(f"timeline must not use blocking queue wait: {timeout}")
 
         def get_nowait(self):
+            self.poll_count += 1
+            if self.poll_count == 2:
+                time.sleep(0.045)
             raise queue.Empty
 
     class RecordingTransport:

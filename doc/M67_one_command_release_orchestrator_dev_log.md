@@ -55,3 +55,5 @@ Windows/macOS 实机安装与回滚、Apple notarization、真实设备/RF/电�
 - 修正后版本递增为 `v1.9.5`，不移动或复用失败的 `v1.9.4` tag。
 - `v1.9.5` Windows 回归进一步证明默认计时粒度使真实 20 ms UDP 时间线 P95 达到 32 ms；发送子进程现于 Windows 生命周期内成对调用 `timeBeginPeriod(1)` / `timeEndPeriod(1)`，不以放宽时序门限掩盖故障。
 - Windows `chmod` 不能表达 POSIX `0600/0644`，服务器工具在 Windows 明确使用独立复制，源字节不变；权限位断言仅属于 POSIX。正式版本继续递增为 `v1.9.6`，两个失败 tag 均保持不可变且没有候选晋升。
+- `v1.9.6` 证明 `timeBeginPeriod(1)` 不能改变 `multiprocessing.Queue.get(timeout)` 所用 Windows 同步对象的超时量化，真实 UDP P95 仍为 32 ms。时间线等待改为非阻塞命令轮询、高分辨率 sleep 与最后 1 ms deadline guard；回归测试明确拒绝阻塞队列等待。正式版本递增为 `v1.9.7`。
+- Windows Actions 在全量源码回归前增加平台合同快速门禁，优先执行真实 UDP 时间线、发布互斥和服务器文件语义测试；它不替代后续全量回归，只把平台错误提前到候选构建前数秒暴露。

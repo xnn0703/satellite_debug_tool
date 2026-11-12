@@ -56,16 +56,16 @@ def run_timeline_process(
                 if remaining_ns <= 0:
                     break
                 try:
+                    command = command_queue.get_nowait()
+                except queue.Empty:
+                    # Windows 的同步对象超时会按系统 tick 量化，20 ms 等待可退化为
+                    # 约 32 ms；命令队列只做非阻塞轮询，剩余时间交给高分辨率 sleep。
+                    # 最后 1 ms 保持命令轮询，避免 sleep 过冲拖慢固定时间线。
                     if remaining_ns > _DEADLINE_GUARD_NS:
-                        command = command_queue.get(
-                            timeout=(remaining_ns - _DEADLINE_GUARD_NS)
+                        time.sleep(
+                            (remaining_ns - _DEADLINE_GUARD_NS)
                             / 1_000_000_000.0
                         )
-                    else:
-                        command = command_queue.get_nowait()
-                except queue.Empty:
-                    # macOS的Queue超时通常会多睡约1 ms；最后1 ms保持命令轮询，
-                    # 让20 ms时间线不系统性退化为约21 ms。
                     continue
                 action = command[0]
                 if action == "stop":
