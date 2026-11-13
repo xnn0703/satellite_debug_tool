@@ -197,7 +197,7 @@ def test_macos_frozen_contract_rejects_identity_in_legacy_runtime_layout(tmp_pat
     legacy = app / "Contents/MacOS/_internal/satellite_debug_tool/build_identity.json"
     legacy.parent.mkdir(parents=True)
     legacy.write_text(json.dumps({"edition": "ops", "version": "1.9.9", "platform": "mac"}))
-    with pytest.raises(ValueError, match="Contents/Resources"):
+    with pytest.raises(ValueError, match="Resources"):
         verify(app, "ops", None)
 
     expected = app / "Contents/Resources/satellite_debug_tool/build_identity.json"

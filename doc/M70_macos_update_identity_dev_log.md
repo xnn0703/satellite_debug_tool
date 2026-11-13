@@ -22,3 +22,11 @@
 - 更新/发布/edition 相邻回归：359 passed；定向身份与候选回归：51 passed。
 - 翻译检查：1558 finished / 0 unfinished；`compileall` 与 `git diff --check` 通过。
 - 稳定最终源码全量回归：2354 passed in 266.16s。
+
+## v1.9.9 Windows 门禁拒绝
+
+- GitHub Actions run `43363590015` 的 user/ops job 均在候选构建前停止。
+- 两个 job 的产品回归结果相同：2338 passed / 14 skipped，仅新增的两项错误消息断言失败。
+- 根因是测试期望字符串写死 `Contents/Resources`，Windows `Path` 正确输出 `Contents\\Resources`；被测代码已抛出预期异常，失败只在测试消息的路径分隔符表现层。
+- 修复将断言绑定到领域关键词 `Resources`，不改变应用身份逻辑、不放宽构建门禁。v1.9.9 tag 保持不可变且不重建，后续发行版本为 v1.9.10。
+- v1.9.10 最终本地快照定向回归 2 passed；全量回归 2354 passed in 265.00s；翻译 1558 finished / 0 unfinished。

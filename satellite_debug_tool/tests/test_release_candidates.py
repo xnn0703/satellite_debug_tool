@@ -65,7 +65,7 @@ def test_macos_candidate_identity_requires_the_formal_resources_path(tmp_path):
         edition=Edition.OPS, version="1.9.9", platform="mac",
         architecture="arm64", build_id="a" * 40,
     )))
-    with pytest.raises(ValueError, match="Contents/Resources"):
+    with pytest.raises(ValueError, match="Resources"):
         load_identity(app, "a" * 40, "1.9.9")
 
     expected = app / "Contents/Resources/satellite_debug_tool/build_identity.json"

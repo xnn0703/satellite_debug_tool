@@ -1,6 +1,6 @@
 # 卫通终端管理工具发版操作手册
 
-最后更新：2026-11-13。适用于 M69 单 publication 发行链路与 M70 macOS 身份路径修复。v1.9.8 四包及两平台渠道发布证据见 [M69_release_validation.json](M69_release_validation.json)；v1.9.2～v1.9.8 macOS 运维版需用 v1.9.9 完整包完成一次引导，后续版本仍以各自 journal 和最终验证记录为准。
+最后更新：2026-11-13。适用于 M69 单 publication 发行链路与 M70 macOS 身份路径修复。v1.9.8 四包及两平台渠道发布证据见 [M69_release_validation.json](M69_release_validation.json)；v1.9.2～v1.9.8 macOS 运维版需用 v1.9.10 完整包完成一次引导，后续版本仍以各自 journal 和最终验证记录为准。v1.9.9 tag 被 Windows 源码门禁拒绝，未生成候选或进入 stable。
 
 本手册是当前发版的唯一操作入口。历史设计、部署和故障证据分别见：
 
@@ -279,7 +279,7 @@ M67 由 `scripts/release.py` 统一投递服务器请求，服务器端
 
 “发现新版本”只证明签名目录和平台选择成功；真正自动更新还要独立验证下载、安装事务、重启健康回执和失败回滚。
 
-macOS v1.9.2～v1.9.8 的已安装更新器错误读取 `Contents/MacOS/_internal`，而真实 PyInstaller 身份位于 `Contents/Resources`。旧程序在关闭前、旧 updater 在关闭后都会读取错误路径，远端新包不能修复这两个安装前检查。该范围必须一次性人工安装 v1.9.9 完整 ops 包；不得将这次引导描述为自动更新成功。v1.9.9 起正式身份路径和回归 fixture 均使用 `Contents/Resources/satellite_debug_tool/build_identity.json`。
+macOS v1.9.2～v1.9.8 的已安装更新器错误读取 `Contents/MacOS/_internal`，而真实 PyInstaller 身份位于 `Contents/Resources`。旧程序在关闭前、旧 updater 在关闭后都会读取错误路径，远端新包不能修复这两个安装前检查。该范围必须一次性人工安装 v1.9.10 完整 ops 包；不得将这次引导描述为自动更新成功。v1.9.10 起正式身份路径和回归 fixture 均使用 `Contents/Resources/satellite_debug_tool/build_identity.json`。
 
 ### 8.2 服务器与公网检查
 
