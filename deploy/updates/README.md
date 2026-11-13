@@ -18,7 +18,7 @@
 
 app 根保持发布 owner 管理的 0755；部署者预创建可由 `satellite_meta` 读写的 `app/publish.lock`。metadata 目录使用共享组与 2775，receipts 目录使用共享组、sticky bit 与 3770；服务 sandbox 只开放必要目录和现有 publish.lock。`verification/requests` 由 `satellite_publish:satellite_metadata` 管理，`results/archive` 由 `root:satellite_metadata` 管理，正式发布身份对回执只读。公开元数据的服务 UMask 为 0022，确保 Nginx 可读新文件；在线密钥独立保持目录 0700、文件 0600，不受公开元数据 UMask 改变。
 
-将本目录的 `health_check.py`、`renew_certificate.sh` 和 `renewed_reload_nginx.sh` 一并放入工具 bundle 的 `deploy/updates/`，将 `.service`/`.timer`/`.path` 复制到 `/etc/systemd/system/`。`verify_publication_server.py` 安装到工具 bundle 的 `scripts/`，启用 `satellite-updates-verify-publication.path`；正式 JSON 请求存在时触发 oneshot 本机完整 SHA-256，处理后请求进入 root 归档。两个请求 watcher 均使用 `PathExistsGlob=.../requests/*.json`，临时文件不会触发空扫描，重启后的已有正式请求仍会处理。下载服务按当前 timestamp 的编号签名链读取两个 ops 目录。将 `certbot.env.example` 配置后安装为 `/etc/satellite-updates/certbot.env`，`root:root 0600`；`CERTBOT_CERT_NAME` 必须是 `certbot certificates` 显示的更新站证书名称。renew 只操作该证书，沿用首次申请保存的 webroot 配置。
+将本目录的 `health_check.py`、`renew_certificate.sh` 和 `renewed_reload_nginx.sh` 一并放入工具 bundle 的 `deploy/updates/`，将 `.service`/`.timer`/`.path` 复制到 `/etc/systemd/system/`。`verify_publication_server.py` 安装到工具 bundle 的 `scripts/`，启用 `satellite-updates-verify-publication.path`；正式 JSON 请求存在时触发 root oneshot。服务只读 incoming 中与 request/receipt/SHA-256 绑定的 ops 候选，复制成独立公开 inode，再对全部不可变 publication 文件执行完整 SHA-256；发布机不重复上传大包。处理后请求进入 root 归档。两个请求 watcher 均使用 `PathExistsGlob=.../requests/*.json`，临时文件不会触发空扫描，重启后的已有正式请求仍会处理。下载服务按当前 timestamp 的编号签名链读取两个 ops 目录。将 `certbot.env.example` 配置后安装为 `/etc/satellite-updates/certbot.env`，`root:root 0600`；`CERTBOT_CERT_NAME` 必须是 `certbot certificates` 显示的更新站证书名称。renew 只操作该证书，沿用首次申请保存的 webroot 配置。
 
 | Timer | 调度 UTC | 操作账号 |
 | --- | --- | --- |

@@ -121,11 +121,20 @@ def test_both_platforms_prepare_and_resume_one_publication(tmp_path):
     assert second.journal.data["evidence"]["publication_result"]["verification_request_id"] == "verified-request"
     assert len(calls) == 2
     assert calls[1].count("--bundle") == 1
+    assert calls[1].count("--candidate") == 2
+    assert calls[1].count("--remote-candidate") == 2
+    assert "--recover-lock" not in calls[1]
     manifest = Path(second.journal.data["evidence"]["publication"])
     manifest.write_text("changed")
     with pytest.raises(ReleaseBlocked, match="approved digest"):
         second._commit_publication()
     assert len(calls) == 2
+
+    second.journal.mark("commit_publication", "FAILED", error="connection dropped")
+    resumed = ReleaseOrchestrator(root=root, state_root=state, version="2.0.0", runner=runner)
+    manifest.write_text("combined signed publication")
+    resumed._commit_publication()
+    assert "--recover-lock" in calls[-1]
 
 
 def test_captured_failure_preserves_stderr_return_code_and_journal(tmp_path):

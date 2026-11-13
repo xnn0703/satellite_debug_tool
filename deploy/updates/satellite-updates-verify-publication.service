@@ -1,5 +1,5 @@
 [Unit]
-Description=Verify Satellite Terminal Manager publication files locally
+Description=Stage and verify Satellite Terminal Manager publication files locally
 After=local-fs.target
 
 [Service]
@@ -8,10 +8,11 @@ User=root
 Group=satellite_metadata
 UMask=0027
 WorkingDirectory=/opt/satellite-updates/tools
-ExecStart=/opt/satellite-updates/venv/bin/python /opt/satellite-updates/tools/scripts/verify_publication_server.py --requests /srv/satellite-updates/receipts/verification/requests --results /srv/satellite-updates/receipts/verification/results --archive /srv/satellite-updates/receipts/verification/archive --public-apps-root /srv/satellite-updates/public/v1/apps
+ExecStart=/opt/satellite-updates/venv/bin/python /opt/satellite-updates/tools/scripts/verify_publication_server.py --requests /srv/satellite-updates/receipts/verification/requests --results /srv/satellite-updates/receipts/verification/results --archive /srv/satellite-updates/receipts/verification/archive --public-apps-root /srv/satellite-updates/public/v1/apps --incoming-root /srv/satellite-updates/incoming
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadOnlyPaths=/srv/satellite-updates/public
-ReadWritePaths=/srv/satellite-updates/receipts/verification/requests /srv/satellite-updates/receipts/verification/results /srv/satellite-updates/receipts/verification/archive
+ReadOnlyPaths=/srv/satellite-updates/incoming
+ReadWritePaths=/srv/satellite-updates/public/v1/apps/satellite-terminal-tool /srv/satellite-updates/receipts/verification/requests /srv/satellite-updates/receipts/verification/results /srv/satellite-updates/receipts/verification/archive
+RestrictAddressFamilies=AF_UNIX

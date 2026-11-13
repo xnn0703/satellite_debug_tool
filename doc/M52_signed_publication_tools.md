@@ -1,6 +1,6 @@
 # M52 本地签名与正式晋升
 
-正式发行使用 `scripts/promote_release.py fetch / prepare / commit`。签名发生在发布者本机；纯 SFTP 只传公开的 TUF 元数据和发行文件。root/targets 私钥、本地发布账本、publication.json 均不上传。构建账号只有 incoming 权限，正式发布使用独立 SFTP 账号；两者使用独立核验的 known_hosts 和固定 SSH key。
+正式发行使用 `scripts/promote_release.py fetch / prepare / commit`。签名发生在发布者本机；M71 起 ops 大包与 payload manifest 只在候选阶段上传一次，正式 commit 仅通过 SFTP 传公开 TUF 小型元数据和 stage request，ECS 从 incoming 本机晋升大包。root/targets 私钥、本地发布账本、publication.json 均不上传。构建账号只有 incoming 权限，正式发布使用独立 SFTP 账号；两者使用独立核验的 known_hosts 和固定 SSH key。
 
 本页“当前现场状态”及各处“本轮”描述是 M52 阶段的 2026-11-02 历史快照。当前 v1.9.0 发行状态以 [M53 开发记录](M53_manager_naming_release_dev_log.md)和[验收标准](M53_manager_naming_release_acceptance.md)为准。
 
@@ -79,7 +79,7 @@ Mac 版按已确认的最低 macOS 版本设置 `--min-os`；其安装方式仍�
   --bundle /absolute/publications/RELEASE_ID/publication.json
 ```
 
-提交持有服务器排他锁，先确认 timestamp 仍与 prepare 时一致，再上传摘要命名的目标文件和编号元数据。M56 起，发布机通过纯 SFTP 投递与 bundle ID 绑定的规范校验请求；ECS `satellite-updates-verify-publication.path/service` 在本机对 Nginx public 文件计算完整长度和 SHA-256，由 root 写入发布账号只读的回执。发布机校验回执的 request/bundle/文件数/总字节，再从实际 HTTPS 地址对每个目标做首/中/尾最多 4 KiB Range 对比；全部完成后，通过 OpenSSH `posix-rename` 原子替换 timestamp，最后推进本地正式账本。未支持原子替换的 SFTP 服务明确失败。包缺失、服务器回执缺失/不匹配、权限错误、公开 URL 错误、HTTP 降级或 Range 不一致都不推进渠道。该改动不给发布账号开放 shell/TTY/转发，root/targets 私钥仍只留在发布机。
+提交持有服务器排他锁，先确认 timestamp 仍与 prepare 时一致，再上传缺失的小型签名文件和编号元数据。M71 的请求把已审计本地 receipt 与固定 incoming 相对目录绑定；ECS `satellite-updates-verify-publication.path/service` 重新核对 receipt、身份、文件名、长度和 SHA-256，把候选复制为独立公开 inode，再对全部不可变文件计算完整长度和 SHA-256，由 root 写入发布账号只读的回执。发布机校验回执的 request/bundle/文件数/总字节，再从实际 HTTPS 地址对每个目标做首/中/尾最多 4 KiB Range 对比；全部完成后，通过 OpenSSH `posix-rename` 原子替换 timestamp，最后推进本地正式账本。未支持原子替换的 SFTP 服务明确失败。包缺失、服务器回执缺失/不匹配、权限错误、公开 URL 错误、HTTP 降级或 Range 不一致都不推进渠道。该改动不给发布账号开放 shell/TTY/转发，root/targets 私钥仍只留在发布机。
 
 正常失败会释放锁，原 bundle 可重试；已经提交的同 bundle 返回 `reused`，并补齐可能因本地异常而尚未更新的账本。另一发布或服务器续签改变了 timestamp 时明确拒绝；重新 prepare 到新目录获取新状态。更新服务器续签与正式提交共用排他锁，避免互相覆盖。
 

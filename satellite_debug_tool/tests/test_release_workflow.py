@@ -57,3 +57,12 @@ def test_server_watcher_detects_completed_request_already_in_queue(tmp_path, ser
     assert list(queue_dir.glob(Path(pattern).name)) == []
     partial.rename(request)
     assert list(queue_dir.glob(Path(pattern).name)) == [request]
+
+
+def test_publication_service_stages_only_from_incoming_into_the_fixed_app_root():
+    unit = Path(__file__).resolve().parents[2] / "deploy/updates/satellite-updates-verify-publication.service"
+    source = unit.read_text(encoding="utf-8")
+    assert "--incoming-root /srv/satellite-updates/incoming" in source
+    assert "ReadOnlyPaths=/srv/satellite-updates/incoming" in source
+    assert "ReadWritePaths=/srv/satellite-updates/public/v1/apps/satellite-terminal-tool " in source
+    assert "RestrictAddressFamilies=AF_UNIX" in source

@@ -17,7 +17,7 @@ from tuf.ngclient.fetcher import FetcherInterface
 
 from scripts.promote_release import (
     PUBLIC_ROOT, STATE_ROOT, VERIFY_REQUEST_ROOT, VERIFY_RESULT_ROOT,
-    _ensure_directory, commit_bundle, fetch_candidate, prepare_bundle,
+    _ensure_directory, _remote_lock, commit_bundle, fetch_candidate, prepare_bundle,
 )
 from scripts.upload_release import CANDIDATE_ROOT, ensure_directory as ensure_candidate_directory
 from scripts.verify_publication_server import process_requests
@@ -34,10 +34,12 @@ class Sftp:
         self.prefetches = []
         self.moves = []
         self.read_paths = []
+        self.write_paths = []
         self.fail_timestamp = False
         self.corrupt_before_verification = False
         (root / PUBLIC_ROOT.lstrip("/")).mkdir(parents=True)
         (root / STATE_ROOT.lstrip("/")).mkdir(parents=True)
+        (root / CANDIDATE_ROOT.lstrip("/")).mkdir(parents=True)
         (root / VERIFY_REQUEST_ROOT.lstrip("/")).mkdir(parents=True)
         (root / VERIFY_RESULT_ROOT.lstrip("/")).mkdir(parents=True)
 
@@ -53,6 +55,8 @@ class Sftp:
     def open(self, value, mode):
         if mode == "rb":
             self.read_paths.append(value)
+        else:
+            self.write_paths.append(value)
         stream = self.path(value).open("xb" if mode == "wx" else mode)
         stream.stat = lambda: os.fstat(stream.fileno())
         stream.prefetch = lambda **options: self.prefetches.append((value, options))
@@ -80,6 +84,7 @@ class Sftp:
                 self.path(VERIFY_REQUEST_ROOT),
                 self.path(VERIFY_RESULT_ROOT),
                 self.path(PUBLIC_ROOT),
+                incoming_root=self.path(CANDIDATE_ROOT),
             )
 
 
@@ -115,7 +120,7 @@ def test_public_directories_allow_nginx_traversal_and_private_state_keeps_its_mo
         sftp.path(STATE_ROOT).rmdir()
         _ensure_directory(sftp, STATE_ROOT, STATE_ROOT)
         assert stat.S_IMODE(sftp.path(STATE_ROOT).stat().st_mode) == 0o750
-        sftp.path(CANDIDATE_ROOT).mkdir(mode=0o750)
+        sftp.path(CANDIDATE_ROOT).chmod(0o750)
         ensure_candidate_directory(sftp, CANDIDATE_ROOT + "/candidate")
         assert stat.S_IMODE(sftp.path(CANDIDATE_ROOT + "/candidate").stat().st_mode) == 0o750
         metadata = PUBLIC_ROOT + "/satellite-terminal-tool/metadata"
@@ -211,6 +216,67 @@ def test_two_platform_candidates_publish_one_snapshot_and_both_fresh_catalogs(de
     assert sum(path.endswith("/timestamp.json") for path in sftp.moves) == 1
     assert commit_bundle(sftp, manifest, fetcher=fetcher)["reused"]
     assert sum(path.endswith("/timestamp.json") for path in sftp.moves) == 1
+
+
+def test_candidate_packages_are_staged_on_server_without_second_sftp_upload(deployment):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    source = candidate(tmp / "local-candidate")
+    receipt = source / "receipt.json"
+    receipt.write_text(json.dumps(json.loads(receipt.read_bytes()), indent=2), encoding="utf-8")
+    remote = CANDIDATE_ROOT + "/" + "a" * 40 + "/satellite-terminal-tool/ops/win/x86_64/" + "a" * 40
+    sftp.path(remote).parent.mkdir(parents=True)
+    shutil.copytree(source, sftp.path(remote))
+    manifest = prepare_bundle(sftp, local, source, tmp / "server-stage", keys,
+        expected_commit="a" * 40, min_os="10.0.0", initial=True,
+        public_base_url="https://60.205.157.141/v1/apps/satellite-terminal-tool/")
+
+    commit_bundle(sftp, manifest, fetcher=fetcher, candidates=[(source, remote)])
+
+    published = next(sftp.path(PUBLIC_ROOT).rglob("*.7z"))
+    incoming = sftp.path(remote) / "complete.7z"
+    assert published.read_bytes() == incoming.read_bytes()
+    assert published.stat().st_ino != incoming.stat().st_ino
+    assert not any(path.endswith(".7z") or ".7z.upload-" in path for path in sftp.write_paths)
+    assert not list(sftp.path(PUBLIC_ROOT).rglob("*.7z.upload-*"))
+    assert check().tag_name == "2.0.0"
+
+
+def test_server_stage_rejects_changed_candidate_and_keeps_old_timestamp(deployment):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    source = candidate(tmp / "local-candidate")
+    remote = CANDIDATE_ROOT + "/" + "a" * 40 + "/satellite-terminal-tool/ops/win/x86_64/" + "a" * 40
+    sftp.path(remote).parent.mkdir(parents=True)
+    shutil.copytree(source, sftp.path(remote))
+    manifest = prepare_bundle(sftp, local, source, tmp / "server-stage", keys,
+        expected_commit="a" * 40, min_os="10.0.0", initial=True,
+        public_base_url="https://60.205.157.141/v1/apps/satellite-terminal-tool/")
+    package = sftp.path(remote) / "complete.7z"
+    package.write_bytes(b"!" + package.read_bytes()[1:])
+
+    with pytest.raises(ValueError, match="server publication verification failed"):
+        commit_bundle(sftp, manifest, fetcher=fetcher, candidates=[(source, remote)])
+
+    assert not sftp.path(PUBLIC_ROOT + "/satellite-terminal-tool/metadata/timestamp.json").exists()
+
+
+def test_server_stage_rejects_symlinked_incoming_root(deployment):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    source = candidate(tmp / "local-candidate")
+    remote = CANDIDATE_ROOT + "/" + "a" * 40 + "/satellite-terminal-tool/ops/win/x86_64/" + "a" * 40
+    sftp.path(remote).parent.mkdir(parents=True)
+    shutil.copytree(source, sftp.path(remote))
+    incoming = sftp.path(CANDIDATE_ROOT)
+    real_incoming = incoming.with_name("incoming-real")
+    incoming.rename(real_incoming)
+    incoming.symlink_to(real_incoming, target_is_directory=True)
+    manifest = prepare_bundle(sftp, local, source, tmp / "server-stage", keys,
+        expected_commit="a" * 40, min_os="10.0.0", initial=True,
+        public_base_url="https://60.205.157.141/v1/apps/satellite-terminal-tool/")
+
+    with pytest.raises(ValueError, match="server publication verification failed"):
+        commit_bundle(sftp, manifest, fetcher=fetcher, candidates=[(source, remote)])
+
+    assert not sftp.path(PUBLIC_ROOT + "/satellite-terminal-tool/metadata/timestamp.json").exists()
 
 
 @pytest.mark.parametrize("second_version,second_platform", [("2.1.0", "mac"), ("2.0.0", "win")])
@@ -409,6 +475,16 @@ def test_lock_recovery_requires_same_bundle_and_explicit_intent(deployment):
             pass
     commit_bundle(sftp, manifest, fetcher=fetcher, recover_lock=True)
     assert check().tag_name == "2.0.0"
+
+
+def test_disconnected_lock_cleanup_preserves_the_primary_failure(tmp_path):
+    sftp = Sftp(tmp_path / "remote")
+    lock = STATE_ROOT + "/publication.lock"
+    with pytest.raises(RuntimeError, match="primary publication failure"):
+        with _remote_lock(sftp, lock, "a" * 64, recover=False):
+            sftp.lstat = lambda _path: (_ for _ in ()).throw(ConnectionError("connection closed"))
+            raise RuntimeError("primary publication failure")
+    assert sftp.path(lock).is_file()
 
 
 def test_changed_bundle_and_remote_symlink_rejected(deployment):

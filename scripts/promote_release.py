@@ -303,12 +303,20 @@ def _remote_lock(sftp, path: str, bundle_id: str, recover: bool):
     with sftp.open(path, "wx") as stream:
         stream.write(owner)
         stream.flush()
+    body_error = None
     try:
         yield
+    except BaseException as error:
+        body_error = error
+        raise
     finally:
         # 断线时此操作可失败；保留 owner，后续只能显式恢复同一 bundle。
-        if _read(sftp, path, 1024) == owner:
-            sftp.remove(path)
+        try:
+            if _read(sftp, path, 1024) == owner:
+                sftp.remove(path)
+        except Exception:
+            if body_error is None:
+                raise
 
 
 class PublicRangeFetcher:
@@ -337,9 +345,58 @@ def _immutable_rows(document: dict) -> list[dict]:
             if row["path"] not in ("metadata/timestamp.json", "metadata/root.json")]
 
 
-def _verification_request(document: dict, bundle_id: str) -> tuple[dict, bytes]:
-    files = [{"path": row["path"], "size": row["size"], "sha256": row["sha256"]}
-             for row in _immutable_rows(document)]
+def _candidate_sources(candidates: list[tuple[Path, str]]) -> dict[tuple[int, str, str], dict]:
+    """Bind audited local receipts to their sealed ECS incoming directories."""
+    sources = {}
+    allowed = PurePosixPath(CANDIDATE_ROOT)
+    for directory, remote in candidates:
+        receipt_path = Path(directory).resolve(strict=True) / "receipt.json"
+        raw = receipt_path.read_bytes()
+        receipt = json.loads(raw)
+        if receipt.get("schema") != "satellite.release-candidate/v1":
+            raise ValueError("candidate source receipt is unsupported")
+        identity = receipt.get("identity", {})
+        if identity.get("edition") != "ops" or identity.get("build_id") != receipt.get("source_commit"):
+            raise ValueError("candidate source identity is invalid")
+        remote_path = PurePosixPath(remote)
+        if str(remote_path) != remote or allowed not in remote_path.parents or ".." in remote_path.parts:
+            raise ValueError("candidate source must be inside the fixed incoming root")
+        relative = remote_path.relative_to(allowed).as_posix()
+        receipt_digest = _sha(raw)
+        rows = receipt.get("artifacts")
+        if not isinstance(rows, list):
+            raise ValueError("candidate source artifacts are invalid")
+        for row in rows:
+            name, size, digest = safe_component(row["name"]), row.get("size"), row.get("sha256", "")
+            local = receipt_path.parent / name
+            if (type(size) is not int or size < 0 or not re.fullmatch(r"[0-9a-f]{64}", str(digest))
+                    or local.is_symlink() or _local_digest(local) != (size, digest)):
+                raise ValueError("candidate source artifact differs from its receipt")
+            key = (size, digest, name)
+            source = {"candidate": relative, "receipt_sha256": receipt_digest, "artifact": name}
+            if key in sources and sources[key] != source:
+                raise ValueError("candidate source artifact identity is ambiguous")
+            sources[key] = source
+    return sources
+
+
+def _source_for_row(row: dict, sources: dict[tuple[int, str, str], dict]) -> dict | None:
+    prefix = row["sha256"] + "."
+    name = PurePosixPath(row["path"]).name
+    if not name.startswith(prefix):
+        return None
+    return sources.get((row["size"], row["sha256"], name[len(prefix):]))
+
+
+def _verification_request(document: dict, bundle_id: str,
+                          sources: dict[tuple[int, str, str], dict]) -> tuple[dict, bytes]:
+    files = []
+    for row in _immutable_rows(document):
+        item = {"path": row["path"], "size": row["size"], "sha256": row["sha256"]}
+        source = _source_for_row(row, sources)
+        if source is not None:
+            item["source"] = source
+        files.append(item)
     request = {
         "schema": REQUEST_SCHEMA,
         "request_id": uuid.uuid4().hex + uuid.uuid4().hex,
@@ -358,11 +415,13 @@ def _require_remote_directory(sftp, path: str) -> None:
         raise ValueError("server verification directory is unavailable")
 
 
-def _request_server_verification(sftp, document: dict, bundle_id: str, *, timeout: float = 120.0) -> dict:
-    """Submit a small request through SFTP and consume the root-owned server result."""
+def _request_server_verification(sftp, document: dict, bundle_id: str,
+                                 sources: dict[tuple[int, str, str], dict], *,
+                                 timeout: float = 120.0) -> dict:
+    """Ask the root-owned service to stage candidate bytes and verify the publication."""
     _require_remote_directory(sftp, VERIFY_REQUEST_ROOT)
     _require_remote_directory(sftp, VERIFY_RESULT_ROOT)
-    request, raw = _verification_request(document, bundle_id)
+    request, raw = _verification_request(document, bundle_id, sources)
     request_digest = hashlib.sha256(raw).hexdigest()
     destination = VERIFY_REQUEST_ROOT + "/" + request["request_id"] + ".json"
     temporary = destination + ".submission-" + bundle_id
@@ -469,11 +528,13 @@ def _stage_public_file(sftp, local: Path, remote: str, *, size: int) -> None:
             sftp.remove(temporary)
 
 
-def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = False) -> dict:
+def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = False,
+                  candidates: list[tuple[Path, str]] | None = None) -> dict:
     """只上传公开签名数据；ECS 完整校验与 HTTPS 分段探测成功后切换 timestamp。"""
     manifest = Path(manifest).resolve(strict=True)
     with repository_lock(manifest.parent / "commit.lock"):
         document, identity = _load_bundle(manifest)
+        sources = _candidate_sources(candidates or [])
         remote = _remote_root(document["app_id"])
         _ensure_directory(sftp, remote, PUBLIC_ROOT)
         _ensure_directory(sftp, STATE_ROOT, STATE_ROOT)
@@ -493,9 +554,10 @@ def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = Fa
                     continue
                 destination = remote + "/" + row["path"]
                 _ensure_directory(sftp, str(PurePosixPath(destination).parent), PUBLIC_ROOT)
-                _stage_public_file(sftp, manifest.parent / "repository" / row["path"], destination,
-                                   size=row["size"])
-            verification = _request_server_verification(sftp, document, identity)
+                if _source_for_row(row, sources) is None:
+                    _stage_public_file(sftp, manifest.parent / "repository" / row["path"], destination,
+                                       size=row["size"])
+            verification = _request_server_verification(sftp, document, identity, sources)
             _probe_public_samples(document, manifest.parent / "repository", fetcher)
             # timestamp 最后提交；root.json 是供在线低权续签读取的公开根指针。
             for name in ("metadata/root.json", "metadata/timestamp.json"):
@@ -547,7 +609,7 @@ def main(argv=None):
     parser.add_argument("--repository", type=Path)
     parser.add_argument("--key-dir", type=Path)
     parser.add_argument("--candidate", type=Path, action="append")
-    parser.add_argument("--remote-candidate")
+    parser.add_argument("--remote-candidate", action="append")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--expected-commit")
     parser.add_argument("--min-os", action="append")
@@ -571,9 +633,9 @@ def main(argv=None):
         with client.open_sftp() as sftp:
             sftp.get_channel().settimeout(60)
             if args.command == "fetch":
-                if args.remote_candidate is None or args.output is None:
+                if args.remote_candidate is None or len(args.remote_candidate) != 1 or args.output is None:
                     parser.error("fetch requires --remote-candidate and --output")
-                result = {"state": "candidate-downloaded", "receipt": str(fetch_candidate(sftp, args.remote_candidate, args.output))}
+                result = {"state": "candidate-downloaded", "receipt": str(fetch_candidate(sftp, args.remote_candidate[0], args.output))}
             elif args.command == "prepare":
                 result = {"state": "prepared", "bundle": str(prepare_bundle(sftp, args.repository, list(zip(args.candidate, args.min_os)), args.output,
                     load_signers(args.key_dir, ("targets", "snapshot", "timestamp")), expected_commit=args.expected_commit,
@@ -584,7 +646,10 @@ def main(argv=None):
             else:
                 if args.bundle is None:
                     parser.error("commit requires --bundle")
-                result = commit_bundle(sftp, args.bundle, recover_lock=args.recover_lock)
+                if bool(args.candidate) != bool(args.remote_candidate) or (args.candidate and len(args.candidate) != len(args.remote_candidate)):
+                    parser.error("commit candidate and remote-candidate values must be paired")
+                result = commit_bundle(sftp, args.bundle, recover_lock=args.recover_lock,
+                    candidates=list(zip(args.candidate or [], args.remote_candidate or [])))
             print(json.dumps(result, ensure_ascii=False))
     finally:
         client.close()

@@ -1,6 +1,6 @@
 # 卫通终端管理工具发版操作手册
 
-最后更新：2026-11-13。适用于 M69 单 publication 发行链路与 M70 macOS 身份路径修复。v1.9.8 四包及两平台渠道发布证据见 [M69_release_validation.json](M69_release_validation.json)；v1.9.2～v1.9.8 macOS 运维版需用 v1.9.10 完整包完成一次引导，后续版本仍以各自 journal 和最终验证记录为准。v1.9.9 tag 被 Windows 源码门禁拒绝，未生成候选或进入 stable。
+最后更新：2026-11-13。适用于 M69 单 publication、M70 macOS 身份路径和 M71 ECS 本机晋升链路。v1.9.8 四包及两平台渠道发布证据见 [M69_release_validation.json](M69_release_validation.json)；v1.9.10 的最终机器证据位于仓库外 `~/.config/satellite-release/runs/v1.9.10/release-validation.json`。v1.9.2～v1.9.8 macOS 运维版需用 v1.9.10 完整包完成一次引导，后续版本仍以各自 journal 和最终验证记录为准。v1.9.9 tag 被 Windows 源码门禁拒绝，未生成候选或进入 stable。
 
 本手册是当前发版的唯一操作入口。历史设计、部署和故障证据分别见：
 
@@ -13,6 +13,9 @@
 - [M69 发布事务修复计划](M69_release_transaction_plan.md)
 - [M69 发布事务验收标准](M69_release_transaction_acceptance.md)
 - [M69 发布事务开发记录](M69_release_transaction_dev_log.md)
+- [M71 ECS 本机晋升计划](M71_server_side_publication_plan.md)
+- [M71 ECS 本机晋升验收标准](M71_server_side_publication_acceptance.md)
+- [M71 ECS 本机晋升开发记录](M71_server_side_publication_dev_log.md)
 
 ## 1. 当前发行模型
 
@@ -32,7 +35,7 @@
 - GitHub Actions 只构建 Windows 并上传隔离候选，不持有正式 TUF 私钥，也不切换 stable。
 - Mac 候选在发布 Mac 本地构建并上传；不能用普通 `build_macos.sh` 结果替代正式候选。
 - Windows 和 macOS ops 共用一个 TUF 仓库；两个候选合并到同一私有暂存仓库，最终生成一份 publication，并通过一次 timestamp 原子切换同时发布。
-- ECS 对正式文件做本机完整 SHA-256；正式晋升通过 SFTP 检查已有文件类型/长度和上传缺失文件，公网只做首/中/尾 HTTPS Range 抽样。大包完整摘要以 ECS 回执为准，SFTP 不再全量回读正式包。候选上传和首次获取候选继续执行各自的 receipt 校验合同。
+- ops 完整包与 payload manifest 只在候选阶段上传一次。正式晋升时发布机仅传小型签名元数据和绑定 receipt 的 stage request；ECS root oneshot 从 incoming 复制为独立公开 inode，并对全部不可变文件做完整 SHA-256。发布机随后执行首/中/尾 HTTPS Range 抽样，最后才切换 timestamp。候选上传和首次获取候选继续执行各自的 receipt 校验合同。
 - 已发布 tag、候选字节和 publication bundle 均不可变。应用代码修复使用新 patch 版本；仅发布机工具修复使用独立 commit，可继续晋升原标签已验证的候选，记录工具 commit 与应用 commit。禁止移动旧 tag 或用修复后的源码重建同版包。
 
 ## 2. 发布角色和受控路径
@@ -228,10 +231,14 @@ Windows 和 macOS 在同一次 prepare 中合并，输出到一个全新目录�
 "${PUBLISH_PY}" scripts/promote_release.py commit \
   --config "${PUBLISH_CONFIG}" --known-hosts "${KNOWN_HOSTS}" \
   --identity-file "${PUBLISH_KEY}" \
-  --bundle "/absolute/publications/${RELEASE_ID}-ops/publication.json"
+  --bundle "/absolute/publications/${RELEASE_ID}-ops/publication.json" \
+  --candidate "/absolute/candidates/${RELEASE_ID}-windows-ops" \
+  --remote-candidate "/srv/satellite-updates/incoming/${RELEASE_ID}/satellite-terminal-tool/ops/win/x86_64/${COMMIT}" \
+  --candidate "release/candidates/${COMMIT}/macos/ops" \
+  --remote-candidate "/srv/satellite-updates/incoming/${RELEASE_ID}/satellite-terminal-tool/ops/mac/arm64/${COMMIT}"
 ```
 
-commit 的准入顺序：校验本地 bundle；确认远端 timestamp 等于准备基线；复用类型/长度匹配的不可变文件并上传缺失文件；投递服务器复核请求；ECS 本机计算本次文件集的完整长度和 SHA-256；发布机核对绑定 request、bundle 和文件集的 root 回执；公网只比对首/中/尾最多 4 KiB Range；全部通过后一次原子替换 timestamp 并推进本地账本。
+commit 的准入顺序：校验本地 bundle 与两份本地 ops receipt；确认远端 timestamp 等于准备基线；上传缺失的小型签名文件；投递绑定 incoming 候选目录、receipt 摘要和 artifact 身份的 stage request；ECS 本机重新校验 candidate app/edition/build、文件名、大小及 SHA-256，复制到独立公开 inode，并完整校验本次全部不可变文件；发布机核对绑定 request、bundle 和文件集的 root 回执；公网只比对首/中/尾最多 4 KiB Range；全部通过后一次原子替换 timestamp 并推进本地账本。
 
 这套复核不会通过公网重新下载完整包。任一回执、Range、权限、摘要或 URL 失败都不切换 timestamp。
 
@@ -322,13 +329,14 @@ ECS 本机：
 | macOS 候选已存在 | receipt 完全一致则复用；不同字节明确失败 |
 | prepare 失败 | 修复原因后输出到新的空目录；不要覆盖旧 publication |
 | commit 在 timestamp 切换前失败 | 保留同一 bundle 重试；已提交 bundle 应返回 `reused` |
+| 晋升阶段出现大包 SFTP 上传 | 停止发布；这是 M71 前的错误数据流。确认 commit 已绑定两组 `--candidate/--remote-candidate`，由 ECS 从 incoming 晋升 |
 | 远端 timestamp 已变化 | 重新 prepare 到新目录，吸收最新远端状态 |
 | 发布锁残留 | 先确认旧进程已结束；仅同一 bundle owner 使用 `--recover-lock` |
 | TLS CA 校验失败 | 检查发布环境的 certifi 与证书链；发布探测和索引读取共用 `updater.network.build_https_opener()`，保持证书校验开启 |
 | 子进程失败 | 读取终端和 journal 中的原返回码及 stdout/stderr，依据具体错误定位后再恢复 |
 | 旧 v1 journal | 归档并审计原 commit/candidate/远端状态，按下述一次性流程重建 v2，旧双 publication 执行模型已移除 |
 | ECS SHA 或 Range 不一致 | stable 保持旧 timestamp；调查正式文件、Nginx 路径和回执，不绕过门禁 |
-| 服务器带宽慢 | 保留 ECS 本机完整 SHA；公网只做 Range，不删除完整性门禁 |
+| 服务器带宽慢 | ops 大包只上传一次；保留 ECS 本机复制与完整 SHA，公网只做 Range，不删除完整性门禁 |
 
 M69 的发布探测、下载索引读取与应用更新使用同一 HTTPS opener，由已安装的 certifi 提供可信 CA。发布操作无需临时设置 `SSL_CERT_FILE`；TLS 失败时保留完整诊断，修复实际证书环境后继续同一候选。
 
@@ -360,7 +368,7 @@ PUBLISH_PY="$HOME/.config/satellite-release/venv/bin/python"
 "${PUBLISH_PY}" scripts/release.py verify --version X.Y.Z
 ```
 
-journal 位于 `~/.config/satellite-release/runs/vX.Y.Z/release-run.json`，schema 为 `satellite.release-run/v2`，阶段状态为 `PENDING/RUNNING/WAITING_APPROVAL/PASSED/FAILED`。正式晋升只有 `prepare_publication` 和 `commit_publication`，确认值绑定该份 publication 的 SHA-256。失败子进程的原返回码及捕获的 stdout/stderr 写入阶段错误证据。同版本进程使用内核锁互斥；进程异常退出后锁自动释放。摘要一致的 candidate/publication 复用原字节，摘要变化时停止。
+journal 位于 `~/.config/satellite-release/runs/vX.Y.Z/release-run.json`，schema 为 `satellite.release-run/v2`，阶段状态为 `PENDING/RUNNING/WAITING_APPROVAL/PASSED/FAILED`。正式晋升只有 `prepare_publication` 和 `commit_publication`，确认值绑定该份 publication 的 SHA-256。失败子进程的原返回码及捕获的 stdout/stderr 写入阶段错误证据。同版本进程使用内核锁互斥；进程异常退出后锁自动释放。摘要一致的 candidate/publication 复用原字节，摘要变化时停止。`commit_publication` 失败后的同 journal 恢复会显式携带 `--recover-lock`，且只允许恢复同一 bundle owner。
 
 旧 v1 journal 采用双 publication 模型，v2 明确拒绝直接执行。已有未完成事务只做一次人工恢复：
 

@@ -373,6 +373,7 @@ class ReleaseOrchestrator:
         self.commit, self.tag = self.facts["source_commit"], self.facts["tag"]
         self.run_root = self.state_root / self.tag
         self.journal = ReleaseJournal.open(self.run_root / "release-run.json", version=version, commit=self.commit)
+        self.recover_publication_lock = self.journal.stage("commit_publication").get("state") == "FAILED"
         self.publish_python = Path.home() / ".config/satellite-release/venv/bin/python"
         self.publish_config = Path.home() / ".config/satellite-release/publish.json"
         self.known_hosts = Path.home() / ".config/satellite-release/known_hosts"
@@ -483,6 +484,9 @@ class ReleaseOrchestrator:
     def _windows_remote(self, edition: str) -> str:
         return f"/srv/satellite-updates/incoming/{self.commit}/{APP_ID}/{edition}/win/x86_64/{self.commit}"
 
+    def _macos_remote(self, edition: str) -> str:
+        return f"/srv/satellite-updates/incoming/{self.commit}/{APP_ID}/{edition}/mac/arm64/{self.commit}"
+
     def _candidate_audit(self) -> Mapping[str, Any]:
         for edition in ("user", "ops"):
             output = self.run_root / f"candidates/windows-{edition}"
@@ -532,7 +536,14 @@ class ReleaseOrchestrator:
         manifest = self.journal.data["evidence"]["publication"]
         if sha256_file(Path(manifest)) != self.journal.data["evidence"]["publication_sha256"]:
             raise ReleaseBlocked("publication differs from the approved digest")
-        result = json.loads(self._promote("commit", "--bundle", manifest, capture=True))
+        arguments = ["commit", "--bundle", manifest,
+            "--candidate", str(self.run_root / "candidates/windows-ops"),
+            "--remote-candidate", self._windows_remote("ops"),
+            "--candidate", str(self.root / f"release/candidates/{self.commit}/macos/ops"),
+            "--remote-candidate", self._macos_remote("ops")]
+        if self.recover_publication_lock:
+            arguments.append("--recover-lock")
+        result = json.loads(self._promote(*arguments, capture=True))
         previous = self.journal.data["evidence"].get("publication_result", {})
         if result.get("reused") and previous.get("bundle_id") == result.get("bundle_id"):
             result = {**previous, **result}
