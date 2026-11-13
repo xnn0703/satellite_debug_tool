@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from satellite_debug_tool.edition import Edition, create_build_identity
 from satellite_debug_tool.package_names import WINDOWS_EXECUTABLE, release_archive_name
+from satellite_debug_tool.updater.install_platform import identity_path, installation_platform
 from satellite_debug_tool.updater.payload import build_manifest, create_delta, read_manifest, sha256_file, verify_tree, write_manifest
 from satellite_debug_tool.versioning import parse_version
 
@@ -29,9 +30,12 @@ def source_commit(root: Path = ROOT, *, clean: bool = True) -> str:
 
 def load_identity(payload: Path, expected_commit: str, expected_version: str) -> dict:
     paths = [path for path in payload.rglob("build_identity.json") if not path.is_symlink()]
-    if len(paths) != 1:
-        raise ValueError("release payload requires exactly one build identity")
-    identity = json.loads(paths[0].read_text(encoding="utf-8"))
+    expected_path = identity_path(payload, installation_platform(payload))
+    if len(paths) != 1 or paths[0] != expected_path:
+        raise ValueError(
+            f"release payload requires one build identity at {expected_path.relative_to(payload)}"
+        )
+    identity = json.loads(expected_path.read_text(encoding="utf-8"))
     canonical = create_build_identity(**{key: identity[key] for key in
         ("edition", "version", "platform", "architecture", "build_id")})
     if identity != canonical or identity["build_id"] != expected_commit:

@@ -190,6 +190,22 @@ def test_user_frozen_contract_requires_shell_and_rejects_operations(tmp_path):
         verify(tmp_path, "user", toc)
 
 
+def test_macos_frozen_contract_rejects_identity_in_legacy_runtime_layout(tmp_path):
+    from scripts.verify_edition_package import verify
+
+    app = tmp_path / "SatelliteTerminalManagerOps.app"
+    legacy = app / "Contents/MacOS/_internal/satellite_debug_tool/build_identity.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"edition": "ops", "version": "1.9.9", "platform": "mac"}))
+    with pytest.raises(ValueError, match="Contents/Resources"):
+        verify(app, "ops", None)
+
+    expected = app / "Contents/Resources/satellite_debug_tool/build_identity.json"
+    expected.parent.mkdir(parents=True)
+    legacy.replace(expected)
+    verify(app, "ops", None)
+
+
 def test_update_policy_belongs_to_build_identity(monkeypatch):
     from types import SimpleNamespace
     from satellite_debug_tool import edition

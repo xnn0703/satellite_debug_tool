@@ -115,7 +115,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `i18n/` — `TranslationManager` + TS/QM 翻译资源（`translations/satellite_debug_tool_zh_CN.{ts,qm}`）
 - `io/` — `DataRecorder`、流式 `DataImporter` 与唯一 `sdb_schema.py`；大型 SDB 在原文件旁生成可重建的稀疏 `.sdbi` 索引
 - `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）、`build_encrypted_firmware_package.py`（客户 OTA 加密固件打包工具）
-- `updater/` — **M52/M56/M57** ops 应用更新：TUF 仓库验证元数据，Downloader 校验摘要及续传范围，payload/preparation 提供完整包和 Windows 上一正式基线文件级增量。UpdateDialog 下载后等待安装意图，MainWindow 完成资源收尾后启动安装目录外的持久 updater。Windows onedir 与 macOS `.app` 共用同一请求、journal、同盘 staging/rename、健康回执和回滚事实；macOS 额外验证唯一 app、受约束相对链接、bundle 身份及 codesign，并用用户 LaunchAgent 保留登录恢复入口。user 构建裁剪这条应用更新路径，设备固件 OTA 保留。M56/M69 正式晋升由 ECS 本机完整 SHA-256 回执与发布机有界 HTTPS Range 共同准入，SFTP 复用已有文件时检查类型/长度，大包摘要统一交给 ECS。**M67/M69** `scripts/release.py` 编排既有 Windows Actions、Mac candidate、TUF prepare/commit 和 fresh checker owner；两平台在同一暂存仓库合并为一份 publication，经一次 timestamp 原子切换，以仓库外 v2 journal 断点续跑。发布探测与索引读取共用 `updater.network.build_https_opener()` 的 certifi CA，子进程原返回码及 stdout/stderr 进入阶段错误记录。服务器 `publish_release_downloads_server.py` 从两份 user receipt 与当前 signed ops catalog 原子生成四包下载目录及索引。
+- `updater/` — **M52/M56/M57/M70** ops 应用更新：TUF 仓库验证元数据，Downloader 校验摘要及续传范围，payload/preparation 提供完整包和 Windows 上一正式基线文件级增量。UpdateDialog 下载后等待安装意图，MainWindow 完成资源收尾后启动安装目录外的持久 updater。Windows onedir 与 macOS `.app` 共用同一请求、journal、同盘 staging/rename、健康回执和回滚事实；macOS 额外验证唯一 app、受约束相对链接、bundle 身份及 codesign，并用用户 LaunchAgent 保留登录恢复入口。构建身份按真实平台路径唯一读取：Windows 为 `_internal/satellite_debug_tool/build_identity.json`，macOS 为 `Contents/Resources/satellite_debug_tool/build_identity.json`；v1.9.2～v1.9.8 macOS 旧更新器路径错误，必须用 v1.9.9 完整包一次性引导，不能宣称远端包可自举修复。user 构建裁剪这条应用更新路径，设备固件 OTA 保留。M56/M69 正式晋升由 ECS 本机完整 SHA-256 回执与发布机有界 HTTPS Range 共同准入，SFTP 复用已有文件时检查类型/长度，大包摘要统一交给 ECS。**M67/M69** `scripts/release.py` 编排既有 Windows Actions、Mac candidate、TUF prepare/commit 和 fresh checker owner；两平台在同一暂存仓库合并为一份 publication，经一次 timestamp 原子切换，以仓库外 v2 journal 断点续跑。发布探测与索引读取共用 `updater.network.build_https_opener()` 的 certifi CA，子进程原返回码及 stdout/stderr 进入阶段错误记录。服务器 `publish_release_downloads_server.py` 从两份 user receipt 与当前 signed ops catalog 原子生成四包下载目录及索引。
 - `platform/macos/{en,zh_CN}.lproj/InfoPlist.strings` — macOS `CFBundleLocalizations` 用的本地化 InfoPlist 字符串
 
 ### 关键约定
@@ -206,7 +206,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 
 - **开发验证方式（2026-10-23 用户确认）**：每轮修复默认验证源码并提供运行命令；用户完成功能验证、明确要求打包后，再执行本地打包或主动触发发行构建。
 
-- **M52/M57 分发策略**：Windows 保留 GitHub Actions 构建，Mac 本地发行命令构建，两端验证后自动上传阿里云 ECS 候选。user 通过公开完整包直链人工交付，不进入更新渠道；ops 使用可信在线更新。M52 首轮 Mac 只校验下载并人工安装；M57 起后续 Mac ops 候选携带树清单并进入事务自动安装，v1.9.0/v1.9.1 仍需人工安装一次桥接版本。首轮使用 ECS 公网 IP 的 HTTPS 入口，域名/OSS/CDN/内网 Runner 后续按需部署；上传候选与签名晋升分开。源码最低 Python 3.10（TUF 7），打包工具链固定 Python 3.11。计划、验收、实现与现场记录见 `doc/M52_*`、`doc/M57_*`。
+- **M52/M57/M70 分发策略**：Windows 保留 GitHub Actions 构建，Mac 本地发行命令构建，两端验证后自动上传阿里云 ECS 候选。user 通过公开完整包直链人工交付，不进入更新渠道；ops 使用可信在线更新。M52 首轮 Mac 只校验下载并人工安装；M57 引入事务自动安装，但 v1.9.2～v1.9.8 的真实 macOS bundle 身份路径错误直到 M70 才被发现，该范围必须用 v1.9.9 完整包一次性引导。首轮使用 ECS 公网 IP 的 HTTPS 入口，域名/OSS/CDN/内网 Runner 后续按需部署；上传候选与签名晋升分开。源码最低 Python 3.10（TUF 7），打包工具链固定 Python 3.11。计划、验收、实现与现场记录见 `doc/M52_*`、`doc/M57_*`、`doc/M70_*`。
 
 - **M39 应用图标**：`ui/assets/icons/app_icon_master.png` 是已确认图稿，`scripts/generate_application_icons.py` 从母版生成 Windows 多尺寸 ICO、macOS ICNS 和实际尺寸预览。主程序/updater 的 Windows spec、macOS BUNDLE、QApplication 与顶栏共用该资源；运行时入口为 `ui/application_icon.py`。
 

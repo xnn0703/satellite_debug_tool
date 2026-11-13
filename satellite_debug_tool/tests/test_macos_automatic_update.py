@@ -12,6 +12,7 @@ import pytest
 from satellite_debug_tool.edition import Edition, create_build_identity, validate_payload_identity
 from satellite_debug_tool.updater.applier import Applier, PayloadContract
 from satellite_debug_tool.updater.handoff import prepare_update_launch_request, sha256_file
+from satellite_debug_tool.updater.install_platform import identity_path
 from satellite_debug_tool.updater.main import execute_update
 from satellite_debug_tool.updater.payload import build_manifest, verify_tree, write_manifest
 
@@ -22,8 +23,9 @@ pytestmark = pytest.mark.skipif(__import__("sys").platform != "darwin", reason="
 def _app(root: Path, *, version: str = "2.0.0", build: str = "a" * 40) -> Path:
     app = root / "SatelliteTerminalManagerOps.app"
     macos = app / "Contents/MacOS"
-    identity = macos / "_internal/satellite_debug_tool/build_identity.json"
+    identity = app / "Contents/Resources/satellite_debug_tool/build_identity.json"
     identity.parent.mkdir(parents=True)
+    macos.mkdir(parents=True)
     plist = {
         "CFBundleExecutable": "SatelliteTerminalManagerOps",
         "CFBundleIdentifier": "com.satellite-debug-tool.desktop",
@@ -38,11 +40,19 @@ def _app(root: Path, *, version: str = "2.0.0", build: str = "a" * 40) -> Path:
     identity.write_text(json.dumps(create_build_identity(
         edition=Edition.OPS, version=version, platform="mac", architecture="arm64", build_id=build)))
     resources = app / "Contents/Resources"
-    resources.mkdir(parents=True)
+    resources.mkdir(parents=True, exist_ok=True)
     (resources / "data.bin").write_bytes(b"resource")
     (resources / "data-current").symlink_to("data.bin")
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
     return app
+
+
+def test_macos_identity_uses_the_real_pyinstaller_resources_layout(tmp_path):
+    app = _app(tmp_path)
+    assert identity_path(app) == app / "Contents/Resources/satellite_debug_tool/build_identity.json"
+    assert identity_path(app).is_file()
+    assert not (app / "Contents/MacOS/_internal/satellite_debug_tool/build_identity.json").exists()
+    validate_payload_identity(app, Edition.OPS, "2.0.0")
 
 
 def _archive(app: Path, destination: Path) -> Path:

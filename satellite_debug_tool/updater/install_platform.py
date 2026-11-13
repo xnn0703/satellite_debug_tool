@@ -14,14 +14,16 @@ def installation_platform(root: Path) -> str:
     return "macos" if Path(root).suffix == ".app" else "windows"
 
 
-def runtime_root(root: Path, platform: str | None = None) -> Path:
+def identity_path(root: Path, platform: str | None = None) -> Path:
+    """返回冻结应用中唯一的构建身份路径。"""
     root = Path(root)
     selected = installation_platform(root) if platform is None else platform
-    return root / "Contents/MacOS" if selected == "macos" else root
-
-
-def identity_path(root: Path, platform: str | None = None) -> Path:
-    return runtime_root(root, platform) / "_internal/satellite_debug_tool/build_identity.json"
+    if selected == "macos":
+        # PyInstaller BUNDLE 将 datas 放入 Contents/Resources；MacOS 仅承载可执行文件。
+        return root / "Contents/Resources/satellite_debug_tool/build_identity.json"
+    if selected == "windows":
+        return root / "_internal/satellite_debug_tool/build_identity.json"
+    raise ValueError(f"unsupported installation platform: {selected}")
 
 
 def main_executable(root: Path) -> Path:

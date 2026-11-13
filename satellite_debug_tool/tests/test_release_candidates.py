@@ -57,6 +57,23 @@ def test_wrong_source_identity_fails_before_candidate_creation(tmp_path):
     assert not (tmp_path / "candidate").exists()
 
 
+def test_macos_candidate_identity_requires_the_formal_resources_path(tmp_path):
+    app = tmp_path / "SatelliteTerminalManagerOps.app"
+    wrong = app / "Contents/MacOS/_internal/satellite_debug_tool/build_identity.json"
+    wrong.parent.mkdir(parents=True)
+    wrong.write_text(json.dumps(create_build_identity(
+        edition=Edition.OPS, version="1.9.9", platform="mac",
+        architecture="arm64", build_id="a" * 40,
+    )))
+    with pytest.raises(ValueError, match="Contents/Resources"):
+        load_identity(app, "a" * 40, "1.9.9")
+
+    expected = app / "Contents/Resources/satellite_debug_tool/build_identity.json"
+    expected.parent.mkdir(parents=True)
+    wrong.replace(expected)
+    assert load_identity(app, "a" * 40, "1.9.9")["platform"] == "mac"
+
+
 def test_optional_windows_ops_delta_binds_exact_baseline_and_target_trees(tmp_path):
     import zipfile
     from satellite_debug_tool.updater.payload import build_manifest, manifest_sha256, write_manifest
