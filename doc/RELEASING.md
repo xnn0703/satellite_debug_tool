@@ -1,6 +1,6 @@
 # 卫通终端管理工具发版操作手册
 
-最后更新：2026-11-12。适用于 M52～M66 之后的发行链路；最近一次完整走通并留存机器可读证据的版本是 v1.9.3。
+最后更新：2026-11-13。适用于 M69 单 publication 发行链路。v1.9.8 四包及两平台自动更新渠道已发布并验证，完整证据见 [M69_release_validation.json](M69_release_validation.json)；后续版本仍以各自 journal 和最终验证记录为准。
 
 本手册是当前发版的唯一操作入口。历史设计、部署和故障证据分别见：
 
@@ -10,6 +10,9 @@
 - [M57 macOS 自动更新](M57_macos_automatic_update_dev_log.md)
 - [v1.9.3 实际发布记录](M62_capture_duration_clock_release_dev_log.md)
 - [v1.9.3 机器可读验证结果](M62_release_validation.json)
+- [M69 发布事务修复计划](M69_release_transaction_plan.md)
+- [M69 发布事务验收标准](M69_release_transaction_acceptance.md)
+- [M69 发布事务开发记录](M69_release_transaction_dev_log.md)
 
 ## 1. 当前发行模型
 
@@ -28,8 +31,9 @@
 - user 构建裁剪应用更新器和在线更新配置；ops 才进入 TUF 自动更新渠道。
 - GitHub Actions 只构建 Windows 并上传隔离候选，不持有正式 TUF 私钥，也不切换 stable。
 - Mac 候选在发布 Mac 本地构建并上传；不能用普通 `build_macos.sh` 结果替代正式候选。
-- ECS 对正式文件做本机完整 SHA-256；公网只做首/中/尾 HTTPS Range 抽样，不再通过 3 Mbps 公网完整回读大包。
-- 已发布 tag、候选字节和 publication bundle 均不可变。任何代码修复使用新 patch 版本，禁止移动旧 tag。
+- Windows 和 macOS ops 共用一个 TUF 仓库；两个候选合并到同一私有暂存仓库，最终生成一份 publication，并通过一次 timestamp 原子切换同时发布。
+- ECS 对正式文件做本机完整 SHA-256；正式晋升通过 SFTP 检查已有文件类型/长度和上传缺失文件，公网只做首/中/尾 HTTPS Range 抽样。大包完整摘要以 ECS 回执为准，SFTP 不再全量回读正式包。候选上传和首次获取候选继续执行各自的 receipt 校验合同。
+- 已发布 tag、候选字节和 publication bundle 均不可变。应用代码修复使用新 patch 版本；仅发布机工具修复使用独立 commit，可继续晋升原标签已验证的候选，记录工具 commit 与应用 commit。禁止移动旧 tag 或用修复后的源码重建同版包。
 
 ## 2. 发布角色和受控路径
 
@@ -193,7 +197,7 @@ PUBLISH_KEY="$HOME/.config/satellite-release/publish_ed25519"
 
 ### 6.2 本地签名准备
 
-Windows 和 macOS 分别 prepare 到全新目录。`--min-os` 必须按本版真实最低系统要求填写：
+Windows 和 macOS 在同一次 prepare 中合并，输出到一个全新目录。重复的 `--candidate` 与 `--min-os` 按出现顺序一一对应，数量必须相等；系统下限按本版真实要求填写：
 
 ```bash
 "${PUBLISH_PY}" scripts/promote_release.py prepare \
@@ -202,26 +206,19 @@ Windows 和 macOS 分别 prepare 到全新目录。`--min-os` 必须按本版真
   --repository "$HOME/.config/satellite-release/repository" \
   --key-dir "$HOME/.config/satellite-release/keys" \
   --candidate "/absolute/candidates/${RELEASE_ID}-windows-ops" \
-  --expected-commit "${COMMIT}" \
-  --output "/absolute/publications/${RELEASE_ID}-windows-ops" \
-  --public-base-url "https://60.205.157.141/v1/apps/satellite-terminal-tool/" \
-  --min-os "10.0.19041" --channel stable \
-  --notes-file "doc/v${VERSION}_release_notes.md"
-
-"${PUBLISH_PY}" scripts/promote_release.py prepare \
-  --config "${PUBLISH_CONFIG}" --known-hosts "${KNOWN_HOSTS}" \
-  --identity-file "${PUBLISH_KEY}" \
-  --repository "$HOME/.config/satellite-release/repository" \
-  --key-dir "$HOME/.config/satellite-release/keys" \
+  --min-os "10.0.19041" \
   --candidate "release/candidates/${COMMIT}/macos/ops" \
+  --min-os "14.0" \
   --expected-commit "${COMMIT}" \
-  --output "/absolute/publications/${RELEASE_ID}-macos-ops" \
+  --output "/absolute/publications/${RELEASE_ID}-ops" \
   --public-base-url "https://60.205.157.141/v1/apps/satellite-terminal-tool/" \
-  --min-os "14.0" --channel stable \
+  --channel stable \
   --notes-file "doc/v${VERSION}_release_notes.md"
 ```
 
 当前生产仓库已经存在可信元数据，日常发行禁止添加 `--initial`。prepare 只读取服务器状态并在发布 Mac 本地生成不可变 `publication.json`，不会切换 stable。
+
+准备后的最终签名 targets 必须同时包含 Windows/macOS catalog，两个 catalog 的版本和 build ID 均与本轮冻结候选相符。两个平台分别基于同一旧 timestamp 准备会形成互斥分支，第二份提交会被版本围栏拒绝；M69 已用单 publication 取代此流程。
 
 没有可信上一正式文件树和 manifest 时只发布完整包。当前 CI 不会自动下载旧基线或自动生成差量包；未明确生成、测量并验证 delta 时，验证记录必须写 `delta_count=0`。
 
@@ -231,15 +228,10 @@ Windows 和 macOS 分别 prepare 到全新目录。`--min-os` 必须按本版真
 "${PUBLISH_PY}" scripts/promote_release.py commit \
   --config "${PUBLISH_CONFIG}" --known-hosts "${KNOWN_HOSTS}" \
   --identity-file "${PUBLISH_KEY}" \
-  --bundle "/absolute/publications/${RELEASE_ID}-windows-ops/publication.json"
-
-"${PUBLISH_PY}" scripts/promote_release.py commit \
-  --config "${PUBLISH_CONFIG}" --known-hosts "${KNOWN_HOSTS}" \
-  --identity-file "${PUBLISH_KEY}" \
-  --bundle "/absolute/publications/${RELEASE_ID}-macos-ops/publication.json"
+  --bundle "/absolute/publications/${RELEASE_ID}-ops/publication.json"
 ```
 
-commit 的准入顺序：上传不可变 target/编号元数据但不切 timestamp；投递服务器复核请求；ECS 本机计算完整长度和 SHA-256；发布机核对 root 回执；公网只比对首/中/尾最多 4 KiB Range；全部通过后原子替换 timestamp 并推进本地账本。
+commit 的准入顺序：校验本地 bundle；确认远端 timestamp 等于准备基线；复用类型/长度匹配的不可变文件并上传缺失文件；投递服务器复核请求；ECS 本机计算本次文件集的完整长度和 SHA-256；发布机核对绑定 request、bundle 和文件集的 root 回执；公网只比对首/中/尾最多 4 KiB Range；全部通过后一次原子替换 timestamp 并推进本地账本。
 
 这套复核不会通过公网重新下载完整包。任一回执、Range、权限、摘要或 URL 失败都不切换 timestamp。
 
@@ -303,7 +295,7 @@ ECS 本机：
 
 ### 8.3 机器可读验证记录
 
-每版在 `doc/` 保存 `Mxx_release_validation.json`，至少记录版本、源码 commit、tag、Actions run、两个 ops publication bundle ID、四个下载 URL/大小/SHA-256，以及以下门禁：
+每版保存机器可读 `release-validation.json`，编排器默认写入仓库外本轮运行目录，可将审核副本归档为 `doc/Mxx_release_validation.json`。至少记录版本、源码 commit、tag、Actions run、单一 ops publication bundle ID、四个下载 URL/大小/SHA-256，以及以下门禁：
 
 ```json
 {
@@ -330,41 +322,51 @@ ECS 本机：
 | commit 在 timestamp 切换前失败 | 保留同一 bundle 重试；已提交 bundle 应返回 `reused` |
 | 远端 timestamp 已变化 | 重新 prepare 到新目录，吸收最新远端状态 |
 | 发布锁残留 | 先确认旧进程已结束；仅同一 bundle owner 使用 `--recover-lock` |
-| TLS CA 路径错误 | 不重建/重签；给同一命令显式设置发布 venv 的 certifi CA 后重试 |
+| TLS CA 校验失败 | 检查发布环境的 certifi 与证书链；发布探测和索引读取共用 `updater.network.build_https_opener()`，保持证书校验开启 |
+| 子进程失败 | 读取终端和 journal 中的原返回码及 stdout/stderr，依据具体错误定位后再恢复 |
+| 旧 v1 journal | 归档并审计原 commit/candidate/远端状态，按下述一次性流程重建 v2，旧双 publication 执行模型已移除 |
 | ECS SHA 或 Range 不一致 | stable 保持旧 timestamp；调查正式文件、Nginx 路径和回执，不绕过门禁 |
 | 服务器带宽慢 | 保留 ECS 本机完整 SHA；公网只做 Range，不删除完整性门禁 |
 
-示例 CA 设置：
+M69 的发布探测、下载索引读取与应用更新使用同一 HTTPS opener，由已安装的 certifi 提供可信 CA。发布操作无需临时设置 `SSL_CERT_FILE`；TLS 失败时保留完整诊断，修复实际证书环境后继续同一候选。
 
-```bash
-SSL_CERT_FILE="$("${PUBLISH_PY}" -c 'import certifi; print(certifi.where())')" \
-  "${PUBLISH_PY}" scripts/promote_release.py commit ...
-```
+服务器请求监听使用 `PathExistsGlob=.../requests/*.json`，正式请求即使早于监听激活仍可执行，临时文件不参与队列。下载服务从当前 timestamp 所引用的编号 snapshot/targets 验证签名链，一次冻结两个 ops 的目录；未编号 `targets.json` 不作为已发布状态来源。服务器脚本修复后重交同一失败请求时，先归档旧失败回执，再投递原请求，避免读取旧结果；保留原请求内容和 ID。
 
 ## 10. 一键编排入口
 
-M67 提供单入口：
+M69 以单 publication 取代 M67 的双平台独立 publication，保留单入口：
 
 ```bash
+# 发布入口使用独立发布环境，包含 requirements/publish.txt 的 SFTP/签名依赖
+PUBLISH_PY="$HOME/.config/satellite-release/venv/bin/python"
+
 # 只读计划，不创建 journal，不执行任何外部写操作
-.venv/bin/python scripts/release.py plan --version X.Y.Z
-.venv/bin/python scripts/release.py run --version X.Y.Z --dry-run
+"${PUBLISH_PY}" scripts/release.py plan --version X.Y.Z
+"${PUBLISH_PY}" scripts/release.py run --version X.Y.Z --dry-run
 
 # 第一次运行；tag 确认值必须是计划显示的完整 commit
-.venv/bin/python scripts/release.py run --version X.Y.Z \
+"${PUBLISH_PY}" scripts/release.py run --version X.Y.Z \
   --confirm-tag <40位源码SHA>
 
-# stable 前脚本会停止并显示 bundle-set SHA；确认后从 journal 续跑
-.venv/bin/python scripts/release.py resume --version X.Y.Z \
+# stable 前脚本会显示单一 publication SHA；确认后从 journal 续跑
+"${PUBLISH_PY}" scripts/release.py resume --version X.Y.Z \
   --confirm-tag <40位源码SHA> \
-  --confirm-stable <64位bundle-set-SHA>
+  --confirm-stable <64位publication-SHA>
 
 # 只读状态；发布后重新执行 fresh checker、索引和 Range 复核
-.venv/bin/python scripts/release.py status --version X.Y.Z
-.venv/bin/python scripts/release.py verify --version X.Y.Z
+"${PUBLISH_PY}" scripts/release.py status --version X.Y.Z
+"${PUBLISH_PY}" scripts/release.py verify --version X.Y.Z
 ```
 
-journal 位于 `~/.config/satellite-release/runs/vX.Y.Z/release-run.json`，阶段状态为 `PENDING/RUNNING/WAITING_APPROVAL/PASSED/FAILED`。同版本进程使用内核锁互斥；进程异常退出后锁自动释放。摘要一致的 candidate/publication 复用原字节，摘要变化时停止。
+journal 位于 `~/.config/satellite-release/runs/vX.Y.Z/release-run.json`，schema 为 `satellite.release-run/v2`，阶段状态为 `PENDING/RUNNING/WAITING_APPROVAL/PASSED/FAILED`。正式晋升只有 `prepare_publication` 和 `commit_publication`，确认值绑定该份 publication 的 SHA-256。失败子进程的原返回码及捕获的 stdout/stderr 写入阶段错误证据。同版本进程使用内核锁互斥；进程异常退出后锁自动释放。摘要一致的 candidate/publication 复用原字节，摘要变化时停止。
+
+旧 v1 journal 采用双 publication 模型，v2 明确拒绝直接执行。已有未完成事务只做一次人工恢复：
+
+1. 确认原发布进程已经结束，保留旧 journal、publication、错误记录和校验回执的归档副本。
+2. 从原 tag 重新确认应用 commit、四份 candidate 身份与摘要、Actions 和构建证据；已有候选保持原字节。
+3. 核对远端当前 timestamp、编号元数据及两个 catalog 内容，记录已经提交的实际平台状态。
+4. 以原应用 commit 重建 v2 journal，只迁入重新审计通过的候选和前置阶段证据；正式晋升与后续下载/复核阶段重新执行。单一 publication 必须基于当前正式状态准备，或使用已核验且基线匹配的修正 publication；绑定其新的确认摘要。
+5. 发布机工具修复独立提交，记录工具 commit。原应用 tag、候选、归档包和包内 build ID 保持一致；该恢复处理不构成长期兼容旧双分支的入口。
 
 编排器自动完成预检、版本核对、测试、tag、Actions 等待、Mac 候选、fetch/prepare/commit、四包下载请求、fresh checker、Range 和验证记录。但继续保留以下人工或受保护门禁：
 

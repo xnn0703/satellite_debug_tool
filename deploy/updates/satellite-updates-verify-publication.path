@@ -2,7 +2,7 @@
 Description=Watch for Satellite Terminal Manager publication verification requests
 
 [Path]
-PathChanged=/srv/satellite-updates/receipts/verification/requests
+PathExistsGlob=/srv/satellite-updates/receipts/verification/requests/*.json
 Unit=satellite-updates-verify-publication.service
 
 [Install]

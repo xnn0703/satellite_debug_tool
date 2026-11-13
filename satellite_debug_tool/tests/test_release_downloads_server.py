@@ -6,11 +6,14 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import stat
 import zipfile
+from datetime import datetime, timedelta, timezone
 
 import py7zr
 import pytest
 from securesystemslib.signer import CryptoSigner
+from tuf.api.metadata import Metadata
 
 from scripts.publish_release_downloads_server import (
     INDEX_SCHEMA, REQUEST_SCHEMA, load_request, process_requests, publish_release,
@@ -95,10 +98,13 @@ def release_tree(tmp_path):
     repository = tmp_path / "repository"
     signers = {role: CryptoSigner.generate_ed25519() for role in ("root", "targets", "snapshot", "timestamp")}
     initialize_repository(repository, signers, app_id="satellite-terminal-tool", repo_id="test-repo")
+    initial_targets = (repository / "metadata/targets.json").read_bytes()
     publish_candidate(repository, win_ops, signers, expected_commit=COMMIT, min_os="10.0.0",
                       publication_mode="prepare")
     publish_candidate(repository, mac_ops, signers, expected_commit=COMMIT, min_os="14.0",
                       publication_mode="prepare")
+    # 真实 SFTP 晋升只推进 timestamp 和编号文件；未编号 alias 仍是初始空目录。
+    (repository / "metadata/targets.json").write_bytes(initial_targets)
     def receipt_sha(path: Path) -> str:
         return hashlib.sha256((path / "receipt.json").read_bytes()).hexdigest()
     base = {"schema": REQUEST_SCHEMA, "app_id": "satellite-terminal-tool", "version": VERSION,
@@ -136,6 +142,68 @@ def test_four_verified_packages_and_indexes_are_published_atomically(release_tre
                            downloads_root=downloads)["state"] == "reused"
 
 
+def test_current_signed_chain_succeeds_with_alias_removed_and_reads_timestamp_once(release_tree, monkeypatch):
+    from scripts import publish_release_downloads_server as server
+
+    incoming, downloads, repository, request = release_tree
+    (repository / "metadata/targets.json").unlink()
+    (repository / "metadata/snapshot.json").unlink()
+    reads = []
+    original = server._metadata_bytes
+
+    def read(path, name):
+        reads.append(name)
+        return original(path, name)
+
+    monkeypatch.setattr(server, "_metadata_bytes", read)
+    result = publish_release(request, incoming_root=incoming, repository=repository, downloads_root=downloads)
+    assert result["state"] == "published"
+    assert len(result["artifacts"]) == 4
+    assert reads.count("timestamp.json") == 1
+    assert "targets.json" not in reads and "snapshot.json" not in reads
+    assert len(reads) == 4
+
+
+@pytest.mark.parametrize("role", ["snapshot", "targets"])
+def test_changed_referenced_metadata_rejects_publication(release_tree, role):
+    incoming, downloads, repository, request = release_tree
+    metadata = repository / "metadata"
+    timestamp = Metadata.from_file(str(metadata / "timestamp.json"))
+    snapshot_path = metadata / f"{timestamp.signed.snapshot_meta.version}.snapshot.json"
+    snapshot = Metadata.from_file(str(snapshot_path))
+    path = snapshot_path if role == "snapshot" else metadata / f"{snapshot.signed.meta['targets.json'].version}.targets.json"
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(Exception, match="length|hash"):
+        publish_release(request, incoming_root=incoming, repository=repository, downloads_root=downloads)
+    assert not list(downloads.iterdir())
+
+
+def test_expired_signed_metadata_rejects_publication(release_tree, monkeypatch):
+    from scripts import publish_release_downloads_server as server
+
+    incoming, downloads, repository, request = release_tree
+    class FutureClock:
+        @staticmethod
+        def now(_timezone):
+            return datetime.now(timezone.utc) + timedelta(days=400)
+
+    monkeypatch.setattr(server, "datetime", FutureClock)
+    with pytest.raises(ValueError, match="expired"):
+        publish_release(request, incoming_root=incoming, repository=repository, downloads_root=downloads)
+    assert not list(downloads.iterdir())
+
+
+def test_timestamp_signature_is_verified_before_targets_are_used(release_tree):
+    incoming, downloads, repository, request = release_tree
+    path = repository / "metadata/timestamp.json"
+    document = json.loads(path.read_bytes())
+    document["signed"]["version"] += 1
+    path.write_text(json.dumps(document))
+    with pytest.raises(Exception, match="signed|signature"):
+        publish_release(request, incoming_root=incoming, repository=repository, downloads_root=downloads)
+    assert not list(downloads.iterdir())
+
+
 def test_private_candidate_is_copied_without_changing_source_permissions(release_tree):
     incoming, downloads, repository, request = release_tree
     candidate_path = incoming / request["users"]["windows_x86_64"]["candidate"]
@@ -151,6 +219,23 @@ def test_private_candidate_is_copied_without_changing_source_permissions(release
         assert source.stat().st_mode & 0o777 == 0o600
         assert target.stat().st_mode & 0o777 == 0o644
     assert source.stat().st_ino != target.stat().st_ino
+
+
+@pytest.mark.skipif(os.name == "nt", reason="ECS POSIX publication permissions")
+def test_service_private_umask_keeps_published_downloads_publicly_readable(release_tree):
+    incoming, downloads, repository, request = release_tree
+    previous = os.umask(0o027)
+    try:
+        publish_release(request, incoming_root=incoming, repository=repository, downloads_root=downloads)
+        directory = downloads / "v2.0.0"
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o755
+        assert all(path.stat().st_mode & stat.S_IROTH for path in directory.iterdir())
+        directory.chmod(0o750)
+        assert publish_release(request, incoming_root=incoming, repository=repository,
+                               downloads_root=downloads)["state"] == "reused"
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o755
+    finally:
+        os.umask(previous)
 
 
 def test_request_is_canonical_and_binds_receipts(release_tree):

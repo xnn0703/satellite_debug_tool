@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -25,15 +26,16 @@ from satellite_debug_tool.edition import APP_ID, Edition
 from satellite_debug_tool.release_config import load_release_config
 from satellite_debug_tool.updater.checker import ReleaseChecker
 from satellite_debug_tool.updater.payload import canonical_bytes, sha256_file
+from satellite_debug_tool.updater.network import build_https_opener
 from satellite_debug_tool.versioning import parse_version
 
 
-RUN_SCHEMA = "satellite.release-run/v1"
+RUN_SCHEMA = "satellite.release-run/v2"
 DOWNLOAD_REQUEST_SCHEMA = "satellite.release-download-request/v1"
 DOWNLOAD_RESULT_SCHEMA = "satellite.release-download-result/v1"
 STAGES = (
     "preflight", "tag", "windows_candidate", "macos_candidate", "candidate_audit",
-    "prepare_publications", "stable_confirmation", "commit_publications",
+    "prepare_publication", "stable_confirmation", "commit_publication",
     "publish_downloads", "post_verify", "evidence",
 )
 TERMINAL_STAGE_STATES = {"PASSED", "SKIPPED"}
@@ -45,6 +47,14 @@ class ReleaseBlocked(RuntimeError):
     pass
 
 
+class ReleaseCommandError(subprocess.CalledProcessError):
+    """保留原返回码，并把工具诊断投影到终端和发布 journal。"""
+
+    def __str__(self) -> str:
+        diagnostics = "\n".join(value.strip() for value in (self.stdout, self.stderr) if value)
+        return super().__str__() + ("\n" + diagnostics if diagnostics else "")
+
+
 class ConfirmationRequired(ReleaseBlocked):
     def __init__(self, kind: str, value: str, *, details: Mapping[str, Any] | None = None):
         message = f"confirmation required: --confirm-{kind} {value}"
@@ -54,10 +64,23 @@ class ConfirmationRequired(ReleaseBlocked):
         self.kind, self.value, self.details = kind, value, dict(details or {})
 
 
+def validate_publish_runtime() -> None:
+    """发布入口先确认自身可完成 SFTP 与 HTTPS，应用测试环境独立。"""
+    missing = [name for name in ("paramiko", "certifi") if importlib.util.find_spec(name) is None]
+    if missing:
+        raise ReleaseBlocked("release runtime requires " + ", ".join(missing)
+            + "; use ~/.config/satellite-release/venv/bin/python (requirements/publish.txt)")
+    build_https_opener()
+
+
 def _run(arguments: list[str], *, cwd: Path = ROOT, env: Mapping[str, str] | None = None,
          capture: bool = False) -> str:
-    result = subprocess.run(arguments, cwd=cwd, env=dict(env) if env else None, check=True,
-                            text=True, capture_output=capture)
+    try:
+        result = subprocess.run(arguments, cwd=cwd, env=dict(env) if env else None, check=True,
+                                text=True, capture_output=capture)
+    except subprocess.CalledProcessError as error:
+        raise ReleaseCommandError(error.returncode, error.cmd, output=error.stdout,
+                                  stderr=error.stderr) from error
     return result.stdout.strip() if capture else ""
 
 
@@ -235,11 +258,6 @@ def audit_candidates(run_root: Path, source_root: Path, *, version: str, commit:
             for name, (path, edition, platform, architecture) in paths.items()}
 
 
-def _bundle_set(publications: Mapping[str, str]) -> tuple[str, dict[str, str]]:
-    hashes = {name: sha256_file(Path(path)) for name, path in sorted(publications.items())}
-    return hashlib.sha256(canonical_bytes(hashes)).hexdigest(), hashes
-
-
 def build_download_request(*, version: str, commit: str, release_id: str,
                            candidates: Mapping[str, Any], public_base_url: str) -> dict[str, Any]:
     base = {"schema": DOWNLOAD_REQUEST_SCHEMA, "app_id": APP_ID, "version": version,
@@ -261,25 +279,30 @@ def submit_download_request(request: Mapping[str, Any], *, config: Path,
     args = argparse.Namespace(config=config, known_hosts=known_hosts, identity_file=identity_file)
     client = _connect(args)
     raw = canonical_bytes(request)
+    def verified_result(result_raw: bytes) -> dict[str, Any]:
+        result = json.loads(result_raw)
+        if (result.get("schema") != DOWNLOAD_RESULT_SCHEMA
+                or result.get("request_id") != request["request_id"]
+                or result.get("request_sha256") != hashlib.sha256(raw).hexdigest()
+                or result.get("state") not in ("published", "reused")):
+            raise ReleaseBlocked(f"download publication failed: {result}")
+        return result
     try:
         with client.open_sftp() as sftp, tempfile.TemporaryDirectory(prefix="release-download-request-") as directory:
             sftp.get_channel().settimeout(60)
+            result_path = STATE_ROOT + "/downloads/results/" + request["request_id"] + ".json"
+            existing_result = _read(sftp, result_path)
+            if existing_result is not None:
+                return verified_result(existing_result)
             local = Path(directory) / (request["request_id"] + ".json")
             local.write_bytes(raw)
             remote = STATE_ROOT + "/downloads/requests/" + local.name
             upload_file(sftp, local, remote, size=len(raw), sha256=hashlib.sha256(raw).hexdigest())
-            result_path = STATE_ROOT + "/downloads/results/" + local.name
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 result_raw = _read(sftp, result_path)
                 if result_raw is not None:
-                    result = json.loads(result_raw)
-                    if (result.get("schema") != DOWNLOAD_RESULT_SCHEMA
-                            or result.get("request_id") != request["request_id"]
-                            or result.get("request_sha256") != hashlib.sha256(raw).hexdigest()
-                            or result.get("state") not in ("published", "reused")):
-                        raise ReleaseBlocked(f"download publication failed: {result}")
-                    return result
+                    return verified_result(result_raw)
                 time.sleep(1.0)
     finally:
         client.close()
@@ -288,7 +311,7 @@ def submit_download_request(request: Mapping[str, Any], *, config: Path,
 
 def _range_probe(url: str, start: int, end: int, total: int) -> bytes:
     request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with build_https_opener().open(request, timeout=20) as response:
         expected = f"bytes {start}-{end}/{total}"
         if response.status != 206 or response.headers.get("Content-Range", "") != expected:
             raise ReleaseBlocked(f"HTTPS Range response is invalid: {url}")
@@ -296,7 +319,7 @@ def _range_probe(url: str, start: int, end: int, total: int) -> bytes:
 
 
 def _small_download(url: str, maximum: int = 1024 * 1024) -> bytes:
-    with urllib.request.urlopen(url, timeout=20) as response:
+    with build_https_opener().open(url, timeout=20) as response:
         data = response.read(maximum + 1)
     if len(data) > maximum:
         raise ReleaseBlocked(f"release index exceeds its bound: {url}")
@@ -361,6 +384,7 @@ class ReleaseOrchestrator:
         self.journal.mark(name, "RUNNING")
         try:
             evidence = dict(action())
+            self.journal.mark(name, "PASSED", **evidence)
         except ConfirmationRequired as error:
             self.journal.mark(name, "WAITING_APPROVAL", required=error.value,
                               confirmation_evidence=error.details)
@@ -368,7 +392,6 @@ class ReleaseOrchestrator:
         except Exception as error:
             self.journal.mark(name, "FAILED", error=str(error))
             raise
-        self.journal.mark(name, "PASSED", **evidence)
 
     def run(self) -> dict[str, Any]:
         self._exec_stage("preflight", self._preflight)
@@ -376,9 +399,9 @@ class ReleaseOrchestrator:
         self._exec_stage("windows_candidate", self._windows_candidate)
         self._exec_stage("macos_candidate", self._macos_candidate)
         self._exec_stage("candidate_audit", self._candidate_audit)
-        self._exec_stage("prepare_publications", self._prepare_publications)
+        self._exec_stage("prepare_publication", self._prepare_publication)
         self._exec_stage("stable_confirmation", self._stable_confirmation)
-        self._exec_stage("commit_publications", self._commit_publications)
+        self._exec_stage("commit_publication", self._commit_publication)
         self._exec_stage("publish_downloads", self._publish_downloads)
         self._exec_stage("post_verify", self._post_verify)
         self._exec_stage("evidence", self._evidence)
@@ -471,35 +494,28 @@ class ReleaseOrchestrator:
         self.journal.save()
         return {"receipts": {name: value["sha256"] for name, value in candidates.items()}}
 
-    def _prepare_publications(self) -> Mapping[str, Any]:
+    def _prepare_publication(self) -> Mapping[str, Any]:
         notes = self.root / f"doc/v{self.version}_release_notes.md"
-        inputs = {
-            "windows": (self.run_root / "candidates/windows-ops", "10.0.19041"),
-            "macos": (self.root / f"release/candidates/{self.commit}/macos/ops", "14.0"),
-        }
-        publications = {}
-        for platform, (candidate, minimum) in inputs.items():
-            output = self.run_root / f"publications/{platform}-ops"
-            manifest = output / "publication.json"
-            if not manifest.is_file():
-                output.parent.mkdir(parents=True, exist_ok=True)
-                self._promote("prepare", "--repository", str(Path.home() / ".config/satellite-release/repository"),
-                    "--key-dir", str(Path.home() / ".config/satellite-release/keys"),
-                    "--candidate", str(candidate), "--expected-commit", self.commit,
-                    "--output", str(output), "--public-base-url",
-                    "https://60.205.157.141/v1/apps/satellite-terminal-tool/",
-                    "--min-os", minimum, "--channel", "stable", "--notes-file", str(notes))
-            publications[platform] = str(manifest)
-        set_sha, hashes = _bundle_set(publications)
-        self.journal.data["evidence"]["publications"] = publications
-        self.journal.data["evidence"]["bundle_set_sha256"] = set_sha
+        output = self.run_root / "publications/ops"
+        manifest = output / "publication.json"
+        if not manifest.is_file():
+            output.parent.mkdir(parents=True, exist_ok=True)
+            self._promote("prepare", "--repository", str(Path.home() / ".config/satellite-release/repository"),
+                "--key-dir", str(Path.home() / ".config/satellite-release/keys"),
+                "--candidate", str(self.run_root / "candidates/windows-ops"), "--min-os", "10.0.19041",
+                "--candidate", str(self.root / f"release/candidates/{self.commit}/macos/ops"), "--min-os", "14.0",
+                "--expected-commit", self.commit, "--output", str(output), "--public-base-url",
+                "https://60.205.157.141/v1/apps/satellite-terminal-tool/",
+                "--channel", "stable", "--notes-file", str(notes))
+        digest = sha256_file(manifest)
+        self.journal.data["evidence"]["publication"] = str(manifest)
+        self.journal.data["evidence"]["publication_sha256"] = digest
         self.journal.save()
-        return {"bundle_set_sha256": set_sha, "publication_sha256": hashes}
+        return {"publication_sha256": digest}
 
     def _stable_confirmation(self) -> Mapping[str, Any]:
-        expected = self.journal.data["evidence"]["bundle_set_sha256"]
+        expected = self.journal.data["evidence"]["publication_sha256"]
         if self.confirm_stable != expected:
-            publications = self.journal.stage("prepare_publications").get("publication_sha256", {})
             candidates = self.journal.data["evidence"].get("candidates", {})
             packages = {
                 name: {"identity": row["identity"], "artifacts": row["artifacts"]}
@@ -507,18 +523,22 @@ class ReleaseOrchestrator:
             }
             raise ConfirmationRequired("stable", expected, details={
                 "source_commit": self.commit,
-                "publication_sha256": publications,
+                "publication_sha256": expected,
                 "packages": packages,
             })
-        return {"bundle_set_sha256": expected}
+        return {"publication_sha256": expected}
 
-    def _commit_publications(self) -> Mapping[str, Any]:
-        results = {}
-        for platform, manifest in self.journal.data["evidence"]["publications"].items():
-            results[platform] = json.loads(self._promote("commit", "--bundle", manifest, capture=True))
-        self.journal.data["evidence"]["publication_results"] = results
+    def _commit_publication(self) -> Mapping[str, Any]:
+        manifest = self.journal.data["evidence"]["publication"]
+        if sha256_file(Path(manifest)) != self.journal.data["evidence"]["publication_sha256"]:
+            raise ReleaseBlocked("publication differs from the approved digest")
+        result = json.loads(self._promote("commit", "--bundle", manifest, capture=True))
+        previous = self.journal.data["evidence"].get("publication_result", {})
+        if result.get("reused") and previous.get("bundle_id") == result.get("bundle_id"):
+            result = {**previous, **result}
+        self.journal.data["evidence"]["publication_result"] = result
         self.journal.save()
-        return results
+        return {"publication_result": result}
 
     def _publish_downloads(self) -> Mapping[str, Any]:
         candidates = self.journal.data["evidence"]["candidates"]
@@ -528,7 +548,7 @@ class ReleaseOrchestrator:
                                          known_hosts=self.known_hosts, identity_file=self.publish_key)
         self.journal.data["evidence"]["download_result"] = result
         self.journal.save()
-        return {"request_id": request["request_id"], "state": result["state"],
+        return {"request_id": request["request_id"], "publication_state": result["state"],
                 "release_index": result["release_index"]}
 
     def _post_verify(self) -> Mapping[str, Any]:
@@ -542,7 +562,7 @@ class ReleaseOrchestrator:
         evidence = {"schema": "satellite.release-validation/v1", "version": self.version,
             "source_commit": self.commit, "tag": self.tag,
             "github_actions": self.journal.stage("windows_candidate"),
-            "publication_results": self.journal.data["evidence"]["publication_results"],
+            "publication_result": self.journal.data["evidence"]["publication_result"],
             "downloads": self.journal.data["evidence"]["download_result"],
             "post_verify": self.journal.data["evidence"]["post_verify"],
             "boundaries": {"windows_real_install_and_rollback": "NOT_RUN",
@@ -577,6 +597,7 @@ def main(argv=None) -> int:
             raise ReleaseBlocked("release journal does not exist")
         _print(ReleaseJournal.load(journal_path, version=args.version).data)
         return 0
+    validate_publish_runtime()
     with release_run_lock(args.state_root / ("v" + args.version) / "release-run.lock"):
         orchestrator = ReleaseOrchestrator(root=args.root, state_root=args.state_root, version=args.version,
             confirm_tag=args.confirm_tag, confirm_stable=args.confirm_stable, github_run_id=args.github_run_id)

@@ -2,7 +2,7 @@
 Description=Watch for Satellite Terminal Manager complete-download publication requests
 
 [Path]
-PathChanged=/srv/satellite-updates/receipts/downloads/requests
+PathExistsGlob=/srv/satellite-updates/receipts/downloads/requests/*.json
 Unit=satellite-updates-publish-downloads.service
 
 [Install]

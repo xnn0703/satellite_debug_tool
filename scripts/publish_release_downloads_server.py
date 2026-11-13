@@ -14,7 +14,7 @@ import stat
 import tempfile
 from typing import Any, Mapping
 
-from tuf.api.metadata import Metadata
+from tuf.api.metadata import Metadata, Root, Snapshot, Targets, Timestamp
 
 ROOT = Path(__file__).resolve().parents[1]
 import sys
@@ -32,6 +32,7 @@ REQUEST_SCHEMA = "satellite.release-download-request/v1"
 RESULT_SCHEMA = "satellite.release-download-result/v1"
 INDEX_SCHEMA = "satellite.release-download-index/v1"
 MAX_REQUEST_BYTES = 256 * 1024
+MAX_METADATA_BYTES = 64 * 1024**2
 HASH64 = re.compile(r"[0-9a-f]{64}")
 COMMIT40 = re.compile(r"[0-9a-f]{40}")
 EXPECTED_USERS = {"windows_x86_64": ("win", "x86_64"), "macos_arm64": ("mac", "arm64")}
@@ -140,13 +141,52 @@ def _published_target(repository: Path, targets: Metadata, logical: str) -> tupl
     return stored, info
 
 
-def _ops_artifact(repository: Path, catalog_logical: str, *, version: str,
+def _metadata_bytes(repository: Path, name: str) -> bytes:
+    path = _regular_beneath(repository, PurePosixPath("metadata") / name)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_METADATA_BYTES:
+            raise ValueError("release metadata requires a bounded regular file")
+        raw = stream.read(MAX_METADATA_BYTES + 1)
+    if len(raw) > MAX_METADATA_BYTES:
+        raise ValueError("release metadata exceeds its size bound")
+    return raw
+
+
+def _current_targets(repository: Path) -> Metadata:
+    """冻结当前 timestamp 指向的签名链，两个平台共用同一份 targets。"""
+    now = datetime.now(timezone.utc)
+    root = Metadata.from_bytes(_metadata_bytes(repository, "root.json"))
+    if (not isinstance(root.signed, Root) or not root.signed.consistent_snapshot
+            or root.signed.unrecognized_fields.get("app_id") != APP_ID):
+        raise ValueError("release repository root identity differs")
+    root.signed.verify_delegate("root", root.signed_bytes, root.signatures)
+    timestamp = Metadata.from_bytes(_metadata_bytes(repository, "timestamp.json"))
+    if not isinstance(timestamp.signed, Timestamp):
+        raise ValueError("release timestamp metadata type differs")
+    root.signed.verify_delegate("timestamp", timestamp.signed_bytes, timestamp.signatures)
+
+    def referenced(role: str, reference, expected_type) -> Metadata:
+        if reference.length is None or not reference.hashes or "sha256" not in reference.hashes:
+            raise ValueError("release metadata reference requires length and SHA-256")
+        raw = _metadata_bytes(repository, f"{reference.version}.{role}.json")
+        reference.verify_length_and_hashes(raw)
+        metadata = Metadata.from_bytes(raw)
+        if not isinstance(metadata.signed, expected_type) or metadata.signed.version != reference.version:
+            raise ValueError("release metadata reference version or type differs")
+        root.signed.verify_delegate(role, metadata.signed_bytes, metadata.signatures)
+        return metadata
+
+    snapshot = referenced("snapshot", timestamp.signed.snapshot_meta, Snapshot)
+    targets = referenced("targets", snapshot.signed.meta["targets.json"], Targets)
+    if any(metadata.signed.expires <= now for metadata in (root, timestamp, snapshot, targets)):
+        raise ValueError("release metadata has expired")
+    return targets
+
+
+def _ops_artifact(repository: Path, targets: Metadata, catalog_logical: str, *, version: str,
                   commit: str, platform: str, architecture: str) -> dict:
-    root_path = _regular_beneath(repository, PurePosixPath("metadata/root.json"))
-    targets_path = _regular_beneath(repository, PurePosixPath("metadata/targets.json"))
-    root = Metadata.from_file(str(root_path))
-    targets = Metadata.from_file(str(targets_path))
-    root.signed.verify_delegate("targets", targets.signed_bytes, targets.signatures)
     catalog_path, catalog_info = _published_target(repository, targets, catalog_logical)
     if catalog_info.length > 1024**2:
         raise ValueError("release catalog exceeds its local bound")
@@ -171,6 +211,7 @@ def _ops_artifact(repository: Path, catalog_logical: str, *, version: str,
 
 def inspect_release(request: Mapping[str, Any], *, incoming_root: Path,
                     repository: Path) -> list[dict[str, Any]]:
+    targets = _current_targets(repository)
     artifacts = []
     for key, (platform, architecture) in EXPECTED_USERS.items():
         row = request["users"][key]
@@ -186,7 +227,7 @@ def inspect_release(request: Mapping[str, Any], *, incoming_root: Path,
     for key, catalog in EXPECTED_OPS.items():
         platform = "windows" if key.startswith("windows") else "macos"
         architecture = EXPECTED_USERS[key][1]
-        artifacts.append({**_ops_artifact(repository, catalog, version=request["version"],
+        artifacts.append({**_ops_artifact(repository, targets, catalog, version=request["version"],
             commit=request["source_commit"], platform=platform, architecture=architecture), "edition": "ops"})
     if {(row["identity"]["edition"], row["identity"]["platform"], row["identity"]["architecture"])
             for row in artifacts} != {
@@ -263,6 +304,8 @@ def publish_release(request: Mapping[str, Any], *, incoming_root: Path,
         with tempfile.TemporaryDirectory(prefix=".release-download-", dir=downloads_root) as temporary:
             stage = Path(temporary) / destination.name
             stage.mkdir(mode=0o755)
+            # 服务的私有 UMask=0027 不改变公开目录的遍历合同。
+            stage.chmod(0o755)
             for name, value in files.items():
                 target = stage / name
                 if isinstance(value, bytes):
@@ -289,6 +332,8 @@ def publish_release(request: Mapping[str, Any], *, incoming_root: Path,
                 state = "reused"
             else:
                 state = "published"
+    # 已验证的同字节目录恢复时也确认公开遍历权限，保留包字节与源权限。
+    destination.chmod(0o755)
     index = json.loads((destination / "release.json").read_bytes())
     return {"schema": RESULT_SCHEMA, "state": state, "request_id": request["request_id"],
             "request_sha256": hashlib.sha256(canonical_bytes(request)).hexdigest(),

@@ -1,0 +1,136 @@
+{
+  "boundaries": {
+    "apple_notarization": "NOT_RUN",
+    "physical_device_rf_power_motion": "NOT_RUN",
+    "windows_real_install_and_rollback": "NOT_RUN"
+  },
+  "downloads": {
+    "artifacts": [
+      {
+        "architecture": "arm64",
+        "edition": "ops",
+        "name": "satellite_terminal_manager-ops-macos-arm64-v1.9.8.zip",
+        "platform": "macos",
+        "sha256": "59015dc3c96c05c75ebb3bbd891aadf9f980e396128371f5628916c809a0e53c",
+        "size": 284069626,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-ops-macos-arm64-v1.9.8.zip"
+      },
+      {
+        "architecture": "x86_64",
+        "edition": "ops",
+        "name": "satellite_terminal_manager-ops-windows-x86_64-v1.9.8.7z",
+        "platform": "windows",
+        "sha256": "b4edf9dec2c1154fdd8c7a24c4aafbf3116659d8222e097d9f202513077ba2ff",
+        "size": 218065373,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-ops-windows-x86_64-v1.9.8.7z"
+      },
+      {
+        "architecture": "arm64",
+        "edition": "user",
+        "name": "satellite_terminal_manager-macos-arm64-v1.9.8.zip",
+        "platform": "macos",
+        "sha256": "940dbcbe8fea2af62d9567e295f9a3ddf41ffa68abfa4a077cff58aa1491b9f1",
+        "size": 70139303,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-macos-arm64-v1.9.8.zip"
+      },
+      {
+        "architecture": "x86_64",
+        "edition": "user",
+        "name": "satellite_terminal_manager-windows-x86_64-v1.9.8.7z",
+        "platform": "windows",
+        "sha256": "28e4354775ea041d06ec0c9337e448698f0a6d755871d48f7fe239f697191a89",
+        "size": 57559130,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-windows-x86_64-v1.9.8.7z"
+      }
+    ],
+    "published_at": "2026-11-13T00:02:46.894120+00:00",
+    "release_index": "https://60.205.157.141/downloads/v1.9.8/release.json",
+    "request_id": "86f54c397f5da2fcc671679eb3240e1344a0f32762029401e25a78b00128927a",
+    "request_sha256": "57b82b65b6175414334d6604e2ba7aa505ee9b63ccaa0a2c637d2dc50055fba5",
+    "schema": "satellite.release-download-result/v1",
+    "sha256sums": "https://60.205.157.141/downloads/v1.9.8/SHA256SUMS.txt",
+    "source_commit": "69ab71f3228427977db7661f397004559314eaf7",
+    "state": "published",
+    "version": "1.9.8"
+  },
+  "github_actions": {
+    "conclusion": "success",
+    "headBranch": "v1.9.8",
+    "headSha": "69ab71f3228427977db7661f397004559314eaf7",
+    "run_id": 43295577446,
+    "state": "PASSED",
+    "status": "completed",
+    "url": "https://github.com/xnn0703/satellite_debug_tool/actions/runs/43295577446"
+  },
+  "post_verify": {
+    "https_range": [
+      {
+        "probes": [
+          0,
+          142034813,
+          284069625
+        ],
+        "size": 284069626,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-ops-macos-arm64-v1.9.8.zip"
+      },
+      {
+        "probes": [
+          0,
+          109032686,
+          218065372
+        ],
+        "size": 218065373,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-ops-windows-x86_64-v1.9.8.7z"
+      },
+      {
+        "probes": [
+          0,
+          35069651,
+          70139302
+        ],
+        "size": 70139303,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-macos-arm64-v1.9.8.zip"
+      },
+      {
+        "probes": [
+          0,
+          28779565,
+          57559129
+        ],
+        "size": 57559130,
+        "url": "https://60.205.157.141/downloads/v1.9.8/satellite_terminal_manager-windows-x86_64-v1.9.8.7z"
+      }
+    ],
+    "release_checker": {
+      "macos": {
+        "build_id": "69ab71f3228427977db7661f397004559314eaf7",
+        "catalog_sha256": "d7ec62dfe27e6838abdccf33f60189d70518647262e4da2ba45904cd0c98824d",
+        "delta_count": 0,
+        "installation_mode": "automatic",
+        "sha256": "59015dc3c96c05c75ebb3bbd891aadf9f980e396128371f5628916c809a0e53c",
+        "size": 284069626,
+        "version": "1.9.8"
+      },
+      "windows": {
+        "build_id": "69ab71f3228427977db7661f397004559314eaf7",
+        "catalog_sha256": "50e165a00137690f89fbf9fc434abbdee2c04e469ec9245d9cec283a486d2fd8",
+        "delta_count": 0,
+        "installation_mode": "automatic",
+        "sha256": "b4edf9dec2c1154fdd8c7a24c4aafbf3116659d8222e097d9f202513077ba2ff",
+        "size": 218065373,
+        "version": "1.9.8"
+      }
+    }
+  },
+  "publication_result": {
+    "bundle_id": "e5b443fcfc03fe246eb872ceb2786632eef2f1ae74c2526a1a17a040b61541aa",
+    "reused": true,
+    "state": "published",
+    "timestamp_sha256": "a04b69a2aaafe4a7f802a46d568aa91be282ef3d57caa08507347d53cb23a297",
+    "verification_request_id": "44aac389e45e4b4c848a5ee989b5c3f32aaf8ad13e3b4b5db6fcc1e3b8c3e489"
+  },
+  "schema": "satellite.release-validation/v1",
+  "source_commit": "69ab71f3228427977db7661f397004559314eaf7",
+  "tag": "v1.9.8",
+  "version": "1.9.8"
+}

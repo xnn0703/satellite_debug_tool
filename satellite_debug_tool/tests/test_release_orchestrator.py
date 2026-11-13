@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
 from scripts.release import (
     ConfirmationRequired, ReleaseBlocked, ReleaseJournal, ReleaseOrchestrator,
-    _bundle_set, build_download_request,
+    ReleaseCommandError, _run, build_download_request,
     inspect_preflight, main, release_plan, release_run_lock,
 )
 
@@ -94,15 +95,106 @@ def test_preflight_rejects_source_changes_created_during_validation(tmp_path):
     assert len(calls) == 4
 
 
-def test_bundle_confirmation_changes_when_either_publication_changes(tmp_path):
-    windows, macos = tmp_path / "windows.json", tmp_path / "macos.json"
-    windows.write_text("windows")
-    macos.write_text("macos")
-    first, hashes = _bundle_set({"windows": str(windows), "macos": str(macos)})
-    assert set(hashes) == {"windows", "macos"}
-    macos.write_text("changed")
-    second, _ = _bundle_set({"windows": str(windows), "macos": str(macos)})
-    assert first != second
+def test_both_platforms_prepare_and_resume_one_publication(tmp_path):
+    root, commit = repository(tmp_path)
+    calls = []
+
+    def runner(arguments, *, cwd, **kwargs):
+        calls.append(arguments)
+        if "prepare" in arguments:
+            output = Path(arguments[arguments.index("--output") + 1])
+            output.mkdir(parents=True)
+            (output / "publication.json").write_text("combined signed publication")
+        return json.dumps({"state": "published", "bundle_id": "b" * 64, "reused": True})
+
+    state = tmp_path / "state"
+    first = ReleaseOrchestrator(root=root, state_root=state, version="2.0.0", runner=runner)
+    first._prepare_publication()
+    assert len(calls) == 1
+    assert calls[0].count("--candidate") == 2
+    assert calls[0].count("--min-os") == 2
+    second = ReleaseOrchestrator(root=root, state_root=state, version="2.0.0", runner=runner)
+    assert second.commit == commit
+    second.journal.data["evidence"]["publication_result"] = {
+        "bundle_id": "b" * 64, "verification_request_id": "verified-request"}
+    second._commit_publication()
+    assert second.journal.data["evidence"]["publication_result"]["verification_request_id"] == "verified-request"
+    assert len(calls) == 2
+    assert calls[1].count("--bundle") == 1
+    manifest = Path(second.journal.data["evidence"]["publication"])
+    manifest.write_text("changed")
+    with pytest.raises(ReleaseBlocked, match="approved digest"):
+        second._commit_publication()
+    assert len(calls) == 2
+
+
+def test_captured_failure_preserves_stderr_return_code_and_journal(tmp_path):
+    root, _ = repository(tmp_path)
+    orchestrator = ReleaseOrchestrator(root=root, state_root=tmp_path / "state", version="2.0.0")
+    def command():
+        _run([sys.executable, "-c", "import sys; sys.stderr.write('TLS issuer missing'); sys.exit(7)"],
+             cwd=root, capture=True)
+        return {}
+    with pytest.raises(ReleaseCommandError, match="TLS issuer missing") as error:
+        orchestrator._exec_stage("commit_publication", command)
+    assert error.value.returncode == 7
+    loaded = ReleaseJournal.load(orchestrator.journal.path, version="2.0.0")
+    assert "TLS issuer missing" in loaded.stage("commit_publication")["error"]
+
+
+def test_stage_result_contract_error_is_recorded_as_failed(tmp_path):
+    root, _ = repository(tmp_path)
+    orchestrator = ReleaseOrchestrator(root=root, state_root=tmp_path / "state", version="2.0.0")
+    with pytest.raises(TypeError, match="state"):
+        orchestrator._exec_stage("commit_publication", lambda: {"state": "published"})
+    assert orchestrator.journal.stage("commit_publication")["state"] == "FAILED"
+
+
+def test_release_http_probes_use_shared_trusted_opener(monkeypatch):
+    from io import BytesIO
+    from scripts import release
+    calls = []
+    class Opener:
+        def open(self, request, timeout):
+            calls.append(request)
+            stream = BytesIO(b"x")
+            stream.status = 206
+            stream.headers = {"Content-Range": "bytes 0-0/1"}
+            return stream
+    monkeypatch.setattr(release, "build_https_opener", Opener)
+    monkeypatch.setattr(release.urllib.request, "urlopen", lambda *a, **k: pytest.fail("default CA path"))
+    assert release._range_probe("https://example.test/package", 0, 0, 1) == b"x"
+    assert release._small_download("https://example.test/index") == b"x"
+    assert len(calls) == 2
+
+
+def test_missing_publisher_dependency_stops_before_journal_creation(tmp_path, monkeypatch):
+    from scripts import release
+    root, _ = repository(tmp_path)
+    state = tmp_path / "state"
+    monkeypatch.setattr(release.importlib.util, "find_spec", lambda name: None if name == "paramiko" else object())
+    with pytest.raises(ReleaseBlocked, match="release runtime requires paramiko"):
+        main(["run", "--version", "2.0.0", "--root", str(root), "--state-root", str(state)])
+    assert not state.exists()
+
+
+def test_download_resume_consumes_bound_receipt_without_resubmitting(tmp_path, monkeypatch):
+    from scripts import release
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    request = {"request_id": "a" * 64}
+    result = {"schema": release.DOWNLOAD_RESULT_SCHEMA, "request_id": request["request_id"],
+              "request_sha256": release.hashlib.sha256(release.canonical_bytes(request)).hexdigest(),
+              "state": "published"}
+    sftp = SimpleNamespace(get_channel=lambda: SimpleNamespace(settimeout=lambda _: None))
+    client = SimpleNamespace(open_sftp=lambda: nullcontext(sftp), close=lambda: None)
+    monkeypatch.setattr(release, "_connect", lambda _: client)
+    monkeypatch.setattr(release, "_read", lambda *a: release.canonical_bytes(result))
+    monkeypatch.setattr(release, "upload_file", lambda *a, **k: pytest.fail("completed request resubmitted"))
+    assert release.submit_download_request(request, config=tmp_path, known_hosts=tmp_path, identity_file=tmp_path) == result
+    result["request_sha256"] = "b" * 64
+    with pytest.raises(ReleaseBlocked, match="download publication failed"):
+        release.submit_download_request(request, config=tmp_path, known_hosts=tmp_path, identity_file=tmp_path)
 
 
 def test_download_request_binds_both_user_receipts_and_exact_catalogs():
@@ -131,3 +223,30 @@ def test_same_version_run_lock_rejects_concurrent_owner(tmp_path):
         with pytest.raises(Exception, match="another process"):
             with release_run_lock(lock):
                 pass
+
+
+def test_run_finishes_publication_and_download_stages_with_domain_states(tmp_path, monkeypatch):
+    """完整阶段包装必须将发布结果 state 与 journal 阶段 state 分开。"""
+    from scripts import release
+    root, _ = repository(tmp_path)
+    def runner(arguments, **kwargs):
+        assert "commit" in arguments
+        return json.dumps({"state": "published", "bundle_id": "b" * 64})
+    orchestrator = ReleaseOrchestrator(root=root, state_root=tmp_path / "state", version="2.0.0", runner=runner)
+    manifest = tmp_path / "publication.json"
+    manifest.write_text("signed publication")
+    orchestrator.journal.data["evidence"].update({
+        "publication": str(manifest), "publication_sha256": release.sha256_file(manifest),
+        "candidates": {"windows_user": {"sha256": "1" * 64}, "macos_user": {"sha256": "2" * 64}},
+    })
+    for name in ("preflight", "tag", "windows_candidate", "macos_candidate", "candidate_audit",
+                 "prepare_publication", "stable_confirmation"):
+        orchestrator.journal.mark(name, "PASSED")
+    monkeypatch.setattr(release, "submit_download_request", lambda *a, **k: {
+        "state": "published", "release_index": "https://example.test/index.json"})
+    monkeypatch.setattr(release, "post_verify", lambda *a, **k: {"verified": True})
+    result = orchestrator.run()
+    assert all(stage["state"] == "PASSED" for stage in result["stages"].values())
+    assert result["stages"]["commit_publication"]["publication_result"]["state"] == "published"
+    assert result["stages"]["publish_downloads"]["publication_state"] == "published"
+    assert Path(result["stages"]["evidence"]["validation"]).is_file()

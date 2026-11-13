@@ -12,6 +12,7 @@ import urllib.parse
 import pytest
 from securesystemslib.signer import CryptoSigner
 from tuf.api.exceptions import DownloadHTTPError
+from tuf.api.metadata import Metadata
 from tuf.ngclient.fetcher import FetcherInterface
 
 from scripts.promote_release import (
@@ -32,6 +33,7 @@ class Sftp:
         self.root = root
         self.prefetches = []
         self.moves = []
+        self.read_paths = []
         self.fail_timestamp = False
         self.corrupt_before_verification = False
         (root / PUBLIC_ROOT.lstrip("/")).mkdir(parents=True)
@@ -49,6 +51,8 @@ class Sftp:
         self.path(value).mkdir(mode=mode)
 
     def open(self, value, mode):
+        if mode == "rb":
+            self.read_paths.append(value)
         stream = self.path(value).open("xb" if mode == "wx" else mode)
         stream.stat = lambda: os.fstat(stream.fileno())
         stream.prefetch = lambda **options: self.prefetches.append((value, options))
@@ -123,11 +127,12 @@ def test_public_directories_allow_nginx_traversal_and_private_state_keeps_its_mo
         os.umask(previous_umask)
 
 
-def candidate(path, version="2.0.0", commit="a" * 40):
+def candidate(path, version="2.0.0", commit="a" * 40, *, platform="win"):
     path.mkdir()
-    identity = create_build_identity(edition="ops", version=version, platform="win", architecture="x86_64", build_id=commit)
-    (path / "complete.7z").write_bytes(b"packaging verified separately" * 100)
-    tree = {"schema": "satellite.update-tree/v1", "identity": {**identity, "platform": "windows"},
+    identity = create_build_identity(edition="ops", version=version, platform=platform,
+        architecture="x86_64" if platform == "win" else "arm64", build_id=commit)
+    (path / ("complete.7z" if platform == "win" else "complete.zip")).write_bytes(b"packaging verified separately" * 100)
+    tree = {"schema": "satellite.update-tree/v1", "identity": {**identity, "platform": "windows" if platform == "win" else "macos"},
             "files": [{"path": "app.exe", "size": 3, "sha256": hashlib.sha256(b"exe").hexdigest(), "kind": "file"}]}
     (path / "payload-manifest.json").write_bytes(canonical_bytes(tree))
     files = [{"name": p.name, "size": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in path.iterdir()]
@@ -170,6 +175,157 @@ def test_prepare_keeps_remote_and_local_channel_then_commit_publishes_timestamp_
     assert not list(public.rglob("publication.json"))
     assert not list(public.rglob("last-publish.json"))
     assert not list(public.rglob("publish.lock"))
+
+
+def test_two_platform_candidates_publish_one_snapshot_and_both_fresh_catalogs(deployment):
+    """两个平台消费同一签名账本；中间分支永远不进入公开文件集。"""
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    prior = (local / "metadata/timestamp.json").read_bytes()
+    windows = candidate(tmp / "windows")
+    macos = candidate(tmp / "macos", platform="mac")
+    url = "https://60.205.157.141/v1/apps/satellite-terminal-tool/"
+    manifest = prepare_bundle(sftp, local, [(windows, "10.0.0"), (macos, "14.0")],
+        tmp / "combined", keys, expected_commit="a" * 40, public_base_url=url, initial=True)
+    document = json.loads(manifest.read_bytes())
+    files = {row["path"] for row in document["files"]}
+    assert len([p for p in files if p.endswith(".snapshot.json")]) == 1
+    assert len([p for p in files if p.endswith(".targets.json")]) == 1
+    assert (local / "metadata/timestamp.json").read_bytes() == prior
+    assert len(document["publish_receipts"]) == 2
+    # 同版本中间元数据可能已被历史失败事务占用；最终文件集应完全避开。
+    intermediate = manifest.parent / "repository/metadata/2.targets.json"
+    assert intermediate.is_file() and "metadata/2.targets.json" not in files
+    remote_metadata = sftp.path(PUBLIC_ROOT + "/satellite-terminal-tool/metadata")
+    remote_metadata.mkdir(parents=True)
+    (remote_metadata / intermediate.name).write_bytes(b"other unpublished branch")
+    commit_bundle(sftp, manifest, fetcher=fetcher)
+    root = Metadata.from_file(str(local / "metadata/root.json")).to_dict()
+    config = {**DEFAULTS, "repo_id": "test-repo", "trusted_root": root,
+              "metadata_base_url": url + "metadata/", "target_base_url": url + "targets/"}
+    for platform, architecture, os_version in (("win", "x86_64", "10.0.1"), ("mac", "arm64", "14.0")):
+        latest = ReleaseChecker(config, cache_dir=tmp / ("fresh-" + platform), platform=platform,
+            architecture=architecture, os_version=os_version, fetcher=fetcher).fetch_latest()
+        assert latest.tag_name == "2.0.0"
+        assert latest.identity["build_id"] == "a" * 40
+        assert latest.installation_mode == "automatic"
+    assert sum(path.endswith("/timestamp.json") for path in sftp.moves) == 1
+    assert commit_bundle(sftp, manifest, fetcher=fetcher)["reused"]
+    assert sum(path.endswith("/timestamp.json") for path in sftp.moves) == 1
+
+
+@pytest.mark.parametrize("second_version,second_platform", [("2.1.0", "mac"), ("2.0.0", "win")])
+def test_grouped_candidates_require_one_version_and_unique_platform(deployment, second_version, second_platform):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    sources = [(candidate(tmp / "first"), "10.0.0"),
+               (candidate(tmp / "second", second_version, platform=second_platform), "14.0")]
+    with pytest.raises(ValueError, match="one release version|unique platform"):
+        prepare_bundle(sftp, local, sources, tmp / "group", keys, expected_commit="a" * 40,
+            public_base_url="https://example.test/v1/apps/satellite-terminal-tool/", initial=True)
+    assert not sftp.moves
+
+
+def test_existing_package_digest_is_verified_on_server_without_sftp_readback(deployment):
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    manifest = prepare("bundle")
+    fetcher.reject = "complete.7z"
+    with pytest.raises(DownloadHTTPError):
+        commit_bundle(sftp, manifest, fetcher=fetcher)
+    assert not any(path.endswith(".7z") for path in sftp.read_paths)
+    package = next(sftp.path(PUBLIC_ROOT).rglob("*.7z"))
+    original = package.read_bytes()
+    package.write_bytes(b"!" + original[1:])
+    fetcher.reject = ""
+    sftp.read_paths.clear()
+    with pytest.raises(ValueError, match="server publication verification failed"):
+        commit_bundle(sftp, manifest, fetcher=fetcher)
+    assert not any(path.endswith(".7z") for path in sftp.read_paths)
+    assert not sftp.path(PUBLIC_ROOT + "/satellite-terminal-tool/metadata/timestamp.json").exists()
+    package.write_bytes(original)
+    assert commit_bundle(sftp, manifest, fetcher=fetcher)["state"] == "published"
+    assert check().tag_name == "2.0.0"
+
+
+def test_range_fetcher_uses_shared_trusted_https_opener(monkeypatch):
+    import io
+    from types import SimpleNamespace
+    from scripts import promote_release
+
+    calls = []
+    def open_response(request, *, timeout):
+        calls.append((request.full_url, request.get_header("Range"), timeout))
+        response = io.BytesIO(b"data")
+        response.status = 206
+        response.headers = {"Content-Range": "bytes 0-3/4"}
+        return response
+
+    monkeypatch.setattr(promote_release, "build_https_opener", lambda: SimpleNamespace(open=open_response))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("implicit CA opener used"))
+    assert promote_release.PublicRangeFetcher().fetch_range("https://example.test/file", 0, 3) == b"data"
+    assert calls == [("https://example.test/file", "bytes=0-3", 10.0)]
+
+
+def test_prepare_cli_validates_candidate_os_pairing_before_connect(monkeypatch, tmp_path):
+    from scripts import promote_release
+
+    monkeypatch.setattr(promote_release, "_connect", lambda _args: pytest.fail("connected before input validation"))
+    with pytest.raises(SystemExit) as error:
+        promote_release.main(["prepare", "--config", "config", "--known-hosts", "known", "--identity-file", "identity",
+            "--repository", str(tmp_path), "--key-dir", "keys", "--candidate", "windows", "--candidate", "macos",
+            "--min-os", "10.0", "--output", "bundle", "--expected-commit", "a" * 40,
+            "--public-base-url", "https://example.test/"])
+    assert error.value.code == 2
+
+
+def test_orchestrator_serialized_resume_keeps_both_signed_platform_catalogs(deployment, monkeypatch):
+    """真实签名+真实编排字段经过 JSON 重载，提交仍只有一个事务。"""
+    from scripts import release
+
+    tmp, local, keys, sftp, fetcher, prepare, check = deployment
+    commit_bundle(sftp, prepare("baseline", version="1.0.0", commit="b" * 40), fetcher=fetcher)
+    source = tmp / "source"
+    (source / "doc").mkdir(parents=True)
+    (source / "doc/v2.0.0_release_notes.md").write_text("release")
+    state = tmp / "runs"
+    windows = state / "v2.0.0/candidates/windows-ops"
+    windows.parent.mkdir(parents=True)
+    candidate(windows)
+    macos = source / ("release/candidates/" + "a" * 40 + "/macos/ops")
+    macos.parent.mkdir(parents=True)
+    candidate(macos, platform="mac")
+    monkeypatch.setattr(release, "inspect_preflight", lambda *_args: {"source_commit": "a" * 40, "tag": "v2.0.0"})
+    operations = []
+
+    def runner(arguments, **_options):
+        command = arguments[2]
+        operations.append(command)
+        def values(flag):
+            return [arguments[i + 1] for i, value in enumerate(arguments) if value == flag]
+        if command == "prepare":
+            manifest = prepare_bundle(sftp, local,
+                [(Path(path), minimum) for path, minimum in zip(values("--candidate"), values("--min-os"))],
+                Path(values("--output")[0]), keys, expected_commit=values("--expected-commit")[0],
+                public_base_url=values("--public-base-url")[0])
+            return json.dumps({"state": "prepared", "bundle": str(manifest)})
+        assert command == "commit"
+        return json.dumps(commit_bundle(sftp, Path(values("--bundle")[0]), fetcher=fetcher))
+
+    first = release.ReleaseOrchestrator(root=source, state_root=state, version="2.0.0", runner=runner)
+    first._prepare_publication()
+    confirmed = first.journal.data["evidence"]["publication_sha256"]
+    resumed = release.ReleaseOrchestrator(root=source, state_root=state, version="2.0.0", runner=runner,
+                                          confirm_stable=confirmed)
+    resumed._stable_confirmation()
+    resumed._commit_publication()
+    assert operations == ["prepare", "commit"]
+    assert sum(path.endswith("/timestamp.json") for path in sftp.moves) == 2  # baseline + whole release
+    url = "https://60.205.157.141/v1/apps/satellite-terminal-tool/"
+    config = {**DEFAULTS, "repo_id": "test-repo", "trusted_root": Metadata.from_file(str(local / "metadata/root.json")).to_dict(),
+              "metadata_base_url": url + "metadata/", "target_base_url": url + "targets/"}
+    for platform, architecture, os_version in (("win", "x86_64", "10.0.19041"), ("mac", "arm64", "14.0")):
+        latest = ReleaseChecker(config, cache_dir=tmp / ("final-" + platform), platform=platform,
+            architecture=architecture, os_version=os_version, fetcher=fetcher).fetch_latest()
+        assert latest.tag_name == "2.0.0"
+        assert latest.identity["build_id"] == "a" * 40
 
 
 def test_readback_failure_keeps_old_channel_and_same_bundle_retries(deployment):

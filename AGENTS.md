@@ -103,7 +103,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `core/production/fixture_runtime.py` — **M19-A.13** 进程级摇摆台/MS-6222 所有权根；Customer 弹窗与 Production 共用唯一租约、夹具档案和坐标标定 Store
 - `core/production/fixture_telemetry.py` — **M19-A.15** 进程级夹具姿态事实总线；平台已发送目标、MS-6222 标定后相对 FRD 与真实航向保持独立来源，活动 SDB v3 recorder 各自订阅并保存
 - `core/production/ms6222_debug.py` — **M19-A.5/M19-A9** MS-6222 独立串口租约与工程证据会话；独立 MS 页面只采集参考，摇摆台自动资格测试显式获取摇摆台与 MS 两项所有权并生成联合诊断包
-- `core/motion_platform/` — **M19-A.11** 可复用运动平台直接控制组件；独占本机 `192.168.15.101:8410` 反馈端点并向控制器 `192.168.15.201:7408` 发送二进制帧，统一拥有严格逆运动学、连接代际、反馈闭环完成、回原点、轨迹调度和证据模型；**M59–M61** `trajectory.py` 启动前编译 `CompiledTrajectory`（FRD 姿态、六缸逆解与 `0xC0` 帧全量预编译，热路径只做单调时钟调度与发送），`timeline_process.py` 以 spawn 子进程独占真实 socket 的轨迹帧发送时间线（父进程不执行轨迹 `sendto`），缓停回正状态机与固定 20 ms 周期常量归此模块所有
+- `core/motion_platform/` — **M19-A.11** 可复用运动平台直接控制组件；独占本机 `192.168.15.101:8410` 反馈端点并向控制器 `192.168.15.201:7408` 发送二进制帧，统一拥有严格逆运动学、连接代际、反馈闭环完成、回原点、轨迹调度和证据模型；**M59–M61/M68** `trajectory.py` 启动前编译 `CompiledTrajectory`（FRD 姿态、六缸逆解与 `0xC0` 帧全量预编译，热路径只做单调时钟调度与发送），`timeline_process.py` 以 spawn 子进程独占真实 socket 的轨迹帧发送时间线（父进程不执行轨迹 `sendto`）；缓停回正状态机与平台周期唯一来源归此模块所有，macOS 为 20 ms、Windows 为 50 ms。
 - `core/production/fixture_profile.py` — **M19-A.11** 摇摆台型号模板、v4 工作站档案、运行包线和控制租约；型号预置直接控制端点与运动学参数，旧 `192.168.15.101:9800` 厂家服务端点不解释为控制器地址，现场只确认轴符号并由引导标定生成真实 calibration ID
 - `core/log_parser/` — WindTerm 日志解析
 - `core/security/` — 客户 OTA 固件包 AES-256-GCM 认证解密（`firmware_package.py`）
@@ -115,7 +115,7 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `i18n/` — `TranslationManager` + TS/QM 翻译资源（`translations/satellite_debug_tool_zh_CN.{ts,qm}`）
 - `io/` — `DataRecorder`、流式 `DataImporter` 与唯一 `sdb_schema.py`；大型 SDB 在原文件旁生成可重建的稀疏 `.sdbi` 索引
 - `tools/` — `tile_downloader.py`（OSM 离线 tile CLI）、`build_encrypted_firmware_package.py`（客户 OTA 加密固件打包工具）
-- `updater/` — **M52/M56/M57** ops 应用更新：TUF 仓库验证元数据，Downloader 校验摘要及续传范围，payload/preparation 提供完整包和 Windows 上一正式基线文件级增量。UpdateDialog 下载后等待安装意图，MainWindow 完成资源收尾后启动安装目录外的持久 updater。Windows onedir 与 macOS `.app` 共用同一请求、journal、同盘 staging/rename、健康回执和回滚事实；macOS 额外验证唯一 app、受约束相对链接、bundle 身份及 codesign，并用用户 LaunchAgent 保留登录恢复入口。user 构建裁剪这条应用更新路径，设备固件 OTA 保留。M56 正式晋升由 ECS 本机完整 SHA-256 回执与发布机有界 HTTPS Range 共同准入，不再从公网完整回读发布包。**M67** `scripts/release.py` 只编排既有 Windows Actions、Mac candidate、TUF prepare/commit 和 fresh checker owner，以仓库外 journal 断点续跑；服务器 `publish_release_downloads_server.py` 从两份 user receipt 与当前 signed ops catalog 原子生成四包下载目录及索引。
+- `updater/` — **M52/M56/M57** ops 应用更新：TUF 仓库验证元数据，Downloader 校验摘要及续传范围，payload/preparation 提供完整包和 Windows 上一正式基线文件级增量。UpdateDialog 下载后等待安装意图，MainWindow 完成资源收尾后启动安装目录外的持久 updater。Windows onedir 与 macOS `.app` 共用同一请求、journal、同盘 staging/rename、健康回执和回滚事实；macOS 额外验证唯一 app、受约束相对链接、bundle 身份及 codesign，并用用户 LaunchAgent 保留登录恢复入口。user 构建裁剪这条应用更新路径，设备固件 OTA 保留。M56/M69 正式晋升由 ECS 本机完整 SHA-256 回执与发布机有界 HTTPS Range 共同准入，SFTP 复用已有文件时检查类型/长度，大包摘要统一交给 ECS。**M67/M69** `scripts/release.py` 编排既有 Windows Actions、Mac candidate、TUF prepare/commit 和 fresh checker owner；两平台在同一暂存仓库合并为一份 publication，经一次 timestamp 原子切换，以仓库外 v2 journal 断点续跑。发布探测与索引读取共用 `updater.network.build_https_opener()` 的 certifi CA，子进程原返回码及 stdout/stderr 进入阶段错误记录。服务器 `publish_release_downloads_server.py` 从两份 user receipt 与当前 signed ops catalog 原子生成四包下载目录及索引。
 - `platform/macos/{en,zh_CN}.lproj/InfoPlist.strings` — macOS `CFBundleLocalizations` 用的本地化 InfoPlist 字符串
 
 ### 关键约定
@@ -218,9 +218,12 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - **Mac 发行**：本机 Python 3.11 通过 `scripts/release_macos.py` 在指定干净 SHA 生成保留应用结构的 ZIP、签名校验、树清单、冻结 smoke 并上传候选；M57 后 ops 支持事务自动安装，user 保持人工完整包。spec 声明 `LSMinimumSystemVersion=14.0`，冻结依赖实际最低系统要求仍需审计。
 - **v1.9.0 发行证据**：四包均来自不可变标签 SHA `a867cfed9da78186db33d67b4a389279e2d8dfa7`，Mac 双版及 Windows Actions 双版完成构建/冻结/归档验证；四份完整包已公开至阿里云，ops 两平台通过独立新缓存 TUF 验证。逐包 SHA、平台签名边界、真实硬件及 Windows 实机升级边界见 `doc/M53_release_validation.json`。后续文档和发布CLI保活修复保持这四包字节与标签不变。
 - **v1.9.2 / v1.9.3 发行证据**：v1.9.2 tag 的 Windows user 源码回归失败（墙钟分辨率使 `support_full_coverage_ns` 为 0），该版未晋升；单调时钟修复后 v1.9.3（提交 `57f6b1f` / 标签 `v1.9.3`）四包经 ECS 本机完整 SHA-256 与公网 Range 抽样原子发布至 `/downloads/v1.9.3/`，两平台 fresh `ReleaseChecker` 均返回 v1.9.3 + `automatic`，本版目录 `delta_count=0`（完整包）。机器可读证据 `doc/M62_release_validation.json`；Windows 实机自动更新/回滚、Apple notarization 与真机现场验收仍是独立边界。
-- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.3`，发布状态以 `doc/M62_release_validation.json` 为准）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值
+- **版本号唯一来源**：`satellite_debug_tool/__init__.py.__version__`（当前 `1.9.8`，发布状态以该版 journal 和最终机器可读验证记录为准；源码版本不代表发布完成）；mac `Info.plist` 的 `CFBundleVersion` 由 `satellite_debug_tool.spec` 自动读这个值。
 - **打 tag 发版**：`git tag v<__version__>` + `git push github v<__version__>` 触发 CI；Mac 本地使用 Python 3.11 调用 `scripts/release_macos.py` 构建并上传候选；四包校验后 ops 签名晋升 stable，user 公开完整包
-- **签名晋升连接**：`scripts/promote_release.py` 的唯一 SSH Transport 仅通过纯 SFTP 上传公开字节、投递 ECS 校验请求并读取 root 回执；回执绑定 bundle/request/文件数/总字节，实际 HTTPS 只做每文件首/中/尾最多 4 KiB Range。完整摘要和 Range 均通过后才原子提交 timestamp。恢复同一 bundle 的遗留锁前，先确认旧发布进程已经停止并核对远端版本围栏。
+- **签名晋升连接**：`scripts/promote_release.py` 的唯一 SSH Transport 仅通过纯 SFTP 上传公开字节、投递 ECS 校验请求并读取 root 回执；正式文件完整 SHA-256 在 ECS 本机执行，SFTP 不全量回读正式大包。回执绑定 bundle/request/文件数/总字节，实际 HTTPS 只做每文件首/中/尾最多 4 KiB Range。完整摘要和 Range 均通过后才原子提交 timestamp。恢复同一 bundle 的遗留锁前，先确认旧发布进程已经停止并核对远端版本围栏。
+- **M69 单一发布事务**：Windows/macOS ops 共用一个 TUF 仓库，`promote_release.py prepare` 通过重复且一一对应的 `--candidate` / `--min-os` 在同一暂存账本合并候选，最后只提交一份 publication。`release.py` 使用 `satellite.release-run/v2`、`prepare_publication` / `commit_publication` 及单 publication SHA 确认值。旧 v1 双分支 journal 拒绝直接执行；一次性恢复须先归档，重新审计原 tag/commit、候选和远端状态，再以原 commit 重建 v2。应用标签和包字节保持冻结，发布工具修复另行提交。具体恢复与操作见 `doc/RELEASING.md`、`doc/M69_release_transaction_*.md`。
+- **M69 服务器收尾**：两个请求 watcher 使用正式 `*.json` 存在条件；下载服务一次验证并冻结当前 timestamp → 编号 snapshot → 编号 targets 签名链，两平台消费同一目录，不读取过期 targets 别名。journal 的执行状态与领域发布结果独立存储；发布入口使用专用发布 venv 并提前检查 SFTP/CA 依赖。
+- **v1.9.8 发行证据**：应用 commit 69ab71f、正式 Windows Actions 43295577446；四包及双平台 stable 完成发布，fresh checker 均为 1.9.8 / automatic，delta_count=0。证据见 `doc/M69_release_validation.json`。M69 发布工具修复独立提交，标签和应用包保持原字节；公开目录显式 0755，服务 UMask 不改变 Nginx 遍历权限。
 - **`release.config.json`** 配 `app_id/repo_id/channel`、HTTPS metadata/target 入口和内嵌 TUF 公钥 root；未配置时明确等待部署，不回退 GitHub。私钥和上传凭据保存在仓库外。
 - **修改第一方 UI 文案后**：`python3 scripts/update_translations.py update` + commit TS+QM；只交 TS 不交 QM 会让 `check` 失败
 
@@ -258,7 +261,9 @@ Production   Fleet + EndpointSessionDirectory → ProductionConfigurationStore �
 - `doc/M52_*` — 双平台候选构建、ECS 上传、TUF 可信更新与签名晋升。
 - `doc/M56_server_release_verification_*` — ECS 本机完整摘要、root 回执、公网有界 Range 与服务器现场证据。
 - `doc/M57_macos_automatic_update_*` — macOS ops 自动退出、app 事务替换、健康确认、登录恢复与失败回滚。
-- `doc/M58_*` ~ `doc/M63_*` — 摇摆台预录制可靠性/组合包线、轨迹编译与缓停回正、独立发送时间线、固定 20 ms 轨迹、v1.9.2/v1.9.3 发布（含 `M62_release_validation.json`）、采集覆盖单调时钟与按需轨迹预览的 plan/acceptance/dev_log。
+- `doc/M58_*` ~ `doc/M63_*` — 摇摆台预录制可靠性/组合包线、轨迹编译与缓停回正、独立发送时间线、历史 20 ms 轨迹、v1.9.2/v1.9.3 发布（含 `M62_release_validation.json`）、采集覆盖单调时钟与按需轨迹预览的 plan/acceptance/dev_log；当前平台周期合同见 M68。
+- `doc/M68_platform_motion_timing_*.md` — macOS 20 ms / Windows 50 ms 轨迹周期、供应商证据、Windows 冷启动与跨平台构建门禁修复。
+- `doc/M69_release_transaction_*.md`、`doc/RELEASING.md` — 单 publication 双平台原子发布、共享 CA、完整子进程诊断、ECS 摘要与 v1 journal 一次性恢复。
 - `doc/M53_manager_naming_release_*.md`、`doc/M53_release_validation.json` — Manager 命名与 v1.9.0 四包发行计划、验收、逐包摘要和实际发布状态。
 - `doc/M45_shell_terminal_throughput_*.md` — Shell 有界消费与按帧投影计划、验收与开发记录；含三轮评审合同修订与两次 P0 投影升级的实测依据（头删 O(文档) 归因、maximumBlockCount 接管、16 KiB 帧预算）。
 - `doc/M44_snr_time_axis_recovery_*.md` — 客户 SNR/温度历史的同连接采集代际恢复、u32/乱序准入、事务授权与回放断点证据。

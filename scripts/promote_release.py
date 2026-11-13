@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 from tuf.api.metadata import Metadata, TargetFile
 from scripts.upload_release import CANDIDATE_ROOT, _attributes, _local_digest, upload_file
 from satellite_debug_tool.updater.payload import canonical_bytes
+from satellite_debug_tool.updater.network import build_https_opener
 from satellite_debug_tool.updater.publishing import _write_bytes, load_signers, publish_candidate
 from satellite_debug_tool.updater.repository import https_base, repository_lock, safe_component, target_path
 from scripts.verify_publication_server import REQUEST_SCHEMA, RESULT_SCHEMA
@@ -203,13 +204,29 @@ def _sync_remote(sftp, repository: Path, stage: Path, *, initial: bool) -> str |
     return _sha(raw_timestamp)
 
 
-def prepare_bundle(sftp, repository: Path, candidate: Path, output: Path, signers: dict, *,
-                   expected_commit: str, min_os: str, public_base_url: str, initial: bool = False,
+def prepare_bundle(sftp, repository: Path, candidate: Path | list[tuple[Path, str]], output: Path, signers: dict, *,
+                   expected_commit: str, public_base_url: str, min_os: str | None = None, initial: bool = False,
                    channel: str = "stable", notes: str = "", min_updater_version: str = "1.0.0",
                    config_schema_min: int = 1, config_schema_max: int = 1) -> Path:
-    """产生不可变 bundle；本地正式账本与远端 timestamp 都保持原状态。"""
+    """在同一暂存账本合并候选，只导出最终可见的签名元数据。"""
     repository, output = Path(repository).resolve(), Path(output).resolve()
     base = https_base(public_base_url)
+    candidates = candidate if isinstance(candidate, list) else [(Path(candidate), min_os)]
+    if not candidates or any(not minimum for _, minimum in candidates):
+        raise ValueError("publication candidates require their minimum OS versions")
+    identities, versions = set(), set()
+    for source, _minimum in candidates:
+        receipt = json.loads((Path(source) / "receipt.json").read_text(encoding="utf-8"))
+        identity = receipt.get("identity", {})
+        if identity.get("edition") != "ops":
+            raise ValueError("online publication bundle requires the ops edition")
+        platform = (identity.get("platform"), identity.get("architecture"))
+        if platform in identities:
+            raise ValueError("publication candidates require unique platform identities")
+        identities.add(platform)
+        versions.add(identity.get("version"))
+    if len(versions) != 1:
+        raise ValueError("publication candidates require one release version")
     if output.exists() or output.is_relative_to(repository):
         raise ValueError("publication bundle requires a fresh directory outside the local repository")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -219,19 +236,24 @@ def prepare_bundle(sftp, repository: Path, candidate: Path, output: Path, signer
         expected = _sync_remote(sftp, repository, stage, initial=initial)
         root = Metadata.from_file(str(stage / "metadata/root.json"))
         app_id, repo_id = (root.signed.unrecognized_fields[key] for key in ("app_id", "repo_id"))
-        receipt = json.loads((Path(candidate) / "receipt.json").read_text(encoding="utf-8"))
-        if receipt.get("identity", {}).get("edition") != "ops":
-            raise ValueError("online publication bundle requires the ops edition")
-        result = publish_candidate(stage, candidate, signers, expected_commit=expected_commit, min_os=min_os,
-            publication_mode="prepare", channel=channel, notes=notes, min_updater_version=min_updater_version,
-            config_schema_min=config_schema_min, config_schema_max=config_schema_max)
+        results = []
+        for source, minimum in candidates:
+            results.append(publish_candidate(stage, source, signers, expected_commit=expected_commit, min_os=minimum,
+                publication_mode="prepare", channel=channel, notes=notes, min_updater_version=min_updater_version,
+                config_schema_min=config_schema_min, config_schema_max=config_schema_max))
+        # 中间 snapshot/targets 只服务本地合并；其版本可能与失败发布留下的文件重号。
+        timestamp = Metadata.from_file(str(stage / "metadata/timestamp.json"))
+        snapshot_name = f"{timestamp.signed.snapshot_meta.version}.snapshot.json"
+        snapshot = Metadata.from_file(str(stage / "metadata" / snapshot_name))
+        target_name = f"{snapshot.signed.meta['targets.json'].version}.targets.json"
+        final_metadata = {"timestamp.json", "root.json", snapshot_name, target_name}
         files = []
         for directory in (stage / "targets", stage / "metadata"):
             for path in sorted(directory.rglob("*")):
                 if not path.is_file():
                     continue
                 relative = path.relative_to(stage).as_posix()
-                if directory.name == "metadata" and path.name in ("targets.json", "snapshot.json"):
+                if directory.name == "metadata" and path.name not in final_metadata and not re.fullmatch(r"[1-9][0-9]*\.root\.json", path.name):
                     continue
                 size, digest = _local_digest(path)
                 files.append({"path": relative, "size": size, "sha256": digest})
@@ -239,7 +261,7 @@ def prepare_bundle(sftp, repository: Path, candidate: Path, output: Path, signer
                     "local_repository": str(repository),
                     "public_base_url": base, "expected_timestamp_sha256": expected,
                     "timestamp_sha256": _sha((stage / "metadata/timestamp.json").read_bytes()),
-                    "files": files, "publish_receipt": result}
+                    "files": files, "publish_receipts": results}
         (bundle / "publication.json").write_bytes(canonical_bytes(document))
         bundle.rename(output)
     return output / "publication.json"
@@ -294,10 +316,11 @@ class PublicRangeFetcher:
 
     def __init__(self, timeout: float = 10.0):
         self.timeout = timeout
+        self.opener = build_https_opener()
 
     def fetch_range(self, url: str, start: int, end: int) -> bytes:
         request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self.opener.open(request, timeout=self.timeout) as response:
             if getattr(response, "status", None) != 206:
                 raise ValueError("public publication range request was not honored")
             expected = f"bytes {start}-{end}/"
@@ -422,6 +445,30 @@ def _record_local_commit(document: dict, manifest: Path) -> None:
             _write_bytes(repository / "metadata" / name, (source / origin).read_bytes())
 
 
+def _stage_public_file(sftp, local: Path, remote: str, *, size: int) -> None:
+    """公开字节就位；完整摘要由随后同一 bundle 的 ECS 回执确认。"""
+    current = _attributes(sftp, remote)
+    if current is not None:
+        if not stat.S_ISREG(current.st_mode) or current.st_size != size:
+            raise ValueError("immutable public file differs in type or length")
+        return
+    # 每次上传独占临时名，恢复时只复用已封口文件，不猜测遗留 partial 的所有权。
+    temporary = remote + ".upload-" + uuid.uuid4().hex
+    try:
+        with sftp.open(temporary, "wx") as output, local.open("rb") as source:
+            output.set_pipelined(True)
+            while block := source.read(1024 * 1024):
+                output.write(block)
+            output.flush()
+        uploaded = _attributes(sftp, temporary)
+        if uploaded is None or not stat.S_ISREG(uploaded.st_mode) or uploaded.st_size != size:
+            raise ValueError("public upload length differs from bundle")
+        sftp.rename(temporary, remote)
+    finally:
+        if _attributes(sftp, temporary) is not None:
+            sftp.remove(temporary)
+
+
 def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = False) -> dict:
     """只上传公开签名数据；ECS 完整校验与 HTTPS 分段探测成功后切换 timestamp。"""
     manifest = Path(manifest).resolve(strict=True)
@@ -446,8 +493,8 @@ def commit_bundle(sftp, manifest: Path, *, fetcher=None, recover_lock: bool = Fa
                     continue
                 destination = remote + "/" + row["path"]
                 _ensure_directory(sftp, str(PurePosixPath(destination).parent), PUBLIC_ROOT)
-                upload_file(sftp, manifest.parent / "repository" / row["path"], destination,
-                            size=row["size"], sha256=row["sha256"])
+                _stage_public_file(sftp, manifest.parent / "repository" / row["path"], destination,
+                                   size=row["size"])
             verification = _request_server_verification(sftp, document, identity)
             _probe_public_samples(document, manifest.parent / "repository", fetcher)
             # timestamp 最后提交；root.json 是供在线低权续签读取的公开根指针。
@@ -483,7 +530,7 @@ def _connect(args):
         transport = client.get_transport()
         if transport is None:
             raise ConnectionError("publication SSH transport is unavailable")
-        # 完整 HTTPS 回读期间 SFTP 空闲；由同一 SSH owner 保持协议活动直至最终提交。
+        # HTTPS 探测期间由同一 SSH owner 保持协议活动直至最终提交。
         transport.set_keepalive(30)
     except Exception:
         client.close()
@@ -499,11 +546,11 @@ def main(argv=None):
     parser.add_argument("--identity-file", type=Path, required=True)
     parser.add_argument("--repository", type=Path)
     parser.add_argument("--key-dir", type=Path)
-    parser.add_argument("--candidate", type=Path)
+    parser.add_argument("--candidate", type=Path, action="append")
     parser.add_argument("--remote-candidate")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--expected-commit")
-    parser.add_argument("--min-os")
+    parser.add_argument("--min-os", action="append")
     parser.add_argument("--min-updater-version", default="1.0.0")
     parser.add_argument("--config-schema-min", type=int, default=1)
     parser.add_argument("--config-schema-max", type=int, default=1)
@@ -514,6 +561,11 @@ def main(argv=None):
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--recover-lock", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "prepare":
+        if any(getattr(args, key) is None for key in ("repository", "key_dir", "candidate", "output", "expected_commit", "min_os", "public_base_url")):
+            parser.error("prepare requires repository, key-dir, candidate, output, expected-commit, min-os and public-base-url")
+        if len(args.candidate) != len(args.min_os):
+            parser.error("each --candidate requires one corresponding --min-os")
     client = _connect(args)
     try:
         with client.open_sftp() as sftp:
@@ -523,11 +575,9 @@ def main(argv=None):
                     parser.error("fetch requires --remote-candidate and --output")
                 result = {"state": "candidate-downloaded", "receipt": str(fetch_candidate(sftp, args.remote_candidate, args.output))}
             elif args.command == "prepare":
-                if any(getattr(args, key) is None for key in ("repository", "key_dir", "candidate", "output", "expected_commit", "min_os", "public_base_url")):
-                    parser.error("prepare requires repository, key-dir, candidate, output, expected-commit, min-os and public-base-url")
-                result = {"state": "prepared", "bundle": str(prepare_bundle(sftp, args.repository, args.candidate, args.output,
+                result = {"state": "prepared", "bundle": str(prepare_bundle(sftp, args.repository, list(zip(args.candidate, args.min_os)), args.output,
                     load_signers(args.key_dir, ("targets", "snapshot", "timestamp")), expected_commit=args.expected_commit,
-                    min_os=args.min_os, public_base_url=args.public_base_url, initial=args.initial, channel=args.channel,
+                    public_base_url=args.public_base_url, initial=args.initial, channel=args.channel,
                     min_updater_version=args.min_updater_version, config_schema_min=args.config_schema_min,
                     config_schema_max=args.config_schema_max,
                     notes=args.notes_file.read_text(encoding="utf-8") if args.notes_file else ""))}

@@ -2,6 +2,9 @@
 
 from pathlib import Path
 import re
+import configparser
+
+import pytest
 
 
 def _run_commands(source: str):
@@ -34,3 +37,23 @@ def test_source_test_exit_code_is_an_independent_workflow_gate():
         assert len(executable_lines) == 1, "pytest requires its own CI exit-code boundary"
         assert executable_lines[0].startswith("python -m pytest satellite_debug_tool/tests ")
     assert "continue-on-error: true" not in source
+
+
+@pytest.mark.parametrize("service,queue", [("publish-downloads", "downloads"), ("verify-publication", "verification")])
+def test_server_watcher_detects_completed_request_already_in_queue(tmp_path, service, queue):
+    """正式请求先存在、watcher 后激活仍满足条件，partial 写入不触发。"""
+    unit = Path(__file__).resolve().parents[2] / f"deploy/updates/satellite-updates-{service}.path"
+    config = configparser.ConfigParser()
+    config.read(unit)
+    watch = config["Path"]
+    assert "PathChanged" not in watch
+    pattern = watch["PathExistsGlob"]
+    assert pattern == f"/srv/satellite-updates/receipts/{queue}/requests/*.json"
+    queue_dir = tmp_path / "requests"
+    queue_dir.mkdir()
+    request = queue_dir / "ready.json"
+    partial = queue_dir / "ready.json.part"
+    partial.write_text("request")
+    assert list(queue_dir.glob(Path(pattern).name)) == []
+    partial.rename(request)
+    assert list(queue_dir.glob(Path(pattern).name)) == [request]
