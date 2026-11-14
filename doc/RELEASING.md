@@ -1,6 +1,6 @@
 # 卫通终端管理工具发版操作手册
 
-最后更新：2026-11-13。适用于 M69 单 publication、M70 macOS 身份路径和 M71 ECS 本机晋升链路。v1.9.8 四包及两平台渠道发布证据见 [M69_release_validation.json](M69_release_validation.json)；v1.9.10 的最终机器证据位于仓库外 `~/.config/satellite-release/runs/v1.9.10/release-validation.json`。v1.9.2～v1.9.8 macOS 运维版需用 v1.9.10 完整包完成一次引导，后续版本仍以各自 journal 和最终验证记录为准。v1.9.9 tag 被 Windows 源码门禁拒绝，未生成候选或进入 stable。
+最后更新：2026-11-14。适用于 M69 单 publication、M70 macOS 身份路径、M71 ECS 本机晋升链路和 M72 跨平台健康入口。v1.9.8 四包及两平台渠道发布证据见 [M69_release_validation.json](M69_release_validation.json)；后续版本的最终机器证据位于仓库外 `~/.config/satellite-release/runs/v<version>/release-validation.json`。v1.9.2～v1.9.8 macOS 运维版需用 v1.9.10 完整包完成一次引导；v1.9.11 的健康试运行错误写死 Windows 入口，真实自动更新会回滚，修复版从 v1.9.12 起生效。各版最终状态仍以自身 journal 和验证记录为准。v1.9.9 tag 被 Windows 源码门禁拒绝，未生成候选或进入 stable。
 
 本手册是当前发版的唯一操作入口。历史设计、部署和故障证据分别见：
 
@@ -16,6 +16,9 @@
 - [M71 ECS 本机晋升计划](M71_server_side_publication_plan.md)
 - [M71 ECS 本机晋升验收标准](M71_server_side_publication_acceptance.md)
 - [M71 ECS 本机晋升开发记录](M71_server_side_publication_dev_log.md)
+- [M72 跨平台健康入口计划](M72_platform_health_entry_plan.md)
+- [M72 跨平台健康入口验收标准](M72_platform_health_entry_acceptance.md)
+- [M72 跨平台健康入口开发记录](M72_platform_health_entry_dev_log.md)
 
 ## 1. 当前发行模型
 

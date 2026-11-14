@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 import time
 
-from satellite_debug_tool.package_names import WINDOWS_EXECUTABLE
+from satellite_debug_tool.updater.install_platform import main_executable
 from satellite_debug_tool.updater.status import write_atomic_json
 
 
@@ -59,7 +59,7 @@ def startup_health_context(edition, version: str) -> StartupHealthContext | None
             or not isinstance(data.get("token"), str) or len(data["token"]) != 64):
         raise RuntimeError("application health identity differs from update transaction")
     if getattr(sys, "frozen", False):
-        if Path(sys.executable).resolve() != request.install_dir / WINDOWS_EXECUTABLE:
+        if Path(sys.executable).resolve() != main_executable(request.install_dir).resolve():
             raise RuntimeError("application health executable differs from the installation")
     context = StartupHealthContext(path.parent, request.transaction_id, request.target_version,
                                    data["token"], request.settings_directory,

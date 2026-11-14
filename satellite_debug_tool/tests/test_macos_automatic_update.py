@@ -10,6 +10,7 @@ import shutil
 import pytest
 
 from satellite_debug_tool.edition import Edition, create_build_identity, validate_payload_identity
+from satellite_debug_tool.package_names import APPLICATION_EXECUTABLE
 from satellite_debug_tool.updater.applier import Applier, PayloadContract
 from satellite_debug_tool.updater.handoff import prepare_update_launch_request, sha256_file
 from satellite_debug_tool.updater.install_platform import identity_path
@@ -27,13 +28,13 @@ def _app(root: Path, *, version: str = "2.0.0", build: str = "a" * 40) -> Path:
     identity.parent.mkdir(parents=True)
     macos.mkdir(parents=True)
     plist = {
-        "CFBundleExecutable": "SatelliteTerminalManagerOps",
+        "CFBundleExecutable": APPLICATION_EXECUTABLE,
         "CFBundleIdentifier": "com.satellite-debug-tool.desktop",
         "CFBundleShortVersionString": version,
         "CFBundleVersion": version,
     }
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(plist))
-    for name in ("SatelliteTerminalManagerOps", "updater"):
+    for name in (APPLICATION_EXECUTABLE, "updater"):
         path = macos / name
         shutil.copyfile("/usr/bin/true", path)
         path.chmod(0o755)

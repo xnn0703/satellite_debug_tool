@@ -1,7 +1,9 @@
 """安装恢复入口、重复恢复与真实主窗口健康门禁。"""
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import plistlib
 import sys
 from types import SimpleNamespace
 
@@ -173,7 +175,7 @@ def test_startup_health_context_binds_version_and_transaction(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("executable", ["SatelliteTerminalManager.exe", "SatelliteDebugTool.exe"])
-def test_frozen_health_requires_manager_executable(tmp_path, monkeypatch, executable):
+def test_frozen_windows_health_requires_declared_manager_executable(tmp_path, monkeypatch, executable):
     from satellite_debug_tool.edition import Edition
     from satellite_debug_tool.updater import health
 
@@ -184,6 +186,35 @@ def test_frozen_health_requires_manager_executable(tmp_path, monkeypatch, execut
     monkeypatch.setenv(HEALTH_ENV, str(path))
     monkeypatch.setattr(health, "sys", SimpleNamespace(frozen=True, executable=str(request.install_dir / executable)))
     if executable == "SatelliteTerminalManager.exe":
+        assert startup_health_context(Edition.OPS, "1.9.1").transaction_id == request.transaction_id
+    else:
+        with pytest.raises(RuntimeError, match="executable"):
+            startup_health_context(Edition.OPS, "1.9.1")
+
+
+@pytest.mark.parametrize("executable", ["SatelliteTerminalManager", "SatelliteTerminalManagerOps"])
+def test_frozen_macos_health_requires_info_plist_executable(tmp_path, monkeypatch, executable):
+    from satellite_debug_tool.edition import Edition
+    from satellite_debug_tool.updater import health
+
+    request = make_request(tmp_path)
+    install = tmp_path / "Applications/SatelliteTerminalManagerOps.app"
+    macos = install / "Contents/MacOS"
+    macos.mkdir(parents=True)
+    (install / "Contents/Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleExecutable": "SatelliteTerminalManager",
+    }))
+    (macos / "SatelliteTerminalManager").write_bytes(b"application")
+    request = replace(request, install_dir=install.resolve())
+    write_atomic_json(request.request_path, request.to_json())
+    health_path = request.transaction_dir / "health-request.json"
+    write_atomic_json(health_path, {"schema": HEALTH_SCHEMA, "transaction_id": request.transaction_id,
+                                  "target_version": request.target_version, "token": "b" * 64})
+    monkeypatch.setenv(HEALTH_ENV, str(health_path))
+    monkeypatch.setattr(health, "sys", SimpleNamespace(
+        frozen=True, executable=str(macos / executable),
+    ))
+    if executable == "SatelliteTerminalManager":
         assert startup_health_context(Edition.OPS, "1.9.1").transaction_id == request.transaction_id
     else:
         with pytest.raises(RuntimeError, match="executable"):
