@@ -6,7 +6,9 @@ import pytest
 
 from satellite_debug_tool.tests._updater_helpers import archive_payload, make_payload
 from satellite_debug_tool.updater.applier import Applier, ApplyError, PayloadContract
-from satellite_debug_tool.updater.recovery import InstallJournal, recover_installation
+from satellite_debug_tool.updater.recovery import (
+    CommittedBackupCleanupError, InstallJournal, RecoveryError, recover_installation,
+)
 
 CONTRACT = PayloadContract("SatelliteTerminalManager.exe", "updater.exe", edition="ops", target_version="1.9.1")
 
@@ -128,6 +130,68 @@ def test_verified_staging_is_beside_installation(tmp_path):
     assert (install / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
     assert (result.backup_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
     assert source.is_dir()
+
+
+def test_committed_backup_release_is_guarded_and_idempotent(tmp_path):
+    install, _, _, journal = prepare(tmp_path)
+    result = Applier().install_prepared(journal)
+    with pytest.raises(RecoveryError, match="committed"):
+        journal.release_committed_backup()
+    assert result.backup_dir.is_dir()
+    journal.save("committed")
+    assert journal.release_committed_backup() == "released"
+    assert not result.backup_dir.exists()
+    assert journal.release_committed_backup() == "released"
+    assert InstallJournal.load(journal.path).data["backup_state"] == "released"
+
+
+def test_first_install_records_new_install_without_backup(tmp_path):
+    install = tmp_path / "installed"
+    maintenance = tmp_path / "maintenance"
+    maintenance.mkdir()
+    updater = maintenance / "updater.exe"
+    updater.write_bytes(b"updater")
+    token = "c" * 32
+    from satellite_debug_tool.updater.recovery import staging_path
+    journal = InstallJournal.create(
+        maintenance / "journal.json", transaction_id=token, install_dir=install,
+        staging_dir=staging_path(install, token), updater_executable=updater,
+        target_version="1.9.1",
+    )
+    install.mkdir()
+    journal.save("committed")
+    assert journal.release_committed_backup() == "new_install"
+    assert InstallJournal.load(journal.path).data["backup_state"] == "new_install"
+
+
+def test_committed_backup_release_rejects_symlink(tmp_path):
+    install, _, _, journal = prepare(tmp_path)
+    journal.save("committed")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    journal.backup_dir.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(RecoveryError, match="not a directory"):
+        journal.release_committed_backup()
+    assert outside.is_dir()
+
+
+def test_committed_backup_cleanup_error_keeps_recovery_fact(tmp_path, monkeypatch):
+    from satellite_debug_tool.updater import recovery
+
+    _, _, _, journal = prepare(tmp_path)
+    result = Applier().install_prepared(journal)
+    journal.save("committed", backup_state="recovery_ready")
+
+    def cleanup_failed(_path):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(recovery.shutil, "rmtree", cleanup_failed)
+    with pytest.raises(CommittedBackupCleanupError, match="permission denied"):
+        journal.release_committed_backup()
+    assert result.backup_dir.is_dir()
+    persisted = InstallJournal.load(journal.path)
+    assert persisted.data["state"] == "committed"
+    assert persisted.data["backup_state"] == "recovery_ready"
 
 
 def test_new_directory_rename_failure_restores_original(tmp_path, monkeypatch):

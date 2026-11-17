@@ -8,7 +8,7 @@ import pytest
 from satellite_debug_tool.tests._updater_helpers import make_request
 from satellite_debug_tool.updater import main as updater_main
 from satellite_debug_tool.updater import recovery
-from satellite_debug_tool.updater.recovery import InstallJournal
+from satellite_debug_tool.updater.recovery import CommittedBackupCleanupError, InstallJournal
 from satellite_debug_tool.updater.status import write_atomic_json
 
 
@@ -160,6 +160,30 @@ def test_recovery_cli_reports_failure_once(tmp_path, monkeypatch, platform_effec
     assert platform_effects.removed == []
 
 
+def test_recovery_cli_reports_committed_backup_cleanup_requirement(
+    tmp_path, monkeypatch, platform_effects,
+):
+    from satellite_debug_tool.tests.test_updater_applier import prepare
+
+    install, _, _, journal = prepare(tmp_path)
+    journal.save("committed", backup_state="recovery_ready")
+    detail = CommittedBackupCleanupError(journal.backup_dir, "permission denied")
+
+    def cleanup_failed(_path):
+        raise detail
+
+    monkeypatch.setattr(updater_main, "_setup_logging", lambda *_args: None)
+    monkeypatch.setattr(updater_main, "recover_installation", cleanup_failed)
+    assert updater_main.main(["--recover", str(journal.path)]) == 4
+    status = json.loads((journal.path.parent / "update-status.json").read_text())
+    assert status["state"] == "cleanup_required"
+    assert status["stage"] == "releasing_backup"
+    assert status["backup_dir"] == str(journal.backup_dir)
+    assert platform_effects.failures == [("releasing_backup", str(detail), journal.path.parent / "updater.log")]
+    assert platform_effects.removed == []
+    assert install.is_dir()
+
+
 def test_other_installed_process_prevents_configuration_snapshot(tmp_path, monkeypatch, platform_effects):
     import psutil
     from types import SimpleNamespace
@@ -197,10 +221,12 @@ def test_complete_and_prepared_tree_share_health_transaction(tmp_path, monkeypat
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
     journal = InstallJournal.load(request.transaction_dir / "journal.json")
     assert journal.data["state"] == "committed"
-    assert (journal.backup_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    assert journal.data["backup_state"] == "released"
+    assert not journal.backup_dir.exists()
     status = json.loads(request.status_path.read_text())
     commit = json.loads((request.transaction_dir / "health-commit.json").read_text())
     assert status["state"] == "completed"
+    assert status["backup_state"] == "released"
     assert commit["pid"] == trial.pid
     assert commit["transaction_id"] == request.transaction_id
     assert not trial.terminated
@@ -208,6 +234,30 @@ def test_complete_and_prepared_tree_share_health_transaction(tmp_path, monkeypat
     assert platform_effects.registered == [(request.updater_executable,
                                             request.transaction_dir / "journal.json", request.install_dir)]
     assert platform_effects.removed == [request.install_dir]
+
+
+def test_committed_cleanup_failure_keeps_new_application_and_recovery_entry(
+    tmp_path, monkeypatch, platform_effects,
+):
+    request = make_request(tmp_path)
+    trial = install_trial(monkeypatch, request)
+
+    def cleanup_failed(self):
+        raise CommittedBackupCleanupError(self.backup_dir, "permission denied")
+
+    monkeypatch.setattr(InstallJournal, "release_committed_backup", cleanup_failed)
+    assert updater_main.execute_update(request, health_timeout=0.2) == 4
+    assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
+    journal = InstallJournal.load(request.transaction_dir / "journal.json")
+    assert journal.data["state"] == "committed"
+    assert (journal.backup_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.0"
+    status = json.loads(request.status_path.read_text())
+    assert status["state"] == "cleanup_required"
+    assert status["stage"] == "releasing_backup"
+    assert status["backup_dir"] == str(journal.backup_dir)
+    assert not trial.terminated
+    assert platform_effects.removed == []
+    assert platform_effects.failures == [("releasing_backup", status["detail"], request.log_path)]
 
 
 @pytest.mark.parametrize("mode", ["exit", "timeout", "wrong_token", "wrong_pid", "wrong_version"])
@@ -387,6 +437,9 @@ def test_recovery_after_committed_journal_before_commit_delivery(tmp_path, monke
     request = make_request(tmp_path)
     trial = install_trial(monkeypatch, request)
     assert updater_main.execute_update(request) == 0
+    journal = InstallJournal.load(request.transaction_dir / "journal.json")
+    journal.backup_dir.mkdir()
+    (journal.backup_dir / "SatelliteTerminalManager.exe").write_bytes(b"executable-1.9.0")
     commit = request.transaction_dir / "health-commit.json"
     commit.unlink()
     if not alive:
@@ -395,6 +448,8 @@ def test_recovery_after_committed_journal_before_commit_delivery(tmp_path, monke
     assert recover_installation(request.transaction_dir / "journal.json") == "committed"
     journal = InstallJournal.load(request.transaction_dir / "journal.json")
     assert journal.data["application_phase"] == ("ready" if alive else "closed")
+    assert journal.data["backup_state"] == "released"
+    assert not journal.backup_dir.exists()
     assert commit.exists() is alive
     assert (request.install_dir / "SatelliteTerminalManager.exe").read_bytes() == b"executable-1.9.1"
     assert platform_effects.failures == []

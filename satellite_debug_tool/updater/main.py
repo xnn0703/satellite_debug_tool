@@ -17,7 +17,7 @@ from satellite_debug_tool.updater.applier import Applier, PayloadContract
 from satellite_debug_tool.updater.handoff import UpdateLaunchRequest, load_update_launch_request, sha256_file
 from satellite_debug_tool.updater.health import HEALTH_ENV, HEALTH_SCHEMA, StartupHealthContext, validate_health_message
 from satellite_debug_tool.updater.recovery import (
-    InstallJournal, InstallationLock, RecoveryError, recover_installation,
+    CommittedBackupCleanupError, InstallJournal, InstallationLock, RecoveryError, recover_installation,
     register_login_recovery, remove_login_recovery, require_recovered_installation,
 )
 from satellite_debug_tool.updater.status import write_atomic_json, write_update_status
@@ -225,13 +225,30 @@ def execute_update(request: UpdateLaunchRequest, *, wait_timeout: float = 30.0,
                             target_version=request.target_version, backup_dir=str(result.backup_dir))
         _wait_for_health(trial, context, health_timeout)
         # journal 是提交事实；其持久化先于允许主程序操作设备。
-        journal.save("committed")
+        journal.save("committed", backup_state=(
+            "recovery_ready" if journal.data["original_exists"] else "new_install"
+        ))
         commit = context.message("committed")
         commit["pid"] = trial.pid
         write_atomic_json(context.commit_path, commit)
+        phase = "releasing_backup"
+        try:
+            backup_state = journal.release_committed_backup()
+        except CommittedBackupCleanupError as exc:
+            log.exception("Committed installation requires backup cleanup")
+            write_update_status(request.status_path, "cleanup_required", stage=phase,
+                                detail=str(exc), transaction_id=request.transaction_id,
+                                target_version=request.target_version,
+                                install_dir=str(result.install_dir),
+                                backup_dir=str(exc.backup_dir),
+                                backup_state=journal.data.get("backup_state", "recovery_ready"),
+                                application_pid=trial.pid)
+            _show_windows_failure(phase, str(exc), request.log_path)
+            return 4
         write_update_status(request.status_path, "completed", transaction_id=request.transaction_id,
                             target_version=request.target_version, install_dir=str(result.install_dir),
-                            backup_dir=str(result.backup_dir), application_pid=trial.pid)
+                            backup_dir=str(result.backup_dir), backup_state=backup_state,
+                            application_pid=trial.pid)
         try:
             remove_login_recovery(request.install_dir)
         except OSError:
@@ -308,9 +325,21 @@ def main(argv: Optional[list[str]] = None) -> int:
             write_update_status(args.recover.parent / "update-status.json", result,
                                 application_phase=journal.data.get("application_phase", "closed"),
                                 transaction_id=journal.data["transaction_id"],
+                                backup_dir=str(journal.backup_dir),
+                                backup_state=journal.data.get("backup_state", ""),
                                 application_restart=application_restart,
                                 application_restart_detail=application_restart_detail)
             return 0
+        except CommittedBackupCleanupError as exc:
+            journal = InstallJournal.load(args.recover)
+            write_update_status(args.recover.parent / "update-status.json", "cleanup_required",
+                                stage="releasing_backup", detail=str(exc),
+                                transaction_id=journal.data["transaction_id"],
+                                backup_dir=str(exc.backup_dir),
+                                backup_state=journal.data.get("backup_state", "recovery_ready"))
+            log.exception("Committed installation requires backup cleanup")
+            _show_windows_failure("releasing_backup", str(exc), args.recover.parent / "updater.log")
+            return 4
         except Exception as exc:
             log.exception("Recovery failed")
             _show_windows_failure("recovery", str(exc), args.recover.parent / "updater.log")

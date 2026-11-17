@@ -30,6 +30,14 @@ class RecoveryError(RuntimeError):
     """恢复的必要证据或文件操作未完成。"""
 
 
+class CommittedBackupCleanupError(RecoveryError):
+    """新版已经提交，但旧安装备份尚未释放。"""
+
+    def __init__(self, backup_dir: Path, detail: str):
+        self.backup_dir = Path(backup_dir).resolve()
+        super().__init__(f"committed backup cleanup failed: {self.backup_dir}: {detail}")
+
+
 def journal_pointer_path(install_dir: Path) -> Path:
     install = Path(install_dir).resolve()
     return install.parent / f".{install.name}.update-journal.json"
@@ -333,6 +341,28 @@ class InstallJournal:
             else:
                 path.unlink(missing_ok=True)
 
+    def release_committed_backup(self) -> str:
+        """提交后释放旧安装；试运行和回滚阶段不得调用。"""
+        if self.data["state"] != "committed":
+            raise RecoveryError("installation backup release requires a committed journal")
+        if not self.install_dir.is_dir():
+            raise RecoveryError("committed installation directory is missing")
+        backup = self.backup_dir
+        if not self.data["original_exists"]:
+            if backup.exists() or backup.is_symlink():
+                raise RecoveryError("new installation has an unexpected recovery backup")
+            self.save("committed", backup_state="new_install")
+            return "new_install"
+        if backup.is_symlink() or (backup.exists() and not backup.is_dir()):
+            raise RecoveryError("committed recovery backup is not a directory")
+        try:
+            if backup.is_dir():
+                shutil.rmtree(backup)
+        except OSError as exc:
+            raise CommittedBackupCleanupError(backup, str(exc)) from exc
+        self.save("committed", backup_state="released")
+        return "released"
+
     def stop_trial_process(self) -> None:
         if not self.data.get("configuration_trial_started", False):
             return
@@ -429,6 +459,7 @@ class InstallJournal:
         if self.data["state"] == "committed":
             phase = self.resume_committed_trial()
             self.save("committed", application_phase=phase)
+            self.release_committed_backup()
             remove_login_recovery(self.install_dir)
             return "committed"
         if self.data["state"] == "rolled_back":
