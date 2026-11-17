@@ -291,7 +291,7 @@ def test_model_change_clears_stale_mesh_when_target_has_no_model(
 
 
 def test_afd01b2_has_independent_builtin_model_and_axes(tmp_path):
-    """B2 实机模型独立成档；CAD 机头沿 X，与 C/D（沿 Z）轴向约定不同。"""
+    """B2 实机模型独立成档；机头沿短边(Z)、翼沿长边(X)，与 C/D 同族约定。"""
     candidates = device_model_candidates(
         "AFD01B2",
         home=tmp_path,
@@ -305,11 +305,76 @@ def test_afd01b2_has_independent_builtin_model_and_axes(tmp_path):
         _sha256(MODELS_DIR / "afd01b2.stl")
         == BUILTIN_MODEL_ASSETS["afd01b2.stl"].sha256
     )
-    from satellite_debug_tool.ui.device_model_resources import device_model_axes
+    axes = device_model_axes("afd01b2")
+    assert (axes.up_axis, axes.nose_axis, axes.nose_sign, axes.left_sign) == (
+        1,
+        2,
+        1.0,
+        1.0,
+    )
+
+
+_REAL_DEVICE_MODEL_KEYS = ("afd01b2", "afd01c", "afd01d")
+
+
+def test_real_device_model_axes_form_proper_rotation_and_nose_is_short_axis():
+    """B2/C/D 轴映射两条几何硬约束（2026-11-17 俯仰/横滚互换回归）：
+
+    1. 机头×左翼=天顶为真旋转（det=+1，模型不镜像）；
+    2. 归一化后机头方向跨度 < 翼方向跨度——面板长边是翼不是机头，
+       否则俯仰会显示成横滚（旧 B2 配置 nose=X 长轴即此故障）。
+    """
+    from satellite_debug_tool.ui.stl_loader import load_stl, normalize_mesh
+
+    for key in _REAL_DEVICE_MODEL_KEYS:
+        axes = device_model_axes(key)
+        nose = np.zeros(3)
+        nose[axes.nose_axis] = axes.nose_sign
+        left = np.zeros(3)
+        third = [
+            a for a in range(3) if a not in (axes.up_axis, axes.nose_axis)
+        ][0]
+        left[third] = axes.left_sign
+        up = np.zeros(3)
+        up[axes.up_axis] = 1.0
+        assert np.cross(nose, left) == pytest.approx(up), key
+
+        verts, _ = load_stl(MODELS_DIR / f"{key}.stl")
+        normed = normalize_mesh(
+            verts,
+            target_size=3.6,
+            up_axis=axes.up_axis,
+            nose_axis=axes.nose_axis,
+            nose_sign=axes.nose_sign,
+            left_sign=axes.left_sign,
+        )
+        extent = np.ptp(normed, axis=0)
+        assert extent[0] < extent[1], (
+            f"{key}: 机头跨度 {extent[0]:.2f} 必须小于翼跨度 {extent[1]:.2f}"
+        )
+
+
+def test_afd01b2_connector_stub_is_on_the_right_side():
+    """实机俯视图：接插件凸出在设备右侧。归一化后紧凑凸出簇必须落在
+    widget -Y（右翼）端，对侧端面才是全宽面板（同时证明模型未镜像）。"""
+    from satellite_debug_tool.ui.stl_loader import load_stl, normalize_mesh
 
     axes = device_model_axes("afd01b2")
-    assert (axes.up_axis, axes.nose_axis) == (1, 0)
-    assert (axes.up_axis, axes.nose_axis) != (
-        device_model_axes("afd01c").up_axis,
-        device_model_axes("afd01c").nose_axis,
+    verts, _ = load_stl(MODELS_DIR / "afd01b2.stl")
+    normed = normalize_mesh(
+        verts,
+        target_size=3.6,
+        up_axis=axes.up_axis,
+        nose_axis=axes.nose_axis,
+        nose_sign=axes.nose_sign,
+        left_sign=axes.left_sign,
     )
+    y_min = normed[:, 1].min()
+    y_max = normed[:, 1].max()
+    margin = 0.072  # 实机 6mm 带（缩放 3.6/298.1）
+    right_end = normed[normed[:, 1] < y_min + margin]
+    left_end = normed[normed[:, 1] > y_max - margin]
+    # 右端只有接插件小簇（X 散布 0.25），左端是全宽端面（X 散布 2.27）
+    assert len(right_end) < len(left_end) / 10
+    assert np.ptp(right_end[:, 0]) < 0.5
+    assert np.ptp(left_end[:, 0]) > 2.0
