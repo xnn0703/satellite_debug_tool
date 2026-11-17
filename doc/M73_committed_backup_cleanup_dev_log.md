@@ -30,3 +30,12 @@
   `/Applications` 已无对应 v1.9.11 备份目录；未再执行删除。使用新接口按文件事实将旧 journal
   补记为 `backup_state=released`。
 - 真实 macOS 下一次自动更新后的 `/Applications` 备份释放仍待正式包验收；未用软件测试替代。
+- 2026-11-17：v1.9.12→v1.9.13 真实自动更新完成（事务 `1197d6c0…62ab9`，健康链
+  started→ready→committed，status completed），但 `.app.bak.<id>` 未自动删除，由用户手动删除。
+  查证为**预期滞后而非回归**：事务由启动时复制的 `runtime/updater` 收尾，该副本 mtime 为
+  2026-11-14（v1.9.12 构建、无 M73 代码），日志仅 prepare/swap。更新器代码修复在真机上滞后
+  一版生效——修复版 N 的安装事务由 N-1 updater 收尾，N→N+1 才首次执行修复逻辑。
+  随后用 v1.9.13 updater `--recover` 按文件事实补记：`release_committed_backup()` 对已不存在
+  的备份目录幂等跳过删除并记录 `released`，journal 与 status 均为 `committed +
+  backup_state=released`，`/Applications` 无残留。**M73 真机验收点相应移至下一次更新**
+  （v1.9.13 → 后续版本），届时由 v1.9.13 runtime 副本收尾，备份应自动消失；若再不删除才是回归。
