@@ -381,6 +381,9 @@ class TestSerialReadCap:
                 self._pending = payload
                 self.timeout = 0.0
 
+            def open(self) -> None:
+                return None
+
             @property
             def in_waiting(self) -> int:
                 return len(self._pending)

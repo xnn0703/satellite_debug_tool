@@ -94,7 +94,12 @@ class TcpShellLink(ShellLink):
 
 
 class SerialShellLink(ShellLink):
-    """Raw byte pipe over pyserial (8N1); the shell console on the device side."""
+    """Raw byte pipe over pyserial (8N1); the shell console on the device side.
+
+    开口合同：8N1、无流控，DTR 与 RTS 保持不置位。Shell 控制台不拥有调制解调器线；
+    置位会经 USB CDC 桥下发 SET_CONTROL_LINE_STATE 并改变桥的行为（实测置位后
+    首段长输出截断、此后设备不再回应）。
+    """
 
     def __init__(self, port: str, baudrate: int) -> None:
         self._port = str(port)
@@ -106,22 +111,31 @@ class SerialShellLink(ShellLink):
         import serial
 
         try:
-            self._serial = serial.Serial(
-                port=self._port,
-                baudrate=self._baudrate,
-                bytesize=serial.EIGHTBITS,
-                stopbits=serial.STOPBITS_ONE,
-                parity=serial.PARITY_NONE,
-                timeout=0.05,
-            )
+            # pyserial 带 port 即打开，且不接受 dtr/rts 构造参数；先建未打开对象，
+            # 确定线状态后再 open。
+            stream = serial.Serial()
+            stream.port = self._port
+            stream.baudrate = self._baudrate
+            stream.bytesize = serial.EIGHTBITS
+            stream.stopbits = serial.STOPBITS_ONE
+            stream.parity = serial.PARITY_NONE
+            stream.timeout = 0.05
+            stream.dtr = False
+            stream.rts = False
+            stream.open()
         except Exception as exc:  # noqa: BLE001 - pyserial raises device-specific types
             self._serial = None
             raise ShellLinkError(f"{type(exc).__name__}: {exc}") from exc
+        self._serial = stream
 
     def recv(self, timeout_s: float) -> bytes:
         stream = self._require_open()
         try:
-            stream.timeout = max(timeout_s, 0.001)
+            timeout = max(timeout_s, 0.001)
+            # pyserial 的 timeout setter 每次赋值都重走端口重配置；USB CDC 虚拟 COM 上该调用
+            # 实测约 1 ms（in_waiting 为 1 µs）。读取热路径只在取值变化时赋值。
+            if stream.timeout != timeout:
+                stream.timeout = timeout
             waiting = stream.in_waiting
             if waiting:
                 return bytes(stream.read(min(waiting, MAX_READ_CHUNK)))
@@ -131,10 +145,10 @@ class SerialShellLink(ShellLink):
             raise ShellLinkError(f"{type(exc).__name__}: {exc}") from exc
 
     def send(self, data: bytes) -> None:
+        """提交字节；返回只表示系统已接收，不等待线上发完。"""
         stream = self._require_open()
         try:
             stream.write(data)
-            stream.flush()
         except Exception as exc:  # noqa: BLE001
             self.close()
             raise ShellLinkError(f"{type(exc).__name__}: {exc}") from exc

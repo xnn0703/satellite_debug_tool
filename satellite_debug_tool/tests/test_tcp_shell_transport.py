@@ -7,6 +7,7 @@ worker 的命令循环/YMODEM 逻辑与物理口无关（全部经 ShellLink 接
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
 from unittest.mock import Mock, patch
@@ -101,6 +102,44 @@ class TestTcpShellLink:
             listener.close()
 
 
+class _FakePyserial:
+    """pyserial 3.5 的开口语义：带 port 即打开、dtr/rts 不是构造参数、开口时按当前线状态驱动。"""
+
+    opened: tuple | None = None  # 最近一次 open() 时的完整串口状态
+
+    def __init__(self, port=None, baudrate=9600, bytesize=8, parity="N", stopbits=1,
+                 timeout=None, **kwargs):
+        if kwargs:
+            raise ValueError(f"unexpected keyword arguments: {kwargs!r}")
+        self.is_open = False
+        self.port, self.baudrate = port, baudrate
+        self.bytesize, self.parity, self.stopbits, self.timeout = bytesize, parity, stopbits, timeout
+        self._dtr, self._rts = True, True  # pyserial 默认：两线置位
+        if port is not None:
+            self.open()
+
+    @property
+    def dtr(self):
+        return self._dtr
+
+    @dtr.setter
+    def dtr(self, value):
+        self._dtr = value
+
+    @property
+    def rts(self):
+        return self._rts
+
+    @rts.setter
+    def rts(self, value):
+        self._rts = value
+
+    def open(self):
+        type(self).opened = (self.port, self.baudrate, self.bytesize, self.parity,
+                             self.stopbits, self.timeout, self._dtr, self._rts)
+        self.is_open = True
+
+
 class TestSerialShellLink:
     def _make_link(self, mock_serial_cls) -> SerialShellLink:
         link = SerialShellLink("/dev/cu.test", 115200)
@@ -108,16 +147,55 @@ class TestSerialShellLink:
             link.open()
         return link
 
-    def test_open_uses_8n1_and_label(self):
-        mock_cls = Mock()
+    def test_open_uses_8n1_and_leaves_modem_lines_deasserted(self):
+        # 参照终端（COMTool）开口合同：8N1、rts=false、dtr=false。置位会经 CDC 桥
+        # 改变桥的行为（首段长输出截断后设备不再回应）。
+        _FakePyserial.opened = None
         link = SerialShellLink("COM7", 921600)
-        with patch("serial.Serial", mock_cls):
+        with patch("serial.Serial", _FakePyserial):
             link.open()
         assert link.label == "COM7@921600"
-        kwargs = mock_cls.call_args.kwargs
-        assert kwargs["port"] == "COM7"
-        assert kwargs["baudrate"] == 921600
-        assert kwargs["bytesize"] is not None and kwargs["parity"] is not None
+        port, baudrate, bytesize, parity, stopbits, _timeout, dtr, rts = _FakePyserial.opened
+        assert (port, baudrate, bytesize, parity, stopbits) == ("COM7", 921600, 8, "N", 1)
+        assert (dtr, rts) == (False, False)
+
+    @pytest.mark.skipif(
+        sys.platform not in ("darwin", "linux"), reason="需要 POSIX 伪终端与真实 pyserial"
+    )
+    def test_open_clears_dtr_and_rts_through_real_pyserial(self, monkeypatch):
+        import fcntl
+        import os
+        import pty
+        import struct
+
+        import serial.serialposix as posix
+
+        attempted: list[tuple[str, str]] = []
+        real_ioctl = fcntl.ioctl
+
+        def recording_ioctl(fd, request, *args):
+            if request in (posix.TIOCMBIS, posix.TIOCMBIC):
+                bits = struct.unpack("I", args[0])[0]
+                attempted.append(
+                    ("set" if request == posix.TIOCMBIS else "clear",
+                     {posix.TIOCM_DTR: "DTR", posix.TIOCM_RTS: "RTS"}[bits])
+                )
+                return 0  # 伪终端没有调制解调器线；按真实串口返回成功以观察后续调用
+            return real_ioctl(fd, request, *args)
+
+        monkeypatch.setattr(fcntl, "ioctl", recording_ioctl)
+        master, slave = pty.openpty()
+        try:
+            link = SerialShellLink(os.ttyname(slave), 115200)
+            link.open()
+            try:
+                assert attempted == [("clear", "DTR"), ("clear", "RTS")]
+                assert (link._serial.dtr, link._serial.rts) == (False, False)
+            finally:
+                link.close()
+        finally:
+            os.close(master)
+            os.close(slave)
 
     def test_open_failure_raises_link_error(self):
         mock_cls = Mock(side_effect=OSError("no such port"))
@@ -148,13 +226,105 @@ class TestSerialShellLink:
         assert link._serial is None
         stream.close.assert_called()
 
-    def test_send_writes_and_flushes(self):
+    def test_recv_assigns_port_timeout_only_when_it_changes(self):
+        # 读取热路径不得每次重设串口超时：pyserial 的 timeout setter 重走端口重配置，USB CDC
+        # 虚拟 COM 上该调用实测约 1 ms；数据流入期间每次读取插入这段等待。
+        class _CountingStream:
+            def __init__(self) -> None:
+                self._timeout = 0.05
+                self.timeout_sets = 0
+                self.in_waiting = 0
+                self.read_sizes: list[int] = []
+
+            @property
+            def timeout(self):
+                return self._timeout
+
+            @timeout.setter
+            def timeout(self, value):
+                self.timeout_sets += 1
+                self._timeout = value
+
+            def read(self, size):
+                self.read_sizes.append(size)
+                return b"" if size == 1 else b"x" * size
+
+            def close(self):
+                return None
+
+        stream = _CountingStream()
+        link = SerialShellLink("/dev/cu.test", 115200)
+        link._serial = stream
+        for _ in range(5):
+            assert link.recv(0.05) == b""  # 空转：等待一个字节
+        stream.in_waiting = 40
+        assert link.recv(0.05) == b"x" * 40  # 有积压：整块取出
+        assert stream.read_sizes == [1] * 5 + [40]
+        assert stream.timeout_sets == 0  # 取值未变：读取路径一次都不重设
+        link.recv(0.2)
+        assert stream.timeout_sets == 1 and stream.timeout == 0.2
+
+    @pytest.mark.skipif(
+        sys.platform not in ("darwin", "linux"), reason="需要 POSIX 伪终端与真实 pyserial"
+    )
+    def test_recv_hot_path_skips_port_reconfiguration_on_real_pyserial(self, monkeypatch):
+        import os
+        import pty
+        import termios
+
+        real_tcgetattr = termios.tcgetattr
+        reconfigures: list[int] = []
+        monkeypatch.setattr(
+            termios, "tcgetattr", lambda fd: (reconfigures.append(1), real_tcgetattr(fd))[1]
+        )
+        master, slave = pty.openpty()
+        try:
+            link = SerialShellLink(os.ttyname(slave), 115200)
+            link.open()
+            try:
+                reconfigures.clear()
+                for _ in range(20):
+                    link.recv(0.05)
+                assert reconfigures == []  # 同一超时值：真实 pyserial 零次端口重配置
+                link.recv(0.2)
+                assert len(reconfigures) == 1  # 取值变化：恰好一次
+            finally:
+                link.close()
+        finally:
+            os.close(master)
+            os.close(slave)
+
+    def test_send_submits_bytes_without_draining(self):
         stream = Mock()
         link = SerialShellLink("/dev/cu.test", 115200)
         link._serial = stream
         link.send(b"rb\r")
         stream.write.assert_called_once_with(b"rb\r")
-        stream.flush.assert_called_once()
+        stream.flush.assert_not_called()
+
+    def test_send_returns_while_the_wire_is_still_draining(self):
+        # send 只等待系统接收；线上未发完不得占用唯一 link owner（停止意图与接收都靠它）。
+        release = threading.Event()
+
+        class _SlowDrainStream:
+            def write(self, data):
+                return len(data)
+
+            def flush(self):
+                release.wait(2.0)
+
+            def close(self):
+                release.set()
+
+        link = SerialShellLink("/dev/cu.test", 115200)
+        link._serial = _SlowDrainStream()
+        started = time.monotonic()
+        try:
+            link.send(b"\r")
+            assert time.monotonic() - started < 0.5
+            assert link._serial is not None
+        finally:
+            release.set()
 
 
 class TestCreateLinkDispatch:

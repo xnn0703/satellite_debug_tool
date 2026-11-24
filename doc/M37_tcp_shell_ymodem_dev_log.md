@@ -282,3 +282,38 @@
 英文文本事件的本地回归：Shift+_、Shift+A、Shift++ 分别发出 5f、41、2b；纯 Shift 不产生字节。建议使用英文/ABC 输入法输入 Shell 命令，保留现有 UTF-8 输入语义。终端代码保持原实现。探针原始记录位于 /tmp/sdt-shell-native-keys.jsonl；测试窗口已关闭，过程未连接设备。
 
 按用户新约定，本轮仅提供源码运行命令；未执行打包。用户版：`.venv/bin/python -m satellite_debug_tool.main_user`；运维版：`.venv/bin/python -m satellite_debug_tool.main`。
+
+## 2026-11-23～24 串口 Shell 乱码/换行异常/卡死：读取热路径每次重设串口超时（源码修复，真机复测待记录）
+
+- 现象（用户）：Shell 用串口连接显示乱码、换行异常、卡死；同设备 COMTool 接串口正常，本工具 TCP Shell 正常。
+- 更正：11-23 一度把原因归于开口置位 DTR/RTS 并据此修改（两线不置位、去掉 `flush()`）。11-24 真机上该修改
+  未消除故障（会话 `20261124T022217Z-c9bf71a1` 仍在 113 字节处截断）；两项修改与参照终端一致，保留，
+  但不是截断的触发条件。
+- 真机受控对比（RV CMSIS-DAP 探针 `D6E7:3507` 的 CDC 虚拟 COM `/dev/cu.usbmodem012345ABCDEF2` →
+  目标板 `uart1` PA9/PA10@921600；同一脚本只变读取方式，发送 `\r` 与 `app\r`）：
+  - COMTool 读法（开口后 `timeout=0.001` 只设一次，循环 `in_waiting` → `read(max(1, n))`）：三次完整收到
+    `app` 的 1303 字节（三次均带 `flush()`）。
+  - 本工具读法（每次读取前 `s.timeout = 0.05`，空转时 `read(1)`）：`app` 只收到 67 字节（读取 1 / 63 / 1 / 2，
+    尾部为坏字节），此后回车无响应。
+  - 截断后探针虚拟 COM 两个方向停止转发：串口发 `app` 目标板不执行；目标板 TCP Shell 正常（`app` 1303 字节
+    完整），`hd diag` 全部 `err_cnt:0`，`hd uarterr` uart1 `ORE=0 FE/NE=0`，日志经 UART 写出后镜像到 TCP 的
+    首字节 0–60 ms。
+  - 不恢复的动作：重开端口、DTR/RTS 置位/清除、波特率 115200↔921600、break、`rtscts`/`xonxoff`、4 KiB OUT
+    洪泛、libusb USB 复位（设备重新枚举）、TCP `reboot` 目标板；探针 11:05、11:17 两次重新枚举后仍无输出。
+- 实测差异：该 tty 上 `s.timeout = x` 中位 1030 µs（p95 1048 µs），`in_waiting` 0.9 µs；pyserial 3.5 的
+  `timeout` setter 每次赋值调用 `_reconfigure_port()`。旧读取路径在数据流入期间每读一次插入约 1 ms。
+- 修复：`SerialShellLink.recv()` 只在超时取值变化时给 `timeout` 赋值；其余保持
+  `in_waiting` → `read(已积压)` / `read(1)`。
+- 回归：`test_tcp_shell_transport.py::TestSerialShellLink` 新增 2 项（桩计数；真实 pyserial + 伪终端统计
+  `tcgetattr`）——旧 `recv()` 稳定失败（每次读取重设），新实现通过。Shell 专项 124 passed，全量 2383 passed。
+  上一轮的 4 项（开口 DTR/RTS 不置位、`send()` 不 drain）保留。相邻入口：`SerialWorker` 与 MS-6222 worker
+  一直是“超时设一次 + `read(max(1, in_waiting))`”，全包只有 `SerialShellLink` 有每次读取重设超时的写法。
+- 真机复测（修正后，`SerialShellLink` 实际代码路径，目标板 comServer）：`app`×3 每次 1303 字节完整并以提示符
+  结尾（每次约 320 次小片读取，与 COMTool 读法一致），`help`/`hd ls`/`para ls`/`hd diag` 完整；用户经弹窗
+  在串口上完成 YMODEM 784392 字节传输与 `ota update`，启动日志完整。
+- 边界：探针固件为何在主机读取间隔约 1 ms 时停止转发未检查；截断发生后探针需断电才恢复（libusb USB 复位、
+  DTR/RTS、波特率、break、目标板 `reboot` 均无效）。探针在端口关闭期间缓存目标板输出并在开口时先吐出：
+  波特率已配置时为可读尾部（实测 1303 字节输出缓存为 468 字节尾部），设备启动期间缓存的内容为乱码，
+  其波特率关系未解出，上位机原样呈现。11-06 经 FTDI 适配器的两条会话原始流有成段坏字节与丢失换行，
+  与本次机制是否相同未确认。
+- 按约定本轮仅验证源码，未打包。
